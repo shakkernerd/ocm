@@ -297,4 +297,71 @@ impl Cli {
         }
         Ok(0)
     }
+
+    fn handle_env_use(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, shell_name) = Self::consume_option(args, "--shell")?;
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = self.touch_environment(name)?;
+        let shell = resolve_shell_name(shell_name.as_deref(), &self.env);
+        print!("{}", render_use_script(&meta, &shell));
+        Ok(0)
+    }
+
+    fn handle_env_exec(&self, args: Vec<String>) -> Result<i32, String> {
+        let (before, after) = Self::split_on_double_dash(&args);
+        let Some(name) = before.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&before[1..])?;
+        if after.is_empty() {
+            return Err("env exec requires a command after --".to_string());
+        }
+
+        let meta = self.touch_environment(name)?;
+        self.run_direct(
+            &after[0],
+            &after[1..],
+            &build_openclaw_env(&meta, &self.env),
+            &self.cwd,
+        )
+    }
+
+    fn handle_env_run(&self, args: Vec<String>) -> Result<i32, String> {
+        let (before, after) = Self::split_on_double_dash(&args);
+        let (before, version_override) = Self::consume_option(before, "--version")?;
+        let Some(name) = before.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&before[1..])?;
+
+        let meta = self.touch_environment(name)?;
+        let version_name = version_override
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| meta.default_version.clone())
+            .ok_or_else(|| {
+                format!(
+                    "environment \"{}\" has no default version; use env set-version or pass --version",
+                    meta.name
+                )
+            })?;
+
+        let version = get_version(&version_name, &self.env, &self.cwd)?;
+        let mut command = version.command.clone();
+        if !after.is_empty() {
+            let quoted = after.iter().map(|arg| quote_posix(arg)).collect::<Vec<_>>();
+            command.push(' ');
+            command.push_str(&quoted.join(" "));
+        }
+
+        let run_dir = version
+            .cwd
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.cwd.clone());
+        self.run_shell(&command, &build_openclaw_env(&meta, &self.env), &run_dir)
+    }
 }
