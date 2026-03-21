@@ -189,3 +189,136 @@ pub fn create_environment(
     };
     save_environment(meta, env, cwd)
 }
+
+pub fn remove_environment(
+    name: &str,
+    force: bool,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
+    let meta = get_environment(name, env, cwd)?;
+    if meta.protected && !force {
+        return Err(format!(
+            "environment \"{}\" is protected; re-run with --force",
+            meta.name
+        ));
+    }
+
+    let paths = derive_env_paths(Path::new(&meta.root));
+    let root_exists = path_exists(&paths.root);
+    let marker_exists = path_exists(&paths.marker_path);
+
+    if root_exists && !marker_exists && !force {
+        let marker_name = paths
+            .marker_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(".ocm-env.json");
+        return Err(format!(
+            "refusing to delete {} without {}; re-run with --force",
+            display_path(&paths.root),
+            marker_name
+        ));
+    }
+
+    if root_exists {
+        fs::remove_dir_all(&paths.root).map_err(|error| error.to_string())?;
+    }
+
+    let meta_path = env_meta_path(&meta.name, env, cwd)?;
+    match fs::remove_file(meta_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+
+    Ok(meta)
+}
+
+pub fn list_versions(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<Vec<VersionMeta>, String> {
+    let stores = ensure_store(env, cwd)?;
+    let files = load_json_files(&stores.versions_dir)?;
+    let mut out: Vec<VersionMeta> = Vec::with_capacity(files.len());
+    for file in files {
+        out.push(read_json(&file)?);
+    }
+    out.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(out)
+}
+
+pub fn get_version(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<VersionMeta, String> {
+    let safe_name = validate_name(name, "Version name")?;
+    let path = version_meta_path(&safe_name, env, cwd)?;
+    if !path_exists(&path) {
+        return Err(format!("version \"{safe_name}\" does not exist"));
+    }
+    read_json(&path)
+}
+
+pub fn add_version(
+    options: AddVersionOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<VersionMeta, String> {
+    let name = validate_name(&options.name, "Version name")?;
+    let meta_path = version_meta_path(&name, env, cwd)?;
+    if path_exists(&meta_path) {
+        return Err(format!("version \"{name}\" already exists"));
+    }
+
+    let command = options.command.trim();
+    if command.is_empty() {
+        return Err("version command is required".to_string());
+    }
+
+    let version_cwd = match options.cwd.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => {
+            Some(display_path(&resolve_absolute_path(raw, env, cwd)?))
+        }
+        _ => None,
+    };
+    let description = options
+        .description
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let created_at = now_utc();
+    let meta = VersionMeta {
+        kind: "ocm-version".to_string(),
+        name,
+        command: command.to_string(),
+        cwd: version_cwd,
+        description,
+        created_at,
+        updated_at: created_at,
+    };
+    write_json(&meta_path, &meta)?;
+    Ok(meta)
+}
+
+pub fn remove_version(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<VersionMeta, String> {
+    let meta = get_version(name, env, cwd)?;
+    let path = version_meta_path(&meta.name, env, cwd)?;
+    fs::remove_file(path).map_err(|error| error.to_string())?;
+    Ok(meta)
+}
+
+pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<EnvMeta> {
+    let cutoff = now_utc() - Duration::days(older_than_days);
+    envs.iter()
+        .filter(|meta| !meta.protected)
+        .filter(|meta| meta.last_used_at.unwrap_or(meta.created_at) < cutoff)
+        .cloned()
+        .collect()
+}
