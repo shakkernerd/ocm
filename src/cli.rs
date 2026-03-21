@@ -158,4 +158,143 @@ impl Cli {
         meta.last_used_at = Some(now_utc());
         save_environment(meta, &self.env, &self.cwd)
     }
+
+    fn handle_env_create(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, protect) = Self::consume_flag(args, "--protect");
+        let (args, root) = Self::consume_option(args, "--root")?;
+        let (args, port_raw) = Self::consume_option(args, "--port")?;
+        let gateway_port = match port_raw.as_deref() {
+            Some(raw) if !raw.trim().is_empty() => Some(Self::parse_positive_u32(raw, "--port")?),
+            _ => None,
+        };
+        let (args, version_name) = Self::consume_option(args, "--version")?;
+
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        if let Some(version_name) = version_name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            get_version(version_name, &self.env, &self.cwd)?;
+        }
+
+        let meta = create_environment(
+            CreateEnvironmentOptions {
+                name: name.clone(),
+                root,
+                gateway_port,
+                default_version: version_name.filter(|value| !value.trim().is_empty()),
+                protected: protect,
+            },
+            &self.env,
+            &self.cwd,
+        )?;
+
+        if json_flag {
+            self.print_json(&summarize_env(&meta))?;
+            return Ok(0);
+        }
+
+        let summary = summarize_env(&meta);
+        self.stdout_line(format!("Created env {}", summary.name));
+        self.stdout_line(format!("  root: {}", summary.root));
+        self.stdout_line(format!("  openclaw home: {}", summary.openclaw_home));
+        self.stdout_line(format!("  workspace: {}", summary.workspace_dir));
+        if let Some(port) = summary.gateway_port {
+            self.stdout_line(format!("  gateway port: {port}"));
+        }
+        if let Some(version) = summary.default_version.as_deref() {
+            self.stdout_line(format!("  version: {version}"));
+        }
+        self.stdout_line(format!(
+            "  activate: eval \"$({} env use {})\"",
+            self.command_example(),
+            summary.name
+        ));
+        Ok(0)
+    }
+
+    fn handle_env_list(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        Self::assert_no_extra_args(&args)?;
+
+        let envs = list_environments(&self.env, &self.cwd)?;
+        let summaries = envs.iter().map(summarize_env).collect::<Vec<_>>();
+        if json_flag {
+            self.print_json(&summaries)?;
+            return Ok(0);
+        }
+        if summaries.is_empty() {
+            self.stdout_line("No environments.");
+            return Ok(0);
+        }
+        for summary in summaries {
+            let mut bits = vec![summary.name, summary.root];
+            if let Some(version) = summary.default_version {
+                bits.push(format!("version={version}"));
+            }
+            if let Some(port) = summary.gateway_port {
+                bits.push(format!("port={port}"));
+            }
+            if summary.protected {
+                bits.push("protected".to_string());
+            }
+            self.stdout_line(bits.join("  "));
+        }
+        Ok(0)
+    }
+
+    fn handle_env_show(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = get_environment(name, &self.env, &self.cwd)?;
+        let summary = summarize_env(&meta);
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        let mut lines = BTreeMap::new();
+        lines.insert("name".to_string(), summary.name);
+        lines.insert("root".to_string(), summary.root);
+        lines.insert("openclawHome".to_string(), summary.openclaw_home);
+        lines.insert("stateDir".to_string(), summary.state_dir);
+        lines.insert("configPath".to_string(), summary.config_path);
+        lines.insert("workspaceDir".to_string(), summary.workspace_dir);
+        lines.insert("protected".to_string(), summary.protected.to_string());
+        lines.insert(
+            "createdAt".to_string(),
+            summary
+                .created_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|error| error.to_string())?,
+        );
+        if let Some(port) = summary.gateway_port {
+            lines.insert("gatewayPort".to_string(), port.to_string());
+        }
+        if let Some(version) = summary.default_version {
+            lines.insert("defaultVersion".to_string(), version);
+        }
+        if let Some(last_used_at) = summary.last_used_at {
+            lines.insert(
+                "lastUsedAt".to_string(),
+                last_used_at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+
+        for (key, value) in lines {
+            self.stdout_line(format!("{key}: {value}"));
+        }
+        Ok(0)
+    }
 }
