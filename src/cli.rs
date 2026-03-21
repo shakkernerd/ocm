@@ -500,4 +500,177 @@ impl Cli {
         }
         Ok(0)
     }
+
+    fn handle_version_add(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, command) = Self::consume_option(args, "--command")?;
+        let (args, cwd) = Self::consume_option(args, "--cwd")?;
+        let (args, description) = Self::consume_option(args, "--description")?;
+        let Some(name) = args.first() else {
+            return Err("version name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = add_version(
+            AddVersionOptions {
+                name: name.clone(),
+                command: command.unwrap_or_default(),
+                cwd,
+                description,
+            },
+            &self.env,
+            &self.cwd,
+        )?;
+
+        if json_flag {
+            self.print_json(&meta)?;
+            return Ok(0);
+        }
+
+        self.stdout_line(format!("Added version {}", meta.name));
+        self.stdout_line(format!("  command: {}", meta.command));
+        if let Some(cwd) = meta.cwd.as_deref() {
+            self.stdout_line(format!("  cwd: {cwd}"));
+        }
+        Ok(0)
+    }
+
+    fn handle_version_list(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        Self::assert_no_extra_args(&args)?;
+
+        let versions = list_versions(&self.env, &self.cwd)?;
+        if json_flag {
+            self.print_json(&versions)?;
+            return Ok(0);
+        }
+        if versions.is_empty() {
+            self.stdout_line("No versions.");
+            return Ok(0);
+        }
+        for meta in versions {
+            let mut bits = vec![meta.name, meta.command];
+            if let Some(cwd) = meta.cwd {
+                bits.push(format!("cwd={cwd}"));
+            }
+            self.stdout_line(bits.join("  "));
+        }
+        Ok(0)
+    }
+
+    fn handle_version_show(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("version name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = get_version(name, &self.env, &self.cwd)?;
+        if json_flag {
+            self.print_json(&meta)?;
+            return Ok(0);
+        }
+
+        let mut lines = BTreeMap::new();
+        lines.insert("kind".to_string(), meta.kind.clone());
+        lines.insert("name".to_string(), meta.name.clone());
+        lines.insert("command".to_string(), meta.command.clone());
+        lines.insert(
+            "createdAt".to_string(),
+            meta.created_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|error| error.to_string())?,
+        );
+        lines.insert(
+            "updatedAt".to_string(),
+            meta.updated_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|error| error.to_string())?,
+        );
+        if let Some(cwd) = meta.cwd {
+            lines.insert("cwd".to_string(), cwd);
+        }
+        if let Some(description) = meta.description {
+            lines.insert("description".to_string(), description);
+        }
+        for (key, value) in lines {
+            self.stdout_line(format!("{key}: {value}"));
+        }
+        Ok(0)
+    }
+
+    fn handle_version_remove(&self, args: Vec<String>) -> Result<i32, String> {
+        let Some(name) = args.first() else {
+            return Err("version name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = remove_version(name, &self.env, &self.cwd)?;
+        self.stdout_line(format!("Removed version {}", meta.name));
+        Ok(0)
+    }
+
+    pub fn run(&self, args: Vec<String>) -> i32 {
+        if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
+            print!("{}", self.render_help());
+            return 0;
+        }
+        if matches!(args[0].as_str(), "--version" | "-v") {
+            self.stdout_line(VERSION);
+            return 0;
+        }
+
+        if let Err(error) = ensure_store(&self.env, &self.cwd) {
+            self.stderr_line(format!("ocm: {error}"));
+            self.stderr_line(format!(
+                "Run \"{} help\" for usage.",
+                self.command_example()
+            ));
+            return 1;
+        }
+
+        let group = args.first().cloned().unwrap_or_default();
+        let action = args.get(1).cloned().unwrap_or_default();
+        let rest = if args.len() > 2 {
+            args[2..].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        let result = match group.as_str() {
+            "env" => match action.as_str() {
+                "create" => self.handle_env_create(rest),
+                "list" => self.handle_env_list(rest),
+                "show" => self.handle_env_show(rest),
+                "use" => self.handle_env_use(rest),
+                "exec" => self.handle_env_exec(rest),
+                "run" => self.handle_env_run(rest),
+                "set-version" => self.handle_env_set_version(rest),
+                "protect" => self.handle_env_protect(rest),
+                "remove" | "rm" => self.handle_env_remove(rest),
+                "prune" => self.handle_env_prune(rest),
+                _ => Err(format!("unknown env command: {action}")),
+            },
+            "version" => match action.as_str() {
+                "add" => self.handle_version_add(rest),
+                "list" => self.handle_version_list(rest),
+                "show" => self.handle_version_show(rest),
+                "remove" | "rm" => self.handle_version_remove(rest),
+                _ => Err(format!("unknown version command: {action}")),
+            },
+            _ => Err(format!("unknown command group: {group}")),
+        };
+
+        match result {
+            Ok(code) => code,
+            Err(error) => {
+                self.stderr_line(format!("ocm: {error}"));
+                self.stderr_line(format!(
+                    "Run \"{} help\" for usage.",
+                    self.command_example()
+                ));
+                1
+            }
+        }
+    }
 }
