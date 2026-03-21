@@ -77,3 +77,20 @@ pub struct StorePaths {
     pub envs_dir: PathBuf,
     pub versions_dir: PathBuf,
 }
+
+#[derive(Clone, Debug)]
+pub struct CreateEnvironmentOptions {
+    pub name: String,
+    pub root: Option<String>,
+    pub gateway_port: Option<u32>,
+    pub default_version: Option<String>,
+    pub protected: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AddVersionOptions {
+    pub name: String,
+    pub command: String,
+    pub cwd: Option<String>,
+    pub description: Option<String>,
+}
