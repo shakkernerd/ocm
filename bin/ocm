@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export CARGO_HOME="${CARGO_HOME:-/tmp/ocm-cargo-home}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
+export OCM_SELF="${OCM_SELF:-$ROOT_DIR/bin/ocm}"
+exec cargo run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" -- "$@"
