@@ -133,3 +133,67 @@ pub fn resolve_store_paths(
         home,
     })
 }
+
+pub fn validate_name(name: &str, label: &str) -> Result<String, String> {
+    let trimmed = normalize_value(name);
+    if trimmed.is_empty() {
+        return Err(format!("{label} is required"));
+    }
+
+    let mut chars = trimmed.chars();
+    let Some(first) = chars.next() else {
+        return Err(format!("{label} is required"));
+    };
+    if !first.is_ascii_alphanumeric() {
+        return Err(format!(
+            "{label} must use letters, numbers, '.', '_', or '-'"
+        ));
+    }
+    if chars.any(|ch| !ch.is_ascii_alphanumeric() && ch != '.' && ch != '_' && ch != '-') {
+        return Err(format!(
+            "{label} must use letters, numbers, '.', '_', or '-'"
+        ));
+    }
+
+    Ok(trimmed.to_string())
+}
+
+pub fn derive_env_paths(root: impl AsRef<Path>) -> EnvPaths {
+    let clean_root = clean_path(root.as_ref());
+    let state_dir = clean_root.join(".openclaw");
+    EnvPaths {
+        root: clean_root.clone(),
+        openclaw_home: clean_root.clone(),
+        state_dir: state_dir.clone(),
+        config_path: state_dir.join("openclaw.json"),
+        workspace_dir: state_dir.join("workspace"),
+        marker_path: clean_root.join(".ocm-env.json"),
+    }
+}
+
+pub fn default_env_root(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let stores = resolve_store_paths(env, cwd)?;
+    Ok(stores.envs_dir.join(name))
+}
+
+pub fn env_meta_path(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let stores = resolve_store_paths(env, cwd)?;
+    Ok(stores.envs_dir.join(format!("{name}.json")))
+}
+
+pub fn version_meta_path(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let stores = resolve_store_paths(env, cwd)?;
+    Ok(stores.versions_dir.join(format!("{name}.json")))
+}
