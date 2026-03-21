@@ -364,4 +364,140 @@ impl Cli {
             .unwrap_or_else(|| self.cwd.clone());
         self.run_shell(&command, &build_openclaw_env(&meta, &self.env), &run_dir)
     }
+
+    fn handle_env_set_version(&self, args: Vec<String>) -> Result<i32, String> {
+        if args.len() < 2 {
+            return Err(format!(
+                "usage: {} env set-version <env> <version|none>",
+                self.command_example()
+            ));
+        }
+        let name = &args[0];
+        let version_name = &args[1];
+        Self::assert_no_extra_args(&args[2..])?;
+
+        let mut meta = get_environment(name, &self.env, &self.cwd)?;
+        if version_name.eq_ignore_ascii_case("none") {
+            meta.default_version = None;
+        } else {
+            let validated = validate_name(version_name, "Version name")?;
+            get_version(&validated, &self.env, &self.cwd)?;
+            meta.default_version = Some(validated);
+        }
+
+        let meta = save_environment(meta, &self.env, &self.cwd)?;
+        let default_version = meta.default_version.unwrap_or_else(|| "none".to_string());
+        self.stdout_line(format!(
+            "Updated env {}: defaultVersion={default_version}",
+            meta.name
+        ));
+        Ok(0)
+    }
+
+    fn handle_env_protect(&self, args: Vec<String>) -> Result<i32, String> {
+        if args.len() < 2 {
+            return Err(format!(
+                "usage: {} env protect <env> <on|off>",
+                self.command_example()
+            ));
+        }
+        let name = &args[0];
+        let value = args[1].trim().to_ascii_lowercase();
+        Self::assert_no_extra_args(&args[2..])?;
+        if value != "on" && value != "off" {
+            return Err("protection must be \"on\" or \"off\"".to_string());
+        }
+
+        let mut meta = get_environment(name, &self.env, &self.cwd)?;
+        meta.protected = value == "on";
+        let meta = save_environment(meta, &self.env, &self.cwd)?;
+        self.stdout_line(format!(
+            "Updated env {}: protected={}",
+            meta.name, meta.protected
+        ));
+        Ok(0)
+    }
+
+    fn handle_env_remove(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, force) = Self::consume_flag(args, "--force");
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = remove_environment(name, force, &self.env, &self.cwd)?;
+        self.stdout_line(format!("Removed env {}", meta.name));
+        self.stdout_line(format!(
+            "  root: {}",
+            derive_env_paths(Path::new(&meta.root)).root.display()
+        ));
+        Ok(0)
+    }
+
+    fn handle_env_prune(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, yes) = Self::consume_flag(args, "--yes");
+        let (args, older_than_raw) = Self::consume_option(args, "--older-than")?;
+        Self::assert_no_extra_args(&args)?;
+
+        let older_than_days = match older_than_raw.as_deref() {
+            Some(raw) if !raw.trim().is_empty() => {
+                Self::parse_positive_u32(raw, "--older-than")? as i64
+            }
+            _ => 14,
+        };
+
+        let envs = list_environments(&self.env, &self.cwd)?;
+        let candidates = select_prune_candidates(&envs, older_than_days);
+
+        if !yes {
+            if json_flag {
+                let summaries = candidates.iter().map(summarize_env).collect::<Vec<_>>();
+                self.print_json(&serde_json::json!({
+                    "apply": false,
+                    "olderThanDays": older_than_days,
+                    "count": summaries.len(),
+                    "candidates": summaries,
+                }))?;
+                return Ok(0);
+            }
+
+            self.stdout_line(format!(
+                "Prune preview ({}d): {} candidate(s)",
+                older_than_days,
+                candidates.len()
+            ));
+            for meta in candidates {
+                self.stdout_line(format!(
+                    "  {}  {}",
+                    meta.name,
+                    derive_env_paths(Path::new(&meta.root)).root.display()
+                ));
+            }
+            self.stdout_line("Re-run with --yes to remove them.");
+            return Ok(0);
+        }
+
+        let mut removed = Vec::<EnvSummary>::new();
+        for meta in candidates {
+            let removed_meta = remove_environment(&meta.name, false, &self.env, &self.cwd)?;
+            removed.push(summarize_env(&removed_meta));
+        }
+
+        if json_flag {
+            self.print_json(&serde_json::json!({
+                "apply": true,
+                "olderThanDays": older_than_days,
+                "count": removed.len(),
+                "removed": removed,
+            }))?;
+            return Ok(0);
+        }
+
+        self.stdout_line(format!("Pruned {} environment(s).", removed.len()));
+        for summary in removed {
+            self.stdout_line(format!("  {}  {}", summary.name, summary.root));
+        }
+        Ok(0)
+    }
 }
