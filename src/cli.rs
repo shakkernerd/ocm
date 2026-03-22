@@ -120,6 +120,14 @@ impl Cli {
         }
     }
 
+    fn assert_command_separator(before: &[String], message: &str) -> Result<(), String> {
+        if before.len() > 1 {
+            return Err(message.to_string());
+        }
+        Self::assert_no_extra_args(&before[1..]).map_err(|_| message.to_string())?;
+        Ok(())
+    }
+
     fn run_direct(
         &self,
         command: &str,
@@ -136,7 +144,7 @@ impl Cli {
             .envs(env)
             .current_dir(cwd)
             .status()
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("failed to run \"{command}\": {error}"))?;
         Ok(status.code().unwrap_or(1))
     }
 
@@ -316,7 +324,7 @@ impl Cli {
         let Some(name) = before.first() else {
             return Err("environment name is required".to_string());
         };
-        Self::assert_no_extra_args(&before[1..])?;
+        Self::assert_command_separator(&before, "env exec requires -- before the command")?;
         if after.is_empty() {
             return Err("env exec requires a command after --".to_string());
         }
@@ -336,7 +344,7 @@ impl Cli {
         let Some(name) = before.first() else {
             return Err("environment name is required".to_string());
         };
-        Self::assert_no_extra_args(&before[1..])?;
+        Self::assert_command_separator(&before, "env run requires -- before OpenClaw arguments")?;
 
         let meta = self.touch_environment(name)?;
         let version_name = version_override
