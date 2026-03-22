@@ -1,0 +1,100 @@
+mod support;
+
+use std::fs;
+
+use ocm::paths::{env_meta_path, version_meta_path};
+use ocm::store::{
+    add_version, create_environment, get_environment, get_version, list_environments,
+    list_versions, remove_environment, remove_version,
+};
+use ocm::types::{AddVersionOptions, CreateEnvironmentOptions};
+
+use crate::support::{ocm_env, TestDir};
+
+#[test]
+fn environment_store_round_trip_covers_create_read_list_and_remove() {
+    let root = TestDir::new("store-env-flow");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "alpha".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_version: Some("stable".to_string()),
+            protected: true,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let meta_path = env_meta_path("alpha", &env, &cwd).unwrap();
+    assert!(meta_path.exists());
+    assert!(created.protected);
+    assert_eq!(created.gateway_port, Some(19789));
+    assert_eq!(created.default_version.as_deref(), Some("stable"));
+
+    let fetched = get_environment("alpha", &env, &cwd).unwrap();
+    assert_eq!(fetched.name, "alpha");
+    assert!(fetched.root.ends_with("/alpha"));
+
+    let listed = list_environments(&env, &cwd).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "alpha");
+
+    let removed = remove_environment("alpha", true, &env, &cwd).unwrap();
+    assert_eq!(removed.name, "alpha");
+    assert!(!meta_path.exists());
+    assert!(!std::path::Path::new(&removed.root).exists());
+}
+
+#[test]
+fn version_store_round_trip_covers_add_show_list_and_remove() {
+    let root = TestDir::new("store-version-flow");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let alpha = add_version(
+        AddVersionOptions {
+            name: "alpha".to_string(),
+            command: "sh".to_string(),
+            cwd: None,
+            description: Some("alpha launcher".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let beta = add_version(
+        AddVersionOptions {
+            name: "beta".to_string(),
+            command: "openclaw".to_string(),
+            cwd: Some("./launchers/beta".to_string()),
+            description: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let fetched = get_version("beta", &env, &cwd).unwrap();
+    assert_eq!(alpha.description.as_deref(), Some("alpha launcher"));
+    assert_eq!(fetched.name, "beta");
+    assert_eq!(fetched.command, "openclaw");
+    assert!(fetched.cwd.as_deref().unwrap().ends_with("/launchers/beta"));
+
+    let listed = list_versions(&env, &cwd).unwrap();
+    let names = listed.into_iter().map(|meta| meta.name).collect::<Vec<_>>();
+    assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
+
+    let beta_path = version_meta_path("beta", &env, &cwd).unwrap();
+    assert!(beta_path.exists());
+
+    let removed = remove_version("beta", &env, &cwd).unwrap();
+    assert_eq!(removed.name, beta.name);
+    assert!(!beta_path.exists());
+}
