@@ -53,14 +53,29 @@ impl Cli {
     }
 
     fn parse_positive_u32(raw: &str, label: &str) -> Result<u32, String> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(format!("{label} requires a value"));
+        }
+
         let value = raw
-            .trim()
             .parse::<u32>()
             .map_err(|_| format!("{label} must be a positive integer"))?;
         if value == 0 {
             return Err(format!("{label} must be a positive integer"));
         }
         Ok(value)
+    }
+
+    fn require_option_value(
+        value: Option<String>,
+        name: &str,
+    ) -> Result<Option<String>, String> {
+        match value {
+            Some(value) if value.trim().is_empty() => Err(format!("{name} requires a value")),
+            Some(value) => Ok(Some(value.trim().to_string())),
+            None => Ok(None),
+        }
     }
 
     fn split_on_double_dash(args: &[String]) -> (Vec<String>, Vec<String>) {
@@ -173,20 +188,18 @@ impl Cli {
         let (args, root) = Self::consume_option(args, "--root")?;
         let (args, port_raw) = Self::consume_option(args, "--port")?;
         let gateway_port = match port_raw.as_deref() {
-            Some(raw) if !raw.trim().is_empty() => Some(Self::parse_positive_u32(raw, "--port")?),
+            Some(raw) => Some(Self::parse_positive_u32(raw, "--port")?),
             _ => None,
         };
         let (args, version_name) = Self::consume_option(args, "--version")?;
+        let version_name = Self::require_option_value(version_name, "--version")?;
 
         let Some(name) = args.first() else {
             return Err("environment name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        if let Some(version_name) = version_name
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
+        if let Some(version_name) = version_name.as_deref() {
             get_version(version_name, &self.env, &self.cwd)?;
         }
 
@@ -195,7 +208,7 @@ impl Cli {
                 name: name.clone(),
                 root,
                 gateway_port,
-                default_version: version_name.filter(|value| !value.trim().is_empty()),
+                default_version: version_name,
                 protected: protect,
             },
             &self.env,
@@ -341,6 +354,7 @@ impl Cli {
     fn handle_env_run(&self, args: Vec<String>) -> Result<i32, String> {
         let (before, after) = Self::split_on_double_dash(&args);
         let (before, version_override) = Self::consume_option(before, "--version")?;
+        let version_override = Self::require_option_value(version_override, "--version")?;
         let Some(name) = before.first() else {
             return Err("environment name is required".to_string());
         };
@@ -449,9 +463,7 @@ impl Cli {
         Self::assert_no_extra_args(&args)?;
 
         let older_than_days = match older_than_raw.as_deref() {
-            Some(raw) if !raw.trim().is_empty() => {
-                Self::parse_positive_u32(raw, "--older-than")? as i64
-            }
+            Some(raw) => Self::parse_positive_u32(raw, "--older-than")? as i64,
             _ => 14,
         };
 
@@ -512,6 +524,7 @@ impl Cli {
     fn handle_version_add(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, command) = Self::consume_option(args, "--command")?;
+        let command = Self::require_option_value(command, "--command")?;
         let (args, cwd) = Self::consume_option(args, "--cwd")?;
         let (args, description) = Self::consume_option(args, "--description")?;
         let Some(name) = args.first() else {
