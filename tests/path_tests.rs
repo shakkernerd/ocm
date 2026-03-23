@@ -74,7 +74,7 @@ fn create_environment_normalizes_relative_custom_root() {
 }
 
 #[test]
-fn add_version_normalizes_relative_cwd() {
+fn add_launcher_normalizes_relative_cwd() {
     let root = TestDir::new("launcher-cwd");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
