@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
 use crate::paths::{derive_env_paths, validate_name};
+use crate::runner::{run_direct, run_shell};
 use crate::shell::{build_openclaw_env, quote_posix, render_use_script, resolve_shell_name};
 use crate::store::{
     add_launcher, create_environment, ensure_store, get_environment, get_launcher,
@@ -138,39 +138,6 @@ impl Cli {
         }
         Self::assert_no_extra_args(&before[1..]).map_err(|_| message.to_string())?;
         Ok(())
-    }
-
-    fn run_direct(
-        &self,
-        command: &str,
-        args: &[String],
-        env: &BTreeMap<String, String>,
-        cwd: &Path,
-    ) -> Result<i32, String> {
-        let status = Command::new(command)
-            .args(args)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .env_clear()
-            .envs(env)
-            .current_dir(cwd)
-            .status()
-            .map_err(|error| format!("failed to run \"{command}\": {error}"))?;
-        Ok(status.code().unwrap_or(1))
-    }
-
-    fn run_shell(
-        &self,
-        command: &str,
-        env: &BTreeMap<String, String>,
-        cwd: &Path,
-    ) -> Result<i32, String> {
-        if cfg!(windows) {
-            self.run_direct("cmd", &["/C".to_string(), command.to_string()], env, cwd)
-        } else {
-            self.run_direct("sh", &["-lc".to_string(), command.to_string()], env, cwd)
-        }
     }
 
     fn touch_environment(&self, name: &str) -> Result<EnvMeta, String> {
@@ -340,7 +307,7 @@ impl Cli {
         }
 
         let meta = self.touch_environment(name)?;
-        self.run_direct(
+        run_direct(
             &after[0],
             &after[1..],
             &build_openclaw_env(&meta, &self.env),
@@ -381,7 +348,7 @@ impl Cli {
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.cwd.clone());
-        self.run_shell(&command, &build_openclaw_env(&meta, &self.env), &run_dir)
+        run_shell(&command, &build_openclaw_env(&meta, &self.env), &run_dir)
     }
 
     fn handle_env_set_launcher(&self, args: Vec<String>) -> Result<i32, String> {
