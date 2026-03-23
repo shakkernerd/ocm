@@ -707,6 +707,8 @@ impl Cli {
             "launcher" => match action.as_str() {
                 "add" => self.handle_launcher_like_add(rest, "launcher"),
                 "list" => self.handle_launcher_like_list(rest, "launcher"),
+                "show" => self.handle_launcher_like_show(rest, "launcher"),
+                "remove" | "rm" => self.handle_launcher_like_remove(rest, "launcher"),
                 _ => Err(format!("unknown launcher command: {action}")),
             },
             _ => Err(format!("unknown command group: {group}")),

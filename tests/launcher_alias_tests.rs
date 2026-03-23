@@ -48,3 +48,41 @@ fn launcher_add_and_list_use_the_existing_version_store() {
     assert!(stdout(&version_list).contains("\"name\": \"stable\""));
     assert!(stdout(&version_list).contains("\"description\": \"launcher alias\""));
 }
+
+#[test]
+fn launcher_show_and_remove_share_the_existing_version_store() {
+    let root = TestDir::new("launcher-show-remove");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "version",
+            "add",
+            "stable",
+            "--command",
+            "sh",
+            "--cwd",
+            "./launcher-dir",
+        ],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+
+    let show = run_ocm(&cwd, &env, &["launcher", "show", "stable"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_stdout = stdout(&show);
+    assert!(show_stdout.contains("kind: ocm-version"));
+    assert!(show_stdout.contains("name: stable"));
+    assert!(show_stdout.contains("command: sh"));
+
+    let remove = run_ocm(&cwd, &env, &["launcher", "remove", "stable"]);
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    assert!(stdout(&remove).contains("Removed launcher stable"));
+
+    let version_list = run_ocm(&cwd, &env, &["version", "list"]);
+    assert!(version_list.status.success(), "{}", stderr(&version_list));
+    assert_eq!(stdout(&version_list), "No versions.\n");
+}
