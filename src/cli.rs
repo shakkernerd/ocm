@@ -704,6 +704,11 @@ impl Cli {
                 _ => Err(format!("unknown env command: {action}")),
             },
             "version" => self.dispatch_launcher_like_command("version", action.as_str(), rest),
+            "launcher" => match action.as_str() {
+                "add" => self.handle_launcher_like_add(rest, "launcher"),
+                "list" => self.handle_launcher_like_list(rest, "launcher"),
+                _ => Err(format!("unknown launcher command: {action}")),
+            },
             _ => Err(format!("unknown command group: {group}")),
         };
 
