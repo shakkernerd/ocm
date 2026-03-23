@@ -7,11 +7,10 @@ use serde::Serialize;
 use crate::execution::{build_launcher_command, resolve_launcher_name, resolve_launcher_run_dir};
 use crate::paths::{derive_env_paths, validate_name};
 use crate::runner::{run_direct, run_shell};
-use crate::services::LauncherService;
+use crate::services::{EnvironmentService, LauncherService};
 use crate::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::store::{
-    create_environment, ensure_store, get_environment, get_launcher, list_environments, now_utc,
-    remove_environment, save_environment, select_prune_candidates, summarize_env,
+    ensure_store, get_environment, get_launcher, now_utc, save_environment, summarize_env,
 };
 use crate::types::{AddLauncherOptions, CreateEnvironmentOptions, EnvMeta, EnvSummary};
 
@@ -25,6 +24,10 @@ pub struct Cli {
 impl Cli {
     fn launcher_service(&self) -> LauncherService<'_> {
         LauncherService::new(&self.env, &self.cwd)
+    }
+
+    fn environment_service(&self) -> EnvironmentService<'_> {
+        EnvironmentService::new(&self.env, &self.cwd)
     }
 
     fn stdout_line(&self, line: impl AsRef<str>) {
@@ -168,21 +171,15 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        if let Some(launcher_name) = launcher_name.as_deref() {
-            get_launcher(launcher_name, &self.env, &self.cwd)?;
-        }
-
-        let meta = create_environment(
-            CreateEnvironmentOptions {
+        let meta = self
+            .environment_service()
+            .create(CreateEnvironmentOptions {
                 name: name.clone(),
                 root,
                 gateway_port,
                 default_launcher: launcher_name,
                 protected: protect,
-            },
-            &self.env,
-            &self.cwd,
-        )?;
+            })?;
 
         if json_flag {
             self.print_json(&summarize_env(&meta))?;
@@ -212,7 +209,7 @@ impl Cli {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         Self::assert_no_extra_args(&args)?;
 
-        let envs = list_environments(&self.env, &self.cwd)?;
+        let envs = self.environment_service().list()?;
         let summaries = envs.iter().map(summarize_env).collect::<Vec<_>>();
         if json_flag {
             self.print_json(&summaries)?;
@@ -245,7 +242,7 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = get_environment(name, &self.env, &self.cwd)?;
+        let meta = self.environment_service().get(name)?;
         let summary = summarize_env(&meta);
         if json_flag {
             self.print_json(&summary)?;
@@ -348,16 +345,12 @@ impl Cli {
         let launcher_name = &args[1];
         Self::assert_no_extra_args(&args[2..])?;
 
-        let mut meta = get_environment(name, &self.env, &self.cwd)?;
-        if launcher_name.eq_ignore_ascii_case("none") {
-            meta.default_launcher = None;
+        let validated = if launcher_name.eq_ignore_ascii_case("none") {
+            launcher_name.to_string()
         } else {
-            let validated = validate_name(launcher_name, "Launcher name")?;
-            get_launcher(&validated, &self.env, &self.cwd)?;
-            meta.default_launcher = Some(validated);
-        }
-
-        let meta = save_environment(meta, &self.env, &self.cwd)?;
+            validate_name(launcher_name, "Launcher name")?
+        };
+        let meta = self.environment_service().set_launcher(name, &validated)?;
         let default_launcher = meta.default_launcher.unwrap_or_else(|| "none".to_string());
         self.stdout_line(format!(
             "Updated env {}: defaultLauncher={default_launcher}",
@@ -380,9 +373,9 @@ impl Cli {
             return Err("protection must be \"on\" or \"off\"".to_string());
         }
 
-        let mut meta = get_environment(name, &self.env, &self.cwd)?;
-        meta.protected = value == "on";
-        let meta = save_environment(meta, &self.env, &self.cwd)?;
+        let meta = self
+            .environment_service()
+            .set_protected(name, value == "on")?;
         self.stdout_line(format!(
             "Updated env {}: protected={}",
             meta.name, meta.protected
@@ -397,7 +390,7 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = remove_environment(name, force, &self.env, &self.cwd)?;
+        let meta = self.environment_service().remove(name, force)?;
         self.stdout_line(format!("Removed env {}", meta.name));
         self.stdout_line(format!(
             "  root: {}",
@@ -417,8 +410,9 @@ impl Cli {
             _ => 14,
         };
 
-        let envs = list_environments(&self.env, &self.cwd)?;
-        let candidates = select_prune_candidates(&envs, older_than_days);
+        let candidates = self
+            .environment_service()
+            .prune_candidates(older_than_days)?;
 
         if !yes {
             if json_flag {
@@ -449,9 +443,9 @@ impl Cli {
         }
 
         let mut removed = Vec::<EnvSummary>::new();
-        for meta in candidates {
-            let removed_meta = remove_environment(&meta.name, false, &self.env, &self.cwd)?;
-            removed.push(summarize_env(&removed_meta));
+        let removed_meta = self.environment_service().prune(older_than_days)?;
+        for meta in removed_meta {
+            removed.push(summarize_env(&meta));
         }
 
         if json_flag {
