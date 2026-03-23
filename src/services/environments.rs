@@ -1,11 +1,18 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use crate::execution::{build_launcher_command, resolve_launcher_name, resolve_launcher_run_dir};
 use crate::store::{
     create_environment, get_environment, get_launcher, list_environments, now_utc,
     remove_environment, save_environment, select_prune_candidates,
 };
 use crate::types::{CreateEnvironmentOptions, EnvMeta};
+
+pub struct ResolvedLauncherExecution {
+    pub env: EnvMeta,
+    pub command: String,
+    pub run_dir: PathBuf,
+}
 
 pub struct EnvironmentService<'a> {
     env: &'a BTreeMap<String, String>,
@@ -71,5 +78,22 @@ impl<'a> EnvironmentService<'a> {
             removed.push(remove_environment(&meta.name, false, self.env, self.cwd)?);
         }
         Ok(removed)
+    }
+
+    pub fn resolve_run(
+        &self,
+        name: &str,
+        launcher_override: Option<String>,
+        args: &[String],
+    ) -> Result<ResolvedLauncherExecution, String> {
+        let env = self.touch(name)?;
+        let launcher_name = resolve_launcher_name(&env, launcher_override)?;
+        let launcher = get_launcher(&launcher_name, self.env, self.cwd)?;
+
+        Ok(ResolvedLauncherExecution {
+            command: build_launcher_command(&launcher, args),
+            run_dir: resolve_launcher_run_dir(&launcher, self.cwd),
+            env,
+        })
     }
 }

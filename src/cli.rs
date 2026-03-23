@@ -4,15 +4,12 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::execution::{build_launcher_command, resolve_launcher_name, resolve_launcher_run_dir};
 use crate::paths::{derive_env_paths, validate_name};
 use crate::runner::{run_direct, run_shell};
 use crate::services::{EnvironmentService, LauncherService};
 use crate::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
-use crate::store::{
-    ensure_store, get_environment, get_launcher, now_utc, save_environment, summarize_env,
-};
-use crate::types::{AddLauncherOptions, CreateEnvironmentOptions, EnvMeta, EnvSummary};
+use crate::store::{ensure_store, summarize_env};
+use crate::types::{AddLauncherOptions, CreateEnvironmentOptions, EnvSummary};
 
 const VERSION: &str = "0.1.0";
 
@@ -146,12 +143,6 @@ impl Cli {
         }
         Self::assert_no_extra_args(&before[1..]).map_err(|_| message.to_string())?;
         Ok(())
-    }
-
-    fn touch_environment(&self, name: &str) -> Result<EnvMeta, String> {
-        let mut meta = get_environment(name, &self.env, &self.cwd)?;
-        meta.last_used_at = Some(now_utc());
-        save_environment(meta, &self.env, &self.cwd)
     }
 
     fn handle_env_create(&self, args: Vec<String>) -> Result<i32, String> {
@@ -292,7 +283,7 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = self.touch_environment(name)?;
+        let meta = self.environment_service().touch(name)?;
         let shell = resolve_shell_name(shell_name.as_deref(), &self.env);
         print!("{}", render_use_script(&meta, &shell));
         Ok(0)
@@ -308,7 +299,7 @@ impl Cli {
             return Err("env exec requires a command after --".to_string());
         }
 
-        let meta = self.touch_environment(name)?;
+        let meta = self.environment_service().touch(name)?;
         run_direct(
             &after[0],
             &after[1..],
@@ -326,12 +317,14 @@ impl Cli {
         };
         Self::assert_command_separator(&before, "env run requires -- before OpenClaw arguments")?;
 
-        let meta = self.touch_environment(name)?;
-        let launcher_name = resolve_launcher_name(&meta, launcher_override)?;
-        let launcher = get_launcher(&launcher_name, &self.env, &self.cwd)?;
-        let command = build_launcher_command(&launcher, &after);
-        let run_dir = resolve_launcher_run_dir(&launcher, &self.cwd);
-        run_shell(&command, &build_openclaw_env(&meta, &self.env), &run_dir)
+        let resolved = self
+            .environment_service()
+            .resolve_run(name, launcher_override, &after)?;
+        run_shell(
+            &resolved.command,
+            &build_openclaw_env(&resolved.env, &self.env),
+            &resolved.run_dir,
+        )
     }
 
     fn handle_env_set_launcher(&self, args: Vec<String>) -> Result<i32, String> {
