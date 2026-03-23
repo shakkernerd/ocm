@@ -50,7 +50,7 @@ pub struct EnvSummary {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct VersionMeta {
+pub struct LauncherMeta {
     pub kind: String,
     pub name: String,
     pub command: String,
@@ -61,6 +61,8 @@ pub struct VersionMeta {
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
+
+pub type VersionMeta = LauncherMeta;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +77,7 @@ pub struct EnvMarker {
 pub struct StorePaths {
     pub home: PathBuf,
     pub envs_dir: PathBuf,
+    pub launchers_dir: PathBuf,
     pub versions_dir: PathBuf,
 }
 
@@ -94,3 +97,5 @@ pub struct AddVersionOptions {
     pub cwd: Option<String>,
     pub description: Option<String>,
 }
+
+pub type AddLauncherOptions = AddVersionOptions;

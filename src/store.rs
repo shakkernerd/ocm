@@ -8,11 +8,11 @@ use time::{Duration, OffsetDateTime};
 
 use crate::paths::{
     clean_path, default_env_root, derive_env_paths, display_path, env_meta_path,
-    resolve_absolute_path, resolve_store_paths, validate_name, version_meta_path,
+    launcher_meta_path, resolve_absolute_path, resolve_store_paths, validate_name,
 };
 use crate::types::{
-    AddVersionOptions, CreateEnvironmentOptions, EnvMarker, EnvMeta, EnvSummary, StorePaths,
-    VersionMeta,
+    AddLauncherOptions, CreateEnvironmentOptions, EnvMarker, EnvMeta, EnvSummary, LauncherMeta,
+    StorePaths, VersionMeta,
 };
 
 pub fn now_utc() -> OffsetDateTime {
@@ -72,6 +72,7 @@ pub fn ensure_store(env: &BTreeMap<String, String>, cwd: &Path) -> Result<StoreP
     let stores = resolve_store_paths(env, cwd)?;
     ensure_dir(&stores.home)?;
     ensure_dir(&stores.envs_dir)?;
+    ensure_dir(&stores.launchers_dir)?;
     ensure_dir(&stores.versions_dir)?;
     Ok(stores)
 }
@@ -235,13 +236,13 @@ pub fn remove_environment(
     Ok(meta)
 }
 
-pub fn list_versions(
+pub fn list_launchers(
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) -> Result<Vec<VersionMeta>, String> {
+) -> Result<Vec<LauncherMeta>, String> {
     let stores = ensure_store(env, cwd)?;
-    let files = load_json_files(&stores.versions_dir)?;
-    let mut out: Vec<VersionMeta> = Vec::with_capacity(files.len());
+    let files = load_json_files(&stores.launchers_dir)?;
+    let mut out: Vec<LauncherMeta> = Vec::with_capacity(files.len());
     for file in files {
         out.push(read_json(&file)?);
     }
@@ -249,26 +250,26 @@ pub fn list_versions(
     Ok(out)
 }
 
-pub fn get_version(
+pub fn get_launcher(
     name: &str,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) -> Result<VersionMeta, String> {
+) -> Result<LauncherMeta, String> {
     let safe_name = validate_name(name, "Version name")?;
-    let path = version_meta_path(&safe_name, env, cwd)?;
+    let path = launcher_meta_path(&safe_name, env, cwd)?;
     if !path_exists(&path) {
         return Err(format!("version \"{safe_name}\" does not exist"));
     }
     read_json(&path)
 }
 
-pub fn add_version(
-    options: AddVersionOptions,
+pub fn add_launcher(
+    options: AddLauncherOptions,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) -> Result<VersionMeta, String> {
+) -> Result<LauncherMeta, String> {
     let name = validate_name(&options.name, "Version name")?;
-    let meta_path = version_meta_path(&name, env, cwd)?;
+    let meta_path = launcher_meta_path(&name, env, cwd)?;
     if path_exists(&meta_path) {
         return Err(format!("version \"{name}\" already exists"));
     }
@@ -290,7 +291,7 @@ pub fn add_version(
         .filter(|value| !value.is_empty());
 
     let created_at = now_utc();
-    let meta = VersionMeta {
+    let meta = LauncherMeta {
         kind: "ocm-version".to_string(),
         name,
         command: command.to_string(),
@@ -303,15 +304,46 @@ pub fn add_version(
     Ok(meta)
 }
 
+pub fn remove_launcher(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<LauncherMeta, String> {
+    let meta = get_launcher(name, env, cwd)?;
+    let path = launcher_meta_path(&meta.name, env, cwd)?;
+    fs::remove_file(path).map_err(|error| error.to_string())?;
+    Ok(meta)
+}
+
+pub fn list_versions(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<Vec<VersionMeta>, String> {
+    list_launchers(env, cwd)
+}
+
+pub fn get_version(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<VersionMeta, String> {
+    get_launcher(name, env, cwd)
+}
+
+pub fn add_version(
+    options: AddLauncherOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<VersionMeta, String> {
+    add_launcher(options, env, cwd)
+}
+
 pub fn remove_version(
     name: &str,
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<VersionMeta, String> {
-    let meta = get_version(name, env, cwd)?;
-    let path = version_meta_path(&meta.name, env, cwd)?;
-    fs::remove_file(path).map_err(|error| error.to_string())?;
-    Ok(meta)
+    remove_launcher(name, env, cwd)
 }
 
 pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<EnvMeta> {
