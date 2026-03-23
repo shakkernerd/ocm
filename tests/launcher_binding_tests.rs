@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use crate::support::{ocm_env, run_ocm, stderr, stdout, TestDir};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
 #[test]
 fn env_set_launcher_updates_and_clears_the_default_launcher() {
@@ -11,7 +11,11 @@ fn env_set_launcher_updates_and_clears_the_default_launcher() {
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let add = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "sh"]);
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "sh"],
+    );
     assert!(add.status.success(), "{}", stderr(&add));
 
     let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
