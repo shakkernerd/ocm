@@ -15,7 +15,8 @@ It already works as a practical local control plane for:
 - named launcher definitions for running OpenClaw
 - safe cleanup and pruning
 
-It is not yet a full runtime installer. Today, `version` means "named launcher definition", not "installer-managed OpenClaw runtime".
+It is not yet a full runtime installer. Today, launchers are the execution layer, while runtimes
+remain a future addition.
 
 ## Why this exists
 
@@ -63,11 +64,9 @@ Derived paths inside that root:
 - the boundary for OpenClaw state and config
 - the unit that can be activated, executed in, protected, removed, or pruned
 
-### Versions
+### Launchers
 
-The current `version` entity is a launcher definition.
-
-A version stores:
+A launcher stores:
 
 - a name
 - a command string
@@ -81,11 +80,8 @@ That makes it flexible enough to point at:
 - a local dev command
 - a shell-based launcher workflow
 
-Long term, this concept will likely be renamed to `launcher`, while real installer-managed
-OpenClaw binaries become `runtime`. For now, the compatibility-first CLI surface is still `version`.
-The CLI also now supports `launcher add/list/show/remove` as compatibility aliases for the same
-stored objects. Storage remains version-based for now, and environment binding still uses
-`--version` / `env set-version`.
+Real installer-managed OpenClaw binaries will become `runtime` later. For now, launchers are the
+way an environment decides what to execute.
 
 ## What works today
 
@@ -97,19 +93,12 @@ Environment commands:
 - `env use`
 - `env exec`
 - `env run`
-- `env set-version`
+- `env set-launcher`
 - `env protect`
 - `env remove`
 - `env prune`
 
-Version commands:
-
-- `version add`
-- `version list`
-- `version show`
-- `version remove`
-
-Launcher alias commands:
+Launcher commands:
 
 - `launcher add`
 - `launcher list`
@@ -160,7 +149,7 @@ Register a launcher:
 Create an isolated environment bound to that launcher:
 
 ```bash
-./bin/ocm env create refactor-a --version stable --port 19789
+./bin/ocm env create refactor-a --launcher stable --port 19789
 ```
 
 Activate it in your shell:
@@ -204,17 +193,17 @@ Clean up safely:
 Create one environment per project, branch, or task so OpenClaw state stays separate:
 
 ```bash
-./bin/ocm version add stable --command openclaw
-./bin/ocm env create proj-a --version stable
-./bin/ocm env create proj-b --version stable
+./bin/ocm launcher add stable --command openclaw
+./bin/ocm env create proj-a --launcher stable
+./bin/ocm env create proj-b --launcher stable
 ```
 
 ### 2. Run a local development launcher
 
-If OpenClaw is run from a local checkout or wrapper, store that as a version:
+If OpenClaw is run from a local checkout or wrapper, store that as a launcher:
 
 ```bash
-./bin/ocm version add local-dev \
+./bin/ocm launcher add local-dev \
   --command 'cargo run --bin openclaw --' \
   --cwd /path/to/openclaw \
   --description "Run the local OpenClaw checkout"
@@ -223,11 +212,11 @@ If OpenClaw is run from a local checkout or wrapper, store that as a version:
 Then bind an environment to it:
 
 ```bash
-./bin/ocm env create sandbox --version local-dev
+./bin/ocm env create sandbox --launcher local-dev
 ./bin/ocm env run sandbox -- onboard
 ```
 
-`env run` executes the stored launcher command and appends arguments after `--`. If the version has
+`env run` executes the stored launcher command and appends arguments after `--`. If the launcher has
 `--cwd`, the launcher runs from that directory.
 
 ### 3. Automate environment-aware scripts
@@ -239,8 +228,6 @@ The CLI provides human-readable output and JSON output where it matters:
 ./bin/ocm env show sandbox --json
 ./bin/ocm launcher list --json
 ./bin/ocm launcher show stable --json
-./bin/ocm version list --json
-./bin/ocm version show stable --json
 ./bin/ocm env prune --json
 ```
 
@@ -262,11 +249,11 @@ Apply removal only when you are ready:
 
 ### Environment commands
 
-`env create <name> [--root <path>] [--port <port>] [--version <name>] [--protect]`
+`env create <name> [--root <path>] [--port <port>] [--launcher <name>] [--protect]`
 
 - Creates the environment root and OpenClaw directories.
 - Writes an `.ocm-env.json` marker file into the root.
-- Can bind a default launcher with `--version`.
+- Can bind a default launcher with `--launcher`.
 - Can store a gateway port with `--port`.
 - Can mark the environment protected with `--protect`.
 
@@ -294,15 +281,15 @@ eval "$(./bin/ocm env use demo)"
 - Requires `--` before the command.
 - Propagates the child exit code.
 
-`env run <name> [--version <name>] -- <openclaw args...>`
+`env run <name> [--launcher <name>] -- <openclaw args...>`
 
-- Resolves the environment's default version or an explicit `--version`.
+- Resolves the environment's default launcher or an explicit `--launcher`.
 - Runs the stored launcher command through a shell.
 - Appends the arguments after `--` to that launcher command.
-- Uses the version's stored `cwd` when present, otherwise the current directory.
+- Uses the launcher's stored `cwd` when present, otherwise the current directory.
 - Requires `--` before launcher arguments.
 
-`env set-version <name> <version|none>`
+`env set-launcher <name> <launcher|none>`
 
 - Sets or clears the default launcher for the environment.
 
@@ -324,43 +311,24 @@ eval "$(./bin/ocm env use demo)"
 - Previews candidates by default.
 - Requires `--yes` to actually remove them.
 
-### Version commands
+### Launcher commands
 
-`version add <name> --command "<launcher>" [--cwd <path>] [--description <text>]`
+`launcher add <name> --command "<launcher>" [--cwd <path>] [--description <text>]`
 
 - Registers a launcher definition.
 - `--cwd` is normalized to an absolute path.
 
-`version list [--json]`
+`launcher list [--json]`
 
 - Lists all stored launcher definitions.
 
-`version show <name> [--json]`
+`launcher show <name> [--json]`
 
 - Shows one launcher definition.
 
-`version remove <name>`
-
-- Removes one launcher definition.
-
-### Launcher alias commands
-
-`launcher add <name> --command "<launcher>" [--cwd <path>] [--description <text>]`
-
-- Alias for `version add`.
-- Stores the same underlying version metadata.
-
-`launcher list [--json]`
-
-- Alias for `version list`.
-
-`launcher show <name> [--json]`
-
-- Alias for `version show`.
-
 `launcher remove <name>`
 
-- Alias for `version remove`.
+- Removes one launcher definition.
 
 ## Environment behavior
 
@@ -399,17 +367,17 @@ OCM_HOME/
     <name>/
       .ocm-env.json
       .openclaw/
-  versions/
+  launchers/
     <name>.json
 ```
 
 Path rules:
 
-- environment and version names must start with an ASCII letter or number
+- environment and launcher names must start with an ASCII letter or number
 - remaining characters may use letters, numbers, `.`, `_`, or `-`
 - relative `OCM_HOME` values are resolved against the current working directory
 - relative custom `--root` values are resolved against the current working directory
-- relative version `--cwd` values are resolved against the current working directory
+- relative launcher `--cwd` values are resolved against the current working directory
 
 Metadata is stored as human-readable JSON.
 
@@ -421,7 +389,7 @@ Representative environment metadata:
   "name": "demo",
   "root": "/path/to/.ocm/envs/demo",
   "gatewayPort": 19789,
-  "defaultVersion": "stable",
+  "defaultLauncher": "stable",
   "protected": false,
   "createdAt": "2026-03-26T06:34:45.060385Z",
   "updatedAt": "2026-03-26T06:34:45.060385Z",
@@ -429,11 +397,11 @@ Representative environment metadata:
 }
 ```
 
-Representative version metadata:
+Representative launcher metadata:
 
 ```json
 {
-  "kind": "ocm-version",
+  "kind": "ocm-launcher",
   "name": "stable",
   "command": "openclaw",
   "cwd": null,
@@ -484,6 +452,6 @@ The next product step is not to replace the current model, but to extend it.
 The intended direction is:
 
 - keep environments as the main isolation unit
-- preserve `version` compatibility while clarifying it as a launcher concept
+- use launcher terminology consistently for the execution model
 - add real runtime management separately
 - expand lifecycle and shell integration on top of the current foundation
