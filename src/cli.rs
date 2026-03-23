@@ -7,11 +7,11 @@ use serde::Serialize;
 use crate::execution::{build_launcher_command, resolve_launcher_name, resolve_launcher_run_dir};
 use crate::paths::{derive_env_paths, validate_name};
 use crate::runner::{run_direct, run_shell};
+use crate::services::LauncherService;
 use crate::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::store::{
-    add_launcher, create_environment, ensure_store, get_environment, get_launcher,
-    list_environments, list_launchers, now_utc, remove_environment, remove_launcher,
-    save_environment, select_prune_candidates, summarize_env,
+    create_environment, ensure_store, get_environment, get_launcher, list_environments, now_utc,
+    remove_environment, save_environment, select_prune_candidates, summarize_env,
 };
 use crate::types::{AddLauncherOptions, CreateEnvironmentOptions, EnvMeta, EnvSummary};
 
@@ -23,6 +23,10 @@ pub struct Cli {
 }
 
 impl Cli {
+    fn launcher_service(&self) -> LauncherService<'_> {
+        LauncherService::new(&self.env, &self.cwd)
+    }
+
     fn stdout_line(&self, line: impl AsRef<str>) {
         println!("{}", line.as_ref());
     }
@@ -478,16 +482,12 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = add_launcher(
-            AddLauncherOptions {
-                name: name.clone(),
-                command: command.unwrap_or_default(),
-                cwd,
-                description,
-            },
-            &self.env,
-            &self.cwd,
-        )?;
+        let meta = self.launcher_service().add(AddLauncherOptions {
+            name: name.clone(),
+            command: command.unwrap_or_default(),
+            cwd,
+            description,
+        })?;
 
         if json_flag {
             self.print_json(&meta)?;
@@ -506,7 +506,7 @@ impl Cli {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         Self::assert_no_extra_args(&args)?;
 
-        let launchers = list_launchers(&self.env, &self.cwd)?;
+        let launchers = self.launcher_service().list()?;
         if json_flag {
             self.print_json(&launchers)?;
             return Ok(0);
@@ -532,7 +532,7 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = get_launcher(name, &self.env, &self.cwd)?;
+        let meta = self.launcher_service().show(name)?;
         if json_flag {
             self.print_json(&meta)?;
             return Ok(0);
@@ -572,7 +572,7 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = remove_launcher(name, &self.env, &self.cwd)?;
+        let meta = self.launcher_service().remove(name)?;
         self.stdout_line(format!("Removed launcher {}", meta.name));
         Ok(0)
     }
