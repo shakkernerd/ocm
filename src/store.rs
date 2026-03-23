@@ -1,11 +1,12 @@
 mod common;
 mod environments;
 mod launchers;
+mod prune;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use time::{Duration, OffsetDateTime};
+use time::OffsetDateTime;
 
 use crate::paths::{derive_env_paths, display_path, resolve_store_paths};
 use crate::types::{EnvMeta, EnvSummary, StorePaths};
@@ -14,6 +15,7 @@ pub use environments::{
     create_environment, get_environment, list_environments, remove_environment, save_environment,
 };
 pub use launchers::{add_launcher, get_launcher, list_launchers, remove_launcher};
+pub use prune::select_prune_candidates;
 
 pub fn now_utc() -> OffsetDateTime {
     OffsetDateTime::now_utc()
@@ -42,13 +44,4 @@ pub fn summarize_env(meta: &EnvMeta) -> EnvSummary {
         created_at: meta.created_at,
         last_used_at: meta.last_used_at,
     }
-}
-
-pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<EnvMeta> {
-    let cutoff = now_utc() - Duration::days(older_than_days);
-    envs.iter()
-        .filter(|meta| !meta.protected)
-        .filter(|meta| meta.last_used_at.unwrap_or(meta.created_at) < cutoff)
-        .cloned()
-        .collect()
 }
