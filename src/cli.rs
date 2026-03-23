@@ -22,7 +22,7 @@ pub struct Cli {
 }
 
 impl Cli {
-    fn launcher_like_name(label: &str) -> &'static str {
+    fn launcher_name(label: &str) -> &'static str {
         match label {
             "launcher" => "launcher",
             _ => "version",
@@ -528,14 +528,14 @@ impl Cli {
         Ok(0)
     }
 
-    fn handle_launcher_like_add(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
+    fn handle_launcher_add(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, command) = Self::consume_option(args, "--command")?;
         let command = Self::require_option_value(command, "--command")?;
         let (args, cwd) = Self::consume_option(args, "--cwd")?;
         let (args, description) = Self::consume_option(args, "--description")?;
         let Some(name) = args.first() else {
-            return Err(format!("{} name is required", Self::launcher_like_name(label)));
+            return Err(format!("{} name is required", Self::launcher_name(label)));
         };
         Self::assert_no_extra_args(&args[1..])?;
 
@@ -557,7 +557,7 @@ impl Cli {
 
         self.stdout_line(format!(
             "Added {} {}",
-            Self::launcher_like_name(label),
+            Self::launcher_name(label),
             meta.name
         ));
         self.stdout_line(format!("  command: {}", meta.command));
@@ -567,7 +567,7 @@ impl Cli {
         Ok(0)
     }
 
-    fn handle_launcher_like_list(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
+    fn handle_launcher_list(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         Self::assert_no_extra_args(&args)?;
 
@@ -579,7 +579,7 @@ impl Cli {
         if versions.is_empty() {
             self.stdout_line(format!(
                 "No {}s.",
-                Self::launcher_like_name(label)
+                Self::launcher_name(label)
             ));
             return Ok(0);
         }
@@ -593,10 +593,10 @@ impl Cli {
         Ok(0)
     }
 
-    fn handle_launcher_like_show(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
+    fn handle_launcher_show(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let Some(name) = args.first() else {
-            return Err(format!("{} name is required", Self::launcher_like_name(label)));
+            return Err(format!("{} name is required", Self::launcher_name(label)));
         };
         Self::assert_no_extra_args(&args[1..])?;
 
@@ -634,30 +634,30 @@ impl Cli {
         Ok(0)
     }
 
-    fn handle_launcher_like_remove(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
+    fn handle_launcher_remove(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
         let Some(name) = args.first() else {
-            return Err(format!("{} name is required", Self::launcher_like_name(label)));
+            return Err(format!("{} name is required", Self::launcher_name(label)));
         };
         Self::assert_no_extra_args(&args[1..])?;
 
         let meta = remove_version(name, &self.env, &self.cwd)?;
         self.stdout_line(format!(
             "Removed {} {}",
-            Self::launcher_like_name(label),
+            Self::launcher_name(label),
             meta.name
         ));
         Ok(0)
     }
 
-    fn dispatch_launcher_like_command(&self, label: &str, action: &str, rest: Vec<String>) -> Result<i32, String> {
+    fn dispatch_launcher_command(&self, label: &str, action: &str, rest: Vec<String>) -> Result<i32, String> {
         match action {
-            "add" => self.handle_launcher_like_add(rest, label),
-            "list" => self.handle_launcher_like_list(rest, label),
-            "show" => self.handle_launcher_like_show(rest, label),
-            "remove" | "rm" => self.handle_launcher_like_remove(rest, label),
+            "add" => self.handle_launcher_add(rest, label),
+            "list" => self.handle_launcher_list(rest, label),
+            "show" => self.handle_launcher_show(rest, label),
+            "remove" | "rm" => self.handle_launcher_remove(rest, label),
             _ => Err(format!(
                 "unknown {} command: {action}",
-                Self::launcher_like_name(label)
+                Self::launcher_name(label)
             )),
         }
     }
@@ -703,12 +703,12 @@ impl Cli {
                 "prune" => self.handle_env_prune(rest),
                 _ => Err(format!("unknown env command: {action}")),
             },
-            "version" => self.dispatch_launcher_like_command("version", action.as_str(), rest),
+            "version" => self.dispatch_launcher_command("version", action.as_str(), rest),
             "launcher" => match action.as_str() {
-                "add" => self.handle_launcher_like_add(rest, "launcher"),
-                "list" => self.handle_launcher_like_list(rest, "launcher"),
-                "show" => self.handle_launcher_like_show(rest, "launcher"),
-                "remove" | "rm" => self.handle_launcher_like_remove(rest, "launcher"),
+                "add" => self.handle_launcher_add(rest, "launcher"),
+                "list" => self.handle_launcher_list(rest, "launcher"),
+                "show" => self.handle_launcher_show(rest, "launcher"),
+                "remove" | "rm" => self.handle_launcher_remove(rest, "launcher"),
                 _ => Err(format!("unknown launcher command: {action}")),
             },
             _ => Err(format!("unknown command group: {group}")),
