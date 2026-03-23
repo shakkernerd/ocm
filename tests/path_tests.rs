@@ -3,10 +3,10 @@ mod support;
 use std::fs;
 
 use ocm::paths::{clean_path, resolve_ocm_home, validate_name};
-use ocm::store::{add_version, create_environment};
-use ocm::types::{AddVersionOptions, CreateEnvironmentOptions};
+use ocm::store::{add_launcher, create_environment};
+use ocm::types::{AddLauncherOptions, CreateEnvironmentOptions};
 
-use crate::support::{base_env, ocm_env, path_string, TestDir};
+use crate::support::{TestDir, base_env, ocm_env, path_string};
 
 #[test]
 fn validate_name_accepts_supported_patterns() {
@@ -60,7 +60,7 @@ fn create_environment_normalizes_relative_custom_root() {
             name: "demo".to_string(),
             root: Some("./env-roots/../env-roots/demo".to_string()),
             gateway_port: None,
-            default_version: None,
+            default_launcher: None,
             protected: false,
         },
         &env,
@@ -75,13 +75,13 @@ fn create_environment_normalizes_relative_custom_root() {
 
 #[test]
 fn add_version_normalizes_relative_cwd() {
-    let root = TestDir::new("version-cwd");
+    let root = TestDir::new("launcher-cwd");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let meta = add_version(
-        AddVersionOptions {
+    let meta = add_launcher(
+        AddLauncherOptions {
             name: "stable".to_string(),
             command: "sh".to_string(),
             cwd: Some("./launchers/../launchers/stable".to_string()),
@@ -93,5 +93,8 @@ fn add_version_normalizes_relative_cwd() {
     .unwrap();
 
     let expected_cwd = clean_path(&cwd.join("launchers/stable"));
-    assert_eq!(meta.cwd.as_deref(), Some(path_string(&expected_cwd).as_str()));
+    assert_eq!(
+        meta.cwd.as_deref(),
+        Some(path_string(&expected_cwd).as_str())
+    );
 }

@@ -129,8 +129,7 @@ pub fn resolve_store_paths(
     let home = resolve_ocm_home(env, cwd)?;
     Ok(StorePaths {
         envs_dir: home.join("envs"),
-        launchers_dir: home.join("versions"),
-        versions_dir: home.join("versions"),
+        launchers_dir: home.join("launchers"),
         home,
     })
 }
@@ -197,12 +196,4 @@ pub fn launcher_meta_path(
 ) -> Result<PathBuf, String> {
     let stores = resolve_store_paths(env, cwd)?;
     Ok(stores.launchers_dir.join(format!("{name}.json")))
-}
-
-pub fn version_meta_path(
-    name: &str,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<PathBuf, String> {
-    launcher_meta_path(name, env, cwd)
 }

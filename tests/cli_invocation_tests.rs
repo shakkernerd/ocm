@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use crate::support::{ocm_env, run_ocm, stderr, TestDir};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr};
 
 #[test]
 fn env_exec_propagates_the_child_exit_code() {
@@ -32,7 +32,11 @@ fn env_exec_requires_double_dash_before_the_command() {
     let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
     assert!(create.status.success(), "{}", stderr(&create));
 
-    let exec = run_ocm(&cwd, &env, &["env", "exec", "demo", "sh", "-lc", "printf ok"]);
+    let exec = run_ocm(
+        &cwd,
+        &env,
+        &["env", "exec", "demo", "sh", "-lc", "printf ok"],
+    );
     assert_eq!(exec.status.code(), Some(1));
     assert!(stderr(&exec).contains("env exec requires -- before the command"));
 }
@@ -47,7 +51,11 @@ fn env_exec_mentions_the_command_when_process_launch_fails() {
     let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
     assert!(create.status.success(), "{}", stderr(&create));
 
-    let exec = run_ocm(&cwd, &env, &["env", "exec", "demo", "--", "definitely-not-a-real-command"]);
+    let exec = run_ocm(
+        &cwd,
+        &env,
+        &["env", "exec", "demo", "--", "definitely-not-a-real-command"],
+    );
     assert_eq!(exec.status.code(), Some(1));
     assert!(stderr(&exec).contains("failed to run \"definitely-not-a-real-command\""));
 }
@@ -59,10 +67,18 @@ fn env_run_requires_double_dash_before_openclaw_arguments() {
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let add_version = run_ocm(&cwd, &env, &["version", "add", "stable", "--command", "sh"]);
-    assert!(add_version.status.success(), "{}", stderr(&add_version));
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "sh"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
 
-    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--version", "stable"]);
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(create.status.success(), "{}", stderr(&create));
 
     let run = run_ocm(&cwd, &env, &["env", "run", "demo", "-lc", "printf ok"]);

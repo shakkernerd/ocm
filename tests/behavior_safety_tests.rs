@@ -4,7 +4,7 @@ use std::fs;
 
 use ocm::paths::{clean_path, env_meta_path};
 
-use crate::support::{ocm_env, run_ocm, stderr, TestDir};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr};
 
 #[test]
 fn removing_a_protected_environment_requires_force() {

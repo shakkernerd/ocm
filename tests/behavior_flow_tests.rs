@@ -4,7 +4,7 @@ use std::fs;
 
 use ocm::paths::clean_path;
 
-use crate::support::{ocm_env, run_ocm, stderr, stdout, TestDir};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
 #[test]
 fn env_use_prints_activation_exports_for_the_selected_environment() {
@@ -22,14 +22,8 @@ fn env_use_prints_activation_exports_for_the_selected_environment() {
     let env_root = clean_path(&root.child("ocm-home/envs/demo"));
     let script = stdout(&use_output);
     assert!(script.contains("unset OPENCLAW_PROFILE"));
-    assert!(script.contains(&format!(
-        "export OPENCLAW_HOME='{}'",
-        env_root.display()
-    )));
-    assert!(script.contains(&format!(
-        "export OPENCLAW_GATEWAY_PORT='{}'",
-        19789
-    )));
+    assert!(script.contains(&format!("export OPENCLAW_HOME='{}'", env_root.display())));
+    assert!(script.contains(&format!("export OPENCLAW_GATEWAY_PORT='{}'", 19789)));
 }
 
 #[test]
@@ -58,7 +52,10 @@ fn env_exec_injects_openclaw_environment_variables() {
     assert!(exec_output.status.success(), "{}", stderr(&exec_output));
 
     let env_root = clean_path(&root.child("ocm-home/envs/demo"));
-    assert_eq!(stdout(&exec_output), format!("{}|unset", env_root.display()));
+    assert_eq!(
+        stdout(&exec_output),
+        format!("{}|unset", env_root.display())
+    );
 }
 
 #[test]
@@ -69,11 +66,11 @@ fn env_run_uses_the_registered_launcher_and_its_cwd() {
     fs::create_dir_all(&launcher_dir).unwrap();
     let env = ocm_env(&root);
 
-    let add_version = run_ocm(
+    let add_launcher = run_ocm(
         &cwd,
         &env,
         &[
-            "version",
+            "launcher",
             "add",
             "stable",
             "--command",
@@ -82,9 +79,13 @@ fn env_run_uses_the_registered_launcher_and_its_cwd() {
             "./launchers/stable",
         ],
     );
-    assert!(add_version.status.success(), "{}", stderr(&add_version));
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
 
-    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--version", "stable"]);
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(create.status.success(), "{}", stderr(&create));
 
     let run_output = run_ocm(

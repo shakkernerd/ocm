@@ -12,7 +12,7 @@ use crate::paths::{
 };
 use crate::types::{
     AddLauncherOptions, CreateEnvironmentOptions, EnvMarker, EnvMeta, EnvSummary, LauncherMeta,
-    StorePaths, VersionMeta,
+    StorePaths,
 };
 
 pub fn now_utc() -> OffsetDateTime {
@@ -73,7 +73,6 @@ pub fn ensure_store(env: &BTreeMap<String, String>, cwd: &Path) -> Result<StoreP
     ensure_dir(&stores.home)?;
     ensure_dir(&stores.envs_dir)?;
     ensure_dir(&stores.launchers_dir)?;
-    ensure_dir(&stores.versions_dir)?;
     Ok(stores)
 }
 
@@ -87,7 +86,7 @@ pub fn summarize_env(meta: &EnvMeta) -> EnvSummary {
         config_path: display_path(&paths.config_path),
         workspace_dir: display_path(&paths.workspace_dir),
         gateway_port: meta.gateway_port,
-        default_version: meta.default_version.clone(),
+        default_launcher: meta.default_launcher.clone(),
         protected: meta.protected,
         created_at: meta.created_at,
         last_used_at: meta.last_used_at,
@@ -182,7 +181,7 @@ pub fn create_environment(
         name,
         root: display_path(&paths.root),
         gateway_port: options.gateway_port,
-        default_version: options.default_version,
+        default_launcher: options.default_launcher,
         protected: options.protected,
         created_at,
         updated_at: created_at,
@@ -255,10 +254,10 @@ pub fn get_launcher(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<LauncherMeta, String> {
-    let safe_name = validate_name(name, "Version name")?;
+    let safe_name = validate_name(name, "Launcher name")?;
     let path = launcher_meta_path(&safe_name, env, cwd)?;
     if !path_exists(&path) {
-        return Err(format!("version \"{safe_name}\" does not exist"));
+        return Err(format!("launcher \"{safe_name}\" does not exist"));
     }
     read_json(&path)
 }
@@ -268,18 +267,18 @@ pub fn add_launcher(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<LauncherMeta, String> {
-    let name = validate_name(&options.name, "Version name")?;
+    let name = validate_name(&options.name, "Launcher name")?;
     let meta_path = launcher_meta_path(&name, env, cwd)?;
     if path_exists(&meta_path) {
-        return Err(format!("version \"{name}\" already exists"));
+        return Err(format!("launcher \"{name}\" already exists"));
     }
 
     let command = options.command.trim();
     if command.is_empty() {
-        return Err("version command is required".to_string());
+        return Err("launcher command is required".to_string());
     }
 
-    let version_cwd = match options.cwd.as_deref() {
+    let launcher_cwd = match options.cwd.as_deref() {
         Some(raw) if !raw.trim().is_empty() => {
             Some(display_path(&resolve_absolute_path(raw, env, cwd)?))
         }
@@ -292,10 +291,10 @@ pub fn add_launcher(
 
     let created_at = now_utc();
     let meta = LauncherMeta {
-        kind: "ocm-version".to_string(),
+        kind: "ocm-launcher".to_string(),
         name,
         command: command.to_string(),
-        cwd: version_cwd,
+        cwd: launcher_cwd,
         description,
         created_at,
         updated_at: created_at,
@@ -313,37 +312,6 @@ pub fn remove_launcher(
     let path = launcher_meta_path(&meta.name, env, cwd)?;
     fs::remove_file(path).map_err(|error| error.to_string())?;
     Ok(meta)
-}
-
-pub fn list_versions(
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<Vec<VersionMeta>, String> {
-    list_launchers(env, cwd)
-}
-
-pub fn get_version(
-    name: &str,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<VersionMeta, String> {
-    get_launcher(name, env, cwd)
-}
-
-pub fn add_version(
-    options: AddLauncherOptions,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<VersionMeta, String> {
-    add_launcher(options, env, cwd)
-}
-
-pub fn remove_version(
-    name: &str,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<VersionMeta, String> {
-    remove_launcher(name, env, cwd)
 }
 
 pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<EnvMeta> {

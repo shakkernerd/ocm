@@ -8,11 +8,11 @@ use serde::Serialize;
 use crate::paths::{derive_env_paths, validate_name};
 use crate::shell::{build_openclaw_env, quote_posix, render_use_script, resolve_shell_name};
 use crate::store::{
-    add_version, create_environment, ensure_store, get_environment, get_version, list_environments,
-    list_versions, now_utc, remove_environment, remove_version, save_environment,
-    select_prune_candidates, summarize_env,
+    add_launcher, create_environment, ensure_store, get_environment, get_launcher,
+    list_environments, list_launchers, now_utc, remove_environment, remove_launcher,
+    save_environment, select_prune_candidates, summarize_env,
 };
-use crate::types::{AddVersionOptions, CreateEnvironmentOptions, EnvMeta, EnvSummary};
+use crate::types::{AddLauncherOptions, CreateEnvironmentOptions, EnvMeta, EnvSummary};
 
 const VERSION: &str = "0.1.0";
 
@@ -22,13 +22,6 @@ pub struct Cli {
 }
 
 impl Cli {
-    fn launcher_name(label: &str) -> &'static str {
-        match label {
-            "launcher" => "launcher",
-            _ => "version",
-        }
-    }
-
     fn stdout_line(&self, line: impl AsRef<str>) {
         println!("{}", line.as_ref());
     }
@@ -55,7 +48,7 @@ impl Cli {
     fn render_help(&self) -> String {
         let cmd = self.command_example();
         format!(
-            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--version <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env run <name> [--version <name>] -- <openclaw args...>\n  {cmd} env set-version <name> <version|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} version add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} version list [--json]\n  {cmd} version show <name> [--json]\n  {cmd} version remove <name>\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n\nExamples:\n  {cmd} version add stable --command openclaw\n  {cmd} launcher add stable --command openclaw\n  {cmd} env create refactor-a --version stable --port 19789\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
+            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env run <name> [--launcher <name>] -- <openclaw args...>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} env create refactor-a --launcher stable --port 19789\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
         )
     }
 
@@ -74,10 +67,7 @@ impl Cli {
         Ok(value)
     }
 
-    fn require_option_value(
-        value: Option<String>,
-        name: &str,
-    ) -> Result<Option<String>, String> {
+    fn require_option_value(value: Option<String>, name: &str) -> Result<Option<String>, String> {
         match value {
             Some(value) if value.trim().is_empty() => Err(format!("{name} requires a value")),
             Some(value) => Ok(Some(value.trim().to_string())),
@@ -198,16 +188,16 @@ impl Cli {
             Some(raw) => Some(Self::parse_positive_u32(raw, "--port")?),
             _ => None,
         };
-        let (args, version_name) = Self::consume_option(args, "--version")?;
-        let version_name = Self::require_option_value(version_name, "--version")?;
+        let (args, launcher_name) = Self::consume_option(args, "--launcher")?;
+        let launcher_name = Self::require_option_value(launcher_name, "--launcher")?;
 
         let Some(name) = args.first() else {
             return Err("environment name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        if let Some(version_name) = version_name.as_deref() {
-            get_version(version_name, &self.env, &self.cwd)?;
+        if let Some(launcher_name) = launcher_name.as_deref() {
+            get_launcher(launcher_name, &self.env, &self.cwd)?;
         }
 
         let meta = create_environment(
@@ -215,7 +205,7 @@ impl Cli {
                 name: name.clone(),
                 root,
                 gateway_port,
-                default_version: version_name,
+                default_launcher: launcher_name,
                 protected: protect,
             },
             &self.env,
@@ -235,8 +225,8 @@ impl Cli {
         if let Some(port) = summary.gateway_port {
             self.stdout_line(format!("  gateway port: {port}"));
         }
-        if let Some(version) = summary.default_version.as_deref() {
-            self.stdout_line(format!("  version: {version}"));
+        if let Some(launcher) = summary.default_launcher.as_deref() {
+            self.stdout_line(format!("  launcher: {launcher}"));
         }
         self.stdout_line(format!(
             "  activate: eval \"$({} env use {})\"",
@@ -262,8 +252,8 @@ impl Cli {
         }
         for summary in summaries {
             let mut bits = vec![summary.name, summary.root];
-            if let Some(version) = summary.default_version {
-                bits.push(format!("version={version}"));
+            if let Some(launcher) = summary.default_launcher {
+                bits.push(format!("launcher={launcher}"));
             }
             if let Some(port) = summary.gateway_port {
                 bits.push(format!("port={port}"));
@@ -308,8 +298,8 @@ impl Cli {
         if let Some(port) = summary.gateway_port {
             lines.insert("gatewayPort".to_string(), port.to_string());
         }
-        if let Some(version) = summary.default_version {
-            lines.insert("defaultVersion".to_string(), version);
+        if let Some(launcher) = summary.default_launcher {
+            lines.insert("defaultLauncher".to_string(), launcher);
         }
         if let Some(last_used_at) = summary.last_used_at {
             lines.insert(
@@ -360,33 +350,33 @@ impl Cli {
 
     fn handle_env_run(&self, args: Vec<String>) -> Result<i32, String> {
         let (before, after) = Self::split_on_double_dash(&args);
-        let (before, version_override) = Self::consume_option(before, "--version")?;
-        let version_override = Self::require_option_value(version_override, "--version")?;
+        let (before, launcher_override) = Self::consume_option(before, "--launcher")?;
+        let launcher_override = Self::require_option_value(launcher_override, "--launcher")?;
         let Some(name) = before.first() else {
             return Err("environment name is required".to_string());
         };
         Self::assert_command_separator(&before, "env run requires -- before OpenClaw arguments")?;
 
         let meta = self.touch_environment(name)?;
-        let version_name = version_override
+        let launcher_name = launcher_override
             .filter(|value| !value.trim().is_empty())
-            .or_else(|| meta.default_version.clone())
+            .or_else(|| meta.default_launcher.clone())
             .ok_or_else(|| {
                 format!(
-                    "environment \"{}\" has no default version; use env set-version or pass --version",
+                    "environment \"{}\" has no default launcher; use env set-launcher or pass --launcher",
                     meta.name
                 )
             })?;
 
-        let version = get_version(&version_name, &self.env, &self.cwd)?;
-        let mut command = version.command.clone();
+        let launcher = get_launcher(&launcher_name, &self.env, &self.cwd)?;
+        let mut command = launcher.command.clone();
         if !after.is_empty() {
             let quoted = after.iter().map(|arg| quote_posix(arg)).collect::<Vec<_>>();
             command.push(' ');
             command.push_str(&quoted.join(" "));
         }
 
-        let run_dir = version
+        let run_dir = launcher
             .cwd
             .as_deref()
             .map(PathBuf::from)
@@ -394,30 +384,30 @@ impl Cli {
         self.run_shell(&command, &build_openclaw_env(&meta, &self.env), &run_dir)
     }
 
-    fn handle_env_set_version(&self, args: Vec<String>) -> Result<i32, String> {
+    fn handle_env_set_launcher(&self, args: Vec<String>) -> Result<i32, String> {
         if args.len() < 2 {
             return Err(format!(
-                "usage: {} env set-version <env> <version|none>",
+                "usage: {} env set-launcher <env> <launcher|none>",
                 self.command_example()
             ));
         }
         let name = &args[0];
-        let version_name = &args[1];
+        let launcher_name = &args[1];
         Self::assert_no_extra_args(&args[2..])?;
 
         let mut meta = get_environment(name, &self.env, &self.cwd)?;
-        if version_name.eq_ignore_ascii_case("none") {
-            meta.default_version = None;
+        if launcher_name.eq_ignore_ascii_case("none") {
+            meta.default_launcher = None;
         } else {
-            let validated = validate_name(version_name, "Version name")?;
-            get_version(&validated, &self.env, &self.cwd)?;
-            meta.default_version = Some(validated);
+            let validated = validate_name(launcher_name, "Launcher name")?;
+            get_launcher(&validated, &self.env, &self.cwd)?;
+            meta.default_launcher = Some(validated);
         }
 
         let meta = save_environment(meta, &self.env, &self.cwd)?;
-        let default_version = meta.default_version.unwrap_or_else(|| "none".to_string());
+        let default_launcher = meta.default_launcher.unwrap_or_else(|| "none".to_string());
         self.stdout_line(format!(
-            "Updated env {}: defaultVersion={default_version}",
+            "Updated env {}: defaultLauncher={default_launcher}",
             meta.name
         ));
         Ok(0)
@@ -528,19 +518,19 @@ impl Cli {
         Ok(0)
     }
 
-    fn handle_launcher_add(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
+    fn handle_launcher_add(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, command) = Self::consume_option(args, "--command")?;
         let command = Self::require_option_value(command, "--command")?;
         let (args, cwd) = Self::consume_option(args, "--cwd")?;
         let (args, description) = Self::consume_option(args, "--description")?;
         let Some(name) = args.first() else {
-            return Err(format!("{} name is required", Self::launcher_name(label)));
+            return Err("launcher name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = add_version(
-            AddVersionOptions {
+        let meta = add_launcher(
+            AddLauncherOptions {
                 name: name.clone(),
                 command: command.unwrap_or_default(),
                 cwd,
@@ -555,11 +545,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!(
-            "Added {} {}",
-            Self::launcher_name(label),
-            meta.name
-        ));
+        self.stdout_line(format!("Added launcher {}", meta.name));
         self.stdout_line(format!("  command: {}", meta.command));
         if let Some(cwd) = meta.cwd.as_deref() {
             self.stdout_line(format!("  cwd: {cwd}"));
@@ -567,23 +553,20 @@ impl Cli {
         Ok(0)
     }
 
-    fn handle_launcher_list(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
+    fn handle_launcher_list(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         Self::assert_no_extra_args(&args)?;
 
-        let versions = list_versions(&self.env, &self.cwd)?;
+        let launchers = list_launchers(&self.env, &self.cwd)?;
         if json_flag {
-            self.print_json(&versions)?;
+            self.print_json(&launchers)?;
             return Ok(0);
         }
-        if versions.is_empty() {
-            self.stdout_line(format!(
-                "No {}s.",
-                Self::launcher_name(label)
-            ));
+        if launchers.is_empty() {
+            self.stdout_line("No launchers.");
             return Ok(0);
         }
-        for meta in versions {
+        for meta in launchers {
             let mut bits = vec![meta.name, meta.command];
             if let Some(cwd) = meta.cwd {
                 bits.push(format!("cwd={cwd}"));
@@ -593,14 +576,14 @@ impl Cli {
         Ok(0)
     }
 
-    fn handle_launcher_show(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
+    fn handle_launcher_show(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let Some(name) = args.first() else {
-            return Err(format!("{} name is required", Self::launcher_name(label)));
+            return Err("launcher name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = get_version(name, &self.env, &self.cwd)?;
+        let meta = get_launcher(name, &self.env, &self.cwd)?;
         if json_flag {
             self.print_json(&meta)?;
             return Ok(0);
@@ -634,31 +617,24 @@ impl Cli {
         Ok(0)
     }
 
-    fn handle_launcher_remove(&self, args: Vec<String>, label: &str) -> Result<i32, String> {
+    fn handle_launcher_remove(&self, args: Vec<String>) -> Result<i32, String> {
         let Some(name) = args.first() else {
-            return Err(format!("{} name is required", Self::launcher_name(label)));
+            return Err("launcher name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = remove_version(name, &self.env, &self.cwd)?;
-        self.stdout_line(format!(
-            "Removed {} {}",
-            Self::launcher_name(label),
-            meta.name
-        ));
+        let meta = remove_launcher(name, &self.env, &self.cwd)?;
+        self.stdout_line(format!("Removed launcher {}", meta.name));
         Ok(0)
     }
 
-    fn dispatch_launcher_command(&self, label: &str, action: &str, rest: Vec<String>) -> Result<i32, String> {
+    fn dispatch_launcher_command(&self, action: &str, rest: Vec<String>) -> Result<i32, String> {
         match action {
-            "add" => self.handle_launcher_add(rest, label),
-            "list" => self.handle_launcher_list(rest, label),
-            "show" => self.handle_launcher_show(rest, label),
-            "remove" | "rm" => self.handle_launcher_remove(rest, label),
-            _ => Err(format!(
-                "unknown {} command: {action}",
-                Self::launcher_name(label)
-            )),
+            "add" => self.handle_launcher_add(rest),
+            "list" => self.handle_launcher_list(rest),
+            "show" => self.handle_launcher_show(rest),
+            "remove" | "rm" => self.handle_launcher_remove(rest),
+            _ => Err(format!("unknown launcher command: {action}")),
         }
     }
 
@@ -697,20 +673,13 @@ impl Cli {
                 "use" => self.handle_env_use(rest),
                 "exec" => self.handle_env_exec(rest),
                 "run" => self.handle_env_run(rest),
-                "set-version" => self.handle_env_set_version(rest),
+                "set-launcher" => self.handle_env_set_launcher(rest),
                 "protect" => self.handle_env_protect(rest),
                 "remove" | "rm" => self.handle_env_remove(rest),
                 "prune" => self.handle_env_prune(rest),
                 _ => Err(format!("unknown env command: {action}")),
             },
-            "version" => self.dispatch_launcher_command("version", action.as_str(), rest),
-            "launcher" => match action.as_str() {
-                "add" => self.handle_launcher_add(rest, "launcher"),
-                "list" => self.handle_launcher_list(rest, "launcher"),
-                "show" => self.handle_launcher_show(rest, "launcher"),
-                "remove" | "rm" => self.handle_launcher_remove(rest, "launcher"),
-                _ => Err(format!("unknown launcher command: {action}")),
-            },
+            "launcher" => self.dispatch_launcher_command(action.as_str(), rest),
             _ => Err(format!("unknown command group: {group}")),
         };
 

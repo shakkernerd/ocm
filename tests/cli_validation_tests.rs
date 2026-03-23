@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use crate::support::{ocm_env, run_ocm, stderr, TestDir};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr};
 
 #[test]
 fn env_create_rejects_invalid_names() {
@@ -13,19 +13,25 @@ fn env_create_rejects_invalid_names() {
 
     let create = run_ocm(&cwd, &env, &["env", "create", "bad/name"]);
     assert_eq!(create.status.code(), Some(1));
-    assert!(stderr(&create).contains("Environment name must use letters, numbers, '.', '_', or '-'"));
+    assert!(
+        stderr(&create).contains("Environment name must use letters, numbers, '.', '_', or '-'")
+    );
 }
 
 #[test]
-fn version_add_rejects_invalid_names() {
-    let root = TestDir::new("cli-invalid-version-name");
+fn launcher_add_rejects_invalid_names() {
+    let root = TestDir::new("cli-invalid-launcher-name");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let add = run_ocm(&cwd, &env, &["version", "add", "bad/name", "--command", "sh"]);
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "bad/name", "--command", "sh"],
+    );
     assert_eq!(add.status.code(), Some(1));
-    assert!(stderr(&add).contains("Version name must use letters, numbers, '.', '_', or '-'"));
+    assert!(stderr(&add).contains("Launcher name must use letters, numbers, '.', '_', or '-'"));
 }
 
 #[test]
@@ -45,24 +51,28 @@ fn env_create_rejects_invalid_and_empty_port_values() {
 }
 
 #[test]
-fn env_create_rejects_empty_and_unknown_version_values() {
-    let root = TestDir::new("cli-create-version-validation");
+fn env_create_rejects_empty_and_unknown_launcher_values() {
+    let root = TestDir::new("cli-create-launcher-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let empty = run_ocm(&cwd, &env, &["env", "create", "demo", "--version="]);
+    let empty = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher="]);
     assert_eq!(empty.status.code(), Some(1));
-    assert!(stderr(&empty).contains("--version requires a value"));
+    assert!(stderr(&empty).contains("--launcher requires a value"));
 
-    let missing = run_ocm(&cwd, &env, &["env", "create", "demo", "--version", "missing"]);
+    let missing = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "missing"],
+    );
     assert_eq!(missing.status.code(), Some(1));
-    assert!(stderr(&missing).contains("version \"missing\" does not exist"));
+    assert!(stderr(&missing).contains("launcher \"missing\" does not exist"));
 }
 
 #[test]
-fn env_run_rejects_empty_and_unknown_version_overrides() {
-    let root = TestDir::new("cli-run-version-validation");
+fn env_run_rejects_empty_and_unknown_launcher_overrides() {
+    let root = TestDir::new("cli-run-launcher-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
@@ -70,11 +80,11 @@ fn env_run_rejects_empty_and_unknown_version_overrides() {
     let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
     assert!(create.status.success(), "{}", stderr(&create));
 
-    let empty = run_ocm(&cwd, &env, &["env", "run", "demo", "--version="]);
+    let empty = run_ocm(&cwd, &env, &["env", "run", "demo", "--launcher="]);
     assert_eq!(empty.status.code(), Some(1));
-    assert!(stderr(&empty).contains("--version requires a value"));
+    assert!(stderr(&empty).contains("--launcher requires a value"));
 
-    let missing = run_ocm(&cwd, &env, &["env", "run", "demo", "--version", "missing"]);
+    let missing = run_ocm(&cwd, &env, &["env", "run", "demo", "--launcher", "missing"]);
     assert_eq!(missing.status.code(), Some(1));
-    assert!(stderr(&missing).contains("version \"missing\" does not exist"));
+    assert!(stderr(&missing).contains("launcher \"missing\" does not exist"));
 }

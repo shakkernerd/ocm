@@ -20,7 +20,7 @@ pub struct EnvMeta {
     pub name: String,
     pub root: String,
     pub gateway_port: Option<u32>,
-    pub default_version: Option<String>,
+    pub default_launcher: Option<String>,
     pub protected: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -40,7 +40,7 @@ pub struct EnvSummary {
     pub config_path: String,
     pub workspace_dir: String,
     pub gateway_port: Option<u32>,
-    pub default_version: Option<String>,
+    pub default_launcher: Option<String>,
     pub protected: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -62,8 +62,6 @@ pub struct LauncherMeta {
     pub updated_at: OffsetDateTime,
 }
 
-pub type VersionMeta = LauncherMeta;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvMarker {
@@ -78,7 +76,6 @@ pub struct StorePaths {
     pub home: PathBuf,
     pub envs_dir: PathBuf,
     pub launchers_dir: PathBuf,
-    pub versions_dir: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -86,16 +83,14 @@ pub struct CreateEnvironmentOptions {
     pub name: String,
     pub root: Option<String>,
     pub gateway_port: Option<u32>,
-    pub default_version: Option<String>,
+    pub default_launcher: Option<String>,
     pub protected: bool,
 }
 
 #[derive(Clone, Debug)]
-pub struct AddVersionOptions {
+pub struct AddLauncherOptions {
     pub name: String,
     pub command: String,
     pub cwd: Option<String>,
     pub description: Option<String>,
 }
-
-pub type AddLauncherOptions = AddVersionOptions;
