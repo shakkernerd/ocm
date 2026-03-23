@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::execution::{build_launcher_command, resolve_launcher_name, resolve_launcher_run_dir};
 use crate::paths::{derive_env_paths, validate_name};
 use crate::runner::{run_direct, run_shell};
-use crate::shell::{build_openclaw_env, quote_posix, render_use_script, resolve_shell_name};
+use crate::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::store::{
     add_launcher, create_environment, ensure_store, get_environment, get_launcher,
     list_environments, list_launchers, now_utc, remove_environment, remove_launcher,
@@ -325,29 +326,10 @@ impl Cli {
         Self::assert_command_separator(&before, "env run requires -- before OpenClaw arguments")?;
 
         let meta = self.touch_environment(name)?;
-        let launcher_name = launcher_override
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| meta.default_launcher.clone())
-            .ok_or_else(|| {
-                format!(
-                    "environment \"{}\" has no default launcher; use env set-launcher or pass --launcher",
-                    meta.name
-                )
-            })?;
-
+        let launcher_name = resolve_launcher_name(&meta, launcher_override)?;
         let launcher = get_launcher(&launcher_name, &self.env, &self.cwd)?;
-        let mut command = launcher.command.clone();
-        if !after.is_empty() {
-            let quoted = after.iter().map(|arg| quote_posix(arg)).collect::<Vec<_>>();
-            command.push(' ');
-            command.push_str(&quoted.join(" "));
-        }
-
-        let run_dir = launcher
-            .cwd
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.cwd.clone());
+        let command = build_launcher_command(&launcher, &after);
+        let run_dir = resolve_launcher_run_dir(&launcher, &self.cwd);
         run_shell(&command, &build_openclaw_env(&meta, &self.env), &run_dir)
     }
 
