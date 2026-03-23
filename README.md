@@ -83,6 +83,9 @@ That makes it flexible enough to point at:
 
 Long term, this concept will likely be renamed to `launcher`, while real installer-managed
 OpenClaw binaries become `runtime`. For now, the compatibility-first CLI surface is still `version`.
+The CLI also now supports `launcher add/list/show/remove` as compatibility aliases for the same
+stored objects. Storage remains version-based for now, and environment binding still uses
+`--version` / `env set-version`.
 
 ## What works today
 
@@ -106,6 +109,13 @@ Version commands:
 - `version show`
 - `version remove`
 
+Launcher alias commands:
+
+- `launcher add`
+- `launcher list`
+- `launcher show`
+- `launcher remove`
+
 The current implementation is covered by integration tests around path handling, JSON compatibility,
 environment lifecycle flows, shell activation, command execution, validation, safety rails, and
 child exit-code propagation.
@@ -116,7 +126,7 @@ child exit-code propagation.
 
 - download or install OpenClaw runtimes
 - manage release channels
-- expose `runtime install`, `runtime list`, or `launcher add`
+- expose `runtime install` or `runtime list`
 - provide `ocm init zsh|bash|fish`
 - implement clone, snapshot, export/import, or status flows
 
@@ -144,7 +154,7 @@ Or use the wrapper:
 Register a launcher:
 
 ```bash
-./bin/ocm version add stable --command openclaw
+./bin/ocm launcher add stable --command openclaw
 ```
 
 Create an isolated environment bound to that launcher:
@@ -227,6 +237,8 @@ The CLI provides human-readable output and JSON output where it matters:
 ```bash
 ./bin/ocm env list --json
 ./bin/ocm env show sandbox --json
+./bin/ocm launcher list --json
+./bin/ocm launcher show stable --json
 ./bin/ocm version list --json
 ./bin/ocm version show stable --json
 ./bin/ocm env prune --json
@@ -330,6 +342,25 @@ eval "$(./bin/ocm env use demo)"
 `version remove <name>`
 
 - Removes one launcher definition.
+
+### Launcher alias commands
+
+`launcher add <name> --command "<launcher>" [--cwd <path>] [--description <text>]`
+
+- Alias for `version add`.
+- Stores the same underlying version metadata.
+
+`launcher list [--json]`
+
+- Alias for `version list`.
+
+`launcher show <name> [--json]`
+
+- Alias for `version show`.
+
+`launcher remove <name>`
+
+- Alias for `version remove`.
 
 ## Environment behavior
 
