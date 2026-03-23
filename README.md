@@ -2,10 +2,7 @@
 
 OpenClaw Manager.
 
-`ocm` is a Rust CLI for creating and managing isolated OpenClaw environments on a local machine.
-The current product focus is simple: give each workflow its own disposable `OPENCLAW_HOME`, let you
-activate or execute inside that environment predictably, and keep the resulting state easy to
-inspect and remove.
+`ocm` is a Rust CLI for creating and managing isolated OpenClaw environments on a local machine. The current product focus is simple: give each workflow its own disposable `OPENCLAW_HOME`, let you activate or execute inside that environment predictably, and keep the resulting state easy to inspect and remove.
 
 It already works as a practical local control plane for:
 
@@ -15,15 +12,13 @@ It already works as a practical local control plane for:
 - named launcher definitions for running OpenClaw
 - safe cleanup and pruning
 
-It is not yet a full runtime installer. Today, launchers are the execution layer, while runtimes
-remain a future addition.
+It is not yet a full runtime installer. Today, launchers are the execution layer, while runtimes remain a future addition.
 
 ## Why this exists
 
 OpenClaw state is easier to reason about when it is isolated.
 
-`ocm` solves the local workflow problems that show up when multiple tasks, branches, experiments, or
-projects all compete for one shared global OpenClaw setup:
+`ocm` solves the local workflow problems that show up when multiple tasks, branches, experiments, or projects all compete for one shared global OpenClaw setup:
 
 - state collisions between unrelated tasks
 - hard-to-reproduce behavior caused by shared `~/.openclaw`
@@ -31,8 +26,7 @@ projects all compete for one shared global OpenClaw setup:
 - risky cleanup when old environments accumulate
 - lack of a simple way to bind an environment to a specific OpenClaw launch command
 
-The main design choice is to make each environment its own `OPENCLAW_HOME`. That gives every
-environment a single disposable root and keeps teardown predictable.
+The main design choice is to make each environment its own `OPENCLAW_HOME`. That gives every environment a single disposable root and keeps teardown predictable.
 
 ## Current model
 
@@ -80,8 +74,7 @@ That makes it flexible enough to point at:
 - a local dev command
 - a shell-based launcher workflow
 
-Real installer-managed OpenClaw binaries will become `runtime` later. For now, launchers are the
-way an environment decides what to execute.
+Real installer-managed OpenClaw binaries will become `runtime` later. For now, launchers are the way an environment decides what to execute.
 
 ## What works today
 
@@ -105,9 +98,7 @@ Launcher commands:
 - `launcher show`
 - `launcher remove`
 
-The current implementation is covered by integration tests around path handling, JSON compatibility,
-environment lifecycle flows, shell activation, command execution, validation, safety rails, and
-child exit-code propagation.
+The current implementation is covered by integration tests around path handling, JSON compatibility, environment lifecycle flows, shell activation, command execution, launcher binding, validation, safety rails, and child exit-code propagation.
 
 ## What it does not do yet
 
@@ -216,8 +207,7 @@ Then bind an environment to it:
 ./bin/ocm env run sandbox -- onboard
 ```
 
-`env run` executes the stored launcher command and appends arguments after `--`. If the launcher has
-`--cwd`, the launcher runs from that directory.
+`env run` executes the stored launcher command and appends arguments after `--`. If the launcher has `--cwd`, the launcher runs from that directory.
 
 ### 3. Automate environment-aware scripts
 
@@ -345,8 +335,7 @@ It also explicitly unsets:
 
 - `OPENCLAW_PROFILE`
 
-That unset is intentional. It avoids profile-based collisions with the environment-specific state
-layout.
+That unset is intentional. It avoids profile-based collisions with the environment-specific state layout.
 
 ## Storage layout
 
@@ -413,8 +402,7 @@ Representative launcher metadata:
 
 ## Safety rails
 
-The current CLI deliberately avoids destructive behavior unless the environment looks like one that
-`ocm` created and owns.
+The current CLI deliberately avoids destructive behavior unless the environment looks like one that `ocm` created and owns.
 
 - Protected environments are not removable without `--force`.
 - Environments missing `.ocm-env.json` are not removable without `--force`.
@@ -442,8 +430,7 @@ cargo test
 ./bin/ocm help
 ```
 
-If you are continuing implementation work in a fresh session, read `AGENTS.md`,
-`docs/OCM_PRODUCT_DIRECTION.md`, `docs/CHATGPT_CONTEXT.md`, and `docs/HANDOFF.md`.
+If you are continuing implementation work in a fresh session, read `AGENTS.md`, `docs/OCM_PRODUCT_DIRECTION.md`, `docs/CHATGPT_CONTEXT.md`, and `docs/HANDOFF.md`.
 
 ## Direction
 
