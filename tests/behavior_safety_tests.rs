@@ -50,3 +50,23 @@ fn removing_an_environment_without_the_marker_file_requires_force() {
     assert!(force_remove.status.success(), "{}", stderr(&force_remove));
     assert!(!env_root.exists());
 }
+
+#[test]
+fn cloning_an_environment_without_the_marker_file_is_refused() {
+    let root = TestDir::new("behavior-marker-clone");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let env_root = clean_path(&root.child("ocm-home/envs/source"));
+    fs::remove_file(env_root.join(".ocm-env.json")).unwrap();
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert!(!clone.status.success());
+    let error = stderr(&clone);
+    assert!(error.contains(".ocm-env.json"));
+    assert!(error.contains("refusing to clone"));
+}
