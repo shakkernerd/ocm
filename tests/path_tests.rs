@@ -3,8 +3,10 @@ mod support;
 use std::fs;
 
 use ocm::paths::{clean_path, resolve_ocm_home, validate_name};
-use ocm::store::{add_launcher, add_runtime, create_environment};
-use ocm::types::{AddLauncherOptions, AddRuntimeOptions, CreateEnvironmentOptions};
+use ocm::store::{add_launcher, add_runtime, clone_environment, create_environment};
+use ocm::types::{
+    AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvironmentOptions,
+};
 
 use crate::support::{TestDir, base_env, ocm_env, path_string};
 
@@ -122,4 +124,41 @@ fn add_runtime_normalizes_relative_binary_path() {
 
     let expected_path = clean_path(&cwd.join("bin/openclaw"));
     assert_eq!(meta.binary_path, path_string(&expected_path));
+}
+
+#[test]
+fn clone_environment_normalizes_relative_custom_root() {
+    let root = TestDir::new("clone-custom-root");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let meta = clone_environment(
+        CloneEnvironmentOptions {
+            source_name: "source".to_string(),
+            name: "target".to_string(),
+            root: Some("./env-clones/../env-clones/target".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let expected_root = clean_path(&cwd.join("env-clones/target"));
+    assert_eq!(meta.root, path_string(&expected_root));
+    assert!(expected_root.join(".ocm-env.json").exists());
 }
