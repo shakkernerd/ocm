@@ -126,6 +126,16 @@ fn runtime_install_and_which_use_the_managed_binary_path() {
         format!("{}\n", path_string(&expected_binary))
     );
 
+    let which_json = run_ocm(&cwd, &env, &["runtime", "which", "stable", "--json"]);
+    assert!(which_json.status.success(), "{}", stderr(&which_json));
+    let which_json_stdout = stdout(&which_json);
+    assert!(which_json_stdout.contains("\"name\": \"stable\""));
+    assert!(which_json_stdout.contains(&format!(
+        "\"binaryPath\": \"{}\"",
+        path_string(&expected_binary)
+    )));
+    assert!(which_json_stdout.contains("\"sourceKind\": \"installed\""));
+
     let show = run_ocm(&cwd, &env, &["runtime", "show", "stable"]);
     assert!(show.status.success(), "{}", stderr(&show));
     let show_stdout = stdout(&show);
