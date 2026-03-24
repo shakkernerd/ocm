@@ -26,6 +26,7 @@ pub fn ensure_store(env: &BTreeMap<String, String>, cwd: &Path) -> Result<StoreP
     ensure_dir(&stores.home)?;
     ensure_dir(&stores.envs_dir)?;
     ensure_dir(&stores.launchers_dir)?;
+    ensure_dir(&stores.runtimes_dir)?;
     Ok(stores)
 }
 
@@ -39,6 +40,7 @@ pub fn summarize_env(meta: &EnvMeta) -> EnvSummary {
         config_path: display_path(&paths.config_path),
         workspace_dir: display_path(&paths.workspace_dir),
         gateway_port: meta.gateway_port,
+        default_runtime: meta.default_runtime.clone(),
         default_launcher: meta.default_launcher.clone(),
         protected: meta.protected,
         created_at: meta.created_at,

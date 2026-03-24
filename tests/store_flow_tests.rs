@@ -23,6 +23,7 @@ fn environment_store_round_trip_covers_create_read_list_and_remove() {
             name: "alpha".to_string(),
             root: None,
             gateway_port: Some(19789),
+            default_runtime: None,
             default_launcher: Some("stable".to_string()),
             protected: true,
         },

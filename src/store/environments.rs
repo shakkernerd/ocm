@@ -99,6 +99,7 @@ pub fn create_environment(
         name,
         root: display_path(&paths.root),
         gateway_port: options.gateway_port,
+        default_runtime: options.default_runtime,
         default_launcher: options.default_launcher,
         protected: options.protected,
         created_at,

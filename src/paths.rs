@@ -130,6 +130,7 @@ pub fn resolve_store_paths(
     Ok(StorePaths {
         envs_dir: home.join("envs"),
         launchers_dir: home.join("launchers"),
+        runtimes_dir: home.join("runtimes"),
         home,
     })
 }
@@ -196,4 +197,13 @@ pub fn launcher_meta_path(
 ) -> Result<PathBuf, String> {
     let stores = resolve_store_paths(env, cwd)?;
     Ok(stores.launchers_dir.join(format!("{name}.json")))
+}
+
+pub fn runtime_meta_path(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let stores = resolve_store_paths(env, cwd)?;
+    Ok(stores.runtimes_dir.join(format!("{name}.json")))
 }

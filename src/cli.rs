@@ -168,6 +168,7 @@ impl Cli {
                 name: name.clone(),
                 root,
                 gateway_port,
+                default_runtime: None,
                 default_launcher: launcher_name,
                 protected: protect,
             })?;

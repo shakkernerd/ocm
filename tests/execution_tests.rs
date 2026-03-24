@@ -10,6 +10,7 @@ fn sample_env(default_launcher: Option<&str>) -> EnvMeta {
         name: "demo".to_string(),
         root: "/tmp/demo".to_string(),
         gateway_port: None,
+        default_runtime: None,
         default_launcher: default_launcher.map(str::to_string),
         protected: false,
         created_at: OffsetDateTime::UNIX_EPOCH,

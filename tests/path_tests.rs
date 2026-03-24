@@ -60,6 +60,7 @@ fn create_environment_normalizes_relative_custom_root() {
             name: "demo".to_string(),
             root: Some("./env-roots/../env-roots/demo".to_string()),
             gateway_port: None,
+            default_runtime: None,
             default_launcher: None,
             protected: false,
         },

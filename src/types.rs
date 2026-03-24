@@ -20,6 +20,7 @@ pub struct EnvMeta {
     pub name: String,
     pub root: String,
     pub gateway_port: Option<u32>,
+    pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
     #[serde(with = "time::serde::rfc3339")]
@@ -40,6 +41,7 @@ pub struct EnvSummary {
     pub config_path: String,
     pub workspace_dir: String,
     pub gateway_port: Option<u32>,
+    pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
     #[serde(with = "time::serde::rfc3339")]
@@ -64,6 +66,19 @@ pub struct LauncherMeta {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeMeta {
+    pub kind: String,
+    pub name: String,
+    pub binary_path: String,
+    pub description: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnvMarker {
     pub kind: String,
     pub name: String,
@@ -76,6 +91,7 @@ pub struct StorePaths {
     pub home: PathBuf,
     pub envs_dir: PathBuf,
     pub launchers_dir: PathBuf,
+    pub runtimes_dir: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -83,6 +99,7 @@ pub struct CreateEnvironmentOptions {
     pub name: String,
     pub root: Option<String>,
     pub gateway_port: Option<u32>,
+    pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
 }
@@ -92,5 +109,12 @@ pub struct AddLauncherOptions {
     pub name: String,
     pub command: String,
     pub cwd: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AddRuntimeOptions {
+    pub name: String,
+    pub path: String,
     pub description: Option<String>,
 }
