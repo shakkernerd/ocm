@@ -1,15 +1,96 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use crate::download::{artifact_file_name_from_url, download_to_file};
 use crate::paths::{
     clean_path, display_path, resolve_absolute_path, runtime_install_files_dir,
     runtime_install_root, runtime_meta_path, validate_name,
 };
-use crate::types::{AddRuntimeOptions, InstallRuntimeOptions, RuntimeMeta, RuntimeSourceKind};
+use crate::types::{
+    AddRuntimeOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeMeta,
+    RuntimeSourceKind,
+};
 
 use super::common::{ensure_dir, load_json_files, path_exists, read_json, write_json};
 use super::now_utc;
+
+fn trim_description(description: Option<String>) -> Option<String> {
+    description
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn build_installed_runtime_meta(
+    name: String,
+    binary_path: &Path,
+    install_root: &Path,
+    source_path: Option<&Path>,
+    source_url: Option<String>,
+    description: Option<String>,
+) -> RuntimeMeta {
+    let created_at = now_utc();
+    RuntimeMeta {
+        kind: "ocm-runtime".to_string(),
+        name,
+        binary_path: display_path(binary_path),
+        source_kind: RuntimeSourceKind::Installed,
+        source_path: source_path.map(display_path),
+        source_url,
+        install_root: Some(display_path(install_root)),
+        description,
+        created_at,
+        updated_at: created_at,
+    }
+}
+
+fn copy_installed_runtime_binary(source_path: &Path, binary_path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(source_path).map_err(|error| error.to_string())?;
+    fs::copy(source_path, binary_path).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        let permissions = metadata.permissions();
+        fs::set_permissions(binary_path, permissions).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn install_runtime_at_path(
+    name: String,
+    meta_path: PathBuf,
+    install_root: PathBuf,
+    install_files: PathBuf,
+    file_name: &Path,
+    source_path: Option<&Path>,
+    source_url: Option<String>,
+    description: Option<String>,
+) -> Result<RuntimeMeta, String> {
+    if path_exists(&install_root) {
+        return Err(format!(
+            "runtime install root already exists: {}",
+            display_path(&install_root)
+        ));
+    }
+
+    ensure_dir(&install_files)?;
+    let binary_path = install_files.join(file_name);
+    match (source_path, source_url.as_deref()) {
+        (Some(source_path), _) => copy_installed_runtime_binary(source_path, &binary_path)?,
+        (None, Some(source_url)) => download_to_file(source_url, &binary_path)?,
+        (None, None) => return Err("runtime install requires a source path or URL".to_string()),
+    }
+
+    let meta = build_installed_runtime_meta(
+        name,
+        &binary_path,
+        &install_root,
+        source_path,
+        source_url,
+        description,
+    );
+    write_json(&meta_path, &meta)?;
+    Ok(meta)
+}
 
 pub fn list_runtimes(
     env: &BTreeMap<String, String>,
@@ -78,10 +159,7 @@ pub fn add_runtime(
         ));
     }
 
-    let description = options
-        .description
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let description = trim_description(options.description);
 
     let created_at = now_utc();
     let meta = RuntimeMeta {
@@ -149,50 +227,50 @@ pub fn install_runtime(
         ));
     }
 
-    let install_root = runtime_install_root(&name, env, cwd)?;
-    if path_exists(&install_root) {
-        return Err(format!(
-            "runtime install root already exists: {}",
-            display_path(&install_root)
-        ));
-    }
-
-    let install_files = runtime_install_files_dir(&name, env, cwd)?;
-    ensure_dir(&install_files)?;
     let file_name = source_path.file_name().ok_or_else(|| {
         format!(
             "runtime path must include a file name: {}",
             display_path(&source_path)
         )
     })?;
-    let binary_path = install_files.join(file_name);
-    fs::copy(&source_path, &binary_path).map_err(|error| error.to_string())?;
-    #[cfg(unix)]
-    {
-        let permissions = metadata.permissions();
-        fs::set_permissions(&binary_path, permissions).map_err(|error| error.to_string())?;
+    let install_root = runtime_install_root(&name, env, cwd)?;
+    let install_files = runtime_install_files_dir(&name, env, cwd)?;
+    install_runtime_at_path(
+        name,
+        meta_path,
+        install_root,
+        install_files,
+        Path::new(file_name),
+        Some(&source_path),
+        None,
+        trim_description(options.description),
+    )
+}
+
+pub fn install_runtime_from_url(
+    options: InstallRuntimeFromUrlOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<RuntimeMeta, String> {
+    let name = validate_name(&options.name, "Runtime name")?;
+    let meta_path = runtime_meta_path(&name, env, cwd)?;
+    if path_exists(&meta_path) {
+        return Err(format!("runtime \"{name}\" already exists"));
     }
 
-    let description = options
-        .description
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-
-    let created_at = now_utc();
-    let meta = RuntimeMeta {
-        kind: "ocm-runtime".to_string(),
+    let file_name = artifact_file_name_from_url(&options.url)?;
+    let install_root = runtime_install_root(&name, env, cwd)?;
+    let install_files = runtime_install_files_dir(&name, env, cwd)?;
+    install_runtime_at_path(
         name,
-        binary_path: display_path(&binary_path),
-        source_kind: RuntimeSourceKind::Installed,
-        source_path: Some(display_path(&source_path)),
-        source_url: None,
-        install_root: Some(display_path(&install_root)),
-        description,
-        created_at,
-        updated_at: created_at,
-    };
-    write_json(&meta_path, &meta)?;
-    Ok(meta)
+        meta_path,
+        install_root,
+        install_files,
+        Path::new(&file_name),
+        None,
+        Some(options.url),
+        trim_description(options.description),
+    )
 }
 
 pub fn verify_runtime_binary(meta: RuntimeMeta) -> Result<RuntimeMeta, String> {

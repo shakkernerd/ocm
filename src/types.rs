@@ -165,3 +165,10 @@ pub struct InstallRuntimeOptions {
     pub path: String,
     pub description: Option<String>,
 }
+
+#[derive(Clone, Debug)]
+pub struct InstallRuntimeFromUrlOptions {
+    pub name: String,
+    pub url: String,
+    pub description: Option<String>,
+}
