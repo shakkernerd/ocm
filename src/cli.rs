@@ -769,6 +769,7 @@ impl Cli {
                 name: name.clone(),
                 path,
                 description,
+                force: false,
             })?,
             (None, Some(url)) => {
                 self.runtime_service()
@@ -776,6 +777,7 @@ impl Cli {
                         name: name.clone(),
                         url,
                         description,
+                        force: false,
                     })?
             }
             (Some(_), Some(_)) => {

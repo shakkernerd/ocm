@@ -114,6 +114,22 @@ fn install_runtime_at_path(
     result
 }
 
+fn prepare_runtime_meta_path(
+    name: &str,
+    replace_existing: bool,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let meta_path = runtime_meta_path(name, env, cwd)?;
+    if path_exists(&meta_path) {
+        if !replace_existing {
+            return Err(format!("runtime \"{name}\" already exists"));
+        }
+        remove_runtime(name, env, cwd)?;
+    }
+    Ok(meta_path)
+}
+
 pub fn list_runtimes(
     env: &BTreeMap<String, String>,
     cwd: &Path,
@@ -223,10 +239,7 @@ pub fn install_runtime(
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
     let name = validate_name(&options.name, "Runtime name")?;
-    let meta_path = runtime_meta_path(&name, env, cwd)?;
-    if path_exists(&meta_path) {
-        return Err(format!("runtime \"{name}\" already exists"));
-    }
+    let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
 
     let raw_path = options.path.trim();
     if raw_path.is_empty() {
@@ -275,10 +288,7 @@ pub fn install_runtime_from_url(
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
     let name = validate_name(&options.name, "Runtime name")?;
-    let meta_path = runtime_meta_path(&name, env, cwd)?;
-    if path_exists(&meta_path) {
-        return Err(format!("runtime \"{name}\" already exists"));
-    }
+    let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
 
     let file_name = artifact_file_name_from_url(&options.url)?;
     let install_root = runtime_install_root(&name, env, cwd)?;

@@ -174,6 +174,7 @@ fn runtime_install_copies_binary_into_the_managed_store() {
             name: "stable".to_string(),
             path: "./downloads/openclaw".to_string(),
             description: Some("managed runtime".to_string()),
+            force: false,
         },
         &env,
         &cwd,
