@@ -11,7 +11,7 @@ use crate::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::store::{ensure_store, summarize_env};
 use crate::types::{
     AddLauncherOptions, AddRuntimeOptions, CreateEnvironmentOptions, EnvSummary,
-    InstallRuntimeOptions,
+    InstallRuntimeFromUrlOptions, InstallRuntimeOptions,
 };
 
 const VERSION: &str = "0.1.0";
@@ -60,7 +60,7 @@ impl Cli {
     fn render_help(&self) -> String {
         let cmd = self.command_example();
         format!(
-            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime install <name> --path <binary> [--description <text>]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime which <name>\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} runtime install managed-stable --path ./target/debug/openclaw\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env resolve refactor-a --json\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
+            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime install <name> (--path <binary> | --url <url>) [--description <text>]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime which <name>\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} runtime install managed-stable --path ./target/debug/openclaw\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env resolve refactor-a --json\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
         )
     }
 
@@ -709,17 +709,33 @@ impl Cli {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, path) = Self::consume_option(args, "--path")?;
         let path = Self::require_option_value(path, "--path")?;
+        let (args, url) = Self::consume_option(args, "--url")?;
+        let url = Self::require_option_value(url, "--url")?;
         let (args, description) = Self::consume_option(args, "--description")?;
         let Some(name) = args.first() else {
             return Err("runtime name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = self.runtime_service().install(InstallRuntimeOptions {
-            name: name.clone(),
-            path: path.unwrap_or_default(),
-            description,
-        })?;
+        let meta = match (path, url) {
+            (Some(path), None) => self.runtime_service().install(InstallRuntimeOptions {
+                name: name.clone(),
+                path,
+                description,
+            })?,
+            (None, Some(url)) => {
+                self.runtime_service()
+                    .install_from_url(InstallRuntimeFromUrlOptions {
+                        name: name.clone(),
+                        url,
+                        description,
+                    })?
+            }
+            (Some(_), Some(_)) => {
+                return Err("runtime install accepts only one of --path or --url".to_string());
+            }
+            (None, None) => return Err("runtime install requires --path or --url".to_string()),
+        };
 
         if json_flag {
             self.print_json(&meta)?;
@@ -796,6 +812,9 @@ impl Cli {
         }
         if let Some(source_path) = meta.source_path {
             lines.insert("sourcePath".to_string(), source_path);
+        }
+        if let Some(source_url) = meta.source_url {
+            lines.insert("sourceUrl".to_string(), source_url);
         }
         if let Some(install_root) = meta.install_root {
             lines.insert("installRoot".to_string(), install_root);

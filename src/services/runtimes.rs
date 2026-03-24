@@ -2,9 +2,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::store::{
-    add_runtime, get_runtime_verified, install_runtime, list_runtimes, remove_runtime,
+    add_runtime, get_runtime_verified, install_runtime, install_runtime_from_url, list_runtimes,
+    remove_runtime,
 };
-use crate::types::{AddRuntimeOptions, InstallRuntimeOptions, RuntimeMeta};
+use crate::types::{
+    AddRuntimeOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeMeta,
+};
 
 pub struct RuntimeService<'a> {
     env: &'a BTreeMap<String, String>,
@@ -22,6 +25,13 @@ impl<'a> RuntimeService<'a> {
 
     pub fn install(&self, options: InstallRuntimeOptions) -> Result<RuntimeMeta, String> {
         install_runtime(options, self.env, self.cwd)
+    }
+
+    pub fn install_from_url(
+        &self,
+        options: InstallRuntimeFromUrlOptions,
+    ) -> Result<RuntimeMeta, String> {
+        install_runtime_from_url(options, self.env, self.cwd)
     }
 
     pub fn list(&self) -> Result<Vec<RuntimeMeta>, String> {

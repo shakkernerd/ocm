@@ -244,3 +244,37 @@ fn runtime_install_rejects_empty_and_missing_paths() {
     assert_eq!(missing.status.code(), Some(1));
     assert!(stderr(&missing).contains("runtime path does not exist:"));
 }
+
+#[test]
+fn runtime_install_rejects_empty_and_conflicting_urls() {
+    let root = TestDir::new("cli-runtime-install-url-validation");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(bin_dir.join("stable"), "#!/bin/sh\n").unwrap();
+    let env = ocm_env(&root);
+
+    let empty = run_ocm(&cwd, &env, &["runtime", "install", "stable", "--url="]);
+    assert_eq!(empty.status.code(), Some(1));
+    assert!(stderr(&empty).contains("--url requires a value"));
+
+    let missing = run_ocm(&cwd, &env, &["runtime", "install", "stable"]);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(stderr(&missing).contains("runtime install requires --path or --url"));
+
+    let conflicting = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--path",
+            "./bin/stable",
+            "--url",
+            "http://127.0.0.1/stable",
+        ],
+    );
+    assert_eq!(conflicting.status.code(), Some(1));
+    assert!(stderr(&conflicting).contains("runtime install accepts only one of --path or --url"));
+}

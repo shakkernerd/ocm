@@ -5,7 +5,7 @@ use std::fs;
 use ocm::paths::runtime_install_root;
 
 use crate::support::{
-    TestDir, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
+    TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
 };
 
 #[test]
@@ -135,4 +135,44 @@ fn runtime_install_and_which_use_the_managed_binary_path() {
         path_string(&expected_source_path)
     )));
     assert!(show_stdout.contains(&format!("installRoot: {}", path_string(&install_root))));
+}
+
+#[test]
+fn runtime_install_from_url_downloads_into_the_managed_store() {
+    let root = TestDir::new("runtime-install-url");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let server = TestHttpServer::serve_bytes(
+        "/releases/openclaw-nightly",
+        "application/octet-stream",
+        b"downloaded-runtime",
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "nightly",
+            "--url",
+            &server.url(),
+            "--description",
+            "downloaded runtime",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+    assert!(stdout(&install).contains("Installed runtime nightly"));
+
+    let install_root = runtime_install_root("nightly", &env, &cwd).unwrap();
+    let expected_binary = install_root.join("files/openclaw-nightly");
+    assert_eq!(fs::read(&expected_binary).unwrap(), b"downloaded-runtime");
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "nightly"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_stdout = stdout(&show);
+    assert!(show_stdout.contains("sourceKind: installed"));
+    assert!(show_stdout.contains(&format!("sourceUrl: {}", server.url())));
+    assert!(show_stdout.contains("description: downloaded runtime"));
 }
