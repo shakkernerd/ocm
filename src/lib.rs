@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod download;
 pub mod execution;
 pub mod paths;
 pub mod runner;
