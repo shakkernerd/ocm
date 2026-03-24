@@ -60,7 +60,7 @@ impl Cli {
     fn render_help(&self) -> String {
         let cmd = self.command_example();
         format!(
-            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env status <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime install <name> (--path <binary> | --url <url>) [--description <text>]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime which <name>\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} runtime install managed-stable --path ./target/debug/openclaw\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env status refactor-a --json\n  {cmd} env resolve refactor-a --json\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
+            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env status <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime install <name> (--path <binary> | --url <url>) [--description <text>]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime verify <name> [--json]\n  {cmd} runtime which <name>\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} runtime install managed-stable --path ./target/debug/openclaw\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly\n  {cmd} runtime verify nightly --json\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env status refactor-a --json\n  {cmd} env resolve refactor-a --json\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
         )
     }
 
@@ -872,6 +872,40 @@ impl Cli {
         Ok(0)
     }
 
+    fn handle_runtime_verify(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("runtime name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let summary = self.runtime_service().verify(name)?;
+        let code = if summary.healthy { 0 } else { 1 };
+
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(code);
+        }
+
+        self.stdout_line(format!("name: {}", summary.name));
+        self.stdout_line(format!("binaryPath: {}", summary.binary_path));
+        self.stdout_line(format!("sourceKind: {}", summary.source_kind));
+        self.stdout_line(format!("healthy: {}", summary.healthy));
+        if let Some(source_path) = summary.source_path {
+            self.stdout_line(format!("sourcePath: {source_path}"));
+        }
+        if let Some(source_url) = summary.source_url {
+            self.stdout_line(format!("sourceUrl: {source_url}"));
+        }
+        if let Some(install_root) = summary.install_root {
+            self.stdout_line(format!("installRoot: {install_root}"));
+        }
+        if let Some(issue) = summary.issue {
+            self.stdout_line(format!("issue: {issue}"));
+        }
+        Ok(code)
+    }
+
     fn handle_runtime_which(&self, args: Vec<String>) -> Result<i32, String> {
         let Some(name) = args.first() else {
             return Err("runtime name is required".to_string());
@@ -900,6 +934,7 @@ impl Cli {
             "install" => self.handle_runtime_install(rest),
             "list" => self.handle_runtime_list(rest),
             "show" => self.handle_runtime_show(rest),
+            "verify" => self.handle_runtime_verify(rest),
             "which" => self.handle_runtime_which(rest),
             "remove" | "rm" => self.handle_runtime_remove(rest),
             _ => Err(format!("unknown runtime command: {action}")),

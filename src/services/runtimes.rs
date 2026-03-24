@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 
 use crate::store::{
@@ -7,6 +8,7 @@ use crate::store::{
 };
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeMeta,
+    RuntimeVerifySummary,
 };
 
 pub struct RuntimeService<'a> {
@@ -42,7 +44,37 @@ impl<'a> RuntimeService<'a> {
         get_runtime_verified(name, self.env, self.cwd)
     }
 
+    pub fn verify(&self, name: &str) -> Result<RuntimeVerifySummary, String> {
+        let meta = crate::store::get_runtime(name, self.env, self.cwd)?;
+        let issue = runtime_issue(&meta.binary_path);
+        Ok(RuntimeVerifySummary {
+            name: meta.name,
+            binary_path: meta.binary_path,
+            source_kind: meta.source_kind.as_str().to_string(),
+            source_path: meta.source_path,
+            source_url: meta.source_url,
+            install_root: meta.install_root,
+            healthy: issue.is_none(),
+            issue,
+        })
+    }
+
     pub fn remove(&self, name: &str) -> Result<RuntimeMeta, String> {
         remove_runtime(name, self.env, self.cwd)
+    }
+}
+
+fn runtime_issue(binary_path: &str) -> Option<String> {
+    let path = Path::new(binary_path);
+    if !path.exists() {
+        return Some(format!("binary path does not exist: {}", path.display()));
+    }
+
+    match fs::metadata(path) {
+        Ok(metadata) if !metadata.is_file() => {
+            Some(format!("binary path is not a file: {}", path.display()))
+        }
+        Ok(_) => None,
+        Err(error) => Some(error.to_string()),
     }
 }

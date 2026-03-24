@@ -79,6 +79,19 @@ pub struct EnvStatusSummary {
     pub issue: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeVerifySummary {
+    pub name: String,
+    pub binary_path: String,
+    pub source_kind: String,
+    pub source_path: Option<String>,
+    pub source_url: Option<String>,
+    pub install_root: Option<String>,
+    pub healthy: bool,
+    pub issue: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LauncherMeta {
