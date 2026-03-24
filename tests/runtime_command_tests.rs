@@ -235,3 +235,65 @@ fn runtime_install_from_url_cleans_up_failed_install_roots_for_retry() {
     assert!(retry_install.status.success(), "{}", stderr(&retry_install));
     assert!(stdout(&retry_install).contains("Installed runtime nightly"));
 }
+
+#[test]
+fn runtime_install_force_replaces_an_existing_runtime_definition() {
+    let root = TestDir::new("runtime-install-force");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    let source_dir = cwd.join("downloads");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(&source_dir).unwrap();
+    let external_path = bin_dir.join("stable");
+    let managed_source_path = source_dir.join("openclaw");
+    write_executable_script(&external_path, "#!/bin/sh\nexit 0\n");
+    write_executable_script(&managed_source_path, "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+
+    let duplicate_install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--path",
+            "./downloads/openclaw",
+        ],
+    );
+    assert_eq!(duplicate_install.status.code(), Some(1));
+    assert!(stderr(&duplicate_install).contains("runtime \"stable\" already exists"));
+
+    let force_install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--path",
+            "./downloads/openclaw",
+            "--force",
+        ],
+    );
+    assert!(force_install.status.success(), "{}", stderr(&force_install));
+    assert!(stdout(&force_install).contains("Installed runtime stable"));
+
+    let install_root = runtime_install_root("stable", &env, &cwd).unwrap();
+    let expected_binary = install_root.join("files/openclaw");
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_stdout = stdout(&show);
+    assert!(show_stdout.contains("\"sourceKind\": \"installed\""));
+    assert!(show_stdout.contains(&format!(
+        "\"binaryPath\": \"{}\"",
+        path_string(&expected_binary)
+    )));
+}

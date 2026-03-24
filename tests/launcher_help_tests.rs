@@ -19,15 +19,18 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("launcher show <name> [--json]"));
     assert!(output.contains("launcher remove <name>"));
     assert!(output.contains("runtime add <name> --path <binary> [--description <text>]"));
-    assert!(
-        output.contains(
-            "runtime install <name> (--path <binary> | --url <url>) [--description <text>]"
-        )
-    );
+    assert!(output.contains(
+        "runtime install <name> (--path <binary> | --url <url>) [--description <text>] [--force]"
+    ));
     assert!(output.contains("runtime list [--json]"));
     assert!(output.contains("runtime show <name> [--json]"));
     assert!(output.contains("runtime verify (<name> | --all) [--json]"));
     assert!(output.contains("runtime verify --all"));
+    assert!(
+        output.contains(
+            "runtime install nightly --url https://example.test/openclaw-nightly --force"
+        )
+    );
     assert!(output.contains("runtime which <name> [--json]"));
     assert!(output.contains("runtime which nightly --json"));
     assert!(output.contains("runtime remove <name>"));
