@@ -2,12 +2,13 @@ mod support;
 
 use std::fs;
 
-use ocm::paths::{env_meta_path, launcher_meta_path};
+use ocm::paths::{env_meta_path, launcher_meta_path, runtime_meta_path};
 use ocm::store::{
-    add_launcher, create_environment, get_environment, get_launcher, list_environments,
-    list_launchers, remove_environment, remove_launcher,
+    add_launcher, add_runtime, create_environment, get_environment, get_launcher, get_runtime,
+    list_environments, list_launchers, list_runtimes, remove_environment, remove_launcher,
+    remove_runtime,
 };
-use ocm::types::{AddLauncherOptions, CreateEnvironmentOptions};
+use ocm::types::{AddLauncherOptions, AddRuntimeOptions, CreateEnvironmentOptions};
 
 use crate::support::{TestDir, ocm_env};
 
@@ -98,4 +99,52 @@ fn launcher_store_round_trip_covers_add_show_list_and_remove() {
     let removed = remove_launcher("beta", &env, &cwd).unwrap();
     assert_eq!(removed.name, beta.name);
     assert!(!beta_path.exists());
+}
+
+#[test]
+fn runtime_store_round_trip_covers_add_show_list_and_remove() {
+    let root = TestDir::new("store-runtime-flow");
+    let cwd = root.child("workspace");
+    let runtime_dir = cwd.join("runtime-bin");
+    fs::create_dir_all(&runtime_dir).unwrap();
+    fs::write(runtime_dir.join("stable"), "#!/bin/sh\n").unwrap();
+    fs::write(runtime_dir.join("nightly"), "#!/bin/sh\n").unwrap();
+    let env = ocm_env(&root);
+
+    let stable = add_runtime(
+        AddRuntimeOptions {
+            name: "stable".to_string(),
+            path: "./runtime-bin/stable".to_string(),
+            description: Some("stable runtime".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let nightly = add_runtime(
+        AddRuntimeOptions {
+            name: "nightly".to_string(),
+            path: "./runtime-bin/nightly".to_string(),
+            description: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let fetched = get_runtime("nightly", &env, &cwd).unwrap();
+    assert_eq!(stable.description.as_deref(), Some("stable runtime"));
+    assert_eq!(fetched.name, "nightly");
+    assert!(fetched.binary_path.ends_with("/runtime-bin/nightly"));
+
+    let listed = list_runtimes(&env, &cwd).unwrap();
+    let names = listed.into_iter().map(|meta| meta.name).collect::<Vec<_>>();
+    assert_eq!(names, vec!["nightly".to_string(), "stable".to_string()]);
+
+    let nightly_path = runtime_meta_path("nightly", &env, &cwd).unwrap();
+    assert!(nightly_path.exists());
+
+    let removed = remove_runtime("nightly", &env, &cwd).unwrap();
+    assert_eq!(removed.name, nightly.name);
+    assert!(!nightly_path.exists());
 }

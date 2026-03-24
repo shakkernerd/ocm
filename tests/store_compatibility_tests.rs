@@ -2,7 +2,9 @@ mod support;
 
 use std::fs;
 
-use ocm::store::{ensure_store, get_environment, get_launcher, now_utc, select_prune_candidates};
+use ocm::store::{
+    ensure_store, get_environment, get_launcher, get_runtime, now_utc, select_prune_candidates,
+};
 use ocm::types::EnvMeta;
 use time::Duration;
 
@@ -48,6 +50,25 @@ fn get_launcher_accepts_json_without_optional_fields() {
     assert_eq!(meta.name, "legacy");
     assert_eq!(meta.command, "openclaw");
     assert_eq!(meta.cwd, None);
+    assert_eq!(meta.description, None);
+}
+
+#[test]
+fn get_runtime_accepts_json_without_optional_fields() {
+    let root = TestDir::new("runtime-json");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let stores = ensure_store(&env, &cwd).unwrap();
+
+    write_text(
+        &stores.runtimes_dir.join("legacy.json"),
+        "{\n  \"kind\": \"ocm-runtime\",\n  \"name\": \"legacy\",\n  \"binaryPath\": \"/tmp/openclaw\",\n  \"createdAt\": \"2026-03-20T10:00:00Z\",\n  \"updatedAt\": \"2026-03-20T10:00:00Z\"\n}\n",
+    );
+
+    let meta = get_runtime("legacy", &env, &cwd).unwrap();
+    assert_eq!(meta.name, "legacy");
+    assert_eq!(meta.binary_path, "/tmp/openclaw");
     assert_eq!(meta.description, None);
 }
 

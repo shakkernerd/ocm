@@ -3,8 +3,8 @@ mod support;
 use std::fs;
 
 use ocm::paths::{clean_path, resolve_ocm_home, validate_name};
-use ocm::store::{add_launcher, create_environment};
-use ocm::types::{AddLauncherOptions, CreateEnvironmentOptions};
+use ocm::store::{add_launcher, add_runtime, create_environment};
+use ocm::types::{AddLauncherOptions, AddRuntimeOptions, CreateEnvironmentOptions};
 
 use crate::support::{TestDir, base_env, ocm_env, path_string};
 
@@ -98,4 +98,28 @@ fn add_launcher_normalizes_relative_cwd() {
         meta.cwd.as_deref(),
         Some(path_string(&expected_cwd).as_str())
     );
+}
+
+#[test]
+fn add_runtime_normalizes_relative_binary_path() {
+    let root = TestDir::new("runtime-path");
+    let cwd = root.child("workspace");
+    let binary_path = cwd.join("bin/openclaw");
+    fs::create_dir_all(binary_path.parent().unwrap()).unwrap();
+    fs::write(&binary_path, "#!/bin/sh\n").unwrap();
+    let env = ocm_env(&root);
+
+    let meta = add_runtime(
+        AddRuntimeOptions {
+            name: "stable".to_string(),
+            path: "./bin/./openclaw".to_string(),
+            description: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let expected_path = clean_path(&cwd.join("bin/openclaw"));
+    assert_eq!(meta.binary_path, path_string(&expected_path));
 }
