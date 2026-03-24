@@ -26,7 +26,7 @@ fn help_mentions_launcher_and_runtime_commands() {
         "env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]"
     ));
     assert!(output.contains(
-        "env resolve <name> [--runtime <name> | --launcher <name>] [-- <openclaw args...>]"
+        "env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]"
     ));
     assert!(
         output.contains(
