@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::execution::{
@@ -9,6 +10,7 @@ use crate::store::{
     create_environment, get_environment, get_launcher, get_runtime_verified, list_environments,
     now_utc, remove_environment, save_environment, select_prune_candidates,
 };
+use crate::types::EnvStatusSummary;
 use crate::types::{CreateEnvironmentOptions, EnvMeta, ExecutionSummary};
 
 pub enum ResolvedExecution {
@@ -107,6 +109,70 @@ impl<'a> EnvironmentService<'a> {
         Ok(removed)
     }
 
+    pub fn status(&self, name: &str) -> Result<EnvStatusSummary, String> {
+        let env = self.get(name)?;
+        let mut summary = EnvStatusSummary {
+            env_name: env.name.clone(),
+            root: env.root.clone(),
+            default_runtime: env.default_runtime.clone(),
+            default_launcher: env.default_launcher.clone(),
+            resolved_kind: None,
+            resolved_name: None,
+            binary_path: None,
+            command: None,
+            run_dir: None,
+            runtime_source_kind: None,
+            runtime_health: None,
+            issue: None,
+        };
+
+        match resolve_execution_binding(&env, None, None) {
+            Ok(ExecutionBinding::Runtime(runtime_name)) => {
+                summary.resolved_kind = Some("runtime".to_string());
+                summary.resolved_name = Some(runtime_name.clone());
+                match crate::store::get_runtime(&runtime_name, self.env, self.cwd) {
+                    Ok(runtime) => {
+                        summary.binary_path = Some(runtime.binary_path.clone());
+                        summary.run_dir =
+                            Some(resolve_runtime_run_dir(self.cwd).display().to_string());
+                        summary.runtime_source_kind =
+                            Some(runtime.source_kind.as_str().to_string());
+                        match runtime_health(&runtime.binary_path) {
+                            Ok(()) => summary.runtime_health = Some("ok".to_string()),
+                            Err(error) => {
+                                summary.runtime_health = Some("broken".to_string());
+                                summary.issue =
+                                    Some(format!("runtime \"{}\" {error}", runtime.name));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        summary.runtime_health = Some("missing".to_string());
+                        summary.issue = Some(error);
+                    }
+                }
+            }
+            Ok(ExecutionBinding::Launcher(launcher_name)) => {
+                summary.resolved_kind = Some("launcher".to_string());
+                summary.resolved_name = Some(launcher_name.clone());
+                match get_launcher(&launcher_name, self.env, self.cwd) {
+                    Ok(launcher) => {
+                        summary.command = Some(launcher.command.clone());
+                        summary.run_dir = Some(
+                            resolve_launcher_run_dir(&launcher, self.cwd)
+                                .display()
+                                .to_string(),
+                        );
+                    }
+                    Err(error) => summary.issue = Some(error),
+                }
+            }
+            Err(error) => summary.issue = Some(error),
+        }
+
+        Ok(summary)
+    }
+
     pub fn resolve(
         &self,
         name: &str,
@@ -158,6 +224,20 @@ impl<'a> EnvironmentService<'a> {
             }
         }
     }
+}
+
+fn runtime_health(binary_path: &str) -> Result<(), String> {
+    let path = Path::new(binary_path);
+    if !path.exists() {
+        return Err(format!("binary path does not exist: {}", path.display()));
+    }
+
+    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err(format!("binary path is not a file: {}", path.display()));
+    }
+
+    Ok(())
 }
 
 impl ResolvedExecution {

@@ -62,6 +62,23 @@ pub struct ExecutionSummary {
     pub run_dir: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvStatusSummary {
+    pub env_name: String,
+    pub root: String,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub resolved_kind: Option<String>,
+    pub resolved_name: Option<String>,
+    pub binary_path: Option<String>,
+    pub command: Option<String>,
+    pub run_dir: Option<String>,
+    pub runtime_source_kind: Option<String>,
+    pub runtime_health: Option<String>,
+    pub issue: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LauncherMeta {
