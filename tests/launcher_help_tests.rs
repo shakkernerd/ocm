@@ -14,7 +14,7 @@ fn help_mentions_launcher_and_runtime_commands() {
     let help = run_ocm(&cwd, &env, &["help"]);
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
-    assert!(output.contains("init <zsh|bash|sh|fish>"));
+    assert!(output.contains("init [zsh|bash|sh|fish]"));
     assert!(output.contains("init bash"));
     assert!(output.contains("init fish"));
     assert!(output.contains("launcher add <name> --command"));
