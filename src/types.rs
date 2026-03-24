@@ -83,6 +83,15 @@ pub enum RuntimeSourceKind {
     Installed,
 }
 
+impl RuntimeSourceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Registered => "registered",
+            Self::Installed => "installed",
+        }
+    }
+}
+
 fn default_runtime_source_kind() -> RuntimeSourceKind {
     RuntimeSourceKind::Registered
 }

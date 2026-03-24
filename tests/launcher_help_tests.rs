@@ -19,8 +19,10 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("launcher show <name> [--json]"));
     assert!(output.contains("launcher remove <name>"));
     assert!(output.contains("runtime add <name> --path <binary> [--description <text>]"));
+    assert!(output.contains("runtime install <name> --path <binary> [--description <text>]"));
     assert!(output.contains("runtime list [--json]"));
     assert!(output.contains("runtime show <name> [--json]"));
+    assert!(output.contains("runtime which <name>"));
     assert!(output.contains("runtime remove <name>"));
     assert!(output.contains(
         "env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]"
