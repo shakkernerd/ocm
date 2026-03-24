@@ -12,6 +12,30 @@ pub(crate) fn ensure_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|error| error.to_string())
 }
 
+pub(crate) fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+    ensure_dir(destination)?;
+
+    let entries = fs::read_dir(source).map_err(|error| error.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let metadata = fs::metadata(&source_path).map_err(|error| error.to_string())?;
+
+        if metadata.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+            continue;
+        }
+
+        if let Some(parent) = destination_path.parent() {
+            ensure_dir(parent)?;
+        }
+        fs::copy(&source_path, &destination_path).map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
     let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
     serde_json::from_str(&raw).map_err(|error| error.to_string())
