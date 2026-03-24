@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::download::{artifact_file_name_from_url, download_to_file};
@@ -72,24 +74,44 @@ fn install_runtime_at_path(
         ));
     }
 
-    ensure_dir(&install_files)?;
-    let binary_path = install_files.join(file_name);
-    match (source_path, source_url.as_deref()) {
-        (Some(source_path), _) => copy_installed_runtime_binary(source_path, &binary_path)?,
-        (None, Some(source_url)) => download_to_file(source_url, &binary_path)?,
-        (None, None) => return Err("runtime install requires a source path or URL".to_string()),
+    let result = (|| {
+        ensure_dir(&install_files)?;
+        let binary_path = install_files.join(file_name);
+        match (source_path, source_url.as_deref()) {
+            (Some(source_path), _) => copy_installed_runtime_binary(source_path, &binary_path)?,
+            (None, Some(source_url)) => {
+                download_to_file(source_url, &binary_path)?;
+                #[cfg(unix)]
+                {
+                    let mut permissions = fs::metadata(&binary_path)
+                        .map_err(|error| error.to_string())?
+                        .permissions();
+                    permissions.set_mode(0o755);
+                    fs::set_permissions(&binary_path, permissions)
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            (None, None) => return Err("runtime install requires a source path or URL".to_string()),
+        }
+
+        let meta = build_installed_runtime_meta(
+            name,
+            &binary_path,
+            &install_root,
+            source_path,
+            source_url,
+            description,
+        );
+        write_json(&meta_path, &meta)?;
+        Ok(meta)
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&meta_path);
+        let _ = fs::remove_dir_all(&install_root);
     }
 
-    let meta = build_installed_runtime_meta(
-        name,
-        &binary_path,
-        &install_root,
-        source_path,
-        source_url,
-        description,
-    );
-    write_json(&meta_path, &meta)?;
-    Ok(meta)
+    result
 }
 
 pub fn list_runtimes(

@@ -176,3 +176,52 @@ fn runtime_install_from_url_downloads_into_the_managed_store() {
     assert!(show_stdout.contains(&format!("sourceUrl: {}", server.url())));
     assert!(show_stdout.contains("description: downloaded runtime"));
 }
+
+#[test]
+fn runtime_install_from_url_cleans_up_failed_install_roots_for_retry() {
+    let root = TestDir::new("runtime-install-url-retry");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let missing_server = TestHttpServer::serve_bytes(
+        "/releases/openclaw-nightly",
+        "application/octet-stream",
+        b"downloaded-runtime",
+    );
+    let env = ocm_env(&root);
+
+    let failed_install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "nightly",
+            "--url",
+            &format!("{}-missing", missing_server.url()),
+        ],
+    );
+    assert_eq!(failed_install.status.code(), Some(1));
+    assert!(stderr(&failed_install).contains("failed to download runtime URL"));
+
+    let install_root = runtime_install_root("nightly", &env, &cwd).unwrap();
+    assert!(!install_root.exists());
+
+    let retry_server = TestHttpServer::serve_bytes(
+        "/releases/openclaw-nightly",
+        "application/octet-stream",
+        b"downloaded-runtime",
+    );
+    let retry_install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "nightly",
+            "--url",
+            &retry_server.url(),
+        ],
+    );
+    assert!(retry_install.status.success(), "{}", stderr(&retry_install));
+    assert!(stdout(&retry_install).contains("Installed runtime nightly"));
+}
