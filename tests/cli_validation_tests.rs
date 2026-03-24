@@ -35,6 +35,22 @@ fn launcher_add_rejects_invalid_names() {
 }
 
 #[test]
+fn runtime_add_rejects_invalid_names() {
+    let root = TestDir::new("cli-invalid-runtime-name");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "bad/name", "--path", "./bin/openclaw"],
+    );
+    assert_eq!(add.status.code(), Some(1));
+    assert!(stderr(&add).contains("Runtime name must use letters, numbers, '.', '_', or '-'"));
+}
+
+#[test]
 fn env_create_rejects_invalid_and_empty_port_values() {
     let root = TestDir::new("cli-invalid-port");
     let cwd = root.child("workspace");
@@ -87,4 +103,24 @@ fn env_run_rejects_empty_and_unknown_launcher_overrides() {
     let missing = run_ocm(&cwd, &env, &["env", "run", "demo", "--launcher", "missing"]);
     assert_eq!(missing.status.code(), Some(1));
     assert!(stderr(&missing).contains("launcher \"missing\" does not exist"));
+}
+
+#[test]
+fn runtime_add_rejects_empty_and_missing_paths() {
+    let root = TestDir::new("cli-runtime-path-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let empty = run_ocm(&cwd, &env, &["runtime", "add", "stable", "--path="]);
+    assert_eq!(empty.status.code(), Some(1));
+    assert!(stderr(&empty).contains("--path requires a value"));
+
+    let missing = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./missing"],
+    );
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(stderr(&missing).contains("runtime path does not exist:"));
 }

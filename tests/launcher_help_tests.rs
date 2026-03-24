@@ -5,7 +5,7 @@ use std::fs;
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
 #[test]
-fn help_mentions_launcher_commands_and_binding_flags() {
+fn help_mentions_launcher_and_runtime_commands() {
     let root = TestDir::new("launcher-help");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -18,6 +18,10 @@ fn help_mentions_launcher_commands_and_binding_flags() {
     assert!(output.contains("launcher list [--json]"));
     assert!(output.contains("launcher show <name> [--json]"));
     assert!(output.contains("launcher remove <name>"));
+    assert!(output.contains("runtime add <name> --path <binary> [--description <text>]"));
+    assert!(output.contains("runtime list [--json]"));
+    assert!(output.contains("runtime show <name> [--json]"));
+    assert!(output.contains("runtime remove <name>"));
     assert!(output.contains(
         "env create <name> [--root <path>] [--port <port>] [--launcher <name>] [--protect]"
     ));

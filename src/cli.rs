@@ -6,10 +6,10 @@ use serde::Serialize;
 
 use crate::paths::{derive_env_paths, validate_name};
 use crate::runner::{run_direct, run_shell};
-use crate::services::{EnvironmentService, LauncherService};
+use crate::services::{EnvironmentService, LauncherService, RuntimeService};
 use crate::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::store::{ensure_store, summarize_env};
-use crate::types::{AddLauncherOptions, CreateEnvironmentOptions, EnvSummary};
+use crate::types::{AddLauncherOptions, AddRuntimeOptions, CreateEnvironmentOptions, EnvSummary};
 
 const VERSION: &str = "0.1.0";
 
@@ -25,6 +25,10 @@ impl Cli {
 
     fn environment_service(&self) -> EnvironmentService<'_> {
         EnvironmentService::new(&self.env, &self.cwd)
+    }
+
+    fn runtime_service(&self) -> RuntimeService<'_> {
+        RuntimeService::new(&self.env, &self.cwd)
     }
 
     fn stdout_line(&self, line: impl AsRef<str>) {
@@ -53,7 +57,7 @@ impl Cli {
     fn render_help(&self) -> String {
         let cmd = self.command_example();
         format!(
-            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env run <name> [--launcher <name>] -- <openclaw args...>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} env create refactor-a --launcher stable --port 19789\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
+            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env run <name> [--launcher <name>] -- <openclaw args...>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} env create refactor-a --launcher stable --port 19789\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
         )
     }
 
@@ -575,6 +579,110 @@ impl Cli {
         }
     }
 
+    fn handle_runtime_add(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, path) = Self::consume_option(args, "--path")?;
+        let path = Self::require_option_value(path, "--path")?;
+        let (args, description) = Self::consume_option(args, "--description")?;
+        let Some(name) = args.first() else {
+            return Err("runtime name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = self.runtime_service().add(AddRuntimeOptions {
+            name: name.clone(),
+            path: path.unwrap_or_default(),
+            description,
+        })?;
+
+        if json_flag {
+            self.print_json(&meta)?;
+            return Ok(0);
+        }
+
+        self.stdout_line(format!("Added runtime {}", meta.name));
+        self.stdout_line(format!("  binary path: {}", meta.binary_path));
+        Ok(0)
+    }
+
+    fn handle_runtime_list(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        Self::assert_no_extra_args(&args)?;
+
+        let runtimes = self.runtime_service().list()?;
+        if json_flag {
+            self.print_json(&runtimes)?;
+            return Ok(0);
+        }
+        if runtimes.is_empty() {
+            self.stdout_line("No runtimes.");
+            return Ok(0);
+        }
+        for meta in runtimes {
+            self.stdout_line(format!("{}  {}", meta.name, meta.binary_path));
+        }
+        Ok(0)
+    }
+
+    fn handle_runtime_show(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("runtime name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = self.runtime_service().show(name)?;
+        if json_flag {
+            self.print_json(&meta)?;
+            return Ok(0);
+        }
+
+        let mut lines = BTreeMap::new();
+        lines.insert("kind".to_string(), meta.kind.clone());
+        lines.insert("name".to_string(), meta.name.clone());
+        lines.insert("binaryPath".to_string(), meta.binary_path.clone());
+        lines.insert(
+            "createdAt".to_string(),
+            meta.created_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|error| error.to_string())?,
+        );
+        lines.insert(
+            "updatedAt".to_string(),
+            meta.updated_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|error| error.to_string())?,
+        );
+        if let Some(description) = meta.description {
+            lines.insert("description".to_string(), description);
+        }
+        for (key, value) in lines {
+            self.stdout_line(format!("{key}: {value}"));
+        }
+        Ok(0)
+    }
+
+    fn handle_runtime_remove(&self, args: Vec<String>) -> Result<i32, String> {
+        let Some(name) = args.first() else {
+            return Err("runtime name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = self.runtime_service().remove(name)?;
+        self.stdout_line(format!("Removed runtime {}", meta.name));
+        Ok(0)
+    }
+
+    fn dispatch_runtime_command(&self, action: &str, rest: Vec<String>) -> Result<i32, String> {
+        match action {
+            "add" => self.handle_runtime_add(rest),
+            "list" => self.handle_runtime_list(rest),
+            "show" => self.handle_runtime_show(rest),
+            "remove" | "rm" => self.handle_runtime_remove(rest),
+            _ => Err(format!("unknown runtime command: {action}")),
+        }
+    }
+
     pub fn run(&self, args: Vec<String>) -> i32 {
         if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
             print!("{}", self.render_help());
@@ -617,6 +725,7 @@ impl Cli {
                 _ => Err(format!("unknown env command: {action}")),
             },
             "launcher" => self.dispatch_launcher_command(action.as_str(), rest),
+            "runtime" => self.dispatch_runtime_command(action.as_str(), rest),
             _ => Err(format!("unknown command group: {group}")),
         };
 
