@@ -4,7 +4,9 @@ use std::fs;
 
 use ocm::paths::clean_path;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
+use crate::support::{
+    TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout, write_executable_script,
+};
 
 #[test]
 fn env_set_runtime_updates_and_clears_the_default_runtime() {
@@ -126,4 +128,45 @@ fn env_run_prefers_the_bound_runtime_over_the_bound_launcher() {
     let run = run_ocm(&cwd, &env, &["env", "run", "demo", "--"]);
     assert!(run.status.success(), "{}", stderr(&run));
     assert_eq!(stdout(&run), "runtime");
+}
+
+#[test]
+fn env_run_uses_a_runtime_installed_from_url() {
+    let root = TestDir::new("runtime-binding-installed-url");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let server = TestHttpServer::serve_bytes(
+        "/releases/openclaw-nightly",
+        "application/octet-stream",
+        b"#!/bin/sh\nprintf 'runtime-url|%s|%s' \"$OPENCLAW_HOME\" \"$PWD\"\n",
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "install", "nightly", "--url", &server.url()],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "nightly"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let run = run_ocm(&cwd, &env, &["env", "run", "demo", "--"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+
+    let env_root = clean_path(&root.child("ocm-home/envs/demo"));
+    let expected_cwd = fs::canonicalize(&cwd).unwrap();
+    assert_eq!(
+        stdout(&run),
+        format!(
+            "runtime-url|{}|{}",
+            env_root.display(),
+            expected_cwd.display()
+        )
+    );
 }
