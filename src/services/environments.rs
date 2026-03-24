@@ -1,17 +1,28 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::execution::{build_launcher_command, resolve_launcher_name, resolve_launcher_run_dir};
+use crate::execution::{
+    ExecutionBinding, build_launcher_command, resolve_execution_binding, resolve_launcher_run_dir,
+    resolve_runtime_run_dir,
+};
 use crate::store::{
-    create_environment, get_environment, get_launcher, list_environments, now_utc,
+    create_environment, get_environment, get_launcher, get_runtime, list_environments, now_utc,
     remove_environment, save_environment, select_prune_candidates,
 };
 use crate::types::{CreateEnvironmentOptions, EnvMeta};
 
-pub struct ResolvedLauncherExecution {
-    pub env: EnvMeta,
-    pub command: String,
-    pub run_dir: PathBuf,
+pub enum ResolvedExecution {
+    Launcher {
+        env: EnvMeta,
+        command: String,
+        run_dir: PathBuf,
+    },
+    Runtime {
+        env: EnvMeta,
+        binary_path: String,
+        args: Vec<String>,
+        run_dir: PathBuf,
+    },
 }
 
 pub struct EnvironmentService<'a> {
@@ -25,6 +36,9 @@ impl<'a> EnvironmentService<'a> {
     }
 
     pub fn create(&self, options: CreateEnvironmentOptions) -> Result<EnvMeta, String> {
+        if let Some(runtime_name) = options.default_runtime.as_deref() {
+            get_runtime(runtime_name, self.env, self.cwd)?;
+        }
         if let Some(launcher_name) = options.default_launcher.as_deref() {
             get_launcher(launcher_name, self.env, self.cwd)?;
         }
@@ -56,6 +70,17 @@ impl<'a> EnvironmentService<'a> {
         save_environment(meta, self.env, self.cwd)
     }
 
+    pub fn set_runtime(&self, name: &str, runtime_name: &str) -> Result<EnvMeta, String> {
+        let mut meta = get_environment(name, self.env, self.cwd)?;
+        if runtime_name.eq_ignore_ascii_case("none") {
+            meta.default_runtime = None;
+        } else {
+            get_runtime(runtime_name, self.env, self.cwd)?;
+            meta.default_runtime = Some(runtime_name.to_string());
+        }
+        save_environment(meta, self.env, self.cwd)
+    }
+
     pub fn set_protected(&self, name: &str, protected: bool) -> Result<EnvMeta, String> {
         let mut meta = get_environment(name, self.env, self.cwd)?;
         meta.protected = protected;
@@ -83,17 +108,29 @@ impl<'a> EnvironmentService<'a> {
     pub fn resolve_run(
         &self,
         name: &str,
+        runtime_override: Option<String>,
         launcher_override: Option<String>,
         args: &[String],
-    ) -> Result<ResolvedLauncherExecution, String> {
+    ) -> Result<ResolvedExecution, String> {
         let env = self.touch(name)?;
-        let launcher_name = resolve_launcher_name(&env, launcher_override)?;
-        let launcher = get_launcher(&launcher_name, self.env, self.cwd)?;
-
-        Ok(ResolvedLauncherExecution {
-            command: build_launcher_command(&launcher, args),
-            run_dir: resolve_launcher_run_dir(&launcher, self.cwd),
-            env,
-        })
+        match resolve_execution_binding(&env, runtime_override, launcher_override)? {
+            ExecutionBinding::Launcher(launcher_name) => {
+                let launcher = get_launcher(&launcher_name, self.env, self.cwd)?;
+                Ok(ResolvedExecution::Launcher {
+                    command: build_launcher_command(&launcher, args),
+                    run_dir: resolve_launcher_run_dir(&launcher, self.cwd),
+                    env,
+                })
+            }
+            ExecutionBinding::Runtime(runtime_name) => {
+                let runtime = get_runtime(&runtime_name, self.env, self.cwd)?;
+                Ok(ResolvedExecution::Runtime {
+                    binary_path: runtime.binary_path,
+                    args: args.to_vec(),
+                    run_dir: resolve_runtime_run_dir(self.cwd),
+                    env,
+                })
+            }
+        }
     }
 }

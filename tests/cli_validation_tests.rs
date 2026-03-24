@@ -106,6 +106,90 @@ fn env_run_rejects_empty_and_unknown_launcher_overrides() {
 }
 
 #[test]
+fn env_create_rejects_empty_and_unknown_runtime_values() {
+    let root = TestDir::new("cli-create-runtime-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let empty = run_ocm(&cwd, &env, &["env", "create", "demo", "--runtime="]);
+    assert_eq!(empty.status.code(), Some(1));
+    assert!(stderr(&empty).contains("--runtime requires a value"));
+
+    let missing = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "missing"],
+    );
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(stderr(&missing).contains("runtime \"missing\" does not exist"));
+}
+
+#[test]
+fn env_run_rejects_conflicting_runtime_and_launcher_overrides() {
+    let root = TestDir::new("cli-run-conflicting-overrides");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(bin_dir.join("stable"), "#!/bin/sh\n").unwrap();
+    let env = ocm_env(&root);
+
+    let add_runtime = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add_runtime.status.success(), "{}", stderr(&add_runtime));
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "sh"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let run = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "run",
+            "demo",
+            "--runtime",
+            "stable",
+            "--launcher",
+            "stable",
+            "--",
+            "onboard",
+        ],
+    );
+    assert_eq!(run.status.code(), Some(1));
+    assert!(stderr(&run).contains("env run accepts only one of --runtime or --launcher"));
+}
+
+#[test]
+fn env_run_rejects_empty_and_unknown_runtime_overrides() {
+    let root = TestDir::new("cli-run-runtime-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let empty = run_ocm(&cwd, &env, &["env", "run", "demo", "--runtime="]);
+    assert_eq!(empty.status.code(), Some(1));
+    assert!(stderr(&empty).contains("--runtime requires a value"));
+
+    let missing = run_ocm(&cwd, &env, &["env", "run", "demo", "--runtime", "missing"]);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(stderr(&missing).contains("runtime \"missing\" does not exist"));
+}
+
+#[test]
 fn runtime_add_rejects_empty_and_missing_paths() {
     let root = TestDir::new("cli-runtime-path-validation");
     let cwd = root.child("workspace");

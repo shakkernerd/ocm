@@ -51,6 +51,6 @@ fn env_run_without_a_launcher_uses_launcher_specific_guidance() {
     let run = run_ocm(&cwd, &env, &["env", "run", "demo", "--", "onboard"]);
     assert_eq!(run.status.code(), Some(1));
     assert!(stderr(&run).contains(
-        "environment \"demo\" has no default launcher; use env set-launcher or pass --launcher",
+        "environment \"demo\" has no default runtime or launcher; use env set-runtime, env set-launcher, or pass --runtime/--launcher",
     ));
 }

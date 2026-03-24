@@ -23,8 +23,14 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("runtime show <name> [--json]"));
     assert!(output.contains("runtime remove <name>"));
     assert!(output.contains(
-        "env create <name> [--root <path>] [--port <port>] [--launcher <name>] [--protect]"
+        "env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]"
     ));
+    assert!(
+        output.contains(
+            "env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>"
+        )
+    );
+    assert!(output.contains("env set-runtime <name> <runtime|none>"));
     assert!(output.contains("env set-launcher <name> <launcher|none>"));
     assert!(!output.contains("version add <name> --command"));
 }

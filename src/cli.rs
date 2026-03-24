@@ -57,7 +57,7 @@ impl Cli {
     fn render_help(&self) -> String {
         let cmd = self.command_example();
         format!(
-            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env run <name> [--launcher <name>] -- <openclaw args...>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} env create refactor-a --launcher stable --port 19789\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
+            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
         )
     }
 
@@ -158,6 +158,8 @@ impl Cli {
             Some(raw) => Some(Self::parse_positive_u32(raw, "--port")?),
             _ => None,
         };
+        let (args, runtime_name) = Self::consume_option(args, "--runtime")?;
+        let runtime_name = Self::require_option_value(runtime_name, "--runtime")?;
         let (args, launcher_name) = Self::consume_option(args, "--launcher")?;
         let launcher_name = Self::require_option_value(launcher_name, "--launcher")?;
 
@@ -172,7 +174,7 @@ impl Cli {
                 name: name.clone(),
                 root,
                 gateway_port,
-                default_runtime: None,
+                default_runtime: runtime_name,
                 default_launcher: launcher_name,
                 protected: protect,
             })?;
@@ -189,6 +191,9 @@ impl Cli {
         self.stdout_line(format!("  workspace: {}", summary.workspace_dir));
         if let Some(port) = summary.gateway_port {
             self.stdout_line(format!("  gateway port: {port}"));
+        }
+        if let Some(runtime) = summary.default_runtime.as_deref() {
+            self.stdout_line(format!("  runtime: {runtime}"));
         }
         if let Some(launcher) = summary.default_launcher.as_deref() {
             self.stdout_line(format!("  launcher: {launcher}"));
@@ -217,6 +222,9 @@ impl Cli {
         }
         for summary in summaries {
             let mut bits = vec![summary.name, summary.root];
+            if let Some(runtime) = summary.default_runtime {
+                bits.push(format!("runtime={runtime}"));
+            }
             if let Some(launcher) = summary.default_launcher {
                 bits.push(format!("launcher={launcher}"));
             }
@@ -262,6 +270,9 @@ impl Cli {
         );
         if let Some(port) = summary.gateway_port {
             lines.insert("gatewayPort".to_string(), port.to_string());
+        }
+        if let Some(runtime) = summary.default_runtime {
+            lines.insert("defaultRuntime".to_string(), runtime);
         }
         if let Some(launcher) = summary.default_launcher {
             lines.insert("defaultLauncher".to_string(), launcher);
@@ -315,6 +326,8 @@ impl Cli {
 
     fn handle_env_run(&self, args: Vec<String>) -> Result<i32, String> {
         let (before, after) = Self::split_on_double_dash(&args);
+        let (before, runtime_override) = Self::consume_option(before, "--runtime")?;
+        let runtime_override = Self::require_option_value(runtime_override, "--runtime")?;
         let (before, launcher_override) = Self::consume_option(before, "--launcher")?;
         let launcher_override = Self::require_option_value(launcher_override, "--launcher")?;
         let Some(name) = before.first() else {
@@ -322,14 +335,55 @@ impl Cli {
         };
         Self::assert_command_separator(&before, "env run requires -- before OpenClaw arguments")?;
 
-        let resolved = self
-            .environment_service()
-            .resolve_run(name, launcher_override, &after)?;
-        run_shell(
-            &resolved.command,
-            &build_openclaw_env(&resolved.env, &self.env),
-            &resolved.run_dir,
-        )
+        let resolved = self.environment_service().resolve_run(
+            name,
+            runtime_override,
+            launcher_override,
+            &after,
+        )?;
+        match resolved {
+            crate::services::ResolvedExecution::Launcher {
+                env,
+                command,
+                run_dir,
+            } => run_shell(&command, &build_openclaw_env(&env, &self.env), &run_dir),
+            crate::services::ResolvedExecution::Runtime {
+                env,
+                binary_path,
+                args,
+                run_dir,
+            } => run_direct(
+                &binary_path,
+                &args,
+                &build_openclaw_env(&env, &self.env),
+                &run_dir,
+            ),
+        }
+    }
+
+    fn handle_env_set_runtime(&self, args: Vec<String>) -> Result<i32, String> {
+        if args.len() < 2 {
+            return Err(format!(
+                "usage: {} env set-runtime <env> <runtime|none>",
+                self.command_example()
+            ));
+        }
+        let name = &args[0];
+        let runtime_name = &args[1];
+        Self::assert_no_extra_args(&args[2..])?;
+
+        let validated = if runtime_name.eq_ignore_ascii_case("none") {
+            runtime_name.to_string()
+        } else {
+            validate_name(runtime_name, "Runtime name")?
+        };
+        let meta = self.environment_service().set_runtime(name, &validated)?;
+        let default_runtime = meta.default_runtime.unwrap_or_else(|| "none".to_string());
+        self.stdout_line(format!(
+            "Updated env {}: defaultRuntime={default_runtime}",
+            meta.name
+        ));
+        Ok(0)
     }
 
     fn handle_env_set_launcher(&self, args: Vec<String>) -> Result<i32, String> {
@@ -718,6 +772,7 @@ impl Cli {
                 "use" => self.handle_env_use(rest),
                 "exec" => self.handle_env_exec(rest),
                 "run" => self.handle_env_run(rest),
+                "set-runtime" => self.handle_env_set_runtime(rest),
                 "set-launcher" => self.handle_env_set_launcher(rest),
                 "protect" => self.handle_env_protect(rest),
                 "remove" | "rm" => self.handle_env_remove(rest),
