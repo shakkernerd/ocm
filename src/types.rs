@@ -50,6 +50,18 @@ pub struct EnvSummary {
     pub last_used_at: Option<OffsetDateTime>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionSummary {
+    pub env_name: String,
+    pub binding_kind: String,
+    pub binding_name: String,
+    pub command: Option<String>,
+    pub binary_path: Option<String>,
+    pub forwarded_args: Vec<String>,
+    pub run_dir: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LauncherMeta {

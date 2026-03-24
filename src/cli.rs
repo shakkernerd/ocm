@@ -346,12 +346,14 @@ impl Cli {
                 env,
                 command,
                 run_dir,
+                ..
             } => run_shell(&command, &build_openclaw_env(&env, &self.env), &run_dir),
             crate::services::ResolvedExecution::Runtime {
                 env,
                 binary_path,
                 args,
                 run_dir,
+                ..
             } => run_direct(
                 &binary_path,
                 &args,
