@@ -4,16 +4,16 @@ use std::fs;
 
 use ocm::paths::{env_meta_path, launcher_meta_path, runtime_install_root, runtime_meta_path};
 use ocm::store::{
-    add_launcher, add_runtime, create_environment, get_environment, get_launcher, get_runtime,
-    install_runtime, list_environments, list_launchers, list_runtimes, remove_environment,
-    remove_launcher, remove_runtime,
+    add_launcher, add_runtime, clone_environment, create_environment, get_environment,
+    get_launcher, get_runtime, install_runtime, list_environments, list_launchers, list_runtimes,
+    remove_environment, remove_launcher, remove_runtime,
 };
 use ocm::types::{
-    AddLauncherOptions, AddRuntimeOptions, CreateEnvironmentOptions, InstallRuntimeOptions,
-    RuntimeSourceKind,
+    AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvironmentOptions,
+    InstallRuntimeOptions, RuntimeSourceKind,
 };
 
-use crate::support::{TestDir, ocm_env, path_string, write_executable_script};
+use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
 
 #[test]
 fn environment_store_round_trip_covers_create_read_list_and_remove() {
@@ -206,4 +206,58 @@ fn runtime_install_copies_binary_into_the_managed_store() {
     assert_eq!(removed.name, "stable");
     assert!(!meta_path.exists());
     assert!(!install_root.exists());
+}
+
+#[test]
+fn environment_clone_copies_the_root_and_resets_identity_metadata() {
+    let root = TestDir::new("store-env-clone");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let source = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_runtime: Some("stable".to_string()),
+            default_launcher: Some("stable".to_string()),
+            protected: true,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = std::path::Path::new(&source.root);
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "hello clone",
+    );
+
+    let cloned = clone_environment(
+        CloneEnvironmentOptions {
+            source_name: "source".to_string(),
+            name: "target".to_string(),
+            root: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let target_root = std::path::Path::new(&cloned.root);
+    assert_eq!(
+        fs::read_to_string(target_root.join(".openclaw/workspace/notes.txt")).unwrap(),
+        "hello clone"
+    );
+    assert_eq!(cloned.name, "target");
+    assert_eq!(cloned.gateway_port, Some(19789));
+    assert_eq!(cloned.default_runtime.as_deref(), Some("stable"));
+    assert_eq!(cloned.default_launcher.as_deref(), Some("stable"));
+    assert!(cloned.protected);
+    assert!(cloned.last_used_at.is_none());
+    assert_ne!(cloned.root, source.root);
+
+    let marker_raw = fs::read_to_string(target_root.join(".ocm-env.json")).unwrap();
+    assert!(marker_raw.contains("\"name\": \"target\""));
 }

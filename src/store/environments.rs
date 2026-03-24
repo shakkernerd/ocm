@@ -6,9 +6,11 @@ use crate::paths::{
     clean_path, default_env_root, derive_env_paths, display_path, env_meta_path,
     resolve_absolute_path, validate_name,
 };
-use crate::types::{CreateEnvironmentOptions, EnvMarker, EnvMeta};
+use crate::types::{CloneEnvironmentOptions, CreateEnvironmentOptions, EnvMarker, EnvMeta};
 
-use super::common::{ensure_dir, load_json_files, path_exists, read_json, write_json};
+use super::common::{
+    copy_dir_recursive, ensure_dir, load_json_files, path_exists, read_json, write_json,
+};
 use super::now_utc;
 
 pub fn list_environments(
@@ -107,6 +109,86 @@ pub fn create_environment(
         last_used_at: None,
     };
     save_environment(meta, env, cwd)
+}
+
+pub fn clone_environment(
+    options: CloneEnvironmentOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
+    let source = get_environment(&options.source_name, env, cwd)?;
+    let name = validate_name(&options.name, "Environment name")?;
+    let meta_path = env_meta_path(&name, env, cwd)?;
+    if path_exists(&meta_path) {
+        return Err(format!("environment \"{name}\" already exists"));
+    }
+
+    let root = if let Some(root) = options.root.as_deref() {
+        resolve_absolute_path(root, env, cwd)?
+    } else {
+        default_env_root(&name, env, cwd)?
+    };
+    let target_paths = derive_env_paths(&root);
+    if path_exists(&target_paths.root) {
+        let mut entries = fs::read_dir(&target_paths.root).map_err(|error| error.to_string())?;
+        if entries.next().is_some() {
+            return Err(format!(
+                "root already exists and is not empty: {}",
+                display_path(&target_paths.root)
+            ));
+        }
+    }
+
+    let source_paths = derive_env_paths(Path::new(&source.root));
+    if !path_exists(&source_paths.root) {
+        return Err(format!(
+            "environment root does not exist: {}",
+            display_path(&source_paths.root)
+        ));
+    }
+    if !path_exists(&source_paths.marker_path) {
+        return Err(format!(
+            "refusing to clone {} without {}",
+            display_path(&source_paths.root),
+            source_paths
+                .marker_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(".ocm-env.json")
+        ));
+    }
+
+    let result = (|| {
+        copy_dir_recursive(&source_paths.root, &target_paths.root)?;
+        let created_at = now_utc();
+        let marker = EnvMarker {
+            kind: "ocm-env-marker".to_string(),
+            name: name.clone(),
+            created_at,
+        };
+        write_json(&target_paths.marker_path, &marker)?;
+
+        let meta = EnvMeta {
+            kind: "ocm-env".to_string(),
+            name,
+            root: display_path(&target_paths.root),
+            gateway_port: source.gateway_port,
+            default_runtime: source.default_runtime,
+            default_launcher: source.default_launcher,
+            protected: source.protected,
+            created_at,
+            updated_at: created_at,
+            last_used_at: None,
+        };
+        save_environment(meta, env, cwd)
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&meta_path);
+        let _ = fs::remove_dir_all(&target_paths.root);
+    }
+
+    result
 }
 
 pub fn remove_environment(

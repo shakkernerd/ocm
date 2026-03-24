@@ -183,6 +183,13 @@ pub struct CreateEnvironmentOptions {
 }
 
 #[derive(Clone, Debug)]
+pub struct CloneEnvironmentOptions {
+    pub source_name: String,
+    pub name: String,
+    pub root: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct AddLauncherOptions {
     pub name: String,
     pub command: String,

@@ -7,11 +7,11 @@ use crate::execution::{
     resolve_runtime_run_dir,
 };
 use crate::store::{
-    create_environment, get_environment, get_launcher, get_runtime_verified, list_environments,
-    now_utc, remove_environment, save_environment, select_prune_candidates,
+    clone_environment, create_environment, get_environment, get_launcher, get_runtime_verified,
+    list_environments, now_utc, remove_environment, save_environment, select_prune_candidates,
 };
 use crate::types::EnvStatusSummary;
-use crate::types::{CreateEnvironmentOptions, EnvMeta, ExecutionSummary};
+use crate::types::{CloneEnvironmentOptions, CreateEnvironmentOptions, EnvMeta, ExecutionSummary};
 
 pub enum ResolvedExecution {
     Launcher {
@@ -47,6 +47,10 @@ impl<'a> EnvironmentService<'a> {
             get_launcher(launcher_name, self.env, self.cwd)?;
         }
         create_environment(options, self.env, self.cwd)
+    }
+
+    pub fn clone(&self, options: CloneEnvironmentOptions) -> Result<EnvMeta, String> {
+        clone_environment(options, self.env, self.cwd)
     }
 
     pub fn list(&self) -> Result<Vec<EnvMeta>, String> {
