@@ -92,6 +92,14 @@ pub struct RuntimeVerifySummary {
     pub issue: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeBinarySummary {
+    pub name: String,
+    pub binary_path: String,
+    pub source_kind: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LauncherMeta {

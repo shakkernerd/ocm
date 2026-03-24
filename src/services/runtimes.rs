@@ -7,8 +7,8 @@ use crate::store::{
     remove_runtime,
 };
 use crate::types::{
-    AddRuntimeOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeMeta,
-    RuntimeVerifySummary,
+    AddRuntimeOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeBinarySummary,
+    RuntimeMeta, RuntimeVerifySummary,
 };
 
 pub struct RuntimeService<'a> {
@@ -56,6 +56,15 @@ impl<'a> RuntimeService<'a> {
             install_root: meta.install_root,
             healthy: issue.is_none(),
             issue,
+        })
+    }
+
+    pub fn which(&self, name: &str) -> Result<RuntimeBinarySummary, String> {
+        let meta = get_runtime_verified(name, self.env, self.cwd)?;
+        Ok(RuntimeBinarySummary {
+            name: meta.name,
+            binary_path: meta.binary_path,
+            source_kind: meta.source_kind.as_str().to_string(),
         })
     }
 

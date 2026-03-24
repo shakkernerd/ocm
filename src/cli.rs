@@ -912,8 +912,8 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = self.runtime_service().show(name)?;
-        self.stdout_line(meta.binary_path);
+        let summary = self.runtime_service().which(name)?;
+        self.stdout_line(summary.binary_path);
         Ok(0)
     }
 
