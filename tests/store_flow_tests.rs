@@ -145,6 +145,7 @@ fn runtime_store_round_trip_covers_add_show_list_and_remove() {
         fetched.source_path.as_deref(),
         Some(fetched.binary_path.as_str())
     );
+    assert_eq!(fetched.source_url, None);
 
     let listed = list_runtimes(&env, &cwd).unwrap();
     let names = listed.into_iter().map(|meta| meta.name).collect::<Vec<_>>();
@@ -187,6 +188,7 @@ fn runtime_install_copies_binary_into_the_managed_store() {
         installed.source_path.as_deref(),
         Some(path_string(&source_path).as_str())
     );
+    assert_eq!(installed.source_url, None);
     assert_eq!(
         installed.install_root.as_deref(),
         Some(path_string(&install_root).as_str())

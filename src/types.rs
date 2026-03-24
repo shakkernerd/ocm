@@ -107,6 +107,8 @@ pub struct RuntimeMeta {
     #[serde(default)]
     pub source_path: Option<String>,
     #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
     pub install_root: Option<String>,
     pub description: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
