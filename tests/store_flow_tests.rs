@@ -8,7 +8,9 @@ use ocm::store::{
     list_environments, list_launchers, list_runtimes, remove_environment, remove_launcher,
     remove_runtime,
 };
-use ocm::types::{AddLauncherOptions, AddRuntimeOptions, CreateEnvironmentOptions};
+use ocm::types::{
+    AddLauncherOptions, AddRuntimeOptions, CreateEnvironmentOptions, RuntimeSourceKind,
+};
 
 use crate::support::{TestDir, ocm_env};
 
@@ -135,7 +137,13 @@ fn runtime_store_round_trip_covers_add_show_list_and_remove() {
     let fetched = get_runtime("nightly", &env, &cwd).unwrap();
     assert_eq!(stable.description.as_deref(), Some("stable runtime"));
     assert_eq!(fetched.name, "nightly");
+    assert_eq!(fetched.source_kind, RuntimeSourceKind::Registered);
+    assert_eq!(fetched.install_root, None);
     assert!(fetched.binary_path.ends_with("/runtime-bin/nightly"));
+    assert_eq!(
+        fetched.source_path.as_deref(),
+        Some(fetched.binary_path.as_str())
+    );
 
     let listed = list_runtimes(&env, &cwd).unwrap();
     let names = listed.into_iter().map(|meta| meta.name).collect::<Vec<_>>();

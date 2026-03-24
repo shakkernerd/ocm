@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::paths::{display_path, resolve_absolute_path, runtime_meta_path, validate_name};
-use crate::types::{AddRuntimeOptions, RuntimeMeta};
+use crate::types::{AddRuntimeOptions, RuntimeMeta, RuntimeSourceKind};
 
 use super::common::{load_json_files, path_exists, read_json, write_json};
 use super::now_utc;
@@ -77,6 +77,9 @@ pub fn add_runtime(
         kind: "ocm-runtime".to_string(),
         name,
         binary_path: display_path(&binary_path),
+        source_kind: RuntimeSourceKind::Registered,
+        source_path: Some(display_path(&binary_path)),
+        install_root: None,
         description,
         created_at,
         updated_at: created_at,

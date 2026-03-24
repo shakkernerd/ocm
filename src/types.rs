@@ -76,12 +76,29 @@ pub struct LauncherMeta {
     pub updated_at: OffsetDateTime,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeSourceKind {
+    Registered,
+    Installed,
+}
+
+fn default_runtime_source_kind() -> RuntimeSourceKind {
+    RuntimeSourceKind::Registered
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeMeta {
     pub kind: String,
     pub name: String,
     pub binary_path: String,
+    #[serde(default = "default_runtime_source_kind")]
+    pub source_kind: RuntimeSourceKind,
+    #[serde(default)]
+    pub source_path: Option<String>,
+    #[serde(default)]
+    pub install_root: Option<String>,
     pub description: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -126,6 +143,13 @@ pub struct AddLauncherOptions {
 
 #[derive(Clone, Debug)]
 pub struct AddRuntimeOptions {
+    pub name: String,
+    pub path: String,
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct InstallRuntimeOptions {
     pub name: String,
     pub path: String,
     pub description: Option<String>,

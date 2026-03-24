@@ -5,7 +5,7 @@ use std::fs;
 use ocm::store::{
     ensure_store, get_environment, get_launcher, get_runtime, now_utc, select_prune_candidates,
 };
-use ocm::types::EnvMeta;
+use ocm::types::{EnvMeta, RuntimeSourceKind};
 use time::Duration;
 
 use crate::support::{TestDir, ocm_env, path_string, write_text};
@@ -69,6 +69,9 @@ fn get_runtime_accepts_json_without_optional_fields() {
     let meta = get_runtime("legacy", &env, &cwd).unwrap();
     assert_eq!(meta.name, "legacy");
     assert_eq!(meta.binary_path, "/tmp/openclaw");
+    assert_eq!(meta.source_kind, RuntimeSourceKind::Registered);
+    assert_eq!(meta.source_path, None);
+    assert_eq!(meta.install_root, None);
     assert_eq!(meta.description, None);
 }
 

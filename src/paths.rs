@@ -207,3 +207,20 @@ pub fn runtime_meta_path(
     let stores = resolve_store_paths(env, cwd)?;
     Ok(stores.runtimes_dir.join(format!("{name}.json")))
 }
+
+pub fn runtime_install_root(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let stores = resolve_store_paths(env, cwd)?;
+    Ok(stores.runtimes_dir.join(name))
+}
+
+pub fn runtime_install_files_dir(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    Ok(runtime_install_root(name, env, cwd)?.join("files"))
+}
