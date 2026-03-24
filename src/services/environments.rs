@@ -6,8 +6,8 @@ use crate::execution::{
     resolve_runtime_run_dir,
 };
 use crate::store::{
-    create_environment, get_environment, get_launcher, get_runtime, list_environments, now_utc,
-    remove_environment, save_environment, select_prune_candidates,
+    create_environment, get_environment, get_launcher, get_runtime_verified, list_environments,
+    now_utc, remove_environment, save_environment, select_prune_candidates,
 };
 use crate::types::{CreateEnvironmentOptions, EnvMeta, ExecutionSummary};
 
@@ -39,7 +39,7 @@ impl<'a> EnvironmentService<'a> {
 
     pub fn create(&self, options: CreateEnvironmentOptions) -> Result<EnvMeta, String> {
         if let Some(runtime_name) = options.default_runtime.as_deref() {
-            get_runtime(runtime_name, self.env, self.cwd)?;
+            get_runtime_verified(runtime_name, self.env, self.cwd)?;
         }
         if let Some(launcher_name) = options.default_launcher.as_deref() {
             get_launcher(launcher_name, self.env, self.cwd)?;
@@ -77,7 +77,7 @@ impl<'a> EnvironmentService<'a> {
         if runtime_name.eq_ignore_ascii_case("none") {
             meta.default_runtime = None;
         } else {
-            get_runtime(runtime_name, self.env, self.cwd)?;
+            get_runtime_verified(runtime_name, self.env, self.cwd)?;
             meta.default_runtime = Some(runtime_name.to_string());
         }
         save_environment(meta, self.env, self.cwd)
@@ -147,7 +147,7 @@ impl<'a> EnvironmentService<'a> {
                 })
             }
             ExecutionBinding::Runtime(runtime_name) => {
-                let runtime = get_runtime(&runtime_name, self.env, self.cwd)?;
+                let runtime = get_runtime_verified(&runtime_name, self.env, self.cwd)?;
                 Ok(ResolvedExecution::Runtime {
                     runtime_name,
                     binary_path: runtime.binary_path,

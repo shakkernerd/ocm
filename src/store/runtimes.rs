@@ -38,6 +38,14 @@ pub fn get_runtime(
     read_json(&path)
 }
 
+pub fn get_runtime_verified(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<RuntimeMeta, String> {
+    verify_runtime_binary(get_runtime(name, env, cwd)?)
+}
+
 pub fn add_runtime(
     options: AddRuntimeOptions,
     env: &BTreeMap<String, String>,
@@ -182,5 +190,27 @@ pub fn install_runtime(
         updated_at: created_at,
     };
     write_json(&meta_path, &meta)?;
+    Ok(meta)
+}
+
+pub fn verify_runtime_binary(meta: RuntimeMeta) -> Result<RuntimeMeta, String> {
+    let binary_path = Path::new(&meta.binary_path);
+    if !path_exists(binary_path) {
+        return Err(format!(
+            "runtime \"{}\" binary path does not exist: {}",
+            meta.name,
+            display_path(binary_path)
+        ));
+    }
+
+    let metadata = fs::metadata(binary_path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "runtime \"{}\" binary path is not a file: {}",
+            meta.name,
+            display_path(binary_path)
+        ));
+    }
+
     Ok(meta)
 }

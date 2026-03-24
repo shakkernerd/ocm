@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::store::{add_runtime, get_runtime, install_runtime, list_runtimes, remove_runtime};
+use crate::store::{
+    add_runtime, get_runtime_verified, install_runtime, list_runtimes, remove_runtime,
+};
 use crate::types::{AddRuntimeOptions, InstallRuntimeOptions, RuntimeMeta};
 
 pub struct RuntimeService<'a> {
@@ -27,7 +29,7 @@ impl<'a> RuntimeService<'a> {
     }
 
     pub fn show(&self, name: &str) -> Result<RuntimeMeta, String> {
-        get_runtime(name, self.env, self.cwd)
+        get_runtime_verified(name, self.env, self.cwd)
     }
 
     pub fn remove(&self, name: &str) -> Result<RuntimeMeta, String> {
