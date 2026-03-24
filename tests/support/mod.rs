@@ -2,16 +2,28 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread::{self, JoinHandle};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct TestDir {
     path: PathBuf,
+}
+
+pub struct TestHttpServer {
+    addr: String,
+    path: String,
+    served: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl TestDir {
@@ -37,6 +49,80 @@ impl Drop for TestDir {
     fn drop(&mut self) {
         if self.path.exists() {
             let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+impl TestHttpServer {
+    pub fn serve_bytes(path: &str, content_type: &str, body: &[u8]) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let addr_string = format!("127.0.0.1:{}", addr.port());
+        let path_string = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{path}")
+        };
+        let response_path = path_string.clone();
+        let response_type = content_type.to_string();
+        let response_body = body.to_vec();
+        let served = Arc::new(AtomicBool::new(false));
+        let served_flag = Arc::clone(&served);
+        let handle = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                let request_text = String::from_utf8_lossy(&request);
+                let status_line = if request_text.starts_with(&format!("GET {response_path} ")) {
+                    "HTTP/1.1 200 OK"
+                } else {
+                    "HTTP/1.1 404 Not Found"
+                };
+                let body = if status_line.ends_with("200 OK") {
+                    response_body
+                } else {
+                    b"not found".to_vec()
+                };
+                let response = format!(
+                    "{status_line}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                    response_type
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+                served_flag.store(true, AtomicOrdering::SeqCst);
+            }
+        });
+
+        Self {
+            addr: addr_string,
+            path: path_string,
+            served,
+            handle: Some(handle),
+        }
+    }
+
+    pub fn url(&self) -> String {
+        format!("http://{}{}", self.addr, self.path)
+    }
+}
+
+impl Drop for TestHttpServer {
+    fn drop(&mut self) {
+        if !self.served.load(AtomicOrdering::SeqCst) {
+            if let Ok(mut stream) = TcpStream::connect(&self.addr) {
+                let _ = write!(
+                    stream,
+                    "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                    self.path, self.addr
+                );
+                let _ = stream.flush();
+            }
+        }
+
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
         }
     }
 }
