@@ -114,3 +114,25 @@ pub fn render_use_script(meta: &EnvMeta, shell: &str) -> String {
 
     format!("{}\n", lines.join("\n"))
 }
+
+fn render_init_posix(command: &str) -> String {
+    let command = quote_posix(command);
+    format!(
+        "ocm_use() {{\n  script=\"$(command {command} env use \"$@\")\" || return $?\n  eval \"$script\"\n}}\n"
+    )
+}
+
+fn render_init_fish(command: &str) -> String {
+    let command = quote_fish(command);
+    format!(
+        "function ocm_use\n    set -l script (command {command} env use $argv)\n    or return $status\n    eval $script\nend\n"
+    )
+}
+
+pub fn render_init_script(command: &str, shell: &str) -> Result<String, String> {
+    match shell {
+        "bash" | "sh" | "zsh" => Ok(render_init_posix(command)),
+        "fish" => Ok(render_init_fish(command)),
+        _ => Err(format!("unsupported shell: {shell}")),
+    }
+}
