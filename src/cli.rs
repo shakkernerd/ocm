@@ -57,7 +57,7 @@ impl Cli {
     fn render_help(&self) -> String {
         let cmd = self.command_example();
         format!(
-            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
+            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env resolve refactor-a\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
         )
     }
 
@@ -322,6 +322,41 @@ impl Cli {
             &build_openclaw_env(&meta, &self.env),
             &self.cwd,
         )
+    }
+
+    fn handle_env_resolve(&self, args: Vec<String>) -> Result<i32, String> {
+        let (before, after) = Self::split_on_double_dash(&args);
+        let (before, runtime_override) = Self::consume_option(before, "--runtime")?;
+        let runtime_override = Self::require_option_value(runtime_override, "--runtime")?;
+        let (before, launcher_override) = Self::consume_option(before, "--launcher")?;
+        let launcher_override = Self::require_option_value(launcher_override, "--launcher")?;
+        let Some(name) = before.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&before[1..])?;
+
+        let summary = self
+            .environment_service()
+            .resolve(name, runtime_override, launcher_override, &after)?
+            .into_summary();
+
+        self.stdout_line(format!("envName: {}", summary.env_name));
+        self.stdout_line(format!("bindingKind: {}", summary.binding_kind));
+        self.stdout_line(format!("bindingName: {}", summary.binding_name));
+        if let Some(command) = summary.command {
+            self.stdout_line(format!("command: {command}"));
+        }
+        if let Some(binary_path) = summary.binary_path {
+            self.stdout_line(format!("binaryPath: {binary_path}"));
+        }
+        if !summary.forwarded_args.is_empty() {
+            self.stdout_line(format!(
+                "forwardedArgs: {}",
+                summary.forwarded_args.join(" ")
+            ));
+        }
+        self.stdout_line(format!("runDir: {}", summary.run_dir));
+        Ok(0)
     }
 
     fn handle_env_run(&self, args: Vec<String>) -> Result<i32, String> {
@@ -773,6 +808,7 @@ impl Cli {
                 "show" => self.handle_env_show(rest),
                 "use" => self.handle_env_use(rest),
                 "exec" => self.handle_env_exec(rest),
+                "resolve" => self.handle_env_resolve(rest),
                 "run" => self.handle_env_run(rest),
                 "set-runtime" => self.handle_env_set_runtime(rest),
                 "set-launcher" => self.handle_env_set_launcher(rest),

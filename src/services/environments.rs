@@ -107,6 +107,17 @@ impl<'a> EnvironmentService<'a> {
         Ok(removed)
     }
 
+    pub fn resolve(
+        &self,
+        name: &str,
+        runtime_override: Option<String>,
+        launcher_override: Option<String>,
+        args: &[String],
+    ) -> Result<ResolvedExecution, String> {
+        let env = self.get(name)?;
+        self.resolve_execution(env, runtime_override, launcher_override, args)
+    }
+
     pub fn resolve_run(
         &self,
         name: &str,
@@ -115,6 +126,16 @@ impl<'a> EnvironmentService<'a> {
         args: &[String],
     ) -> Result<ResolvedExecution, String> {
         let env = self.touch(name)?;
+        self.resolve_execution(env, runtime_override, launcher_override, args)
+    }
+
+    fn resolve_execution(
+        &self,
+        env: EnvMeta,
+        runtime_override: Option<String>,
+        launcher_override: Option<String>,
+        args: &[String],
+    ) -> Result<ResolvedExecution, String> {
         match resolve_execution_binding(&env, runtime_override, launcher_override)? {
             ExecutionBinding::Launcher(launcher_name) => {
                 let launcher = get_launcher(&launcher_name, self.env, self.cwd)?;
