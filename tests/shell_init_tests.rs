@@ -35,3 +35,18 @@ fn init_bash_and_sh_print_the_same_posix_helper() {
         assert!(output.contains("eval \"$script\""), "{shell}");
     }
 }
+
+#[test]
+fn init_fish_prints_a_fish_specific_helper() {
+    let root = TestDir::new("shell-init-fish");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let init = run_ocm(&cwd, &env, &["init", "fish"]);
+    assert!(init.status.success(), "{}", stderr(&init));
+    let output = stdout(&init);
+    assert!(output.contains("function ocm_use"));
+    assert!(output.contains("command 'ocm' env use $argv"));
+    assert!(output.contains("eval $script"));
+}
