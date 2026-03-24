@@ -60,3 +60,56 @@ fn runtime_verify_uses_exit_code_one_for_broken_runtimes() {
             .contains("binary path does not exist:")
     );
 }
+
+#[test]
+fn runtime_verify_all_reports_mixed_runtime_health() {
+    let root = TestDir::new("runtime-verify-all");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let stable_path = bin_dir.join("stable");
+    let broken_path = bin_dir.join("broken");
+    write_executable_script(&stable_path, "#!/bin/sh\nexit 0\n");
+    write_executable_script(&broken_path, "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add_stable = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add_stable.status.success(), "{}", stderr(&add_stable));
+    let add_broken = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "broken", "--path", "./bin/broken"],
+    );
+    assert!(add_broken.status.success(), "{}", stderr(&add_broken));
+    fs::remove_file(&broken_path).unwrap();
+
+    let verify = run_ocm(&cwd, &env, &["runtime", "verify", "--all"]);
+    assert_eq!(verify.status.code(), Some(1));
+    let output = stdout(&verify);
+    assert!(output.contains("stable"));
+    assert!(output.contains("healthy=true"));
+    assert!(output.contains("broken"));
+    assert!(output.contains("healthy=false"));
+    assert!(output.contains("issue=binary path does not exist:"));
+
+    let verify_json = run_ocm(&cwd, &env, &["runtime", "verify", "--all", "--json"]);
+    assert_eq!(verify_json.status.code(), Some(1));
+    let value: Value = serde_json::from_str(&stdout(&verify_json)).unwrap();
+    let array = value.as_array().unwrap();
+    assert_eq!(array.len(), 2);
+    assert!(array.iter().any(|item| {
+        item["name"] == "stable" && item["healthy"] == true && item["sourceKind"] == "registered"
+    }));
+    assert!(array.iter().any(|item| {
+        item["name"] == "broken"
+            && item["healthy"] == false
+            && item["issue"]
+                .as_str()
+                .unwrap()
+                .contains("binary path does not exist:")
+    }));
+}

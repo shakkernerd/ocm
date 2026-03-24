@@ -26,7 +26,8 @@ fn help_mentions_launcher_and_runtime_commands() {
     );
     assert!(output.contains("runtime list [--json]"));
     assert!(output.contains("runtime show <name> [--json]"));
-    assert!(output.contains("runtime verify <name> [--json]"));
+    assert!(output.contains("runtime verify (<name> | --all) [--json]"));
+    assert!(output.contains("runtime verify --all"));
     assert!(output.contains("runtime which <name> [--json]"));
     assert!(output.contains("runtime which nightly --json"));
     assert!(output.contains("runtime remove <name>"));
