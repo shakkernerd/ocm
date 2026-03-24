@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::store::{add_runtime, get_runtime, list_runtimes, remove_runtime};
-use crate::types::{AddRuntimeOptions, RuntimeMeta};
+use crate::store::{add_runtime, get_runtime, install_runtime, list_runtimes, remove_runtime};
+use crate::types::{AddRuntimeOptions, InstallRuntimeOptions, RuntimeMeta};
 
 pub struct RuntimeService<'a> {
     env: &'a BTreeMap<String, String>,
@@ -16,6 +16,10 @@ impl<'a> RuntimeService<'a> {
 
     pub fn add(&self, options: AddRuntimeOptions) -> Result<RuntimeMeta, String> {
         add_runtime(options, self.env, self.cwd)
+    }
+
+    pub fn install(&self, options: InstallRuntimeOptions) -> Result<RuntimeMeta, String> {
+        install_runtime(options, self.env, self.cwd)
     }
 
     pub fn list(&self) -> Result<Vec<RuntimeMeta>, String> {

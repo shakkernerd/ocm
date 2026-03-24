@@ -2,17 +2,18 @@ mod support;
 
 use std::fs;
 
-use ocm::paths::{env_meta_path, launcher_meta_path, runtime_meta_path};
+use ocm::paths::{env_meta_path, launcher_meta_path, runtime_install_root, runtime_meta_path};
 use ocm::store::{
     add_launcher, add_runtime, create_environment, get_environment, get_launcher, get_runtime,
-    list_environments, list_launchers, list_runtimes, remove_environment, remove_launcher,
-    remove_runtime,
+    install_runtime, list_environments, list_launchers, list_runtimes, remove_environment,
+    remove_launcher, remove_runtime,
 };
 use ocm::types::{
-    AddLauncherOptions, AddRuntimeOptions, CreateEnvironmentOptions, RuntimeSourceKind,
+    AddLauncherOptions, AddRuntimeOptions, CreateEnvironmentOptions, InstallRuntimeOptions,
+    RuntimeSourceKind,
 };
 
-use crate::support::{TestDir, ocm_env};
+use crate::support::{TestDir, ocm_env, path_string, write_executable_script};
 
 #[test]
 fn environment_store_round_trip_covers_create_read_list_and_remove() {
@@ -155,4 +156,51 @@ fn runtime_store_round_trip_covers_add_show_list_and_remove() {
     let removed = remove_runtime("nightly", &env, &cwd).unwrap();
     assert_eq!(removed.name, nightly.name);
     assert!(!nightly_path.exists());
+}
+
+#[test]
+fn runtime_install_copies_binary_into_the_managed_store() {
+    let root = TestDir::new("store-runtime-install");
+    let cwd = root.child("workspace");
+    let source_dir = cwd.join("downloads");
+    let source_path = source_dir.join("openclaw");
+    fs::create_dir_all(&source_dir).unwrap();
+    write_executable_script(&source_path, "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let installed = install_runtime(
+        InstallRuntimeOptions {
+            name: "stable".to_string(),
+            path: "./downloads/openclaw".to_string(),
+            description: Some("managed runtime".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let install_root = runtime_install_root("stable", &env, &cwd).unwrap();
+    let expected_binary = install_root.join("files/openclaw");
+    let meta_path = runtime_meta_path("stable", &env, &cwd).unwrap();
+    assert_eq!(installed.source_kind, RuntimeSourceKind::Installed);
+    assert_eq!(
+        installed.source_path.as_deref(),
+        Some(path_string(&source_path).as_str())
+    );
+    assert_eq!(
+        installed.install_root.as_deref(),
+        Some(path_string(&install_root).as_str())
+    );
+    assert_eq!(installed.binary_path, path_string(&expected_binary));
+    assert!(expected_binary.exists());
+    assert!(meta_path.exists());
+
+    let fetched = get_runtime("stable", &env, &cwd).unwrap();
+    assert_eq!(fetched.source_kind, RuntimeSourceKind::Installed);
+    assert_eq!(fetched.binary_path, path_string(&expected_binary));
+
+    let removed = remove_runtime("stable", &env, &cwd).unwrap();
+    assert_eq!(removed.name, "stable");
+    assert!(!meta_path.exists());
+    assert!(!install_root.exists());
 }

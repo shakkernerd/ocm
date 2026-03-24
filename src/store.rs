@@ -17,7 +17,7 @@ pub use environments::{
 };
 pub use launchers::{add_launcher, get_launcher, list_launchers, remove_launcher};
 pub use prune::select_prune_candidates;
-pub use runtimes::{add_runtime, get_runtime, list_runtimes, remove_runtime};
+pub use runtimes::{add_runtime, get_runtime, install_runtime, list_runtimes, remove_runtime};
 
 pub fn now_utc() -> OffsetDateTime {
     OffsetDateTime::now_utc()
