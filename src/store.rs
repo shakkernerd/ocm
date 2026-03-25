@@ -33,6 +33,7 @@ pub fn ensure_store(env: &BTreeMap<String, String>, cwd: &Path) -> Result<StoreP
     ensure_dir(&stores.envs_dir)?;
     ensure_dir(&stores.launchers_dir)?;
     ensure_dir(&stores.runtimes_dir)?;
+    ensure_dir(&stores.snapshots_dir)?;
     Ok(stores)
 }
 

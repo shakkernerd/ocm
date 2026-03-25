@@ -131,6 +131,7 @@ pub fn resolve_store_paths(
         envs_dir: home.join("envs"),
         launchers_dir: home.join("launchers"),
         runtimes_dir: home.join("runtimes"),
+        snapshots_dir: home.join("snapshots"),
         home,
     })
 }
@@ -223,4 +224,31 @@ pub fn runtime_install_files_dir(
     cwd: &Path,
 ) -> Result<PathBuf, String> {
     Ok(runtime_install_root(name, env, cwd)?.join("files"))
+}
+
+pub fn snapshot_env_dir(
+    env_name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let stores = resolve_store_paths(env, cwd)?;
+    Ok(stores.snapshots_dir.join(env_name))
+}
+
+pub fn snapshot_meta_path(
+    env_name: &str,
+    snapshot_id: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    Ok(snapshot_env_dir(env_name, env, cwd)?.join(format!("{snapshot_id}.json")))
+}
+
+pub fn snapshot_archive_path(
+    env_name: &str,
+    snapshot_id: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    Ok(snapshot_env_dir(env_name, env, cwd)?.join(format!("{snapshot_id}.tar")))
 }
