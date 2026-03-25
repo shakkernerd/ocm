@@ -26,7 +26,8 @@ pub use runtimes::{
 };
 pub use snapshots::{
     create_env_snapshot, get_env_snapshot, list_all_env_snapshots, list_env_snapshots,
-    remove_env_snapshot, restore_env_snapshot, summarize_snapshot,
+    remove_env_snapshot, restore_env_snapshot, select_snapshot_prune_candidates,
+    summarize_snapshot,
 };
 
 pub fn now_utc() -> OffsetDateTime {

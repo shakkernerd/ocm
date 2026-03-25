@@ -4,6 +4,7 @@ use std::fs;
 
 use ocm::archive::{EnvArchiveManifest, extract_env_archive};
 use ocm::paths::{env_meta_path, launcher_meta_path, runtime_install_root, runtime_meta_path};
+use ocm::services::EnvironmentService;
 use ocm::store::{
     add_launcher, add_runtime, clone_environment, create_env_snapshot, create_environment,
     export_environment, get_env_snapshot, get_environment, get_launcher, get_runtime,
@@ -669,4 +670,60 @@ fn environment_marker_repair_rewrites_the_marker_for_the_current_env_name() {
 
     let marker_raw = fs::read_to_string(marker_path).unwrap();
     assert!(marker_raw.contains("\"name\": \"source\""));
+}
+
+#[test]
+fn environment_snapshot_prune_keeps_the_newest_snapshot_in_scope() {
+    let root = TestDir::new("store-env-snapshot-prune");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let old_snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: Some("old".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let new_snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: Some("new".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let service = EnvironmentService::new(&env, &cwd);
+    let candidates = service
+        .prune_snapshot_candidates(Some("source"), Some(1), None)
+        .unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, old_snapshot.id);
+
+    let removed = service.prune_snapshots(Some("source"), Some(1), None).unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].snapshot_id, old_snapshot.id);
+
+    let remaining = list_env_snapshots("source", &env, &cwd).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, new_snapshot.id);
 }
