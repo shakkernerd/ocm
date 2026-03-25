@@ -35,6 +35,7 @@ fn help_mentions_launcher_and_runtime_commands() {
         output
             .contains("runtime update <name> [--version <version> | --channel <channel>] [--json]")
     );
+    assert!(output.contains("runtime update stable"));
     assert!(output.contains(
         "runtime install stable --manifest-url https://example.test/openclaw-releases.json --version 0.2.0"
     ));

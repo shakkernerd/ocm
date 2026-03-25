@@ -2,6 +2,8 @@ mod support;
 
 use std::fs;
 
+use ocm::store::ensure_store;
+
 use crate::support::{TestDir, ocm_env, run_ocm, stderr};
 
 #[test]
@@ -351,13 +353,14 @@ fn runtime_install_manifest_requires_a_selector_and_rejects_conflicting_sources(
 }
 
 #[test]
-fn runtime_update_requires_a_selector_and_a_manifest_backed_runtime() {
+fn runtime_update_requires_manifest_backing_and_rejects_ambiguous_defaults() {
     let root = TestDir::new("cli-runtime-update-validation");
     let cwd = root.child("workspace");
     let bin_dir = cwd.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
     fs::write(bin_dir.join("stable"), "#!/bin/sh\n").unwrap();
     let env = ocm_env(&root);
+    let stores = ensure_store(&env, &cwd).unwrap();
 
     let add = run_ocm(
         &cwd,
@@ -368,7 +371,10 @@ fn runtime_update_requires_a_selector_and_a_manifest_backed_runtime() {
 
     let missing_selector = run_ocm(&cwd, &env, &["runtime", "update", "stable"]);
     assert_eq!(missing_selector.status.code(), Some(1));
-    assert!(stderr(&missing_selector).contains("runtime update requires --version or --channel"));
+    assert!(
+        stderr(&missing_selector)
+            .contains("runtime \"stable\" is not backed by a release manifest")
+    );
 
     let conflicting = run_ocm(
         &cwd,
@@ -388,14 +394,26 @@ fn runtime_update_requires_a_selector_and_a_manifest_backed_runtime() {
         stderr(&conflicting).contains("runtime update accepts only one of --version or --channel")
     );
 
-    let missing_manifest = run_ocm(
+    let explicit_manifest = run_ocm(
         &cwd,
         &env,
         &["runtime", "update", "stable", "--version", "0.2.0"],
     );
-    assert_eq!(missing_manifest.status.code(), Some(1));
+    assert_eq!(explicit_manifest.status.code(), Some(1));
     assert!(
-        stderr(&missing_manifest)
+        stderr(&explicit_manifest)
             .contains("runtime \"stable\" is not backed by a release manifest")
     );
+
+    fs::write(
+        stores.runtimes_dir.join("legacy.json"),
+        "{\n  \"kind\": \"ocm-runtime\",\n  \"name\": \"legacy\",\n  \"binaryPath\": \"/tmp/openclaw\",\n  \"sourceKind\": \"installed\",\n  \"sourceManifestUrl\": \"https://example.test/releases.json\",\n  \"releaseVersion\": \"0.2.0\",\n  \"releaseChannel\": \"stable\",\n  \"createdAt\": \"2026-03-25T10:00:00Z\",\n  \"updatedAt\": \"2026-03-25T10:00:00Z\"\n}\n",
+    )
+    .unwrap();
+
+    let ambiguous_default = run_ocm(&cwd, &env, &["runtime", "update", "legacy"]);
+    assert_eq!(ambiguous_default.status.code(), Some(1));
+    assert!(stderr(&ambiguous_default).contains(
+        "runtime \"legacy\" does not have a stored release selector; pass --version or --channel"
+    ));
 }

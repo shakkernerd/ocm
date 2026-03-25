@@ -453,6 +453,158 @@ fn runtime_update_reinstalls_a_manifest_backed_runtime_with_a_new_version() {
 }
 
 #[test]
+fn runtime_update_without_arguments_reuses_the_stored_version_selector() {
+    let root = TestDir::new("runtime-update-stored-version-selector");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let stable_body = b"runtime-v0.2.0";
+    let stable_digest_path = root.child("sha256/openclaw-0.2.0");
+    fs::create_dir_all(stable_digest_path.parent().unwrap()).unwrap();
+    fs::write(&stable_digest_path, stable_body).unwrap();
+    let stable_sha256 = file_sha256(&stable_digest_path).unwrap();
+
+    let next_body = b"runtime-v0.3.0";
+    let next_digest_path = root.child("sha256/openclaw-0.3.0");
+    fs::write(&next_digest_path, next_body).unwrap();
+    let next_sha256 = file_sha256(&next_digest_path).unwrap();
+
+    let stable_server = TestHttpServer::serve_bytes_times(
+        "/artifacts/openclaw-0.2.0",
+        "application/octet-stream",
+        stable_body,
+        2,
+    );
+    let next_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-0.3.0",
+        "application/octet-stream",
+        next_body,
+    );
+    let first_manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+        stable_server.url(),
+        stable_sha256
+    );
+    let second_manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}},{{\"version\":\"0.3.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+        stable_server.url(),
+        stable_sha256,
+        next_server.url(),
+        next_sha256
+    );
+    let manifest_server = TestHttpServer::serve_bytes_sequence(
+        "/manifests/releases.json",
+        "application/json",
+        vec![
+            first_manifest_body.into_bytes(),
+            second_manifest_body.into_bytes(),
+        ],
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--version",
+            "0.2.0",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let update = run_ocm(&cwd, &env, &["runtime", "update", "stable"]);
+    assert!(update.status.success(), "{}", stderr(&update));
+    assert!(stdout(&update).contains("Updated runtime stable"));
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let output = stdout(&show);
+    assert!(output.contains("releaseVersion: 0.2.0"));
+    assert!(output.contains("releaseSelectorKind: version"));
+    assert!(output.contains("releaseSelectorValue: 0.2.0"));
+}
+
+#[test]
+fn runtime_update_without_arguments_reuses_the_stored_channel_selector() {
+    let root = TestDir::new("runtime-update-stored-channel-selector");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let first_body = b"runtime-v0.2.0";
+    let first_digest_path = root.child("sha256/openclaw-0.2.0");
+    fs::create_dir_all(first_digest_path.parent().unwrap()).unwrap();
+    fs::write(&first_digest_path, first_body).unwrap();
+    let first_sha256 = file_sha256(&first_digest_path).unwrap();
+
+    let second_body = b"runtime-v0.3.0";
+    let second_digest_path = root.child("sha256/openclaw-0.3.0");
+    fs::write(&second_digest_path, second_body).unwrap();
+    let second_sha256 = file_sha256(&second_digest_path).unwrap();
+
+    let first_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-0.2.0",
+        "application/octet-stream",
+        first_body,
+    );
+    let second_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-0.3.0",
+        "application/octet-stream",
+        second_body,
+    );
+    let first_manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+        first_server.url(),
+        first_sha256
+    );
+    let second_manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.3.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+        second_server.url(),
+        second_sha256
+    );
+    let manifest_server = TestHttpServer::serve_bytes_sequence(
+        "/manifests/releases.json",
+        "application/json",
+        vec![
+            first_manifest_body.into_bytes(),
+            second_manifest_body.into_bytes(),
+        ],
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--channel",
+            "stable",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let update = run_ocm(&cwd, &env, &["runtime", "update", "stable"]);
+    assert!(update.status.success(), "{}", stderr(&update));
+    assert!(stdout(&update).contains("Updated runtime stable"));
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let output = stdout(&show);
+    assert!(output.contains("releaseVersion: 0.3.0"));
+    assert!(output.contains("releaseChannel: stable"));
+    assert!(output.contains("releaseSelectorKind: channel"));
+    assert!(output.contains("releaseSelectorValue: stable"));
+}
+
+#[test]
 fn runtime_install_from_url_cleans_up_failed_install_roots_for_retry() {
     let root = TestDir::new("runtime-install-url-retry");
     let cwd = root.child("workspace");

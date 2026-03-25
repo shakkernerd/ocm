@@ -51,9 +51,6 @@ impl<'a> RuntimeService<'a> {
         if options.version.is_some() && options.channel.is_some() {
             return Err("runtime update accepts only one of --version or --channel".to_string());
         }
-        if options.version.is_none() && options.channel.is_none() {
-            return Err("runtime update requires --version or --channel".to_string());
-        }
 
         let existing = crate::store::get_runtime(&options.name, self.env, self.cwd)?;
         let manifest_url = existing.source_manifest_url.ok_or_else(|| {
@@ -62,13 +59,35 @@ impl<'a> RuntimeService<'a> {
                 existing.name
             )
         })?;
+        let (version, channel) = match (options.version, options.channel) {
+            (Some(version), None) => (Some(version), None),
+            (None, Some(channel)) => (None, Some(channel)),
+            (None, None) => match (
+                existing.release_selector_kind.clone(),
+                existing.release_selector_value.clone(),
+            ) {
+                (Some(crate::types::RuntimeReleaseSelectorKind::Version), Some(value)) => {
+                    (Some(value), None)
+                }
+                (Some(crate::types::RuntimeReleaseSelectorKind::Channel), Some(value)) => {
+                    (None, Some(value))
+                }
+                _ => {
+                    return Err(format!(
+                        "runtime \"{}\" does not have a stored release selector; pass --version or --channel",
+                        existing.name
+                    ));
+                }
+            },
+            _ => unreachable!("conflicting selectors are rejected above"),
+        };
 
         install_runtime_from_release(
             InstallRuntimeFromReleaseOptions {
                 name: existing.name,
                 manifest_url,
-                version: options.version,
-                channel: options.channel,
+                version,
+                channel,
                 description: existing.description,
                 force: true,
             },
