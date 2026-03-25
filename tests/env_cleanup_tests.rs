@@ -149,3 +149,50 @@ fn env_cleanup_yes_json_reports_applied_actions_and_remaining_issues() {
                 .contains("has no default runtime or launcher"))
     );
 }
+
+#[test]
+fn env_cleanup_all_preview_reports_only_actionable_envs() {
+    let root = TestDir::new("env-cleanup-all-preview");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let broken = run_ocm(&cwd, &env, &["env", "create", "broken"]);
+    assert!(broken.status.success(), "{}", stderr(&broken));
+    let healthy = run_ocm(&cwd, &env, &["env", "create", "healthy"]);
+    assert!(healthy.status.success(), "{}", stderr(&healthy));
+
+    fs::remove_file(root.child("ocm-home/envs/broken/.ocm-env.json")).unwrap();
+
+    let cleanup = run_ocm(&cwd, &env, &["env", "cleanup", "--all"]);
+    assert!(cleanup.status.success(), "{}", stderr(&cleanup));
+    let output = stdout(&cleanup);
+    assert!(output.contains("Cleanup preview (--all): 1 env(s)"));
+    assert!(output.contains("  broken"));
+    assert!(!output.contains("  healthy"));
+}
+
+#[test]
+fn env_cleanup_all_yes_json_applies_repairs_across_envs() {
+    let root = TestDir::new("env-cleanup-all-apply-json");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let first = run_ocm(&cwd, &env, &["env", "create", "first"]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    let second = run_ocm(&cwd, &env, &["env", "create", "second"]);
+    assert!(second.status.success(), "{}", stderr(&second));
+
+    fs::remove_file(root.child("ocm-home/envs/first/.ocm-env.json")).unwrap();
+    fs::remove_file(root.child("ocm-home/envs/second/.ocm-env.json")).unwrap();
+
+    let cleanup = run_ocm(&cwd, &env, &["env", "cleanup", "--all", "--yes", "--json"]);
+    assert!(cleanup.status.success(), "{}", stderr(&cleanup));
+    let value: Value = serde_json::from_str(&stdout(&cleanup)).unwrap();
+    assert_eq!(value["apply"], true);
+    assert_eq!(value["count"], 2);
+    assert_eq!(value["results"].as_array().unwrap().len(), 2);
+    assert!(root.child("ocm-home/envs/first/.ocm-env.json").exists());
+    assert!(root.child("ocm-home/envs/second/.ocm-env.json").exists());
+}

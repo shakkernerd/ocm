@@ -43,9 +43,10 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("env snapshot prune --all --older-than 30 --json"));
     assert!(output.contains("env doctor <name> [--json]"));
     assert!(output.contains("env doctor refactor-a --json"));
-    assert!(output.contains("env cleanup <name> [--yes] [--json]"));
+    assert!(output.contains("env cleanup (<name> | --all) [--yes] [--json]"));
     assert!(output.contains("env cleanup refactor-a --json"));
     assert!(output.contains("env cleanup refactor-a --yes"));
+    assert!(output.contains("env cleanup --all --yes"));
     assert!(output.contains("env repair-marker <name> [--json]"));
     assert!(output.contains("env repair-marker refactor-a --json"));
     assert!(output.contains("runtime releases --manifest-url <url> [--json]"));
