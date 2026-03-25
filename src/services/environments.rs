@@ -1,3 +1,4 @@
+use std::fs;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -5,19 +6,20 @@ use crate::execution::{
     ExecutionBinding, build_launcher_command, resolve_execution_binding, resolve_launcher_run_dir,
     resolve_runtime_run_dir,
 };
+use crate::paths::{derive_env_paths, display_path};
 use crate::store::{
     clone_environment, create_env_snapshot, create_environment, export_environment,
-    get_environment, get_launcher, get_runtime_verified, import_environment,
+    get_environment, get_launcher, get_runtime, get_runtime_verified, import_environment,
     list_all_env_snapshots, list_env_snapshots, list_environments, now_utc, remove_environment,
     remove_env_snapshot, restore_env_snapshot, runtime_integrity_issue, save_environment,
     select_prune_candidates, summarize_snapshot,
 };
-use crate::types::EnvStatusSummary;
+use crate::types::{EnvDoctorSummary, EnvStatusSummary};
 use crate::types::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvExportSummary,
     EnvImportSummary, EnvMeta, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
     EnvSnapshotSummary, ExecutionSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
-    RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
+    RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions, EnvMarker,
 };
 
 pub enum ResolvedExecution {
@@ -229,6 +231,150 @@ impl<'a> EnvironmentService<'a> {
         Ok(summary)
     }
 
+    pub fn doctor(&self, name: &str) -> Result<EnvDoctorSummary, String> {
+        let env = self.get(name)?;
+        let env_paths = derive_env_paths(Path::new(&env.root));
+        let mut issues = Vec::new();
+
+        let root_status = if env_paths.root.exists() {
+            "ok".to_string()
+        } else {
+            push_issue(
+                &mut issues,
+                format!(
+                    "environment root does not exist: {}",
+                    display_path(&env_paths.root)
+                ),
+            );
+            "missing".to_string()
+        };
+
+        let marker_status = if env_paths.marker_path.exists() {
+            match fs::read_to_string(&env_paths.marker_path) {
+                Ok(raw) => match serde_json::from_str::<EnvMarker>(&raw) {
+                    Ok(marker) if marker.name == env.name => "ok".to_string(),
+                    Ok(marker) => {
+                        push_issue(
+                            &mut issues,
+                            format!(
+                                "environment marker name mismatch: expected \"{}\", found \"{}\"",
+                                env.name, marker.name
+                            ),
+                        );
+                        "mismatch".to_string()
+                    }
+                    Err(error) => {
+                        push_issue(
+                            &mut issues,
+                            format!(
+                                "environment marker is unreadable: {} ({error})",
+                                display_path(&env_paths.marker_path)
+                            ),
+                        );
+                        "invalid".to_string()
+                    }
+                },
+                Err(error) => {
+                    push_issue(
+                        &mut issues,
+                        format!(
+                            "environment marker is unreadable: {} ({error})",
+                            display_path(&env_paths.marker_path)
+                        ),
+                    );
+                    "invalid".to_string()
+                }
+            }
+        } else {
+            push_issue(
+                &mut issues,
+                format!(
+                    "environment marker is missing: {}",
+                    display_path(&env_paths.marker_path)
+                ),
+            );
+            "missing".to_string()
+        };
+
+        let runtime_status = if let Some(runtime_name) = env.default_runtime.clone() {
+            match get_runtime(&runtime_name, self.env, self.cwd) {
+                Ok(runtime) => match runtime_integrity_issue(&runtime) {
+                    Some(issue) => {
+                        push_issue(&mut issues, format!("runtime \"{}\" {issue}", runtime.name));
+                        "broken".to_string()
+                    }
+                    None => "ok".to_string(),
+                },
+                Err(error) => {
+                    push_issue(&mut issues, error);
+                    "missing".to_string()
+                }
+            }
+        } else {
+            "unbound".to_string()
+        };
+
+        let launcher_status = if let Some(launcher_name) = env.default_launcher.clone() {
+            match get_launcher(&launcher_name, self.env, self.cwd) {
+                Ok(_) => "ok".to_string(),
+                Err(error) => {
+                    push_issue(&mut issues, error);
+                    "missing".to_string()
+                }
+            }
+        } else {
+            "unbound".to_string()
+        };
+
+        let (resolution_status, resolved_kind, resolved_name) =
+            match resolve_execution_binding(&env, None, None) {
+                Ok(ExecutionBinding::Runtime(runtime_name)) => {
+                    let resolution_status = if runtime_status == "ok" {
+                        "ok".to_string()
+                    } else {
+                        "error".to_string()
+                    };
+                    (
+                        resolution_status,
+                        Some("runtime".to_string()),
+                        Some(runtime_name),
+                    )
+                }
+                Ok(ExecutionBinding::Launcher(launcher_name)) => {
+                    let resolution_status = if launcher_status == "ok" {
+                        "ok".to_string()
+                    } else {
+                        "error".to_string()
+                    };
+                    (
+                        resolution_status,
+                        Some("launcher".to_string()),
+                        Some(launcher_name),
+                    )
+                }
+                Err(error) => {
+                    push_issue(&mut issues, error);
+                    ("unbound".to_string(), None, None)
+                }
+            };
+
+        Ok(EnvDoctorSummary {
+            env_name: env.name,
+            root: env.root,
+            default_runtime: env.default_runtime,
+            default_launcher: env.default_launcher,
+            healthy: issues.is_empty(),
+            root_status,
+            marker_status,
+            runtime_status,
+            launcher_status,
+            resolution_status,
+            resolved_kind,
+            resolved_name,
+            issues,
+        })
+    }
+
     pub fn resolve(
         &self,
         name: &str,
@@ -279,6 +425,12 @@ impl<'a> EnvironmentService<'a> {
                 })
             }
         }
+    }
+}
+
+fn push_issue(issues: &mut Vec<String>, issue: String) {
+    if !issues.iter().any(|current| current == &issue) {
+        issues.push(issue);
     }
 }
 

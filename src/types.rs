@@ -83,6 +83,24 @@ pub struct EnvStatusSummary {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EnvDoctorSummary {
+    pub env_name: String,
+    pub root: String,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub healthy: bool,
+    pub root_status: String,
+    pub marker_status: String,
+    pub runtime_status: String,
+    pub launcher_status: String,
+    pub resolution_status: String,
+    pub resolved_kind: Option<String>,
+    pub resolved_name: Option<String>,
+    pub issues: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeVerifySummary {
     pub name: String,
     pub binary_path: String,
