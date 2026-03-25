@@ -24,6 +24,8 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("env export refactor-a --output ./backups/refactor-a.ocm-env.tar"));
     assert!(output.contains("env import <archive> [--name <name>] [--root <path>] [--json]"));
     assert!(output.contains("env import ./backups/refactor-a.ocm-env.tar --name refactor-b"));
+    assert!(output.contains("env snapshot create <name> [--label <label>] [--json]"));
+    assert!(output.contains("env snapshot create refactor-a --label before-upgrade"));
     assert!(output.contains("runtime releases --manifest-url <url> [--json]"));
     assert!(output.contains(
         "runtime releases --manifest-url https://example.test/openclaw-releases.json --json"

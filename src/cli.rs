@@ -10,8 +10,8 @@ use crate::services::{EnvironmentService, LauncherService, RuntimeService};
 use crate::shell::{build_openclaw_env, render_init_script, render_use_script, resolve_shell_name};
 use crate::store::{ensure_store, summarize_env};
 use crate::types::{
-    AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvironmentOptions,
-    EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvSnapshotOptions,
+    CreateEnvironmentOptions, EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
     InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions,
     UpdateRuntimeFromReleaseOptions,
 };
@@ -62,7 +62,7 @@ impl Cli {
     fn render_help(&self) -> String {
         let cmd = self.command_example();
         format!(
-            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} init [zsh|bash|sh|fish]\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env clone <source> <target> [--root <path>] [--json]\n  {cmd} env export <name> [--output <path>] [--json]\n  {cmd} env import <archive> [--name <name>] [--root <path>] [--json]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env status <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime install <name> (--path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force]\n  {cmd} runtime update (<name> | --all) [--version <version> | --channel <channel>] [--json]\n  {cmd} runtime releases --manifest-url <url> [--json]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime verify (<name> | --all) [--json]\n  {cmd} runtime which <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} init\n  {cmd} init zsh\n  {cmd} init bash\n  {cmd} init fish\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} runtime install managed-stable --path ./target/debug/openclaw\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly --force\n  {cmd} runtime install stable --manifest-url https://example.test/openclaw-releases.json --version 0.2.0\n  {cmd} runtime install stable --manifest-url https://example.test/openclaw-releases.json --channel stable\n  {cmd} runtime update stable\n  {cmd} runtime update stable --version 0.3.0\n  {cmd} runtime update --all\n  {cmd} runtime releases --manifest-url https://example.test/openclaw-releases.json --json\n  {cmd} runtime verify nightly --json\n  {cmd} runtime verify --all\n  {cmd} runtime which nightly --json\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env clone refactor-a refactor-b\n  {cmd} env export refactor-a --output ./backups/refactor-a.ocm-env.tar\n  {cmd} env import ./backups/refactor-a.ocm-env.tar --name refactor-b\n  {cmd} env status refactor-a --json\n  {cmd} env resolve refactor-a --json\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
+            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} init [zsh|bash|sh|fish]\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env clone <source> <target> [--root <path>] [--json]\n  {cmd} env export <name> [--output <path>] [--json]\n  {cmd} env import <archive> [--name <name>] [--root <path>] [--json]\n  {cmd} env snapshot create <name> [--label <label>] [--json]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env status <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime install <name> (--path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force]\n  {cmd} runtime update (<name> | --all) [--version <version> | --channel <channel>] [--json]\n  {cmd} runtime releases --manifest-url <url> [--json]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime verify (<name> | --all) [--json]\n  {cmd} runtime which <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} init\n  {cmd} init zsh\n  {cmd} init bash\n  {cmd} init fish\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} runtime install managed-stable --path ./target/debug/openclaw\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly --force\n  {cmd} runtime install stable --manifest-url https://example.test/openclaw-releases.json --version 0.2.0\n  {cmd} runtime install stable --manifest-url https://example.test/openclaw-releases.json --channel stable\n  {cmd} runtime update stable\n  {cmd} runtime update stable --version 0.3.0\n  {cmd} runtime update --all\n  {cmd} runtime releases --manifest-url https://example.test/openclaw-releases.json --json\n  {cmd} runtime verify nightly --json\n  {cmd} runtime verify --all\n  {cmd} runtime which nightly --json\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env clone refactor-a refactor-b\n  {cmd} env export refactor-a --output ./backups/refactor-a.ocm-env.tar\n  {cmd} env import ./backups/refactor-a.ocm-env.tar --name refactor-b\n  {cmd} env snapshot create refactor-a --label before-upgrade\n  {cmd} env status refactor-a --json\n  {cmd} env resolve refactor-a --json\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
         )
     }
 
@@ -327,6 +327,55 @@ impl Cli {
             summary.name
         ));
         Ok(0)
+    }
+
+    fn handle_env_snapshot_create(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, label) = Self::consume_option(args, "--label")?;
+        let label = Self::require_option_value(label, "--label")?;
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let snapshot = self
+            .environment_service()
+            .create_snapshot(CreateEnvSnapshotOptions {
+                env_name: name.clone(),
+                label,
+            })?;
+
+        if json_flag {
+            self.print_json(&snapshot)?;
+            return Ok(0);
+        }
+
+        self.stdout_line(format!(
+            "Created snapshot {} for env {}",
+            snapshot.id, snapshot.env_name
+        ));
+        self.stdout_line(format!("  archive: {}", snapshot.archive_path));
+        self.stdout_line(format!("  root: {}", snapshot.source_root));
+        if let Some(label) = snapshot.label.as_deref() {
+            self.stdout_line(format!("  label: {label}"));
+        }
+        Ok(0)
+    }
+
+    fn dispatch_env_snapshot_command(&self, args: Vec<String>) -> Result<i32, String> {
+        let Some(action) = args.first() else {
+            return Err("env snapshot command is required".to_string());
+        };
+        let rest = if args.len() > 1 {
+            args[1..].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        match action.as_str() {
+            "create" => self.handle_env_snapshot_create(rest),
+            _ => Err(format!("unknown env snapshot command: {action}")),
+        }
     }
 
     fn handle_env_list(&self, args: Vec<String>) -> Result<i32, String> {
@@ -1355,6 +1404,7 @@ impl Cli {
                 "clone" => self.handle_env_clone(rest),
                 "export" => self.handle_env_export(rest),
                 "import" => self.handle_env_import(rest),
+                "snapshot" => self.dispatch_env_snapshot_command(rest),
                 "list" => self.handle_env_list(rest),
                 "show" => self.handle_env_show(rest),
                 "status" => self.handle_env_status(rest),

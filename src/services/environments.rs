@@ -6,14 +6,16 @@ use crate::execution::{
     resolve_runtime_run_dir,
 };
 use crate::store::{
-    clone_environment, create_environment, export_environment, get_environment, get_launcher,
-    get_runtime_verified, import_environment, list_environments, now_utc, remove_environment,
-    runtime_integrity_issue, save_environment, select_prune_candidates,
+    clone_environment, create_env_snapshot, create_environment, export_environment,
+    get_environment, get_launcher, get_runtime_verified, import_environment, list_environments,
+    now_utc, remove_environment, runtime_integrity_issue, save_environment,
+    select_prune_candidates, summarize_snapshot,
 };
 use crate::types::EnvStatusSummary;
 use crate::types::{
-    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary, EnvMeta,
-    ExecutionSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvExportSummary,
+    EnvImportSummary, EnvMeta, EnvSnapshotSummary, ExecutionSummary, ExportEnvironmentOptions,
+    ImportEnvironmentOptions,
 };
 
 pub enum ResolvedExecution {
@@ -62,6 +64,14 @@ impl<'a> EnvironmentService<'a> {
 
     pub fn import(&self, options: ImportEnvironmentOptions) -> Result<EnvImportSummary, String> {
         import_environment(options, self.env, self.cwd)
+    }
+
+    pub fn create_snapshot(
+        &self,
+        options: CreateEnvSnapshotOptions,
+    ) -> Result<EnvSnapshotSummary, String> {
+        let meta = create_env_snapshot(options, self.env, self.cwd)?;
+        Ok(summarize_snapshot(&meta))
     }
 
     pub fn list(&self) -> Result<Vec<EnvMeta>, String> {
