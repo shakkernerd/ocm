@@ -1,4 +1,10 @@
+use crate::download::fetch_json;
 use crate::types::{RuntimeRelease, RuntimeReleaseManifest};
+
+pub fn load_release_manifest(url: &str) -> Result<RuntimeReleaseManifest, String> {
+    let manifest: RuntimeReleaseManifest = fetch_json(url)?;
+    validate_release_manifest(manifest)
+}
 
 pub fn validate_release_manifest(
     manifest: RuntimeReleaseManifest,
