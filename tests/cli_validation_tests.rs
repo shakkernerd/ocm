@@ -335,6 +335,18 @@ fn env_cleanup_requires_a_name() {
 }
 
 #[test]
+fn env_cleanup_rejects_mixed_name_and_all_scope() {
+    let root = TestDir::new("cli-env-cleanup-all-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let conflicting = run_ocm(&cwd, &env, &["env", "cleanup", "demo", "--all"]);
+    assert_eq!(conflicting.status.code(), Some(1));
+    assert!(stderr(&conflicting).contains("env cleanup accepts either <name> or --all"));
+}
+
+#[test]
 fn env_repair_marker_requires_a_name() {
     let root = TestDir::new("cli-env-repair-marker-validation");
     let cwd = root.child("workspace");
