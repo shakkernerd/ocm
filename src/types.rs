@@ -276,6 +276,25 @@ pub struct EnvExportSummary {
 }
 
 #[derive(Clone, Debug)]
+pub struct ImportEnvironmentOptions {
+    pub archive: String,
+    pub name: Option<String>,
+    pub root: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvImportSummary {
+    pub name: String,
+    pub source_name: String,
+    pub root: String,
+    pub archive_path: String,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub protected: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct AddLauncherOptions {
     pub name: String,
     pub command: String,

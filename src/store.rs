@@ -13,8 +13,8 @@ use crate::paths::{derive_env_paths, display_path, resolve_store_paths};
 use crate::types::{EnvMeta, EnvSummary, StorePaths};
 use common::ensure_dir;
 pub use environments::{
-    clone_environment, create_environment, export_environment, get_environment, list_environments,
-    remove_environment, save_environment,
+    clone_environment, create_environment, export_environment, get_environment, import_environment,
+    list_environments, remove_environment, save_environment,
 };
 pub use launchers::{add_launcher, get_launcher, list_launchers, remove_launcher};
 pub use prune::select_prune_candidates;

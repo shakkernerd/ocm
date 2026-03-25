@@ -6,12 +6,13 @@ use ocm::archive::{EnvArchiveManifest, extract_env_archive};
 use ocm::paths::{env_meta_path, launcher_meta_path, runtime_install_root, runtime_meta_path};
 use ocm::store::{
     add_launcher, add_runtime, clone_environment, create_environment, export_environment,
-    get_environment, get_launcher, get_runtime, install_runtime, list_environments, list_launchers,
-    list_runtimes, remove_environment, remove_launcher, remove_runtime,
+    get_environment, get_launcher, get_runtime, import_environment, install_runtime,
+    list_environments, list_launchers, list_runtimes, remove_environment, remove_launcher,
+    remove_runtime,
 };
 use ocm::types::{
     AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvironmentOptions,
-    ExportEnvironmentOptions, InstallRuntimeOptions, RuntimeSourceKind,
+    ExportEnvironmentOptions, ImportEnvironmentOptions, InstallRuntimeOptions, RuntimeSourceKind,
 };
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
@@ -318,4 +319,73 @@ fn environment_export_writes_a_portable_archive() {
         fs::read_to_string(extracted.root_dir.join(".openclaw/workspace/notes.txt")).unwrap(),
         "hello export"
     );
+}
+
+#[test]
+fn environment_import_restores_a_portable_archive_with_a_new_identity() {
+    let root = TestDir::new("store-env-import");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_runtime: Some("stable".to_string()),
+            default_launcher: Some("shell".to_string()),
+            protected: true,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = std::path::Path::new(&created.root);
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "hello import",
+    );
+
+    let exported = export_environment(
+        ExportEnvironmentOptions {
+            name: "source".to_string(),
+            output: Some("./archives/source-backup.tar".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let imported = import_environment(
+        ImportEnvironmentOptions {
+            archive: exported.archive_path.clone(),
+            name: Some("target".to_string()),
+            root: Some("./imports/target-root".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(imported.name, "target");
+    assert_eq!(imported.source_name, "source");
+    assert!(imported.root.ends_with("/imports/target-root"));
+
+    let imported_meta = get_environment("target", &env, &cwd).unwrap();
+    assert_eq!(imported_meta.default_runtime.as_deref(), Some("stable"));
+    assert_eq!(imported_meta.default_launcher.as_deref(), Some("shell"));
+    assert!(imported_meta.protected);
+    assert!(imported_meta.last_used_at.is_none());
+    assert_eq!(
+        fs::read_to_string(
+            root.child("workspace/imports/target-root/.openclaw/workspace/notes.txt")
+        )
+        .unwrap(),
+        "hello import"
+    );
+
+    let marker_raw =
+        fs::read_to_string(root.child("workspace/imports/target-root/.ocm-env.json")).unwrap();
+    assert!(marker_raw.contains("\"name\": \"target\""));
 }

@@ -7,13 +7,13 @@ use crate::execution::{
 };
 use crate::store::{
     clone_environment, create_environment, export_environment, get_environment, get_launcher,
-    get_runtime_verified, list_environments, now_utc, remove_environment, runtime_integrity_issue,
-    save_environment, select_prune_candidates,
+    get_runtime_verified, import_environment, list_environments, now_utc, remove_environment,
+    runtime_integrity_issue, save_environment, select_prune_candidates,
 };
 use crate::types::EnvStatusSummary;
 use crate::types::{
-    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvMeta, ExecutionSummary,
-    ExportEnvironmentOptions,
+    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary, EnvMeta,
+    ExecutionSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
 };
 
 pub enum ResolvedExecution {
@@ -58,6 +58,10 @@ impl<'a> EnvironmentService<'a> {
 
     pub fn export(&self, options: ExportEnvironmentOptions) -> Result<EnvExportSummary, String> {
         export_environment(options, self.env, self.cwd)
+    }
+
+    pub fn import(&self, options: ImportEnvironmentOptions) -> Result<EnvImportSummary, String> {
+        import_environment(options, self.env, self.cwd)
     }
 
     pub fn list(&self) -> Result<Vec<EnvMeta>, String> {

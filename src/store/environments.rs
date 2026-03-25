@@ -1,21 +1,24 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::archive::{ArchivedEnvMeta, EnvArchiveManifest, write_env_archive};
+use crate::archive::{ArchivedEnvMeta, EnvArchiveManifest, extract_env_archive, write_env_archive};
 use crate::paths::{
     clean_path, default_env_root, derive_env_paths, display_path, env_meta_path,
     resolve_absolute_path, validate_name,
 };
 use crate::types::{
-    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvMarker, EnvMeta,
-    ExportEnvironmentOptions,
+    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
+    EnvMarker, EnvMeta, ExportEnvironmentOptions, ImportEnvironmentOptions,
 };
 
 use super::common::{
     copy_dir_recursive, ensure_dir, load_json_files, path_exists, read_json, write_json,
 };
 use super::now_utc;
+
+static NEXT_IMPORT_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn list_environments(
     env: &BTreeMap<String, String>,
@@ -264,6 +267,115 @@ pub fn export_environment(
     })
 }
 
+pub fn import_environment(
+    options: ImportEnvironmentOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvImportSummary, String> {
+    let archive_path = resolve_absolute_path(&options.archive, env, cwd)?;
+    let staging_dir = import_staging_dir();
+    if path_exists(&staging_dir) {
+        let _ = fs::remove_dir_all(&staging_dir);
+    }
+
+    let result = (|| {
+        let extracted = extract_env_archive::<EnvArchiveManifest>(&archive_path, &staging_dir)?;
+        if extracted.manifest.kind != "ocm-env-archive" {
+            return Err(format!(
+                "unsupported archive kind: {}",
+                extracted.manifest.kind
+            ));
+        }
+        if extracted.manifest.format_version != 1 {
+            return Err(format!(
+                "unsupported archive format version: {}",
+                extracted.manifest.format_version
+            ));
+        }
+
+        let source_name = extracted.manifest.env.name.clone();
+        let name = if let Some(name) = options.name.as_deref() {
+            validate_name(name, "Environment name")?
+        } else {
+            validate_name(&source_name, "Environment name")?
+        };
+        let meta_path = env_meta_path(&name, env, cwd)?;
+        if path_exists(&meta_path) {
+            return Err(format!("environment \"{name}\" already exists"));
+        }
+
+        let root = if let Some(root) = options.root.as_deref() {
+            resolve_absolute_path(root, env, cwd)?
+        } else {
+            default_env_root(&name, env, cwd)?
+        };
+        let target_paths = derive_env_paths(&root);
+        if path_exists(&target_paths.root) {
+            let mut entries =
+                fs::read_dir(&target_paths.root).map_err(|error| error.to_string())?;
+            if entries.next().is_some() {
+                return Err(format!(
+                    "root already exists and is not empty: {}",
+                    display_path(&target_paths.root)
+                ));
+            }
+        }
+
+        if !path_exists(&extracted.root_dir) {
+            return Err("archive is missing root/".to_string());
+        }
+        if !path_exists(&extracted.root_dir.join(".ocm-env.json")) {
+            return Err("archive environment root is missing .ocm-env.json".to_string());
+        }
+
+        let imported = (|| {
+            copy_dir_recursive(&extracted.root_dir, &target_paths.root)?;
+
+            let created_at = now_utc();
+            let marker = EnvMarker {
+                kind: "ocm-env-marker".to_string(),
+                name: name.clone(),
+                created_at,
+            };
+            write_json(&target_paths.marker_path, &marker)?;
+
+            let meta = EnvMeta {
+                kind: "ocm-env".to_string(),
+                name: name.clone(),
+                root: display_path(&target_paths.root),
+                gateway_port: extracted.manifest.env.gateway_port,
+                default_runtime: extracted.manifest.env.default_runtime.clone(),
+                default_launcher: extracted.manifest.env.default_launcher.clone(),
+                protected: extracted.manifest.env.protected,
+                created_at,
+                updated_at: created_at,
+                last_used_at: None,
+            };
+            save_environment(meta, env, cwd)
+        })();
+
+        match imported {
+            Ok(meta) => Ok(EnvImportSummary {
+                name: meta.name.clone(),
+                source_name,
+                root: meta.root.clone(),
+                archive_path: display_path(&archive_path),
+                default_runtime: meta.default_runtime.clone(),
+                default_launcher: meta.default_launcher.clone(),
+                protected: meta.protected,
+            }),
+            Err(error) => {
+                let _ = fs::remove_file(&meta_path);
+                let _ = fs::remove_dir_all(&target_paths.root);
+                Err(error)
+            }
+        }
+    })();
+
+    let _ = fs::remove_dir_all(&staging_dir);
+    result
+}
+
 pub fn remove_environment(
     name: &str,
     force: bool,
@@ -307,4 +419,11 @@ pub fn remove_environment(
     }
 
     Ok(meta)
+}
+
+fn import_staging_dir() -> PathBuf {
+    let id = NEXT_IMPORT_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir()
+        .join("ocm-env-imports")
+        .join(format!("{}-{id}", std::process::id()))
 }
