@@ -2,9 +2,12 @@ mod support;
 
 use std::fs;
 
+use ocm::download::file_sha256;
 use serde_json::Value;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
+use crate::support::{
+    TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout, write_executable_script,
+};
 
 #[test]
 fn env_status_reports_the_resolved_launcher() {
@@ -126,4 +129,65 @@ fn env_status_json_reports_runtime_health_and_binding_shape() {
     assert_eq!(value["runtimeHealth"], "ok");
     assert_eq!(value["runtimeSourceKind"], "registered");
     assert!(value["issue"].is_null());
+}
+
+#[test]
+fn env_status_reports_release_backed_runtime_details() {
+    let root = TestDir::new("env-status-release-runtime");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let artifact_body = b"release-runtime";
+    let digest_path = root.child("sha256/openclaw-stable");
+    fs::create_dir_all(digest_path.parent().unwrap()).unwrap();
+    fs::write(&digest_path, artifact_body).unwrap();
+    let sha256 = file_sha256(&digest_path).unwrap();
+
+    let artifact_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-stable",
+        "application/octet-stream",
+        artifact_body,
+    );
+    let manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+        artifact_server.url(),
+        sha256
+    );
+    let manifest_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body.as_bytes(),
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--channel",
+            "stable",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let status = run_ocm(&cwd, &env, &["env", "status", "demo", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let value: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    assert_eq!(value["resolvedKind"], "runtime");
+    assert_eq!(value["runtimeSourceKind"], "installed");
+    assert_eq!(value["runtimeReleaseVersion"], "0.2.0");
+    assert_eq!(value["runtimeReleaseChannel"], "stable");
+    assert_eq!(value["runtimeHealth"], "ok");
 }

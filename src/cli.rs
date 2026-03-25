@@ -382,6 +382,12 @@ impl Cli {
         if let Some(source_kind) = status.runtime_source_kind {
             self.stdout_line(format!("runtimeSourceKind: {source_kind}"));
         }
+        if let Some(release_version) = status.runtime_release_version {
+            self.stdout_line(format!("runtimeReleaseVersion: {release_version}"));
+        }
+        if let Some(release_channel) = status.runtime_release_channel {
+            self.stdout_line(format!("runtimeReleaseChannel: {release_channel}"));
+        }
         if let Some(runtime_health) = status.runtime_health {
             self.stdout_line(format!("runtimeHealth: {runtime_health}"));
         }

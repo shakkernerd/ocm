@@ -75,6 +75,8 @@ pub struct EnvStatusSummary {
     pub command: Option<String>,
     pub run_dir: Option<String>,
     pub runtime_source_kind: Option<String>,
+    pub runtime_release_version: Option<String>,
+    pub runtime_release_channel: Option<String>,
     pub runtime_health: Option<String>,
     pub issue: Option<String>,
 }

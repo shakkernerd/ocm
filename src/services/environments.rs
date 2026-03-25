@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::execution::{
@@ -8,7 +7,8 @@ use crate::execution::{
 };
 use crate::store::{
     clone_environment, create_environment, get_environment, get_launcher, get_runtime_verified,
-    list_environments, now_utc, remove_environment, save_environment, select_prune_candidates,
+    list_environments, now_utc, remove_environment, runtime_integrity_issue, save_environment,
+    select_prune_candidates,
 };
 use crate::types::EnvStatusSummary;
 use crate::types::{CloneEnvironmentOptions, CreateEnvironmentOptions, EnvMeta, ExecutionSummary};
@@ -126,6 +126,8 @@ impl<'a> EnvironmentService<'a> {
             command: None,
             run_dir: None,
             runtime_source_kind: None,
+            runtime_release_version: None,
+            runtime_release_channel: None,
             runtime_health: None,
             issue: None,
         };
@@ -141,9 +143,11 @@ impl<'a> EnvironmentService<'a> {
                             Some(resolve_runtime_run_dir(self.cwd).display().to_string());
                         summary.runtime_source_kind =
                             Some(runtime.source_kind.as_str().to_string());
-                        match runtime_health(&runtime.binary_path) {
-                            Ok(()) => summary.runtime_health = Some("ok".to_string()),
-                            Err(error) => {
+                        summary.runtime_release_version = runtime.release_version.clone();
+                        summary.runtime_release_channel = runtime.release_channel.clone();
+                        match runtime_integrity_issue(&runtime) {
+                            None => summary.runtime_health = Some("ok".to_string()),
+                            Some(error) => {
                                 summary.runtime_health = Some("broken".to_string());
                                 summary.issue =
                                     Some(format!("runtime \"{}\" {error}", runtime.name));
@@ -228,20 +232,6 @@ impl<'a> EnvironmentService<'a> {
             }
         }
     }
-}
-
-fn runtime_health(binary_path: &str) -> Result<(), String> {
-    let path = Path::new(binary_path);
-    if !path.exists() {
-        return Err(format!("binary path does not exist: {}", path.display()));
-    }
-
-    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
-    if !metadata.is_file() {
-        return Err(format!("binary path is not a file: {}", path.display()));
-    }
-
-    Ok(())
 }
 
 impl ResolvedExecution {
