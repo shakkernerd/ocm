@@ -102,6 +102,27 @@ pub struct RuntimeBinarySummary {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeReleaseManifest {
+    #[serde(default)]
+    pub kind: Option<String>,
+    pub releases: Vec<RuntimeRelease>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRelease {
+    pub version: String,
+    #[serde(default)]
+    pub channel: Option<String>,
+    pub url: String,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LauncherMeta {
     pub kind: String,
     pub name: String,
