@@ -727,3 +727,102 @@ fn environment_snapshot_prune_keeps_the_newest_snapshot_in_scope() {
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, new_snapshot.id);
 }
+
+#[test]
+fn environment_cleanup_preview_identifies_safe_repairs_without_mutating_state() {
+    let root = TestDir::new("store-env-cleanup-preview");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let marker_path = root.child("ocm-home/envs/source/.ocm-env.json");
+    fs::remove_file(&marker_path).unwrap();
+
+    let mut drifted = get_environment("source", &env, &cwd).unwrap();
+    drifted.default_runtime = Some("ghost-runtime".to_string());
+    drifted.default_launcher = Some("ghost-launcher".to_string());
+    ocm::store::save_environment(drifted, &env, &cwd).unwrap();
+
+    let service = EnvironmentService::new(&env, &cwd);
+    let preview = service.cleanup_preview("source").unwrap();
+    assert!(!preview.apply);
+    assert_eq!(preview.actions.len(), 3);
+    assert_eq!(preview.actions[0].kind, "repair-marker");
+    assert_eq!(preview.actions[1].kind, "clear-missing-runtime");
+    assert_eq!(preview.actions[2].kind, "clear-missing-launcher");
+    assert!(preview.actions.iter().all(|action| !action.applied));
+
+    let current = get_environment("source", &env, &cwd).unwrap();
+    assert_eq!(current.default_runtime.as_deref(), Some("ghost-runtime"));
+    assert_eq!(current.default_launcher.as_deref(), Some("ghost-launcher"));
+    assert!(!marker_path.exists());
+}
+
+#[test]
+fn environment_cleanup_applies_marker_and_binding_repairs() {
+    let root = TestDir::new("store-env-cleanup-apply");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let marker_path = root.child("ocm-home/envs/source/.ocm-env.json");
+    fs::write(
+        &marker_path,
+        "{\n  \"kind\": \"ocm-env-marker\",\n  \"name\": \"other\",\n  \"createdAt\": \"2026-03-25T00:00:00Z\"\n}\n",
+    )
+    .unwrap();
+
+    let mut drifted = get_environment("source", &env, &cwd).unwrap();
+    drifted.default_runtime = Some("ghost-runtime".to_string());
+    drifted.default_launcher = Some("ghost-launcher".to_string());
+    ocm::store::save_environment(drifted, &env, &cwd).unwrap();
+
+    let service = EnvironmentService::new(&env, &cwd);
+    let applied = service.cleanup("source").unwrap();
+    assert!(applied.apply);
+    assert_eq!(applied.actions.len(), 3);
+    assert!(applied.actions.iter().all(|action| action.applied));
+
+    let current = get_environment("source", &env, &cwd).unwrap();
+    assert_eq!(current.default_runtime, None);
+    assert_eq!(current.default_launcher, None);
+
+    let marker_raw = fs::read_to_string(marker_path).unwrap();
+    assert!(marker_raw.contains("\"name\": \"source\""));
+    assert_eq!(applied.healthy_after, Some(false));
+    assert!(
+        applied
+            .issues_after
+            .unwrap()
+            .iter()
+            .any(|issue| issue.contains("has no default runtime or launcher"))
+    );
+}

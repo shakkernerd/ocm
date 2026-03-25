@@ -109,6 +109,29 @@ pub struct EnvMarkerRepairSummary {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EnvCleanupActionSummary {
+    pub kind: String,
+    pub description: String,
+    pub applied: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvCleanupSummary {
+    pub env_name: String,
+    pub root: String,
+    pub apply: bool,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub healthy_before: bool,
+    pub healthy_after: Option<bool>,
+    pub actions: Vec<EnvCleanupActionSummary>,
+    pub issues_before: Vec<String>,
+    pub issues_after: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeVerifySummary {
     pub name: String,
     pub binary_path: String,

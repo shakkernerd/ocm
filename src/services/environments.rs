@@ -15,7 +15,10 @@ use crate::store::{
     runtime_integrity_issue, save_environment, select_prune_candidates,
     select_snapshot_prune_candidates, summarize_snapshot,
 };
-use crate::types::{EnvDoctorSummary, EnvMarkerRepairSummary, EnvStatusSummary};
+use crate::types::{
+    EnvCleanupActionSummary, EnvCleanupSummary, EnvDoctorSummary, EnvMarkerRepairSummary,
+    EnvStatusSummary,
+};
 use crate::types::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvExportSummary,
     EnvImportSummary, EnvMeta, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
@@ -42,6 +45,12 @@ pub enum ResolvedExecution {
 pub struct EnvironmentService<'a> {
     env: &'a BTreeMap<String, String>,
     cwd: &'a Path,
+}
+
+#[derive(Clone, Debug)]
+struct PlannedCleanupAction {
+    kind: &'static str,
+    description: String,
 }
 
 impl<'a> EnvironmentService<'a> {
@@ -197,6 +206,52 @@ impl<'a> EnvironmentService<'a> {
 
     pub fn repair_marker(&self, name: &str) -> Result<EnvMarkerRepairSummary, String> {
         repair_environment_marker(name, self.env, self.cwd)
+    }
+
+    pub fn cleanup_preview(&self, name: &str) -> Result<EnvCleanupSummary, String> {
+        let env = self.get(name)?;
+        let doctor = self.doctor(name)?;
+        let actions = cleanup_actions(&env, &doctor);
+        Ok(build_cleanup_summary(&env, doctor, false, actions, None))
+    }
+
+    pub fn cleanup(&self, name: &str) -> Result<EnvCleanupSummary, String> {
+        let mut env = self.get(name)?;
+        let doctor_before = self.doctor(name)?;
+        let actions = cleanup_actions(&env, &doctor_before);
+
+        for action in &actions {
+            match action.kind {
+                "repair-marker" => {
+                    repair_environment_marker(&env.name, self.env, self.cwd)?;
+                }
+                "clear-missing-runtime" => {
+                    env.default_runtime = None;
+                }
+                "clear-missing-launcher" => {
+                    env.default_launcher = None;
+                }
+                _ => {}
+            }
+        }
+
+        if actions
+            .iter()
+            .any(|action| matches!(action.kind, "clear-missing-runtime" | "clear-missing-launcher"))
+        {
+            env = save_environment(env, self.env, self.cwd)?;
+        } else {
+            env = self.get(name)?;
+        }
+
+        let doctor_after = self.doctor(name)?;
+        Ok(build_cleanup_summary(
+            &env,
+            doctor_before,
+            true,
+            actions,
+            Some(doctor_after),
+        ))
     }
 
     pub fn prune_candidates(&self, older_than_days: i64) -> Result<Vec<EnvMeta>, String> {
@@ -481,6 +536,67 @@ impl<'a> EnvironmentService<'a> {
 fn push_issue(issues: &mut Vec<String>, issue: String) {
     if !issues.iter().any(|current| current == &issue) {
         issues.push(issue);
+    }
+}
+
+fn cleanup_actions(env: &EnvMeta, doctor: &EnvDoctorSummary) -> Vec<PlannedCleanupAction> {
+    let mut actions = Vec::new();
+
+    if doctor.root_status == "ok" && doctor.marker_status != "ok" {
+        actions.push(PlannedCleanupAction {
+            kind: "repair-marker",
+            description: "rewrite the environment marker file".to_string(),
+        });
+    }
+
+    if doctor.runtime_status == "missing" {
+        if let Some(runtime_name) = env.default_runtime.as_deref() {
+            actions.push(PlannedCleanupAction {
+                kind: "clear-missing-runtime",
+                description: format!("clear missing runtime binding \"{runtime_name}\""),
+            });
+        }
+    }
+
+    if doctor.launcher_status == "missing" {
+        if let Some(launcher_name) = env.default_launcher.as_deref() {
+            actions.push(PlannedCleanupAction {
+                kind: "clear-missing-launcher",
+                description: format!("clear missing launcher binding \"{launcher_name}\""),
+            });
+        }
+    }
+
+    actions
+}
+
+fn build_cleanup_summary(
+    env: &EnvMeta,
+    doctor_before: EnvDoctorSummary,
+    apply: bool,
+    actions: Vec<PlannedCleanupAction>,
+    doctor_after: Option<EnvDoctorSummary>,
+) -> EnvCleanupSummary {
+    let actions = actions
+        .into_iter()
+        .map(|action| EnvCleanupActionSummary {
+            kind: action.kind.to_string(),
+            description: action.description,
+            applied: apply,
+        })
+        .collect();
+
+    EnvCleanupSummary {
+        env_name: env.name.clone(),
+        root: env.root.clone(),
+        apply,
+        default_runtime: env.default_runtime.clone(),
+        default_launcher: env.default_launcher.clone(),
+        healthy_before: doctor_before.healthy,
+        healthy_after: doctor_after.as_ref().map(|doctor| doctor.healthy),
+        actions,
+        issues_before: doctor_before.issues,
+        issues_after: doctor_after.map(|doctor| doctor.issues),
     }
 }
 
