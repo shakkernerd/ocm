@@ -9,9 +9,9 @@ use crate::execution::{
 use crate::paths::{derive_env_paths, display_path};
 use crate::store::{
     clone_environment, create_env_snapshot, create_environment, export_environment,
-    get_environment, get_launcher, get_runtime, get_runtime_verified, import_environment,
-    list_all_env_snapshots, list_env_snapshots, list_environments, now_utc, remove_environment,
-    remove_env_snapshot, repair_environment_marker, restore_env_snapshot,
+    get_env_snapshot, get_environment, get_launcher, get_runtime, get_runtime_verified,
+    import_environment, list_all_env_snapshots, list_env_snapshots, list_environments, now_utc,
+    remove_environment, remove_env_snapshot, repair_environment_marker, restore_env_snapshot,
     runtime_integrity_issue, save_environment, select_prune_candidates, summarize_snapshot,
 };
 use crate::types::{EnvDoctorSummary, EnvMarkerRepairSummary, EnvStatusSummary};
@@ -87,6 +87,15 @@ impl<'a> EnvironmentService<'a> {
             None => list_all_env_snapshots(self.env, self.cwd)?,
         };
         Ok(snapshots.iter().map(summarize_snapshot).collect())
+    }
+
+    pub fn get_snapshot(
+        &self,
+        env_name: &str,
+        snapshot_id: &str,
+    ) -> Result<EnvSnapshotSummary, String> {
+        let snapshot = get_env_snapshot(env_name, snapshot_id, self.env, self.cwd)?;
+        Ok(summarize_snapshot(&snapshot))
     }
 
     pub fn restore_snapshot(

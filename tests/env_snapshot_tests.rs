@@ -66,6 +66,91 @@ fn env_snapshot_create_json_reports_snapshot_metadata() {
 }
 
 #[test]
+fn env_snapshot_show_reports_snapshot_metadata() {
+    let root = TestDir::new("env-snapshot-show");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "source", "--port", "19789", "--protect"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let snapshot = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "create",
+            "source",
+            "--label",
+            "before-upgrade",
+        ],
+    );
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    let show = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "show", "source", &snapshot_id],
+    );
+    assert!(show.status.success(), "{}", stderr(&show));
+    let output = stdout(&show);
+    assert!(output.contains("snapshotId:"));
+    assert!(output.contains("envName: source"));
+    assert!(output.contains("label: before-upgrade"));
+    assert!(output.contains("gatewayPort: 19789"));
+    assert!(output.contains("protected: true"));
+}
+
+#[test]
+fn env_snapshot_show_json_reports_the_snapshot_shape() {
+    let root = TestDir::new("env-snapshot-show-json");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    let show = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "show", "source", &snapshot_id, "--json"],
+    );
+    assert!(show.status.success(), "{}", stderr(&show));
+    let output = stdout(&show);
+    assert!(output.contains("\"envName\": \"source\""));
+    assert!(output.contains("\"archivePath\":"));
+    assert!(output.contains("\"createdAt\":"));
+}
+
+#[test]
 fn env_snapshot_list_reports_env_scoped_snapshots_in_newest_first_order() {
     let root = TestDir::new("env-snapshot-list");
     let cwd = root.child("workspace");

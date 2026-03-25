@@ -26,10 +26,12 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("env import ./backups/refactor-a.ocm-env.tar --name refactor-b"));
     assert!(output.contains("env snapshot create <name> [--label <label>] [--json]"));
     assert!(output.contains("env snapshot create refactor-a --label before-upgrade"));
+    assert!(output.contains("env snapshot show <name> <snapshot> [--json]"));
     assert!(output.contains("env snapshot list <name> [--json]"));
     assert!(output.contains("env snapshot list --all [--json]"));
     assert!(output.contains("env snapshot restore <name> <snapshot> [--json]"));
     assert!(output.contains("env snapshot remove <name> <snapshot> [--json]"));
+    assert!(output.contains("env snapshot show refactor-a 1742922000-123456789"));
     assert!(output.contains("env snapshot list refactor-a"));
     assert!(output.contains("env snapshot list --all --json"));
     assert!(output.contains("env snapshot restore refactor-a 1742922000-123456789"));
