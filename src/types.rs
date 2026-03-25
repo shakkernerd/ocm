@@ -342,6 +342,15 @@ pub struct EnvSnapshotRestoreSummary {
     pub protected: bool,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvSnapshotRemoveSummary {
+    pub env_name: String,
+    pub snapshot_id: String,
+    pub label: Option<String>,
+    pub archive_path: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct CreateEnvSnapshotOptions {
     pub env_name: String,
@@ -350,6 +359,12 @@ pub struct CreateEnvSnapshotOptions {
 
 #[derive(Clone, Debug)]
 pub struct RestoreEnvSnapshotOptions {
+    pub env_name: String,
+    pub snapshot_id: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct RemoveEnvSnapshotOptions {
     pub env_name: String,
     pub snapshot_id: String,
 }

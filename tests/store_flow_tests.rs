@@ -8,13 +8,14 @@ use ocm::store::{
     add_launcher, add_runtime, clone_environment, create_env_snapshot, create_environment,
     export_environment, get_env_snapshot, get_environment, get_launcher, get_runtime,
     import_environment, install_runtime, list_all_env_snapshots, list_env_snapshots,
-    list_environments, list_launchers, list_runtimes, remove_environment, remove_launcher,
-    remove_runtime, restore_env_snapshot,
+    list_environments, list_launchers, list_runtimes, remove_env_snapshot, remove_environment,
+    remove_launcher, remove_runtime, restore_env_snapshot,
 };
 use ocm::types::{
     AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvSnapshotOptions,
     CreateEnvironmentOptions, ExportEnvironmentOptions, ImportEnvironmentOptions,
-    InstallRuntimeOptions, RestoreEnvSnapshotOptions, RuntimeSourceKind,
+    InstallRuntimeOptions, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
+    RuntimeSourceKind,
 };
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
@@ -584,4 +585,53 @@ fn environment_snapshot_restore_replaces_env_state_from_the_snapshot() {
     assert_eq!(restored_meta.default_runtime.as_deref(), Some("stable"));
     assert_eq!(restored_meta.default_launcher.as_deref(), Some("shell"));
     assert!(restored_meta.protected);
+}
+
+#[test]
+fn environment_snapshot_remove_deletes_snapshot_artifacts_and_metadata() {
+    let root = TestDir::new("store-env-snapshot-remove");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: Some("before-cleanup".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let removed = remove_env_snapshot(
+        RemoveEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            snapshot_id: snapshot.id.clone(),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(removed.env_name, "source");
+    assert_eq!(removed.snapshot_id, snapshot.id);
+    assert_eq!(removed.label.as_deref(), Some("before-cleanup"));
+    assert!(!std::path::Path::new(&removed.archive_path).exists());
+    assert!(list_env_snapshots("source", &env, &cwd).unwrap().is_empty());
+    assert!(!root.child("ocm-home/snapshots/source").exists());
 }

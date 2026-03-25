@@ -9,8 +9,9 @@ use crate::paths::{
     validate_name,
 };
 use crate::types::{
-    CreateEnvSnapshotOptions, EnvMarker, EnvMeta, EnvSnapshotMeta, EnvSnapshotRestoreSummary,
-    EnvSnapshotSummary, RestoreEnvSnapshotOptions,
+    CreateEnvSnapshotOptions, EnvMarker, EnvMeta, EnvSnapshotMeta, EnvSnapshotRemoveSummary,
+    EnvSnapshotRestoreSummary, EnvSnapshotSummary, RemoveEnvSnapshotOptions,
+    RestoreEnvSnapshotOptions,
 };
 
 use super::common::{copy_dir_recursive, load_json_files, path_exists, read_json, write_json};
@@ -245,6 +246,32 @@ pub fn restore_env_snapshot(
     result
 }
 
+pub fn remove_env_snapshot(
+    options: RemoveEnvSnapshotOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvSnapshotRemoveSummary, String> {
+    let snapshot = get_env_snapshot(&options.env_name, &options.snapshot_id, env, cwd)?;
+    let meta_path = snapshot_meta_path(&snapshot.env_name, &snapshot.id, env, cwd)?;
+    let archive_path = PathBuf::from(&snapshot.archive_path);
+
+    if path_exists(&meta_path) {
+        fs::remove_file(&meta_path).map_err(|error| error.to_string())?;
+    }
+    if path_exists(&archive_path) {
+        fs::remove_file(&archive_path).map_err(|error| error.to_string())?;
+    }
+
+    remove_snapshot_parent_if_empty(&snapshot.env_name, env, cwd)?;
+
+    Ok(EnvSnapshotRemoveSummary {
+        env_name: snapshot.env_name,
+        snapshot_id: snapshot.id,
+        label: snapshot.label,
+        archive_path: snapshot.archive_path,
+    })
+}
+
 pub fn list_env_snapshots(
     env_name: &str,
     env: &BTreeMap<String, String>,
@@ -311,4 +338,21 @@ fn restore_backup_root(root: &Path) -> PathBuf {
     root.parent()
         .unwrap_or_else(|| Path::new("."))
         .join(backup_name)
+}
+
+fn remove_snapshot_parent_if_empty(
+    env_name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<(), String> {
+    let dir = snapshot_env_dir(env_name, env, cwd)?;
+    if !path_exists(&dir) {
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(&dir).map_err(|error| error.to_string())?;
+    if entries.next().is_none() {
+        fs::remove_dir(&dir).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }

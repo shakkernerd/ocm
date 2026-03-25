@@ -9,14 +9,15 @@ use crate::store::{
     clone_environment, create_env_snapshot, create_environment, export_environment,
     get_environment, get_launcher, get_runtime_verified, import_environment,
     list_all_env_snapshots, list_env_snapshots, list_environments, now_utc, remove_environment,
-    restore_env_snapshot, runtime_integrity_issue, save_environment, select_prune_candidates,
-    summarize_snapshot,
+    remove_env_snapshot, restore_env_snapshot, runtime_integrity_issue, save_environment,
+    select_prune_candidates, summarize_snapshot,
 };
 use crate::types::EnvStatusSummary;
 use crate::types::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvExportSummary,
-    EnvImportSummary, EnvMeta, EnvSnapshotRestoreSummary, EnvSnapshotSummary, ExecutionSummary,
-    ExportEnvironmentOptions, ImportEnvironmentOptions, RestoreEnvSnapshotOptions,
+    EnvImportSummary, EnvMeta, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
+    EnvSnapshotSummary, ExecutionSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
 };
 
 pub enum ResolvedExecution {
@@ -91,6 +92,13 @@ impl<'a> EnvironmentService<'a> {
         options: RestoreEnvSnapshotOptions,
     ) -> Result<EnvSnapshotRestoreSummary, String> {
         restore_env_snapshot(options, self.env, self.cwd)
+    }
+
+    pub fn remove_snapshot(
+        &self,
+        options: RemoveEnvSnapshotOptions,
+    ) -> Result<EnvSnapshotRemoveSummary, String> {
+        remove_env_snapshot(options, self.env, self.cwd)
     }
 
     pub fn list(&self) -> Result<Vec<EnvMeta>, String> {
