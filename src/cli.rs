@@ -534,10 +534,6 @@ impl Cli {
             None => None,
         };
 
-        if keep.is_none() && older_than_days.is_none() {
-            return Err("env snapshot prune requires --keep or --older-than".to_string());
-        }
-
         let env_name = if all {
             if !args.is_empty() {
                 return Err("env snapshot prune accepts either <name> or --all".to_string());
@@ -550,6 +546,10 @@ impl Cli {
             Self::assert_no_extra_args(&args[1..])?;
             Some(name.as_str())
         };
+
+        if keep.is_none() && older_than_days.is_none() {
+            return Err("env snapshot prune requires --keep or --older-than".to_string());
+        }
 
         let scope_label = env_name.unwrap_or("all");
         if !yes {

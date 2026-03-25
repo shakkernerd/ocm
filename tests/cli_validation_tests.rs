@@ -246,6 +246,63 @@ fn env_snapshot_show_requires_both_name_and_snapshot_id() {
 }
 
 #[test]
+fn env_snapshot_prune_requires_scope_and_retention_flags() {
+    let root = TestDir::new("cli-snapshot-prune-scope-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing_scope = run_ocm(&cwd, &env, &["env", "snapshot", "prune"]);
+    assert_eq!(missing_scope.status.code(), Some(1));
+    assert!(stderr(&missing_scope).contains("environment name is required"));
+
+    let missing_selector = run_ocm(&cwd, &env, &["env", "snapshot", "prune", "demo"]);
+    assert_eq!(missing_selector.status.code(), Some(1));
+    assert!(
+        stderr(&missing_selector).contains("env snapshot prune requires --keep or --older-than")
+    );
+
+    let all_missing_selector = run_ocm(&cwd, &env, &["env", "snapshot", "prune", "--all"]);
+    assert_eq!(all_missing_selector.status.code(), Some(1));
+    assert!(
+        stderr(&all_missing_selector)
+            .contains("env snapshot prune requires --keep or --older-than")
+    );
+}
+
+#[test]
+fn env_snapshot_prune_validates_scope_and_numeric_values() {
+    let root = TestDir::new("cli-snapshot-prune-value-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let conflicting = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "prune", "demo", "--all", "--keep", "1"],
+    );
+    assert_eq!(conflicting.status.code(), Some(1));
+    assert!(stderr(&conflicting).contains("env snapshot prune accepts either <name> or --all"));
+
+    let empty_keep = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "prune", "demo", "--keep="],
+    );
+    assert_eq!(empty_keep.status.code(), Some(1));
+    assert!(stderr(&empty_keep).contains("--keep requires a value"));
+
+    let zero_older = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "prune", "demo", "--older-than", "0"],
+    );
+    assert_eq!(zero_older.status.code(), Some(1));
+    assert!(stderr(&zero_older).contains("--older-than must be a positive integer"));
+}
+
+#[test]
 fn env_doctor_requires_a_name() {
     let root = TestDir::new("cli-env-doctor-validation");
     let cwd = root.child("workspace");
