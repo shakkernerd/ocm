@@ -1,16 +1,22 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::archive::{ArchivedEnvMeta, EnvArchiveManifest, write_env_archive};
+use crate::archive::{ArchivedEnvMeta, EnvArchiveManifest, extract_env_archive, write_env_archive};
 use crate::paths::{
     derive_env_paths, display_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
     validate_name,
 };
-use crate::types::{CreateEnvSnapshotOptions, EnvSnapshotMeta, EnvSnapshotSummary};
+use crate::types::{
+    CreateEnvSnapshotOptions, EnvMarker, EnvMeta, EnvSnapshotMeta, EnvSnapshotRestoreSummary,
+    EnvSnapshotSummary, RestoreEnvSnapshotOptions,
+};
 
-use super::common::{load_json_files, path_exists, read_json, write_json};
-use super::{get_environment, now_utc};
+use super::common::{copy_dir_recursive, load_json_files, path_exists, read_json, write_json};
+use super::{get_environment, now_utc, save_environment};
+
+static NEXT_RESTORE_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn create_env_snapshot(
     options: CreateEnvSnapshotOptions,
@@ -128,6 +134,117 @@ pub fn summarize_snapshot(meta: &EnvSnapshotMeta) -> EnvSnapshotSummary {
     }
 }
 
+pub fn restore_env_snapshot(
+    options: RestoreEnvSnapshotOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvSnapshotRestoreSummary, String> {
+    let env_name = validate_name(&options.env_name, "Environment name")?;
+    let snapshot = get_env_snapshot(&env_name, &options.snapshot_id, env, cwd)?;
+    let current = get_environment(&env_name, env, cwd)?;
+    let current_paths = derive_env_paths(Path::new(&current.root));
+    let root_exists = path_exists(&current_paths.root);
+    let marker_exists = path_exists(&current_paths.marker_path);
+    if root_exists && !marker_exists {
+        let marker_name = current_paths
+            .marker_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(".ocm-env.json");
+        return Err(format!(
+            "refusing to restore {} without {}",
+            display_path(&current_paths.root),
+            marker_name
+        ));
+    }
+
+    let staging_dir = restore_staging_dir();
+    let backup_root = restore_backup_root(&current_paths.root);
+    if path_exists(&staging_dir) {
+        let _ = fs::remove_dir_all(&staging_dir);
+    }
+
+    let result = (|| {
+        let extracted = extract_env_archive::<EnvArchiveManifest>(
+            Path::new(&snapshot.archive_path),
+            &staging_dir,
+        )?;
+        if extracted.manifest.kind != "ocm-env-archive" {
+            return Err(format!(
+                "unsupported archive kind: {}",
+                extracted.manifest.kind
+            ));
+        }
+        if extracted.manifest.format_version != 1 {
+            return Err(format!(
+                "unsupported archive format version: {}",
+                extracted.manifest.format_version
+            ));
+        }
+        if !path_exists(&extracted.root_dir.join(".ocm-env.json")) {
+            return Err("snapshot archive is missing .ocm-env.json".to_string());
+        }
+
+        let mut renamed = false;
+        if root_exists {
+            fs::rename(&current_paths.root, &backup_root).map_err(|error| error.to_string())?;
+            renamed = true;
+        }
+
+        let restore_result = (|| {
+            copy_dir_recursive(&extracted.root_dir, &current_paths.root)?;
+            let marker = EnvMarker {
+                kind: "ocm-env-marker".to_string(),
+                name: env_name.clone(),
+                created_at: now_utc(),
+            };
+            write_json(&current_paths.marker_path, &marker)?;
+
+            let restored = EnvMeta {
+                kind: "ocm-env".to_string(),
+                name: current.name.clone(),
+                root: current.root.clone(),
+                gateway_port: extracted.manifest.env.gateway_port,
+                default_runtime: extracted.manifest.env.default_runtime.clone(),
+                default_launcher: extracted.manifest.env.default_launcher.clone(),
+                protected: extracted.manifest.env.protected,
+                created_at: current.created_at,
+                updated_at: current.updated_at,
+                last_used_at: current.last_used_at,
+            };
+            save_environment(restored, env, cwd)
+        })();
+
+        match restore_result {
+            Ok(meta) => {
+                if renamed {
+                    let _ = fs::remove_dir_all(&backup_root);
+                }
+                Ok(EnvSnapshotRestoreSummary {
+                    env_name: meta.name,
+                    snapshot_id: snapshot.id,
+                    label: snapshot.label,
+                    root: meta.root,
+                    archive_path: snapshot.archive_path,
+                    default_runtime: meta.default_runtime,
+                    default_launcher: meta.default_launcher,
+                    protected: meta.protected,
+                })
+            }
+            Err(error) => {
+                let _ = fs::remove_dir_all(&current_paths.root);
+                if renamed {
+                    let _ = fs::rename(&backup_root, &current_paths.root);
+                }
+                Err(error)
+            }
+        }
+    })();
+
+    let _ = fs::remove_dir_all(&staging_dir);
+    result
+}
+
 pub fn list_env_snapshots(
     env_name: &str,
     env: &BTreeMap<String, String>,
@@ -173,4 +290,25 @@ fn sort_snapshots(snapshots: &mut [EnvSnapshotMeta]) {
             .cmp(&left.created_at)
             .then_with(|| right.id.cmp(&left.id))
     });
+}
+
+fn restore_staging_dir() -> PathBuf {
+    let id = NEXT_RESTORE_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir()
+        .join("ocm-snapshot-restores")
+        .join(format!("{}-{id}", std::process::id()))
+}
+
+fn restore_backup_root(root: &Path) -> PathBuf {
+    let id = NEXT_RESTORE_ID.fetch_add(1, Ordering::Relaxed);
+    let backup_name = format!(
+        ".{}-ocm-restore-{}-{id}",
+        root.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("env"),
+        std::process::id()
+    );
+    root.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(backup_name)
 }

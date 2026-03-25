@@ -9,12 +9,12 @@ use ocm::store::{
     export_environment, get_env_snapshot, get_environment, get_launcher, get_runtime,
     import_environment, install_runtime, list_all_env_snapshots, list_env_snapshots,
     list_environments, list_launchers, list_runtimes, remove_environment, remove_launcher,
-    remove_runtime,
+    remove_runtime, restore_env_snapshot,
 };
 use ocm::types::{
     AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvSnapshotOptions,
     CreateEnvironmentOptions, ExportEnvironmentOptions, ImportEnvironmentOptions,
-    InstallRuntimeOptions, RuntimeSourceKind,
+    InstallRuntimeOptions, RestoreEnvSnapshotOptions, RuntimeSourceKind,
 };
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
@@ -513,4 +513,75 @@ fn environment_snapshot_listing_supports_env_scoped_and_global_views() {
     assert!(ids.contains(&alpha_old.id));
     assert!(ids.contains(&alpha_new.id));
     assert!(ids.contains(&beta_snapshot.id));
+}
+
+#[test]
+fn environment_snapshot_restore_replaces_env_state_from_the_snapshot() {
+    let root = TestDir::new("store-env-snapshot-restore");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_runtime: Some("stable".to_string()),
+            default_launcher: Some("shell".to_string()),
+            protected: true,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = std::path::Path::new(&created.root);
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "before restore",
+    );
+
+    let snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: Some("before-upgrade".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "after drift",
+    );
+    let mut drifted = get_environment("source", &env, &cwd).unwrap();
+    drifted.default_launcher = None;
+    drifted.default_runtime = None;
+    drifted.gateway_port = Some(20000);
+    drifted.protected = false;
+    ocm::store::save_environment(drifted, &env, &cwd).unwrap();
+
+    let restored = restore_env_snapshot(
+        RestoreEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            snapshot_id: snapshot.id.clone(),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(restored.snapshot_id, snapshot.id);
+    assert_eq!(restored.label.as_deref(), Some("before-upgrade"));
+    assert_eq!(
+        fs::read_to_string(source_root.join(".openclaw/workspace/notes.txt")).unwrap(),
+        "before restore"
+    );
+
+    let restored_meta = get_environment("source", &env, &cwd).unwrap();
+    assert_eq!(restored_meta.gateway_port, Some(19789));
+    assert_eq!(restored_meta.default_runtime.as_deref(), Some("stable"));
+    assert_eq!(restored_meta.default_launcher.as_deref(), Some("shell"));
+    assert!(restored_meta.protected);
 }
