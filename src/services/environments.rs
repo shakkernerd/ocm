@@ -7,9 +7,9 @@ use crate::execution::{
 };
 use crate::store::{
     clone_environment, create_env_snapshot, create_environment, export_environment,
-    get_environment, get_launcher, get_runtime_verified, import_environment, list_environments,
-    now_utc, remove_environment, runtime_integrity_issue, save_environment,
-    select_prune_candidates, summarize_snapshot,
+    get_environment, get_launcher, get_runtime_verified, import_environment,
+    list_all_env_snapshots, list_env_snapshots, list_environments, now_utc, remove_environment,
+    runtime_integrity_issue, save_environment, select_prune_candidates, summarize_snapshot,
 };
 use crate::types::EnvStatusSummary;
 use crate::types::{
@@ -72,6 +72,17 @@ impl<'a> EnvironmentService<'a> {
     ) -> Result<EnvSnapshotSummary, String> {
         let meta = create_env_snapshot(options, self.env, self.cwd)?;
         Ok(summarize_snapshot(&meta))
+    }
+
+    pub fn list_snapshots(
+        &self,
+        env_name: Option<&str>,
+    ) -> Result<Vec<EnvSnapshotSummary>, String> {
+        let snapshots = match env_name {
+            Some(env_name) => list_env_snapshots(env_name, self.env, self.cwd)?,
+            None => list_all_env_snapshots(self.env, self.cwd)?,
+        };
+        Ok(snapshots.iter().map(summarize_snapshot).collect())
     }
 
     pub fn list(&self) -> Result<Vec<EnvMeta>, String> {
