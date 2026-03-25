@@ -20,6 +20,8 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("launcher add <name> --command"));
     assert!(output.contains("env clone <source> <target> [--root <path>] [--json]"));
     assert!(output.contains("env clone refactor-a refactor-b"));
+    assert!(output.contains("env export <name> [--output <path>] [--json]"));
+    assert!(output.contains("env export refactor-a --output ./backups/refactor-a.ocm-env.tar"));
     assert!(output.contains("runtime releases --manifest-url <url> [--json]"));
     assert!(output.contains(
         "runtime releases --manifest-url https://example.test/openclaw-releases.json --json"
