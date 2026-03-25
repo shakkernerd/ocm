@@ -36,6 +36,8 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("env snapshot remove refactor-a 1742922000-123456789"));
     assert!(output.contains("env doctor <name> [--json]"));
     assert!(output.contains("env doctor refactor-a --json"));
+    assert!(output.contains("env repair-marker <name> [--json]"));
+    assert!(output.contains("env repair-marker refactor-a --json"));
     assert!(output.contains("runtime releases --manifest-url <url> [--json]"));
     assert!(output.contains(
         "runtime releases --manifest-url https://example.test/openclaw-releases.json --json"
