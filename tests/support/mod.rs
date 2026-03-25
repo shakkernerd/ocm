@@ -65,6 +65,14 @@ impl TestHttpServer {
         body: &[u8],
         request_limit: usize,
     ) -> Self {
+        Self::serve_bytes_sequence(
+            path,
+            content_type,
+            vec![body.to_vec(); request_limit.max(1)],
+        )
+    }
+
+    pub fn serve_bytes_sequence(path: &str, content_type: &str, bodies: Vec<Vec<u8>>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let addr_string = format!("127.0.0.1:{}", addr.port());
@@ -75,12 +83,16 @@ impl TestHttpServer {
         };
         let response_path = path_string.clone();
         let response_type = content_type.to_string();
-        let response_body = body.to_vec();
-        let request_limit = request_limit.max(1);
+        let response_bodies = if bodies.is_empty() {
+            vec![Vec::new()]
+        } else {
+            bodies
+        };
+        let request_limit = response_bodies.len();
         let served = Arc::new(AtomicUsize::new(0));
         let served_flag = Arc::clone(&served);
         let handle = thread::spawn(move || {
-            for _ in 0..request_limit {
+            for response_body in response_bodies {
                 let Ok((mut stream, _)) = listener.accept() else {
                     break;
                 };
@@ -93,7 +105,7 @@ impl TestHttpServer {
                     "HTTP/1.1 404 Not Found"
                 };
                 let body = if status_line.ends_with("200 OK") {
-                    response_body.clone()
+                    response_body
                 } else {
                     b"not found".to_vec()
                 };

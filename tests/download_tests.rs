@@ -3,9 +3,10 @@ mod support;
 use std::fs;
 
 use ocm::download::{
-    artifact_file_name_from_url, download_to_file, file_sha256, normalize_sha256,
+    artifact_file_name_from_url, download_to_file, fetch_json, file_sha256, normalize_sha256,
     verify_file_sha256,
 };
+use serde_json::Value;
 
 use crate::support::{TestDir, TestHttpServer};
 
@@ -71,6 +72,26 @@ fn download_to_file_can_reuse_a_repeatable_server() {
 
     assert_eq!(fs::read(&first_destination).unwrap(), b"openclaw-binary");
     assert_eq!(fs::read(&second_destination).unwrap(), b"openclaw-binary");
+}
+
+#[test]
+fn fetch_json_can_consume_sequential_http_responses() {
+    let server = TestHttpServer::serve_bytes_sequence(
+        "/manifests/releases.json",
+        "application/json",
+        vec![
+            br#"{"releases":[{"version":"0.2.0","url":"https://example.test/openclaw-0.2.0"}]}"#
+                .to_vec(),
+            br#"{"releases":[{"version":"0.3.0","url":"https://example.test/openclaw-0.3.0"}]}"#
+                .to_vec(),
+        ],
+    );
+
+    let first: Value = fetch_json(&server.url()).unwrap();
+    let second: Value = fetch_json(&server.url()).unwrap();
+
+    assert_eq!(first["releases"][0]["version"], "0.2.0");
+    assert_eq!(second["releases"][0]["version"], "0.3.0");
 }
 
 #[test]
