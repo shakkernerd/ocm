@@ -31,11 +31,16 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("env snapshot list --all [--json]"));
     assert!(output.contains("env snapshot restore <name> <snapshot> [--json]"));
     assert!(output.contains("env snapshot remove <name> <snapshot> [--json]"));
+    assert!(output.contains(
+        "env snapshot prune (<name> | --all) [--keep <count>] [--older-than <days>] [--yes] [--json]"
+    ));
     assert!(output.contains("env snapshot show refactor-a 1742922000-123456789"));
     assert!(output.contains("env snapshot list refactor-a"));
     assert!(output.contains("env snapshot list --all --json"));
     assert!(output.contains("env snapshot restore refactor-a 1742922000-123456789"));
     assert!(output.contains("env snapshot remove refactor-a 1742922000-123456789"));
+    assert!(output.contains("env snapshot prune refactor-a --keep 5 --yes"));
+    assert!(output.contains("env snapshot prune --all --older-than 30 --json"));
     assert!(output.contains("env doctor <name> [--json]"));
     assert!(output.contains("env doctor refactor-a --json"));
     assert!(output.contains("env repair-marker <name> [--json]"));

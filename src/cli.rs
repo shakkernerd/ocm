@@ -62,7 +62,7 @@ impl Cli {
     fn render_help(&self) -> String {
         let cmd = self.command_example();
         format!(
-            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} init [zsh|bash|sh|fish]\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env clone <source> <target> [--root <path>] [--json]\n  {cmd} env export <name> [--output <path>] [--json]\n  {cmd} env import <archive> [--name <name>] [--root <path>] [--json]\n  {cmd} env snapshot create <name> [--label <label>] [--json]\n  {cmd} env snapshot show <name> <snapshot> [--json]\n  {cmd} env snapshot list <name> [--json]\n  {cmd} env snapshot list --all [--json]\n  {cmd} env snapshot restore <name> <snapshot> [--json]\n  {cmd} env snapshot remove <name> <snapshot> [--json]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env status <name> [--json]\n  {cmd} env doctor <name> [--json]\n  {cmd} env repair-marker <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime install <name> (--path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force]\n  {cmd} runtime update (<name> | --all) [--version <version> | --channel <channel>] [--json]\n  {cmd} runtime releases --manifest-url <url> [--json]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime verify (<name> | --all) [--json]\n  {cmd} runtime which <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} init\n  {cmd} init zsh\n  {cmd} init bash\n  {cmd} init fish\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} runtime install managed-stable --path ./target/debug/openclaw\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly --force\n  {cmd} runtime install stable --manifest-url https://example.test/openclaw-releases.json --version 0.2.0\n  {cmd} runtime install stable --manifest-url https://example.test/openclaw-releases.json --channel stable\n  {cmd} runtime update stable\n  {cmd} runtime update stable --version 0.3.0\n  {cmd} runtime update --all\n  {cmd} runtime releases --manifest-url https://example.test/openclaw-releases.json --json\n  {cmd} runtime verify nightly --json\n  {cmd} runtime verify --all\n  {cmd} runtime which nightly --json\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env clone refactor-a refactor-b\n  {cmd} env export refactor-a --output ./backups/refactor-a.ocm-env.tar\n  {cmd} env import ./backups/refactor-a.ocm-env.tar --name refactor-b\n  {cmd} env snapshot create refactor-a --label before-upgrade\n  {cmd} env snapshot show refactor-a 1742922000-123456789\n  {cmd} env snapshot list refactor-a\n  {cmd} env snapshot list --all --json\n  {cmd} env snapshot restore refactor-a 1742922000-123456789\n  {cmd} env snapshot remove refactor-a 1742922000-123456789\n  {cmd} env status refactor-a --json\n  {cmd} env doctor refactor-a --json\n  {cmd} env repair-marker refactor-a --json\n  {cmd} env resolve refactor-a --json\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
+            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} init [zsh|bash|sh|fish]\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env clone <source> <target> [--root <path>] [--json]\n  {cmd} env export <name> [--output <path>] [--json]\n  {cmd} env import <archive> [--name <name>] [--root <path>] [--json]\n  {cmd} env snapshot create <name> [--label <label>] [--json]\n  {cmd} env snapshot show <name> <snapshot> [--json]\n  {cmd} env snapshot list <name> [--json]\n  {cmd} env snapshot list --all [--json]\n  {cmd} env snapshot restore <name> <snapshot> [--json]\n  {cmd} env snapshot remove <name> <snapshot> [--json]\n  {cmd} env snapshot prune (<name> | --all) [--keep <count>] [--older-than <days>] [--yes] [--json]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env status <name> [--json]\n  {cmd} env doctor <name> [--json]\n  {cmd} env repair-marker <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime install <name> (--path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force]\n  {cmd} runtime update (<name> | --all) [--version <version> | --channel <channel>] [--json]\n  {cmd} runtime releases --manifest-url <url> [--json]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime verify (<name> | --all) [--json]\n  {cmd} runtime which <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} init\n  {cmd} init zsh\n  {cmd} init bash\n  {cmd} init fish\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} runtime install managed-stable --path ./target/debug/openclaw\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly --force\n  {cmd} runtime install stable --manifest-url https://example.test/openclaw-releases.json --version 0.2.0\n  {cmd} runtime install stable --manifest-url https://example.test/openclaw-releases.json --channel stable\n  {cmd} runtime update stable\n  {cmd} runtime update stable --version 0.3.0\n  {cmd} runtime update --all\n  {cmd} runtime releases --manifest-url https://example.test/openclaw-releases.json --json\n  {cmd} runtime verify nightly --json\n  {cmd} runtime verify --all\n  {cmd} runtime which nightly --json\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env clone refactor-a refactor-b\n  {cmd} env export refactor-a --output ./backups/refactor-a.ocm-env.tar\n  {cmd} env import ./backups/refactor-a.ocm-env.tar --name refactor-b\n  {cmd} env snapshot create refactor-a --label before-upgrade\n  {cmd} env snapshot show refactor-a 1742922000-123456789\n  {cmd} env snapshot list refactor-a\n  {cmd} env snapshot list --all --json\n  {cmd} env snapshot restore refactor-a 1742922000-123456789\n  {cmd} env snapshot remove refactor-a 1742922000-123456789\n  {cmd} env snapshot prune refactor-a --keep 5 --yes\n  {cmd} env snapshot prune --all --older-than 30 --json\n  {cmd} env status refactor-a --json\n  {cmd} env doctor refactor-a --json\n  {cmd} env repair-marker refactor-a --json\n  {cmd} env resolve refactor-a --json\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
         )
     }
 
@@ -519,6 +519,99 @@ impl Cli {
         Ok(0)
     }
 
+    fn handle_env_snapshot_prune(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, yes) = Self::consume_flag(args, "--yes");
+        let (args, all) = Self::consume_flag(args, "--all");
+        let (args, keep_raw) = Self::consume_option(args, "--keep")?;
+        let keep = match keep_raw.as_deref() {
+            Some(raw) => Some(Self::parse_positive_u32(raw, "--keep")? as usize),
+            None => None,
+        };
+        let (args, older_than_raw) = Self::consume_option(args, "--older-than")?;
+        let older_than_days = match older_than_raw.as_deref() {
+            Some(raw) => Some(Self::parse_positive_u32(raw, "--older-than")? as i64),
+            None => None,
+        };
+
+        if keep.is_none() && older_than_days.is_none() {
+            return Err("env snapshot prune requires --keep or --older-than".to_string());
+        }
+
+        let env_name = if all {
+            if !args.is_empty() {
+                return Err("env snapshot prune accepts either <name> or --all".to_string());
+            }
+            None
+        } else {
+            let Some(name) = args.first() else {
+                return Err("environment name is required".to_string());
+            };
+            Self::assert_no_extra_args(&args[1..])?;
+            Some(name.as_str())
+        };
+
+        let scope_label = env_name.unwrap_or("all");
+        if !yes {
+            let candidates =
+                self.environment_service()
+                    .prune_snapshot_candidates(env_name, keep, older_than_days)?;
+            if json_flag {
+                self.print_json(&serde_json::json!({
+                    "apply": false,
+                    "scope": scope_label,
+                    "keep": keep,
+                    "olderThanDays": older_than_days,
+                    "count": candidates.len(),
+                    "candidates": candidates,
+                }))?;
+                return Ok(0);
+            }
+
+            self.stdout_line(format!(
+                "Snapshot prune preview ({scope_label}): {} candidate(s)",
+                candidates.len()
+            ));
+            for candidate in candidates {
+                let mut bits = vec![candidate.id, candidate.env_name];
+                if let Some(label) = candidate.label {
+                    bits.push(format!("label={label}"));
+                }
+                bits.push(candidate.archive_path);
+                self.stdout_line(bits.join("  "));
+            }
+            self.stdout_line("Re-run with --yes to remove them.");
+            return Ok(0);
+        }
+
+        let removed = self
+            .environment_service()
+            .prune_snapshots(env_name, keep, older_than_days)?;
+
+        if json_flag {
+            self.print_json(&serde_json::json!({
+                "apply": true,
+                "scope": scope_label,
+                "keep": keep,
+                "olderThanDays": older_than_days,
+                "count": removed.len(),
+                "removed": removed,
+            }))?;
+            return Ok(0);
+        }
+
+        self.stdout_line(format!("Pruned {} snapshot(s).", removed.len()));
+        for snapshot in removed {
+            let mut bits = vec![snapshot.snapshot_id, snapshot.env_name];
+            if let Some(label) = snapshot.label {
+                bits.push(format!("label={label}"));
+            }
+            bits.push(snapshot.archive_path);
+            self.stdout_line(format!("  {}", bits.join("  ")));
+        }
+        Ok(0)
+    }
+
     fn dispatch_env_snapshot_command(&self, args: Vec<String>) -> Result<i32, String> {
         let Some(action) = args.first() else {
             return Err("env snapshot command is required".to_string());
@@ -535,6 +628,7 @@ impl Cli {
             "list" => self.handle_env_snapshot_list(rest),
             "restore" => self.handle_env_snapshot_restore(rest),
             "remove" => self.handle_env_snapshot_remove(rest),
+            "prune" => self.handle_env_snapshot_prune(rest),
             _ => Err(format!("unknown env snapshot command: {action}")),
         }
     }

@@ -397,3 +397,126 @@ fn env_snapshot_remove_json_reports_removed_snapshot_metadata() {
     assert!(output.contains("\"snapshotId\":"));
     assert!(output.contains("\"archivePath\":"));
 }
+
+#[test]
+fn env_snapshot_prune_previews_candidates_without_removing_them() {
+    let root = TestDir::new("env-snapshot-prune-preview");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let old = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "create", "source", "--label", "old"],
+    );
+    assert!(old.status.success(), "{}", stderr(&old));
+    let new = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "create", "source", "--label", "new"],
+    );
+    assert!(new.status.success(), "{}", stderr(&new));
+
+    let prune = run_ocm(&cwd, &env, &["env", "snapshot", "prune", "source", "--keep", "1"]);
+    assert!(prune.status.success(), "{}", stderr(&prune));
+    let output = stdout(&prune);
+    assert!(output.contains("Snapshot prune preview (source): 1 candidate(s)"));
+    assert!(output.contains("label=old"));
+    assert!(output.contains("Re-run with --yes to remove them."));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let listed = stdout(&list);
+    assert!(listed.contains("\"label\": \"old\""));
+    assert!(listed.contains("\"label\": \"new\""));
+}
+
+#[test]
+fn env_snapshot_prune_yes_removes_selected_snapshots() {
+    let root = TestDir::new("env-snapshot-prune-apply");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let old = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "create", "source", "--label", "old"],
+    );
+    assert!(old.status.success(), "{}", stderr(&old));
+    let new = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "create", "source", "--label", "new"],
+    );
+    assert!(new.status.success(), "{}", stderr(&new));
+
+    let prune = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "prune", "source", "--keep", "1", "--yes"],
+    );
+    assert!(prune.status.success(), "{}", stderr(&prune));
+    let output = stdout(&prune);
+    assert!(output.contains("Pruned 1 snapshot(s)."));
+    assert!(output.contains("label=old"));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let listed = stdout(&list);
+    assert!(!listed.contains("\"label\": \"old\""));
+    assert!(listed.contains("\"label\": \"new\""));
+}
+
+#[test]
+fn env_snapshot_prune_json_supports_the_global_view() {
+    let root = TestDir::new("env-snapshot-prune-json-all");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    for name in ["alpha", "beta"] {
+        let create = run_ocm(&cwd, &env, &["env", "create", name]);
+        assert!(create.status.success(), "{}", stderr(&create));
+        let old = run_ocm(
+            &cwd,
+            &env,
+            &["env", "snapshot", "create", name, "--label", "old"],
+        );
+        assert!(old.status.success(), "{}", stderr(&old));
+        let new = run_ocm(
+            &cwd,
+            &env,
+            &["env", "snapshot", "create", name, "--label", "new"],
+        );
+        assert!(new.status.success(), "{}", stderr(&new));
+    }
+
+    let prune = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "prune",
+            "--all",
+            "--keep",
+            "1",
+            "--json",
+        ],
+    );
+    assert!(prune.status.success(), "{}", stderr(&prune));
+    let output = stdout(&prune);
+    assert!(output.contains("\"apply\": false"));
+    assert!(output.contains("\"scope\": \"all\""));
+    assert!(output.contains("\"count\": 2"));
+    assert!(output.contains("\"envName\": \"alpha\""));
+    assert!(output.contains("\"envName\": \"beta\""));
+}
