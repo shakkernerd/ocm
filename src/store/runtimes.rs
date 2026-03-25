@@ -9,7 +9,7 @@ use crate::paths::{
     clean_path, display_path, resolve_absolute_path, runtime_install_files_dir,
     runtime_install_root, runtime_meta_path, validate_name,
 };
-use crate::releases::select_release_by_version;
+use crate::releases::select_release;
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
     InstallRuntimeOptions, RuntimeMeta, RuntimeSourceKind,
@@ -346,11 +346,11 @@ pub fn install_runtime_from_release(
     let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
 
     let manifest = crate::releases::load_release_manifest(&options.manifest_url)?;
-    let version = options
-        .version
-        .as_deref()
-        .ok_or_else(|| "runtime release version is required".to_string())?;
-    let release = select_release_by_version(&manifest, version)?;
+    let release = select_release(
+        &manifest,
+        options.version.as_deref(),
+        options.channel.as_deref(),
+    )?;
     let description =
         trim_description(options.description).or_else(|| trim_description(release.description));
 

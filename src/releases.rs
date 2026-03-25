@@ -59,6 +59,25 @@ pub fn select_release_by_channel(
         .ok_or_else(|| format!("runtime release channel \"{channel}\" was not found"))
 }
 
+pub fn select_release(
+    manifest: &RuntimeReleaseManifest,
+    version: Option<&str>,
+    channel: Option<&str>,
+) -> Result<RuntimeRelease, String> {
+    let version = version.map(str::trim).filter(|value| !value.is_empty());
+    let channel = channel.map(str::trim).filter(|value| !value.is_empty());
+    match (version, channel) {
+        (Some(version), None) => select_release_by_version(manifest, version),
+        (None, Some(channel)) => select_release_by_channel(manifest, channel),
+        (Some(_), Some(_)) => {
+            Err("runtime release selection accepts only one of --version or --channel".to_string())
+        }
+        (None, None) => {
+            Err("runtime release selection requires --version or --channel".to_string())
+        }
+    }
+}
+
 fn validate_release(mut release: RuntimeRelease) -> Result<RuntimeRelease, String> {
     let version = release.version.trim();
     if version.is_empty() {
