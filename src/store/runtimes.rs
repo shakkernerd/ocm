@@ -4,7 +4,10 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::download::{artifact_file_name_from_url, download_to_file, verify_file_sha256};
+use crate::download::{
+    artifact_file_name_from_url, download_to_file, file_sha256, normalize_sha256,
+    verify_file_sha256,
+};
 use crate::paths::{
     clean_path, display_path, resolve_absolute_path, runtime_install_files_dir,
     runtime_install_root, runtime_meta_path, validate_name,
@@ -373,23 +376,49 @@ pub fn install_runtime_from_release(
     )
 }
 
-pub fn verify_runtime_binary(meta: RuntimeMeta) -> Result<RuntimeMeta, String> {
+pub fn runtime_integrity_issue(meta: &RuntimeMeta) -> Option<String> {
     let binary_path = Path::new(&meta.binary_path);
     if !path_exists(binary_path) {
-        return Err(format!(
-            "runtime \"{}\" binary path does not exist: {}",
-            meta.name,
+        return Some(format!(
+            "binary path does not exist: {}",
             display_path(binary_path)
         ));
     }
 
-    let metadata = fs::metadata(binary_path).map_err(|error| error.to_string())?;
+    let metadata = match fs::metadata(binary_path) {
+        Ok(metadata) => metadata,
+        Err(error) => return Some(error.to_string()),
+    };
     if !metadata.is_file() {
-        return Err(format!(
-            "runtime \"{}\" binary path is not a file: {}",
-            meta.name,
+        return Some(format!(
+            "binary path is not a file: {}",
             display_path(binary_path)
         ));
+    }
+
+    let Some(expected_sha256) = meta.source_sha256.as_deref() else {
+        return None;
+    };
+    let expected_sha256 = match normalize_sha256(expected_sha256) {
+        Ok(value) => value,
+        Err(error) => return Some(error),
+    };
+    let actual_sha256 = match file_sha256(binary_path) {
+        Ok(value) => value,
+        Err(error) => return Some(error),
+    };
+    if actual_sha256 != expected_sha256 {
+        return Some(format!(
+            "sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+        ));
+    }
+
+    None
+}
+
+pub fn verify_runtime_binary(meta: RuntimeMeta) -> Result<RuntimeMeta, String> {
+    if let Some(issue) = runtime_integrity_issue(&meta) {
+        return Err(format!("runtime \"{}\" {issue}", meta.name));
     }
 
     Ok(meta)

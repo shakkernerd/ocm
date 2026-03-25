@@ -2,9 +2,12 @@ mod support;
 
 use std::fs;
 
+use ocm::download::file_sha256;
 use serde_json::Value;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
+use crate::support::{
+    TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout, write_executable_script,
+};
 
 #[test]
 fn runtime_verify_reports_a_healthy_runtime() {
@@ -112,4 +115,65 @@ fn runtime_verify_all_reports_mixed_runtime_health() {
                 .unwrap()
                 .contains("binary path does not exist:")
     }));
+}
+
+#[test]
+fn runtime_verify_reports_checksum_drift_for_release_backed_runtimes() {
+    let root = TestDir::new("runtime-verify-checksum-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let artifact_body = b"expected-runtime";
+    let digest_path = root.child("sha256/openclaw-stable");
+    fs::create_dir_all(digest_path.parent().unwrap()).unwrap();
+    fs::write(&digest_path, artifact_body).unwrap();
+    let sha256 = file_sha256(&digest_path).unwrap();
+
+    let artifact_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-stable",
+        "application/octet-stream",
+        artifact_body,
+    );
+    let manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+        artifact_server.url(),
+        sha256
+    );
+    let manifest_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body.as_bytes(),
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--version",
+            "0.2.0",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let runtime_path = root
+        .child("ocm-home")
+        .join("runtimes/stable/files/openclaw-stable");
+    fs::write(runtime_path, b"tampered-runtime").unwrap();
+
+    let verify = run_ocm(&cwd, &env, &["runtime", "verify", "stable", "--json"]);
+    assert_eq!(verify.status.code(), Some(1));
+    let value: Value = serde_json::from_str(&stdout(&verify)).unwrap();
+    assert_eq!(value["healthy"], false);
+    assert!(
+        value["issue"]
+            .as_str()
+            .unwrap()
+            .contains("sha256 mismatch:")
+    );
 }

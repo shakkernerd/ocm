@@ -1,11 +1,10 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use crate::releases::load_release_manifest;
 use crate::store::{
     add_runtime, get_runtime_verified, install_runtime, install_runtime_from_release,
-    install_runtime_from_url, list_runtimes, remove_runtime,
+    install_runtime_from_url, list_runtimes, remove_runtime, runtime_integrity_issue,
 };
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
@@ -82,23 +81,8 @@ impl<'a> RuntimeService<'a> {
     }
 }
 
-fn runtime_issue(binary_path: &str) -> Option<String> {
-    let path = Path::new(binary_path);
-    if !path.exists() {
-        return Some(format!("binary path does not exist: {}", path.display()));
-    }
-
-    match fs::metadata(path) {
-        Ok(metadata) if !metadata.is_file() => {
-            Some(format!("binary path is not a file: {}", path.display()))
-        }
-        Ok(_) => None,
-        Err(error) => Some(error.to_string()),
-    }
-}
-
 fn build_verify_summary(meta: RuntimeMeta) -> RuntimeVerifySummary {
-    let issue = runtime_issue(&meta.binary_path);
+    let issue = runtime_integrity_issue(&meta);
     RuntimeVerifySummary {
         name: meta.name,
         binary_path: meta.binary_path,
