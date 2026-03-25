@@ -936,12 +936,18 @@ impl Cli {
             return Ok(0);
         }
         for meta in runtimes {
-            self.stdout_line(format!(
-                "{}  {}  source={}",
+            let mut bits = vec![
                 meta.name,
                 meta.binary_path,
-                meta.source_kind.as_str()
-            ));
+                format!("source={}", meta.source_kind.as_str()),
+            ];
+            if let Some(release_version) = meta.release_version {
+                bits.push(format!("release={release_version}"));
+            }
+            if let Some(release_channel) = meta.release_channel {
+                bits.push(format!("channel={release_channel}"));
+            }
+            self.stdout_line(bits.join("  "));
         }
         Ok(0)
     }

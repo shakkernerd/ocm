@@ -319,6 +319,59 @@ fn runtime_install_from_manifest_channel_selects_the_matching_release() {
 }
 
 #[test]
+fn runtime_list_surfaces_release_metadata_for_manifest_installs() {
+    let root = TestDir::new("runtime-list-release-metadata");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let artifact_body = b"release-runtime";
+    let digest_path = root.child("sha256/openclaw-stable");
+    fs::create_dir_all(digest_path.parent().unwrap()).unwrap();
+    fs::write(&digest_path, artifact_body).unwrap();
+    let sha256 = file_sha256(&digest_path).unwrap();
+
+    let artifact_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-stable",
+        "application/octet-stream",
+        artifact_body,
+    );
+    let manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+        artifact_server.url(),
+        sha256
+    );
+    let manifest_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body.as_bytes(),
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--channel",
+            "stable",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let list = run_ocm(&cwd, &env, &["runtime", "list"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let output = stdout(&list);
+    assert!(output.contains("stable"));
+    assert!(output.contains("source=installed"));
+    assert!(output.contains("release=0.2.0"));
+    assert!(output.contains("channel=stable"));
+}
+
+#[test]
 fn runtime_install_from_url_cleans_up_failed_install_roots_for_retry() {
     let root = TestDir::new("runtime-install-url-retry");
     let cwd = root.child("workspace");
