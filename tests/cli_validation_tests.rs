@@ -198,6 +198,30 @@ fn env_snapshot_restore_requires_both_name_and_snapshot_id() {
 }
 
 #[test]
+fn env_snapshot_remove_requires_both_name_and_snapshot_id() {
+    let root = TestDir::new("cli-snapshot-remove-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing_name = run_ocm(&cwd, &env, &["env", "snapshot", "remove"]);
+    assert_eq!(missing_name.status.code(), Some(1));
+    assert!(stderr(&missing_name).contains("environment name is required"));
+
+    let missing_snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "remove", "demo"]);
+    assert_eq!(missing_snapshot.status.code(), Some(1));
+    assert!(stderr(&missing_snapshot).contains("snapshot id is required"));
+
+    let extra = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "remove", "demo", "snapshot-1", "extra"],
+    );
+    assert_eq!(extra.status.code(), Some(1));
+    assert!(stderr(&extra).contains("unexpected arguments: extra"));
+}
+
+#[test]
 fn env_run_rejects_empty_and_unknown_launcher_overrides() {
     let root = TestDir::new("cli-run-launcher-validation");
     let cwd = root.child("workspace");
