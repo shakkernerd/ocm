@@ -72,6 +72,10 @@ fn get_runtime_accepts_json_without_optional_fields() {
     assert_eq!(meta.source_kind, RuntimeSourceKind::Registered);
     assert_eq!(meta.source_path, None);
     assert_eq!(meta.source_url, None);
+    assert_eq!(meta.source_manifest_url, None);
+    assert_eq!(meta.source_sha256, None);
+    assert_eq!(meta.release_version, None);
+    assert_eq!(meta.release_channel, None);
     assert_eq!(meta.install_root, None);
     assert_eq!(meta.description, None);
 }

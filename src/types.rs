@@ -87,6 +87,10 @@ pub struct RuntimeVerifySummary {
     pub source_kind: String,
     pub source_path: Option<String>,
     pub source_url: Option<String>,
+    pub source_manifest_url: Option<String>,
+    pub source_sha256: Option<String>,
+    pub release_version: Option<String>,
+    pub release_channel: Option<String>,
     pub install_root: Option<String>,
     pub healthy: bool,
     pub issue: Option<String>,
@@ -98,6 +102,8 @@ pub struct RuntimeBinarySummary {
     pub name: String,
     pub binary_path: String,
     pub source_kind: String,
+    pub release_version: Option<String>,
+    pub release_channel: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -167,6 +173,14 @@ pub struct RuntimeMeta {
     pub source_path: Option<String>,
     #[serde(default)]
     pub source_url: Option<String>,
+    #[serde(default)]
+    pub source_manifest_url: Option<String>,
+    #[serde(default)]
+    pub source_sha256: Option<String>,
+    #[serde(default)]
+    pub release_version: Option<String>,
+    #[serde(default)]
+    pub release_channel: Option<String>,
     #[serde(default)]
     pub install_root: Option<String>,
     pub description: Option<String>,

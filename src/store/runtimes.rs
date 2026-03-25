@@ -29,6 +29,10 @@ fn build_installed_runtime_meta(
     install_root: &Path,
     source_path: Option<&Path>,
     source_url: Option<String>,
+    source_manifest_url: Option<String>,
+    source_sha256: Option<String>,
+    release_version: Option<String>,
+    release_channel: Option<String>,
     description: Option<String>,
 ) -> RuntimeMeta {
     let created_at = now_utc();
@@ -39,6 +43,10 @@ fn build_installed_runtime_meta(
         source_kind: RuntimeSourceKind::Installed,
         source_path: source_path.map(display_path),
         source_url,
+        source_manifest_url,
+        source_sha256,
+        release_version,
+        release_channel,
         install_root: Some(display_path(install_root)),
         description,
         created_at,
@@ -65,6 +73,10 @@ fn install_runtime_at_path(
     file_name: &Path,
     source_path: Option<&Path>,
     source_url: Option<String>,
+    source_manifest_url: Option<String>,
+    source_sha256: Option<String>,
+    release_version: Option<String>,
+    release_channel: Option<String>,
     description: Option<String>,
 ) -> Result<RuntimeMeta, String> {
     if path_exists(&install_root) {
@@ -100,6 +112,10 @@ fn install_runtime_at_path(
             &install_root,
             source_path,
             source_url,
+            source_manifest_url,
+            source_sha256,
+            release_version,
+            release_channel,
             description,
         );
         write_json(&meta_path, &meta)?;
@@ -207,6 +223,10 @@ pub fn add_runtime(
         source_kind: RuntimeSourceKind::Registered,
         source_path: Some(display_path(&binary_path)),
         source_url: None,
+        source_manifest_url: None,
+        source_sha256: None,
+        release_version: None,
+        release_channel: None,
         install_root: None,
         description,
         created_at,
@@ -278,6 +298,10 @@ pub fn install_runtime(
         Path::new(file_name),
         Some(&source_path),
         None,
+        None,
+        None,
+        None,
+        None,
         trim_description(options.description),
     )
 }
@@ -301,6 +325,10 @@ pub fn install_runtime_from_url(
         Path::new(&file_name),
         None,
         Some(options.url),
+        None,
+        None,
+        None,
+        None,
         trim_description(options.description),
     )
 }

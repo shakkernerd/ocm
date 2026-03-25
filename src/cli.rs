@@ -901,6 +901,18 @@ impl Cli {
         if let Some(source_url) = meta.source_url {
             lines.insert("sourceUrl".to_string(), source_url);
         }
+        if let Some(source_manifest_url) = meta.source_manifest_url {
+            lines.insert("sourceManifestUrl".to_string(), source_manifest_url);
+        }
+        if let Some(source_sha256) = meta.source_sha256 {
+            lines.insert("sourceSha256".to_string(), source_sha256);
+        }
+        if let Some(release_version) = meta.release_version {
+            lines.insert("releaseVersion".to_string(), release_version);
+        }
+        if let Some(release_channel) = meta.release_channel {
+            lines.insert("releaseChannel".to_string(), release_channel);
+        }
         if let Some(install_root) = meta.install_root {
             lines.insert("installRoot".to_string(), install_root);
         }
@@ -969,6 +981,18 @@ impl Cli {
         }
         if let Some(source_url) = summary.source_url {
             self.stdout_line(format!("sourceUrl: {source_url}"));
+        }
+        if let Some(source_manifest_url) = summary.source_manifest_url {
+            self.stdout_line(format!("sourceManifestUrl: {source_manifest_url}"));
+        }
+        if let Some(source_sha256) = summary.source_sha256 {
+            self.stdout_line(format!("sourceSha256: {source_sha256}"));
+        }
+        if let Some(release_version) = summary.release_version {
+            self.stdout_line(format!("releaseVersion: {release_version}"));
+        }
+        if let Some(release_channel) = summary.release_channel {
+            self.stdout_line(format!("releaseChannel: {release_channel}"));
         }
         if let Some(install_root) = summary.install_root {
             self.stdout_line(format!("installRoot: {install_root}"));
