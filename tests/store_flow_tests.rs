@@ -5,14 +5,15 @@ use std::fs;
 use ocm::archive::{EnvArchiveManifest, extract_env_archive};
 use ocm::paths::{env_meta_path, launcher_meta_path, runtime_install_root, runtime_meta_path};
 use ocm::store::{
-    add_launcher, add_runtime, clone_environment, create_environment, export_environment,
-    get_environment, get_launcher, get_runtime, import_environment, install_runtime,
-    list_environments, list_launchers, list_runtimes, remove_environment, remove_launcher,
-    remove_runtime,
+    add_launcher, add_runtime, clone_environment, create_env_snapshot, create_environment,
+    export_environment, get_env_snapshot, get_environment, get_launcher, get_runtime,
+    import_environment, install_runtime, list_environments, list_launchers, list_runtimes,
+    remove_environment, remove_launcher, remove_runtime,
 };
 use ocm::types::{
-    AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvironmentOptions,
-    ExportEnvironmentOptions, ImportEnvironmentOptions, InstallRuntimeOptions, RuntimeSourceKind,
+    AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvSnapshotOptions,
+    CreateEnvironmentOptions, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    InstallRuntimeOptions, RuntimeSourceKind,
 };
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
@@ -388,4 +389,60 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
     let marker_raw =
         fs::read_to_string(root.child("workspace/imports/target-root/.ocm-env.json")).unwrap();
     assert!(marker_raw.contains("\"name\": \"target\""));
+}
+
+#[test]
+fn environment_snapshot_captures_a_named_point_in_time() {
+    let root = TestDir::new("store-env-snapshot");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_runtime: Some("stable".to_string()),
+            default_launcher: Some("shell".to_string()),
+            protected: true,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = std::path::Path::new(&created.root);
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "hello snapshot",
+    );
+
+    let snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: Some("before-upgrade".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.env_name, "source");
+    assert_eq!(snapshot.label.as_deref(), Some("before-upgrade"));
+    assert!(snapshot.archive_path.ends_with(".tar"));
+
+    let fetched = get_env_snapshot("source", &snapshot.id, &env, &cwd).unwrap();
+    assert_eq!(fetched.id, snapshot.id);
+
+    let extract_dir = root.child("snapshot-extracted");
+    let extracted = extract_env_archive::<EnvArchiveManifest>(
+        std::path::Path::new(&snapshot.archive_path),
+        &extract_dir,
+    )
+    .unwrap();
+    assert_eq!(extracted.manifest.env.name, "source");
+    assert_eq!(
+        fs::read_to_string(extracted.root_dir.join(".openclaw/workspace/notes.txt")).unwrap(),
+        "hello snapshot"
+    );
 }
