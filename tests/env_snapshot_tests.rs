@@ -222,3 +222,93 @@ fn env_snapshot_restore_json_reports_the_restored_binding_shape() {
     assert!(output.contains("\"snapshotId\":"));
     assert!(output.contains("\"protected\": true"));
 }
+
+#[test]
+fn env_snapshot_remove_deletes_the_named_snapshot() {
+    let root = TestDir::new("env-snapshot-remove");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let snapshot = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "create",
+            "source",
+            "--label",
+            "before-cleanup",
+        ],
+    );
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    let remove = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "remove", "source", &snapshot_id],
+    );
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    let output = stdout(&remove);
+    assert!(output.contains("Removed snapshot"));
+    assert!(output.contains("for env source"));
+    assert!(output.contains("label: before-cleanup"));
+
+    let list_after = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source"]);
+    assert!(list_after.status.success(), "{}", stderr(&list_after));
+    assert!(stdout(&list_after).contains("No snapshots."));
+}
+
+#[test]
+fn env_snapshot_remove_json_reports_removed_snapshot_metadata() {
+    let root = TestDir::new("env-snapshot-remove-json");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    let remove = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "remove",
+            "source",
+            &snapshot_id,
+            "--json",
+        ],
+    );
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    let output = stdout(&remove);
+    assert!(output.contains("\"envName\": \"source\""));
+    assert!(output.contains("\"snapshotId\":"));
+    assert!(output.contains("\"archivePath\":"));
+}
