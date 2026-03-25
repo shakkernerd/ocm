@@ -55,6 +55,25 @@ fn download_to_file_reports_http_errors() {
 }
 
 #[test]
+fn download_to_file_can_reuse_a_repeatable_server() {
+    let root = TestDir::new("download-helper-repeatable");
+    let first_destination = root.child("downloads/openclaw-first");
+    let second_destination = root.child("downloads/openclaw-second");
+    let server = TestHttpServer::serve_bytes_times(
+        "/artifacts/openclaw",
+        "application/octet-stream",
+        b"openclaw-binary",
+        2,
+    );
+
+    download_to_file(&server.url(), &first_destination).unwrap();
+    download_to_file(&server.url(), &second_destination).unwrap();
+
+    assert_eq!(fs::read(&first_destination).unwrap(), b"openclaw-binary");
+    assert_eq!(fs::read(&second_destination).unwrap(), b"openclaw-binary");
+}
+
+#[test]
 fn file_sha256_and_verify_file_sha256_report_the_expected_digest() {
     let root = TestDir::new("download-helper-sha256");
     let artifact = root.child("downloads/openclaw");

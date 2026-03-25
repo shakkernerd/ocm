@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
@@ -22,7 +22,8 @@ pub struct TestDir {
 pub struct TestHttpServer {
     addr: String,
     path: String,
-    served: Arc<AtomicBool>,
+    served: Arc<AtomicUsize>,
+    request_limit: usize,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -55,6 +56,15 @@ impl Drop for TestDir {
 
 impl TestHttpServer {
     pub fn serve_bytes(path: &str, content_type: &str, body: &[u8]) -> Self {
+        Self::serve_bytes_times(path, content_type, body, 1)
+    }
+
+    pub fn serve_bytes_times(
+        path: &str,
+        content_type: &str,
+        body: &[u8],
+        request_limit: usize,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let addr_string = format!("127.0.0.1:{}", addr.port());
@@ -66,10 +76,14 @@ impl TestHttpServer {
         let response_path = path_string.clone();
         let response_type = content_type.to_string();
         let response_body = body.to_vec();
-        let served = Arc::new(AtomicBool::new(false));
+        let request_limit = request_limit.max(1);
+        let served = Arc::new(AtomicUsize::new(0));
         let served_flag = Arc::clone(&served);
         let handle = thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
+            for _ in 0..request_limit {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
                 let mut request = [0_u8; 4096];
                 let _ = stream.read(&mut request);
                 let request_text = String::from_utf8_lossy(&request);
@@ -79,7 +93,7 @@ impl TestHttpServer {
                     "HTTP/1.1 404 Not Found"
                 };
                 let body = if status_line.ends_with("200 OK") {
-                    response_body
+                    response_body.clone()
                 } else {
                     b"not found".to_vec()
                 };
@@ -91,7 +105,7 @@ impl TestHttpServer {
                 let _ = stream.write_all(response.as_bytes());
                 let _ = stream.write_all(&body);
                 let _ = stream.flush();
-                served_flag.store(true, AtomicOrdering::SeqCst);
+                served_flag.fetch_add(1, Ordering::SeqCst);
             }
         });
 
@@ -99,6 +113,7 @@ impl TestHttpServer {
             addr: addr_string,
             path: path_string,
             served,
+            request_limit,
             handle: Some(handle),
         }
     }
@@ -110,15 +125,16 @@ impl TestHttpServer {
 
 impl Drop for TestHttpServer {
     fn drop(&mut self) {
-        if !self.served.load(AtomicOrdering::SeqCst) {
-            if let Ok(mut stream) = TcpStream::connect(&self.addr) {
-                let _ = write!(
-                    stream,
-                    "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-                    self.path, self.addr
-                );
-                let _ = stream.flush();
-            }
+        while self.served.load(Ordering::SeqCst) < self.request_limit {
+            let Ok(mut stream) = TcpStream::connect(&self.addr) else {
+                break;
+            };
+            let _ = write!(
+                stream,
+                "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                self.path, self.addr
+            );
+            let _ = stream.flush();
         }
 
         if let Some(handle) = self.handle.take() {
