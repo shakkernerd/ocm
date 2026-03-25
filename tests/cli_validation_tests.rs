@@ -222,6 +222,30 @@ fn env_snapshot_remove_requires_both_name_and_snapshot_id() {
 }
 
 #[test]
+fn env_snapshot_show_requires_both_name_and_snapshot_id() {
+    let root = TestDir::new("cli-snapshot-show-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing_name = run_ocm(&cwd, &env, &["env", "snapshot", "show"]);
+    assert_eq!(missing_name.status.code(), Some(1));
+    assert!(stderr(&missing_name).contains("environment name is required"));
+
+    let missing_snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "show", "demo"]);
+    assert_eq!(missing_snapshot.status.code(), Some(1));
+    assert!(stderr(&missing_snapshot).contains("snapshot id is required"));
+
+    let extra = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "show", "demo", "snapshot-1", "extra"],
+    );
+    assert_eq!(extra.status.code(), Some(1));
+    assert!(stderr(&extra).contains("unexpected arguments: extra"));
+}
+
+#[test]
 fn env_doctor_requires_a_name() {
     let root = TestDir::new("cli-env-doctor-validation");
     let cwd = root.child("workspace");
