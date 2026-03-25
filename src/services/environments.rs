@@ -9,13 +9,14 @@ use crate::store::{
     clone_environment, create_env_snapshot, create_environment, export_environment,
     get_environment, get_launcher, get_runtime_verified, import_environment,
     list_all_env_snapshots, list_env_snapshots, list_environments, now_utc, remove_environment,
-    runtime_integrity_issue, save_environment, select_prune_candidates, summarize_snapshot,
+    restore_env_snapshot, runtime_integrity_issue, save_environment, select_prune_candidates,
+    summarize_snapshot,
 };
 use crate::types::EnvStatusSummary;
 use crate::types::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvExportSummary,
-    EnvImportSummary, EnvMeta, EnvSnapshotSummary, ExecutionSummary, ExportEnvironmentOptions,
-    ImportEnvironmentOptions,
+    EnvImportSummary, EnvMeta, EnvSnapshotRestoreSummary, EnvSnapshotSummary, ExecutionSummary,
+    ExportEnvironmentOptions, ImportEnvironmentOptions, RestoreEnvSnapshotOptions,
 };
 
 pub enum ResolvedExecution {
@@ -83,6 +84,13 @@ impl<'a> EnvironmentService<'a> {
             None => list_all_env_snapshots(self.env, self.cwd)?,
         };
         Ok(snapshots.iter().map(summarize_snapshot).collect())
+    }
+
+    pub fn restore_snapshot(
+        &self,
+        options: RestoreEnvSnapshotOptions,
+    ) -> Result<EnvSnapshotRestoreSummary, String> {
+        restore_env_snapshot(options, self.env, self.cwd)
     }
 
     pub fn list(&self) -> Result<Vec<EnvMeta>, String> {

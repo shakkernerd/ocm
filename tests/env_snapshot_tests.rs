@@ -117,3 +117,108 @@ fn env_snapshot_list_json_supports_the_global_view() {
     assert!(output.contains("\"envName\": \"alpha\""));
     assert!(output.contains("\"envName\": \"beta\""));
 }
+
+#[test]
+fn env_snapshot_restore_reverts_state_from_the_selected_snapshot() {
+    let root = TestDir::new("env-snapshot-restore");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "source", "--port", "19789", "--protect"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/workspace/notes.txt"),
+        "before restore",
+    );
+    let snapshot = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "create",
+            "source",
+            "--label",
+            "before-upgrade",
+        ],
+    );
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_list = stdout(&list);
+    let snapshot_id = snapshot_list
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/workspace/notes.txt"),
+        "after drift",
+    );
+
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "restore", "source", &snapshot_id],
+    );
+    assert!(restore.status.success(), "{}", stderr(&restore));
+    let output = stdout(&restore);
+    assert!(output.contains("Restored env source from snapshot"));
+    assert!(output.contains("label: before-upgrade"));
+    assert_eq!(
+        fs::read_to_string(root.child("ocm-home/envs/source/.openclaw/workspace/notes.txt"))
+            .unwrap(),
+        "before restore"
+    );
+}
+
+#[test]
+fn env_snapshot_restore_json_reports_the_restored_binding_shape() {
+    let root = TestDir::new("env-snapshot-restore-json");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--protect"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_list = stdout(&list);
+    let snapshot_id = snapshot_list
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "restore",
+            "source",
+            &snapshot_id,
+            "--json",
+        ],
+    );
+    assert!(restore.status.success(), "{}", stderr(&restore));
+    let output = stdout(&restore);
+    assert!(output.contains("\"envName\": \"source\""));
+    assert!(output.contains("\"snapshotId\":"));
+    assert!(output.contains("\"protected\": true"));
+}

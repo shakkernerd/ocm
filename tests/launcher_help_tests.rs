@@ -28,8 +28,10 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("env snapshot create refactor-a --label before-upgrade"));
     assert!(output.contains("env snapshot list <name> [--json]"));
     assert!(output.contains("env snapshot list --all [--json]"));
+    assert!(output.contains("env snapshot restore <name> <snapshot> [--json]"));
     assert!(output.contains("env snapshot list refactor-a"));
     assert!(output.contains("env snapshot list --all --json"));
+    assert!(output.contains("env snapshot restore refactor-a 1742922000-123456789"));
     assert!(output.contains("runtime releases --manifest-url <url> [--json]"));
     assert!(output.contains(
         "runtime releases --manifest-url https://example.test/openclaw-releases.json --json"
