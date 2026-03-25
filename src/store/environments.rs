@@ -2,11 +2,15 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use crate::archive::{ArchivedEnvMeta, EnvArchiveManifest, write_env_archive};
 use crate::paths::{
     clean_path, default_env_root, derive_env_paths, display_path, env_meta_path,
     resolve_absolute_path, validate_name,
 };
-use crate::types::{CloneEnvironmentOptions, CreateEnvironmentOptions, EnvMarker, EnvMeta};
+use crate::types::{
+    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvMarker, EnvMeta,
+    ExportEnvironmentOptions,
+};
 
 use super::common::{
     copy_dir_recursive, ensure_dir, load_json_files, path_exists, read_json, write_json,
@@ -189,6 +193,75 @@ pub fn clone_environment(
     }
 
     result
+}
+
+pub fn export_environment(
+    options: ExportEnvironmentOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvExportSummary, String> {
+    let meta = get_environment(&options.name, env, cwd)?;
+    let env_paths = derive_env_paths(Path::new(&meta.root));
+    if !path_exists(&env_paths.root) {
+        return Err(format!(
+            "environment root does not exist: {}",
+            display_path(&env_paths.root)
+        ));
+    }
+    if !path_exists(&env_paths.marker_path) {
+        return Err(format!(
+            "refusing to export {} without {}",
+            display_path(&env_paths.root),
+            env_paths
+                .marker_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(".ocm-env.json")
+        ));
+    }
+
+    let output_path = if let Some(output) = options.output.as_deref() {
+        resolve_absolute_path(output, env, cwd)?
+    } else {
+        clean_path(&cwd.join(format!("{}.ocm-env.tar", meta.name)))
+    };
+    if path_exists(&output_path) {
+        return Err(format!(
+            "export archive already exists: {}",
+            display_path(&output_path)
+        ));
+    }
+
+    let manifest = EnvArchiveManifest {
+        kind: "ocm-env-archive".to_string(),
+        format_version: 1,
+        exported_at: now_utc(),
+        env: ArchivedEnvMeta {
+            name: meta.name.clone(),
+            gateway_port: meta.gateway_port,
+            default_runtime: meta.default_runtime.clone(),
+            default_launcher: meta.default_launcher.clone(),
+            protected: meta.protected,
+            created_at: meta.created_at,
+            updated_at: meta.updated_at,
+            last_used_at: meta.last_used_at,
+        },
+    };
+
+    let result = write_env_archive(&manifest, &env_paths.root, &output_path);
+    if result.is_err() {
+        let _ = fs::remove_file(&output_path);
+    }
+    result?;
+
+    Ok(EnvExportSummary {
+        name: meta.name,
+        root: meta.root,
+        archive_path: display_path(&output_path),
+        default_runtime: meta.default_runtime,
+        default_launcher: meta.default_launcher,
+        protected: meta.protected,
+    })
 }
 
 pub fn remove_environment(

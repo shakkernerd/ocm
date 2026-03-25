@@ -259,6 +259,23 @@ pub struct CloneEnvironmentOptions {
 }
 
 #[derive(Clone, Debug)]
+pub struct ExportEnvironmentOptions {
+    pub name: String,
+    pub output: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvExportSummary {
+    pub name: String,
+    pub root: String,
+    pub archive_path: String,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub protected: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct AddLauncherOptions {
     pub name: String,
     pub command: String,

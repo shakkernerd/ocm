@@ -52,7 +52,8 @@ pub fn write_env_archive<T: Serialize>(
 
     let file = File::create(output_path).map_err(|error| error.to_string())?;
     let mut builder = Builder::new(file);
-    let mut manifest_raw = serde_json::to_string_pretty(manifest).map_err(|error| error.to_string())?;
+    let mut manifest_raw =
+        serde_json::to_string_pretty(manifest).map_err(|error| error.to_string())?;
     manifest_raw.push('\n');
     let manifest_bytes = manifest_raw.into_bytes();
     let mut header = Header::new_gnu();
@@ -80,7 +81,9 @@ pub fn extract_env_archive<T: DeserializeOwned>(
 
     let file = File::open(archive_path).map_err(|error| error.to_string())?;
     let mut archive = Archive::new(file);
-    archive.unpack(staging_dir).map_err(|error| error.to_string())?;
+    archive
+        .unpack(staging_dir)
+        .map_err(|error| error.to_string())?;
 
     let manifest_path = staging_dir.join(ENV_ARCHIVE_MANIFEST_PATH);
     let root_dir = staging_dir.join(ENV_ARCHIVE_ROOT_DIR);
@@ -143,7 +146,8 @@ mod tests {
         };
 
         write_env_archive(&manifest, &source_root, &archive_path).unwrap();
-        let extracted = extract_env_archive::<EnvArchiveManifest>(&archive_path, &extract_dir).unwrap();
+        let extracted =
+            extract_env_archive::<EnvArchiveManifest>(&archive_path, &extract_dir).unwrap();
 
         assert_eq!(extracted.manifest, manifest);
         assert_eq!(

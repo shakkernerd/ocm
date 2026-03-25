@@ -2,15 +2,16 @@ mod support;
 
 use std::fs;
 
+use ocm::archive::{EnvArchiveManifest, extract_env_archive};
 use ocm::paths::{env_meta_path, launcher_meta_path, runtime_install_root, runtime_meta_path};
 use ocm::store::{
-    add_launcher, add_runtime, clone_environment, create_environment, get_environment,
-    get_launcher, get_runtime, install_runtime, list_environments, list_launchers, list_runtimes,
-    remove_environment, remove_launcher, remove_runtime,
+    add_launcher, add_runtime, clone_environment, create_environment, export_environment,
+    get_environment, get_launcher, get_runtime, install_runtime, list_environments, list_launchers,
+    list_runtimes, remove_environment, remove_launcher, remove_runtime,
 };
 use ocm::types::{
     AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvironmentOptions,
-    InstallRuntimeOptions, RuntimeSourceKind,
+    ExportEnvironmentOptions, InstallRuntimeOptions, RuntimeSourceKind,
 };
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
@@ -260,4 +261,61 @@ fn environment_clone_copies_the_root_and_resets_identity_metadata() {
 
     let marker_raw = fs::read_to_string(target_root.join(".ocm-env.json")).unwrap();
     assert!(marker_raw.contains("\"name\": \"target\""));
+}
+
+#[test]
+fn environment_export_writes_a_portable_archive() {
+    let root = TestDir::new("store-env-export");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_runtime: Some("stable".to_string()),
+            default_launcher: Some("shell".to_string()),
+            protected: true,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = std::path::Path::new(&created.root);
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "hello export",
+    );
+
+    let summary = export_environment(
+        ExportEnvironmentOptions {
+            name: "source".to_string(),
+            output: Some("./archives/source-backup.tar".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(summary.name, "source");
+    assert!(
+        summary
+            .archive_path
+            .ends_with("/archives/source-backup.tar")
+    );
+
+    let extract_dir = root.child("extracted");
+    let extracted = extract_env_archive::<EnvArchiveManifest>(
+        std::path::Path::new(&summary.archive_path),
+        &extract_dir,
+    )
+    .unwrap();
+    assert_eq!(extracted.manifest.env.name, "source");
+    assert_eq!(extracted.manifest.env.gateway_port, Some(19789));
+    assert_eq!(
+        fs::read_to_string(extracted.root_dir.join(".openclaw/workspace/notes.txt")).unwrap(),
+        "hello export"
+    );
 }
