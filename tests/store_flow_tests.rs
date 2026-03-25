@@ -7,8 +7,9 @@ use ocm::paths::{env_meta_path, launcher_meta_path, runtime_install_root, runtim
 use ocm::store::{
     add_launcher, add_runtime, clone_environment, create_env_snapshot, create_environment,
     export_environment, get_env_snapshot, get_environment, get_launcher, get_runtime,
-    import_environment, install_runtime, list_environments, list_launchers, list_runtimes,
-    remove_environment, remove_launcher, remove_runtime,
+    import_environment, install_runtime, list_all_env_snapshots, list_env_snapshots,
+    list_environments, list_launchers, list_runtimes, remove_environment, remove_launcher,
+    remove_runtime,
 };
 use ocm::types::{
     AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvSnapshotOptions,
@@ -445,4 +446,71 @@ fn environment_snapshot_captures_a_named_point_in_time() {
         fs::read_to_string(extracted.root_dir.join(".openclaw/workspace/notes.txt")).unwrap(),
         "hello snapshot"
     );
+}
+
+#[test]
+fn environment_snapshot_listing_supports_env_scoped_and_global_views() {
+    let root = TestDir::new("store-env-snapshot-list");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    for name in ["alpha", "beta"] {
+        create_environment(
+            CreateEnvironmentOptions {
+                name: name.to_string(),
+                root: None,
+                gateway_port: None,
+                default_runtime: None,
+                default_launcher: None,
+                protected: false,
+            },
+            &env,
+            &cwd,
+        )
+        .unwrap();
+    }
+
+    let alpha_old = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "alpha".to_string(),
+            label: Some("old".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let alpha_new = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "alpha".to_string(),
+            label: Some("new".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let beta_snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "beta".to_string(),
+            label: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let alpha_snapshots = list_env_snapshots("alpha", &env, &cwd).unwrap();
+    assert_eq!(alpha_snapshots.len(), 2);
+    assert_eq!(alpha_snapshots[0].id, alpha_new.id);
+    assert_eq!(alpha_snapshots[1].id, alpha_old.id);
+
+    let all_snapshots = list_all_env_snapshots(&env, &cwd).unwrap();
+    assert_eq!(all_snapshots.len(), 3);
+    let ids = all_snapshots
+        .into_iter()
+        .map(|meta| meta.id)
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&alpha_old.id));
+    assert!(ids.contains(&alpha_new.id));
+    assert!(ids.contains(&beta_snapshot.id));
 }

@@ -23,7 +23,10 @@ pub use runtimes::{
     add_runtime, get_runtime, get_runtime_verified, install_runtime, install_runtime_from_release,
     install_runtime_from_url, list_runtimes, remove_runtime, runtime_integrity_issue,
 };
-pub use snapshots::{create_env_snapshot, get_env_snapshot, summarize_snapshot};
+pub use snapshots::{
+    create_env_snapshot, get_env_snapshot, list_all_env_snapshots, list_env_snapshots,
+    summarize_snapshot,
+};
 
 pub fn now_utc() -> OffsetDateTime {
     OffsetDateTime::now_utc()

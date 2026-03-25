@@ -4,11 +4,12 @@ use std::path::Path;
 
 use crate::archive::{ArchivedEnvMeta, EnvArchiveManifest, write_env_archive};
 use crate::paths::{
-    derive_env_paths, display_path, snapshot_archive_path, snapshot_meta_path, validate_name,
+    derive_env_paths, display_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
+    validate_name,
 };
 use crate::types::{CreateEnvSnapshotOptions, EnvSnapshotMeta, EnvSnapshotSummary};
 
-use super::common::{path_exists, read_json, write_json};
+use super::common::{load_json_files, path_exists, read_json, write_json};
 use super::{get_environment, now_utc};
 
 pub fn create_env_snapshot(
@@ -125,4 +126,51 @@ pub fn summarize_snapshot(meta: &EnvSnapshotMeta) -> EnvSnapshotSummary {
         protected: meta.protected,
         created_at: meta.created_at,
     }
+}
+
+pub fn list_env_snapshots(
+    env_name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<Vec<EnvSnapshotMeta>, String> {
+    let safe_env_name = validate_name(env_name, "Environment name")?;
+    let dir = snapshot_env_dir(&safe_env_name, env, cwd)?;
+    let files = load_json_files(&dir)?;
+    let mut out = Vec::with_capacity(files.len());
+    for file in files {
+        out.push(read_json(&file)?);
+    }
+    sort_snapshots(&mut out);
+    Ok(out)
+}
+
+pub fn list_all_env_snapshots(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<Vec<EnvSnapshotMeta>, String> {
+    let stores = super::ensure_store(env, cwd)?;
+    let mut out = Vec::new();
+    let entries = fs::read_dir(&stores.snapshots_dir).map_err(|error| error.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let files = load_json_files(&path)?;
+        for file in files {
+            out.push(read_json(&file)?);
+        }
+    }
+    sort_snapshots(&mut out);
+    Ok(out)
+}
+
+fn sort_snapshots(snapshots: &mut [EnvSnapshotMeta]) {
+    snapshots.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.id.cmp(&left.id))
+    });
 }
