@@ -297,3 +297,50 @@ fn runtime_install_force_replaces_an_existing_runtime_definition() {
         path_string(&expected_binary)
     )));
 }
+
+#[test]
+fn runtime_releases_lists_manifest_entries() {
+    let root = TestDir::new("runtime-releases");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let manifest_body = b"{\"releases\":[{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"https://example.test/openclaw-stable\",\"sha256\":\"abc123\"},{\"version\":\"0.3.0-dev\",\"channel\":\"nightly\",\"url\":\"https://example.test/openclaw-nightly\"}]}";
+    let server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body,
+    );
+    let env = ocm_env(&root);
+
+    let list = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "releases", "--manifest-url", &server.url()],
+    );
+    assert!(list.status.success(), "{}", stderr(&list));
+    let output = stdout(&list);
+    assert!(output.contains("0.2.0"));
+    assert!(output.contains("channel=stable"));
+    assert!(output.contains("sha256=abc123"));
+    assert!(output.contains("0.3.0-dev"));
+
+    let json_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body,
+    );
+    let json = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "releases",
+            "--manifest-url",
+            &json_server.url(),
+            "--json",
+        ],
+    );
+    assert!(json.status.success(), "{}", stderr(&json));
+    let json_output = stdout(&json);
+    assert!(json_output.contains("\"version\": \"0.2.0\""));
+    assert!(json_output.contains("\"channel\": \"stable\""));
+}
