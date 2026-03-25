@@ -1,8 +1,10 @@
 use std::fs::{self, File};
 use std::io;
+use std::io::Read;
 use std::path::Path;
 
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
 
 pub fn artifact_file_name_from_url(url: &str) -> Result<String, String> {
     let trimmed = url.trim();
@@ -56,4 +58,42 @@ fn open_url_reader(url: &str) -> Result<Box<dyn io::Read>, String> {
         .call()
         .map_err(|error| format!("failed to download runtime URL \"{trimmed}\": {error}"))?;
     Ok(Box::new(response.into_reader()))
+}
+
+pub fn file_sha256(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub fn normalize_sha256(expected: &str) -> Result<String, String> {
+    let value = expected.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Err("runtime artifact sha256 is required".to_string());
+    }
+    if value.len() != 64 || !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(format!("runtime artifact sha256 is invalid: {expected}"));
+    }
+    Ok(value)
+}
+
+pub fn verify_file_sha256(path: &Path, expected: &str) -> Result<String, String> {
+    let expected = normalize_sha256(expected)?;
+    let actual = file_sha256(path)?;
+    if actual != expected {
+        return Err(format!(
+            "runtime artifact sha256 mismatch: expected {expected}, got {actual}"
+        ));
+    }
+    Ok(actual)
 }
