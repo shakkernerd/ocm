@@ -31,12 +31,17 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains(
         "runtime install <name> (--path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force]"
     ));
+    assert!(
+        output
+            .contains("runtime update <name> [--version <version> | --channel <channel>] [--json]")
+    );
     assert!(output.contains(
         "runtime install stable --manifest-url https://example.test/openclaw-releases.json --version 0.2.0"
     ));
     assert!(output.contains(
         "runtime install stable --manifest-url https://example.test/openclaw-releases.json --channel stable"
     ));
+    assert!(output.contains("runtime update stable --version 0.3.0"));
     assert!(output.contains("runtime list [--json]"));
     assert!(output.contains("runtime show <name> [--json]"));
     assert!(output.contains("runtime verify (<name> | --all) [--json]"));

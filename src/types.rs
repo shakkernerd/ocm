@@ -266,3 +266,10 @@ pub struct InstallRuntimeFromReleaseOptions {
     pub description: Option<String>,
     pub force: bool,
 }
+
+#[derive(Clone, Debug)]
+pub struct UpdateRuntimeFromReleaseOptions {
+    pub name: String,
+    pub version: Option<String>,
+    pub channel: Option<String>,
+}

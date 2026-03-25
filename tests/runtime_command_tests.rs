@@ -372,6 +372,83 @@ fn runtime_list_surfaces_release_metadata_for_manifest_installs() {
 }
 
 #[test]
+fn runtime_update_reinstalls_a_manifest_backed_runtime_with_a_new_version() {
+    let root = TestDir::new("runtime-update-version");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let stable_body = b"runtime-v0.2.0";
+    let stable_digest_path = root.child("sha256/openclaw-0.2.0");
+    fs::create_dir_all(stable_digest_path.parent().unwrap()).unwrap();
+    fs::write(&stable_digest_path, stable_body).unwrap();
+    let stable_sha256 = file_sha256(&stable_digest_path).unwrap();
+
+    let next_body = b"runtime-v0.3.0";
+    let next_digest_path = root.child("sha256/openclaw-0.3.0");
+    fs::write(&next_digest_path, next_body).unwrap();
+    let next_sha256 = file_sha256(&next_digest_path).unwrap();
+
+    let stable_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-0.2.0",
+        "application/octet-stream",
+        stable_body,
+    );
+    let next_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-0.3.0",
+        "application/octet-stream",
+        next_body,
+    );
+    let manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}},{{\"version\":\"0.3.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+        stable_server.url(),
+        stable_sha256,
+        next_server.url(),
+        next_sha256
+    );
+    let manifest_server = TestHttpServer::serve_bytes_times(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body.as_bytes(),
+        2,
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--version",
+            "0.2.0",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let update = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "update", "stable", "--version", "0.3.0"],
+    );
+    assert!(update.status.success(), "{}", stderr(&update));
+    assert!(stdout(&update).contains("Updated runtime stable"));
+
+    let install_root = runtime_install_root("stable", &env, &cwd).unwrap();
+    let expected_binary = install_root.join("files/openclaw-0.3.0");
+    assert_eq!(fs::read(&expected_binary).unwrap(), next_body);
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let output = stdout(&show);
+    assert!(output.contains("releaseVersion: 0.3.0"));
+    assert!(output.contains("releaseChannel: stable"));
+    assert!(output.contains(&format!("sourceSha256: {next_sha256}")));
+}
+
+#[test]
 fn runtime_install_from_url_cleans_up_failed_install_roots_for_retry() {
     let root = TestDir::new("runtime-install-url-retry");
     let cwd = root.child("workspace");

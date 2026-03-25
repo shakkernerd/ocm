@@ -349,3 +349,53 @@ fn runtime_install_manifest_requires_a_selector_and_rejects_conflicting_sources(
             .contains("runtime install accepts only one of --path, --url, or --manifest-url")
     );
 }
+
+#[test]
+fn runtime_update_requires_a_selector_and_a_manifest_backed_runtime() {
+    let root = TestDir::new("cli-runtime-update-validation");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(bin_dir.join("stable"), "#!/bin/sh\n").unwrap();
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+
+    let missing_selector = run_ocm(&cwd, &env, &["runtime", "update", "stable"]);
+    assert_eq!(missing_selector.status.code(), Some(1));
+    assert!(stderr(&missing_selector).contains("runtime update requires --version or --channel"));
+
+    let conflicting = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "update",
+            "stable",
+            "--version",
+            "0.2.0",
+            "--channel",
+            "stable",
+        ],
+    );
+    assert_eq!(conflicting.status.code(), Some(1));
+    assert!(
+        stderr(&conflicting).contains("runtime update accepts only one of --version or --channel")
+    );
+
+    let missing_manifest = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "update", "stable", "--version", "0.2.0"],
+    );
+    assert_eq!(missing_manifest.status.code(), Some(1));
+    assert!(
+        stderr(&missing_manifest)
+            .contains("runtime \"stable\" is not backed by a release manifest")
+    );
+}

@@ -9,6 +9,7 @@ use crate::store::{
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
     InstallRuntimeOptions, RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeVerifySummary,
+    UpdateRuntimeFromReleaseOptions,
 };
 
 pub struct RuntimeService<'a> {
@@ -41,6 +42,39 @@ impl<'a> RuntimeService<'a> {
         options: InstallRuntimeFromReleaseOptions,
     ) -> Result<RuntimeMeta, String> {
         install_runtime_from_release(options, self.env, self.cwd)
+    }
+
+    pub fn update_from_release(
+        &self,
+        options: UpdateRuntimeFromReleaseOptions,
+    ) -> Result<RuntimeMeta, String> {
+        if options.version.is_some() && options.channel.is_some() {
+            return Err("runtime update accepts only one of --version or --channel".to_string());
+        }
+        if options.version.is_none() && options.channel.is_none() {
+            return Err("runtime update requires --version or --channel".to_string());
+        }
+
+        let existing = crate::store::get_runtime(&options.name, self.env, self.cwd)?;
+        let manifest_url = existing.source_manifest_url.ok_or_else(|| {
+            format!(
+                "runtime \"{}\" is not backed by a release manifest",
+                existing.name
+            )
+        })?;
+
+        install_runtime_from_release(
+            InstallRuntimeFromReleaseOptions {
+                name: existing.name,
+                manifest_url,
+                version: options.version,
+                channel: options.channel,
+                description: existing.description,
+                force: true,
+            },
+            self.env,
+            self.cwd,
+        )
     }
 
     pub fn list(&self) -> Result<Vec<RuntimeMeta>, String> {
