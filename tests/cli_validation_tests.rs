@@ -283,7 +283,7 @@ fn runtime_install_rejects_empty_and_conflicting_urls() {
 }
 
 #[test]
-fn runtime_install_manifest_requires_a_version_and_rejects_conflicting_sources() {
+fn runtime_install_manifest_requires_a_selector_and_rejects_conflicting_sources() {
     let root = TestDir::new("cli-runtime-install-manifest-validation");
     let cwd = root.child("workspace");
     let bin_dir = cwd.join("bin");
@@ -291,7 +291,7 @@ fn runtime_install_manifest_requires_a_version_and_rejects_conflicting_sources()
     fs::write(bin_dir.join("stable"), "#!/bin/sh\n").unwrap();
     let env = ocm_env(&root);
 
-    let missing_version = run_ocm(
+    let missing_selector = run_ocm(
         &cwd,
         &env,
         &[
@@ -302,10 +302,31 @@ fn runtime_install_manifest_requires_a_version_and_rejects_conflicting_sources()
             "https://example.test/releases.json",
         ],
     );
-    assert_eq!(missing_version.status.code(), Some(1));
     assert!(
-        stderr(&missing_version).contains("runtime install with --manifest-url requires --version")
+        stderr(&missing_selector)
+            .contains("runtime install with --manifest-url requires --version or --channel")
     );
+    assert_eq!(missing_selector.status.code(), Some(1));
+
+    let conflicting_selectors = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            "https://example.test/releases.json",
+            "--version",
+            "0.2.0",
+            "--channel",
+            "stable",
+        ],
+    );
+    assert_eq!(conflicting_selectors.status.code(), Some(1));
+    assert!(stderr(&conflicting_selectors).contains(
+        "runtime install with --manifest-url accepts only one of --version or --channel"
+    ));
 
     let conflicting = run_ocm(
         &cwd,

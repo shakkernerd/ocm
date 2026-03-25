@@ -249,6 +249,76 @@ fn runtime_install_from_manifest_version_downloads_and_records_release_metadata(
 }
 
 #[test]
+fn runtime_install_from_manifest_channel_selects_the_matching_release() {
+    let root = TestDir::new("runtime-install-manifest-channel");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let stable_body = b"stable-binary";
+    let stable_digest_path = root.child("sha256/openclaw-stable");
+    fs::create_dir_all(stable_digest_path.parent().unwrap()).unwrap();
+    fs::write(&stable_digest_path, stable_body).unwrap();
+    let stable_sha256 = file_sha256(&stable_digest_path).unwrap();
+
+    let nightly_body = b"nightly-binary";
+    let nightly_digest_path = root.child("sha256/openclaw-nightly");
+    fs::write(&nightly_digest_path, nightly_body).unwrap();
+    let nightly_sha256 = file_sha256(&nightly_digest_path).unwrap();
+
+    let stable_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-stable",
+        "application/octet-stream",
+        stable_body,
+    );
+    let nightly_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-nightly",
+        "application/octet-stream",
+        nightly_body,
+    );
+    let manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}},{{\"version\":\"0.3.0-dev\",\"channel\":\"nightly\",\"url\":\"{}\",\"sha256\":\"{}\",\"description\":\"nightly manifest runtime\"}}]}}",
+        stable_server.url(),
+        stable_sha256,
+        nightly_server.url(),
+        nightly_sha256
+    );
+    let manifest_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body.as_bytes(),
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "nightly",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--channel",
+            "nightly",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+    assert!(stdout(&install).contains("Installed runtime nightly"));
+
+    let install_root = runtime_install_root("nightly", &env, &cwd).unwrap();
+    let expected_binary = install_root.join("files/openclaw-nightly");
+    assert_eq!(fs::read(&expected_binary).unwrap(), nightly_body);
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "nightly"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_stdout = stdout(&show);
+    assert!(show_stdout.contains("releaseVersion: 0.3.0-dev"));
+    assert!(show_stdout.contains("releaseChannel: nightly"));
+    assert!(show_stdout.contains(&format!("sourceSha256: {nightly_sha256}")));
+    assert!(show_stdout.contains("description: nightly manifest runtime"));
+}
+
+#[test]
 fn runtime_install_from_url_cleans_up_failed_install_roots_for_retry() {
     let root = TestDir::new("runtime-install-url-retry");
     let cwd = root.child("workspace");
