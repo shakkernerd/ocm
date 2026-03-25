@@ -249,6 +249,7 @@ impl Cli {
     fn handle_env_export(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, output) = Self::consume_option(args, "--output")?;
+        let output = Self::require_option_value(output, "--output")?;
         let Some(name) = args.first() else {
             return Err("environment name is required".to_string());
         };
@@ -286,6 +287,7 @@ impl Cli {
         let (args, name) = Self::consume_option(args, "--name")?;
         let name = Self::require_option_value(name, "--name")?;
         let (args, root) = Self::consume_option(args, "--root")?;
+        let root = Self::require_option_value(root, "--root")?;
         let Some(archive) = args.first() else {
             return Err("archive path is required".to_string());
         };

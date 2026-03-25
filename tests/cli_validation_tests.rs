@@ -105,6 +105,45 @@ fn env_create_rejects_empty_and_unknown_launcher_values() {
 }
 
 #[test]
+fn env_export_requires_a_name_and_non_empty_output_values() {
+    let root = TestDir::new("cli-export-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing_name = run_ocm(&cwd, &env, &["env", "export"]);
+    assert_eq!(missing_name.status.code(), Some(1));
+    assert!(stderr(&missing_name).contains("environment name is required"));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let empty_output = run_ocm(&cwd, &env, &["env", "export", "demo", "--output="]);
+    assert_eq!(empty_output.status.code(), Some(1));
+    assert!(stderr(&empty_output).contains("--output requires a value"));
+}
+
+#[test]
+fn env_import_requires_an_archive_and_non_empty_option_values() {
+    let root = TestDir::new("cli-import-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing_archive = run_ocm(&cwd, &env, &["env", "import"]);
+    assert_eq!(missing_archive.status.code(), Some(1));
+    assert!(stderr(&missing_archive).contains("archive path is required"));
+
+    let empty_name = run_ocm(&cwd, &env, &["env", "import", "./demo.tar", "--name="]);
+    assert_eq!(empty_name.status.code(), Some(1));
+    assert!(stderr(&empty_name).contains("--name requires a value"));
+
+    let empty_root = run_ocm(&cwd, &env, &["env", "import", "./demo.tar", "--root="]);
+    assert_eq!(empty_root.status.code(), Some(1));
+    assert!(stderr(&empty_root).contains("--root requires a value"));
+}
+
+#[test]
 fn env_run_rejects_empty_and_unknown_launcher_overrides() {
     let root = TestDir::new("cli-run-launcher-validation");
     let cwd = root.child("workspace");
