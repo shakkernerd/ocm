@@ -319,6 +319,22 @@ fn env_doctor_requires_a_name() {
 }
 
 #[test]
+fn env_cleanup_requires_a_name() {
+    let root = TestDir::new("cli-env-cleanup-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing_name = run_ocm(&cwd, &env, &["env", "cleanup"]);
+    assert_eq!(missing_name.status.code(), Some(1));
+    assert!(stderr(&missing_name).contains("environment name is required"));
+
+    let extra = run_ocm(&cwd, &env, &["env", "cleanup", "demo", "extra"]);
+    assert_eq!(extra.status.code(), Some(1));
+    assert!(stderr(&extra).contains("unexpected arguments: extra"));
+}
+
+#[test]
 fn env_repair_marker_requires_a_name() {
     let root = TestDir::new("cli-env-repair-marker-validation");
     let cwd = root.child("workspace");
