@@ -163,6 +163,22 @@ fn default_runtime_source_kind() -> RuntimeSourceKind {
     RuntimeSourceKind::Registered
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeReleaseSelectorKind {
+    Version,
+    Channel,
+}
+
+impl RuntimeReleaseSelectorKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Version => "version",
+            Self::Channel => "channel",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeMeta {
@@ -183,6 +199,10 @@ pub struct RuntimeMeta {
     pub release_version: Option<String>,
     #[serde(default)]
     pub release_channel: Option<String>,
+    #[serde(default)]
+    pub release_selector_kind: Option<RuntimeReleaseSelectorKind>,
+    #[serde(default)]
+    pub release_selector_value: Option<String>,
     #[serde(default)]
     pub install_root: Option<String>,
     pub description: Option<String>,

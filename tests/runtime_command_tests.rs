@@ -245,6 +245,8 @@ fn runtime_install_from_manifest_version_downloads_and_records_release_metadata(
     assert!(show_stdout.contains(&format!("sourceSha256: {sha256}")));
     assert!(show_stdout.contains("releaseVersion: 0.2.0"));
     assert!(show_stdout.contains("releaseChannel: stable"));
+    assert!(show_stdout.contains("releaseSelectorKind: version"));
+    assert!(show_stdout.contains("releaseSelectorValue: 0.2.0"));
     assert!(show_stdout.contains("description: stable manifest runtime"));
 }
 
@@ -314,6 +316,8 @@ fn runtime_install_from_manifest_channel_selects_the_matching_release() {
     let show_stdout = stdout(&show);
     assert!(show_stdout.contains("releaseVersion: 0.3.0-dev"));
     assert!(show_stdout.contains("releaseChannel: nightly"));
+    assert!(show_stdout.contains("releaseSelectorKind: channel"));
+    assert!(show_stdout.contains("releaseSelectorValue: nightly"));
     assert!(show_stdout.contains(&format!("sourceSha256: {nightly_sha256}")));
     assert!(show_stdout.contains("description: nightly manifest runtime"));
 }

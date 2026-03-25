@@ -1038,6 +1038,15 @@ impl Cli {
         if let Some(release_channel) = meta.release_channel {
             lines.insert("releaseChannel".to_string(), release_channel);
         }
+        if let Some(release_selector_kind) = meta.release_selector_kind {
+            lines.insert(
+                "releaseSelectorKind".to_string(),
+                release_selector_kind.as_str().to_string(),
+            );
+        }
+        if let Some(release_selector_value) = meta.release_selector_value {
+            lines.insert("releaseSelectorValue".to_string(), release_selector_value);
+        }
         if let Some(install_root) = meta.install_root {
             lines.insert("installRoot".to_string(), install_root);
         }

@@ -15,7 +15,7 @@ use crate::paths::{
 use crate::releases::select_release;
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
-    InstallRuntimeOptions, RuntimeMeta, RuntimeSourceKind,
+    InstallRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind,
 };
 
 use super::common::{ensure_dir, load_json_files, path_exists, read_json, write_json};
@@ -37,6 +37,8 @@ fn build_installed_runtime_meta(
     source_sha256: Option<String>,
     release_version: Option<String>,
     release_channel: Option<String>,
+    release_selector_kind: Option<RuntimeReleaseSelectorKind>,
+    release_selector_value: Option<String>,
     description: Option<String>,
 ) -> RuntimeMeta {
     let created_at = now_utc();
@@ -51,6 +53,8 @@ fn build_installed_runtime_meta(
         source_sha256,
         release_version,
         release_channel,
+        release_selector_kind,
+        release_selector_value,
         install_root: Some(display_path(install_root)),
         description,
         created_at,
@@ -81,6 +85,8 @@ fn install_runtime_at_path(
     source_sha256: Option<String>,
     release_version: Option<String>,
     release_channel: Option<String>,
+    release_selector_kind: Option<RuntimeReleaseSelectorKind>,
+    release_selector_value: Option<String>,
     description: Option<String>,
 ) -> Result<RuntimeMeta, String> {
     if path_exists(&install_root) {
@@ -123,6 +129,8 @@ fn install_runtime_at_path(
             source_sha256,
             release_version,
             release_channel,
+            release_selector_kind,
+            release_selector_value,
             description,
         );
         write_json(&meta_path, &meta)?;
@@ -234,6 +242,8 @@ pub fn add_runtime(
         source_sha256: None,
         release_version: None,
         release_channel: None,
+        release_selector_kind: None,
+        release_selector_value: None,
         install_root: None,
         description,
         created_at,
@@ -309,6 +319,8 @@ pub fn install_runtime(
         None,
         None,
         None,
+        None,
+        None,
         trim_description(options.description),
     )
 }
@@ -336,6 +348,8 @@ pub fn install_runtime_from_url(
         None,
         None,
         None,
+        None,
+        None,
         trim_description(options.description),
     )
 }
@@ -349,6 +363,18 @@ pub fn install_runtime_from_release(
     let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
 
     let manifest = crate::releases::load_release_manifest(&options.manifest_url)?;
+    let (release_selector_kind, release_selector_value) =
+        match (options.version.as_deref(), options.channel.as_deref()) {
+            (Some(version), None) => (
+                Some(RuntimeReleaseSelectorKind::Version),
+                Some(version.trim().to_string()),
+            ),
+            (None, Some(channel)) => (
+                Some(RuntimeReleaseSelectorKind::Channel),
+                Some(channel.trim().to_string()),
+            ),
+            _ => (None, None),
+        };
     let release = select_release(
         &manifest,
         options.version.as_deref(),
@@ -372,6 +398,8 @@ pub fn install_runtime_from_release(
         release.sha256,
         Some(release.version),
         release.channel,
+        release_selector_kind,
+        release_selector_value,
         description,
     )
 }
