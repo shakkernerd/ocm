@@ -101,6 +101,14 @@ pub struct EnvDoctorSummary {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EnvMarkerRepairSummary {
+    pub env_name: String,
+    pub root: String,
+    pub marker_path: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeVerifySummary {
     pub name: String,
     pub binary_path: String,

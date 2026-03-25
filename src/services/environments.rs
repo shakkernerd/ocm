@@ -11,10 +11,10 @@ use crate::store::{
     clone_environment, create_env_snapshot, create_environment, export_environment,
     get_environment, get_launcher, get_runtime, get_runtime_verified, import_environment,
     list_all_env_snapshots, list_env_snapshots, list_environments, now_utc, remove_environment,
-    remove_env_snapshot, restore_env_snapshot, runtime_integrity_issue, save_environment,
-    select_prune_candidates, summarize_snapshot,
+    remove_env_snapshot, repair_environment_marker, restore_env_snapshot,
+    runtime_integrity_issue, save_environment, select_prune_candidates, summarize_snapshot,
 };
-use crate::types::{EnvDoctorSummary, EnvStatusSummary};
+use crate::types::{EnvDoctorSummary, EnvMarkerRepairSummary, EnvStatusSummary};
 use crate::types::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvExportSummary,
     EnvImportSummary, EnvMeta, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
@@ -147,6 +147,10 @@ impl<'a> EnvironmentService<'a> {
 
     pub fn remove(&self, name: &str, force: bool) -> Result<EnvMeta, String> {
         remove_environment(name, force, self.env, self.cwd)
+    }
+
+    pub fn repair_marker(&self, name: &str) -> Result<EnvMarkerRepairSummary, String> {
+        repair_environment_marker(name, self.env, self.cwd)
     }
 
     pub fn prune_candidates(&self, older_than_days: i64) -> Result<Vec<EnvMeta>, String> {

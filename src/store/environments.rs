@@ -10,7 +10,8 @@ use crate::paths::{
 };
 use crate::types::{
     CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
-    EnvMarker, EnvMeta, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    EnvMarker, EnvMarkerRepairSummary, EnvMeta, ExportEnvironmentOptions,
+    ImportEnvironmentOptions,
 };
 
 use super::common::{
@@ -61,6 +62,34 @@ pub fn save_environment(
     let path = env_meta_path(&meta.name, env, cwd)?;
     write_json(&path, &meta)?;
     Ok(meta)
+}
+
+pub fn repair_environment_marker(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMarkerRepairSummary, String> {
+    let meta = get_environment(name, env, cwd)?;
+    let paths = derive_env_paths(Path::new(&meta.root));
+    if !path_exists(&paths.root) {
+        return Err(format!(
+            "environment root does not exist: {}",
+            display_path(&paths.root)
+        ));
+    }
+
+    let marker = EnvMarker {
+        kind: "ocm-env-marker".to_string(),
+        name: meta.name.clone(),
+        created_at: now_utc(),
+    };
+    write_json(&paths.marker_path, &marker)?;
+
+    Ok(EnvMarkerRepairSummary {
+        env_name: meta.name,
+        root: meta.root,
+        marker_path: display_path(&paths.marker_path),
+    })
 }
 
 pub fn create_environment(

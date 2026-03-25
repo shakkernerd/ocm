@@ -9,7 +9,7 @@ use ocm::store::{
     export_environment, get_env_snapshot, get_environment, get_launcher, get_runtime,
     import_environment, install_runtime, list_all_env_snapshots, list_env_snapshots,
     list_environments, list_launchers, list_runtimes, remove_env_snapshot, remove_environment,
-    remove_launcher, remove_runtime, restore_env_snapshot,
+    remove_launcher, remove_runtime, repair_environment_marker, restore_env_snapshot,
 };
 use ocm::types::{
     AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvSnapshotOptions,
@@ -634,4 +634,39 @@ fn environment_snapshot_remove_deletes_snapshot_artifacts_and_metadata() {
     assert!(!std::path::Path::new(&removed.archive_path).exists());
     assert!(list_env_snapshots("source", &env, &cwd).unwrap().is_empty());
     assert!(!root.child("ocm-home/snapshots/source").exists());
+}
+
+#[test]
+fn environment_marker_repair_rewrites_the_marker_for_the_current_env_name() {
+    let root = TestDir::new("store-env-marker-repair");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let marker_path = std::path::Path::new(&created.root).join(".ocm-env.json");
+    fs::write(
+        &marker_path,
+        "{\n  \"kind\": \"ocm-env-marker\",\n  \"name\": \"other\",\n  \"createdAt\": \"2026-03-25T00:00:00Z\"\n}\n",
+    )
+    .unwrap();
+
+    let repaired = repair_environment_marker("source", &env, &cwd).unwrap();
+    assert_eq!(repaired.env_name, "source");
+    assert_eq!(repaired.marker_path, marker_path.display().to_string());
+
+    let marker_raw = fs::read_to_string(marker_path).unwrap();
+    assert!(marker_raw.contains("\"name\": \"source\""));
 }
