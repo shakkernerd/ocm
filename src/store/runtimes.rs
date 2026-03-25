@@ -4,14 +4,15 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::download::{artifact_file_name_from_url, download_to_file};
+use crate::download::{artifact_file_name_from_url, download_to_file, verify_file_sha256};
 use crate::paths::{
     clean_path, display_path, resolve_absolute_path, runtime_install_files_dir,
     runtime_install_root, runtime_meta_path, validate_name,
 };
+use crate::releases::select_release_by_version;
 use crate::types::{
-    AddRuntimeOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeMeta,
-    RuntimeSourceKind,
+    AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
+    InstallRuntimeOptions, RuntimeMeta, RuntimeSourceKind,
 };
 
 use super::common::{ensure_dir, load_json_files, path_exists, read_json, write_json};
@@ -93,6 +94,9 @@ fn install_runtime_at_path(
             (Some(source_path), _) => copy_installed_runtime_binary(source_path, &binary_path)?,
             (None, Some(source_url)) => {
                 download_to_file(source_url, &binary_path)?;
+                if let Some(source_sha256) = source_sha256.as_deref() {
+                    verify_file_sha256(&binary_path, source_sha256)?;
+                }
                 #[cfg(unix)]
                 {
                     let mut permissions = fs::metadata(&binary_path)
@@ -330,6 +334,42 @@ pub fn install_runtime_from_url(
         None,
         None,
         trim_description(options.description),
+    )
+}
+
+pub fn install_runtime_from_release(
+    options: InstallRuntimeFromReleaseOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<RuntimeMeta, String> {
+    let name = validate_name(&options.name, "Runtime name")?;
+    let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
+
+    let manifest = crate::releases::load_release_manifest(&options.manifest_url)?;
+    let version = options
+        .version
+        .as_deref()
+        .ok_or_else(|| "runtime release version is required".to_string())?;
+    let release = select_release_by_version(&manifest, version)?;
+    let description =
+        trim_description(options.description).or_else(|| trim_description(release.description));
+
+    let file_name = artifact_file_name_from_url(&release.url)?;
+    let install_root = runtime_install_root(&name, env, cwd)?;
+    let install_files = runtime_install_files_dir(&name, env, cwd)?;
+    install_runtime_at_path(
+        name,
+        meta_path,
+        install_root,
+        install_files,
+        Path::new(&file_name),
+        None,
+        Some(release.url),
+        Some(options.manifest_url),
+        release.sha256,
+        Some(release.version),
+        release.channel,
+        description,
     )
 }
 

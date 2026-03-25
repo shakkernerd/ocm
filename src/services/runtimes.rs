@@ -4,12 +4,12 @@ use std::path::Path;
 
 use crate::releases::load_release_manifest;
 use crate::store::{
-    add_runtime, get_runtime_verified, install_runtime, install_runtime_from_url, list_runtimes,
-    remove_runtime,
+    add_runtime, get_runtime_verified, install_runtime, install_runtime_from_release,
+    install_runtime_from_url, list_runtimes, remove_runtime,
 };
 use crate::types::{
-    AddRuntimeOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeBinarySummary,
-    RuntimeMeta, RuntimeRelease, RuntimeVerifySummary,
+    AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
+    InstallRuntimeOptions, RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeVerifySummary,
 };
 
 pub struct RuntimeService<'a> {
@@ -35,6 +35,13 @@ impl<'a> RuntimeService<'a> {
         options: InstallRuntimeFromUrlOptions,
     ) -> Result<RuntimeMeta, String> {
         install_runtime_from_url(options, self.env, self.cwd)
+    }
+
+    pub fn install_from_release(
+        &self,
+        options: InstallRuntimeFromReleaseOptions,
+    ) -> Result<RuntimeMeta, String> {
+        install_runtime_from_release(options, self.env, self.cwd)
     }
 
     pub fn list(&self) -> Result<Vec<RuntimeMeta>, String> {

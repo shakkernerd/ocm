@@ -254,3 +254,13 @@ pub struct InstallRuntimeFromUrlOptions {
     pub description: Option<String>,
     pub force: bool,
 }
+
+#[derive(Clone, Debug)]
+pub struct InstallRuntimeFromReleaseOptions {
+    pub name: String,
+    pub manifest_url: String,
+    pub version: Option<String>,
+    pub channel: Option<String>,
+    pub description: Option<String>,
+    pub force: bool,
+}

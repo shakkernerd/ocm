@@ -2,6 +2,7 @@ mod support;
 
 use std::fs;
 
+use ocm::download::file_sha256;
 use ocm::paths::runtime_install_root;
 
 use crate::support::{
@@ -185,6 +186,66 @@ fn runtime_install_from_url_downloads_into_the_managed_store() {
     assert!(show_stdout.contains("sourceKind: installed"));
     assert!(show_stdout.contains(&format!("sourceUrl: {}", server.url())));
     assert!(show_stdout.contains("description: downloaded runtime"));
+}
+
+#[test]
+fn runtime_install_from_manifest_version_downloads_and_records_release_metadata() {
+    let root = TestDir::new("runtime-install-manifest-version");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let artifact_body = b"release-binary";
+    let digest_path = root.child("sha256/openclaw-0.2.0");
+    fs::create_dir_all(digest_path.parent().unwrap()).unwrap();
+    fs::write(&digest_path, artifact_body).unwrap();
+    let sha256 = file_sha256(&digest_path).unwrap();
+
+    let artifact_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-0.2.0",
+        "application/octet-stream",
+        artifact_body,
+    );
+    let manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\",\"description\":\"stable manifest runtime\"}}]}}",
+        artifact_server.url(),
+        sha256
+    );
+    let manifest_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body.as_bytes(),
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--version",
+            "0.2.0",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+    assert!(stdout(&install).contains("Installed runtime stable"));
+
+    let install_root = runtime_install_root("stable", &env, &cwd).unwrap();
+    let expected_binary = install_root.join("files/openclaw-0.2.0");
+    assert_eq!(fs::read(&expected_binary).unwrap(), artifact_body);
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_stdout = stdout(&show);
+    assert!(show_stdout.contains("sourceKind: installed"));
+    assert!(show_stdout.contains(&format!("sourceManifestUrl: {}", manifest_server.url())));
+    assert!(show_stdout.contains(&format!("sourceSha256: {sha256}")));
+    assert!(show_stdout.contains("releaseVersion: 0.2.0"));
+    assert!(show_stdout.contains("releaseChannel: stable"));
+    assert!(show_stdout.contains("description: stable manifest runtime"));
 }
 
 #[test]

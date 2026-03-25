@@ -260,7 +260,7 @@ fn runtime_install_rejects_empty_and_conflicting_urls() {
 
     let missing = run_ocm(&cwd, &env, &["runtime", "install", "stable"]);
     assert_eq!(missing.status.code(), Some(1));
-    assert!(stderr(&missing).contains("runtime install requires --path or --url"));
+    assert!(stderr(&missing).contains("runtime install requires --path, --url, or --manifest-url"));
 
     let conflicting = run_ocm(
         &cwd,
@@ -276,5 +276,55 @@ fn runtime_install_rejects_empty_and_conflicting_urls() {
         ],
     );
     assert_eq!(conflicting.status.code(), Some(1));
-    assert!(stderr(&conflicting).contains("runtime install accepts only one of --path or --url"));
+    assert!(
+        stderr(&conflicting)
+            .contains("runtime install accepts only one of --path, --url, or --manifest-url")
+    );
+}
+
+#[test]
+fn runtime_install_manifest_requires_a_version_and_rejects_conflicting_sources() {
+    let root = TestDir::new("cli-runtime-install-manifest-validation");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(bin_dir.join("stable"), "#!/bin/sh\n").unwrap();
+    let env = ocm_env(&root);
+
+    let missing_version = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            "https://example.test/releases.json",
+        ],
+    );
+    assert_eq!(missing_version.status.code(), Some(1));
+    assert!(
+        stderr(&missing_version).contains("runtime install with --manifest-url requires --version")
+    );
+
+    let conflicting = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--path",
+            "./bin/stable",
+            "--manifest-url",
+            "https://example.test/releases.json",
+            "--version",
+            "0.2.0",
+        ],
+    );
+    assert_eq!(conflicting.status.code(), Some(1));
+    assert!(
+        stderr(&conflicting)
+            .contains("runtime install accepts only one of --path, --url, or --manifest-url")
+    );
 }

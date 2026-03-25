@@ -11,7 +11,8 @@ use crate::shell::{build_openclaw_env, render_init_script, render_use_script, re
 use crate::store::{ensure_store, summarize_env};
 use crate::types::{
     AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvironmentOptions,
-    EnvSummary, InstallRuntimeFromUrlOptions, InstallRuntimeOptions,
+    EnvSummary, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
+    InstallRuntimeOptions,
 };
 
 const VERSION: &str = "0.1.0";
@@ -60,7 +61,7 @@ impl Cli {
     fn render_help(&self) -> String {
         let cmd = self.command_example();
         format!(
-            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} init [zsh|bash|sh|fish]\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env clone <source> <target> [--root <path>] [--json]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env status <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime install <name> (--path <binary> | --url <url>) [--description <text>] [--force]\n  {cmd} runtime releases --manifest-url <url> [--json]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime verify (<name> | --all) [--json]\n  {cmd} runtime which <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} init\n  {cmd} init zsh\n  {cmd} init bash\n  {cmd} init fish\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} runtime install managed-stable --path ./target/debug/openclaw\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly --force\n  {cmd} runtime releases --manifest-url https://example.test/openclaw-releases.json --json\n  {cmd} runtime verify nightly --json\n  {cmd} runtime verify --all\n  {cmd} runtime which nightly --json\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env clone refactor-a refactor-b\n  {cmd} env status refactor-a --json\n  {cmd} env resolve refactor-a --json\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
+            "OpenClaw Manager (ocm)\n\nUsage:\n  {cmd} help\n  {cmd} --version\n  {cmd} init [zsh|bash|sh|fish]\n  {cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]\n  {cmd} env clone <source> <target> [--root <path>] [--json]\n  {cmd} env list [--json]\n  {cmd} env show <name> [--json]\n  {cmd} env status <name> [--json]\n  {cmd} env use <name> [--shell zsh|bash|sh|fish]\n  {cmd} env exec <name> -- <command...>\n  {cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]\n  {cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>\n  {cmd} env set-runtime <name> <runtime|none>\n  {cmd} env set-launcher <name> <launcher|none>\n  {cmd} env protect <name> <on|off>\n  {cmd} env remove <name> [--force]\n  {cmd} env prune [--older-than <days>] [--yes] [--json]\n  {cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>]\n  {cmd} launcher list [--json]\n  {cmd} launcher show <name> [--json]\n  {cmd} launcher remove <name>\n  {cmd} runtime add <name> --path <binary> [--description <text>]\n  {cmd} runtime install <name> (--path <binary> | --url <url> | --manifest-url <url> --version <version>) [--description <text>] [--force]\n  {cmd} runtime releases --manifest-url <url> [--json]\n  {cmd} runtime list [--json]\n  {cmd} runtime show <name> [--json]\n  {cmd} runtime verify (<name> | --all) [--json]\n  {cmd} runtime which <name> [--json]\n  {cmd} runtime remove <name>\n\nExamples:\n  {cmd} init\n  {cmd} init zsh\n  {cmd} init bash\n  {cmd} init fish\n  {cmd} launcher add stable --command openclaw\n  {cmd} runtime add stable --path /path/to/openclaw\n  {cmd} runtime install managed-stable --path ./target/debug/openclaw\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly\n  {cmd} runtime install nightly --url https://example.test/openclaw-nightly --force\n  {cmd} runtime install stable --manifest-url https://example.test/openclaw-releases.json --version 0.2.0\n  {cmd} runtime releases --manifest-url https://example.test/openclaw-releases.json --json\n  {cmd} runtime verify nightly --json\n  {cmd} runtime verify --all\n  {cmd} runtime which nightly --json\n  {cmd} env create refactor-a --runtime stable --launcher stable --port 19789\n  {cmd} env clone refactor-a refactor-b\n  {cmd} env status refactor-a --json\n  {cmd} env resolve refactor-a --json\n  eval \"$({cmd} env use refactor-a)\"\n  {cmd} env run refactor-a -- onboard\n  {cmd} env exec refactor-a -- openclaw gateway run --port 19789\n"
         )
     }
 
@@ -794,20 +795,47 @@ impl Cli {
         let path = Self::require_option_value(path, "--path")?;
         let (args, url) = Self::consume_option(args, "--url")?;
         let url = Self::require_option_value(url, "--url")?;
+        let (args, manifest_url) = Self::consume_option(args, "--manifest-url")?;
+        let manifest_url = Self::require_option_value(manifest_url, "--manifest-url")?;
+        let (args, version) = Self::consume_option(args, "--version")?;
+        let version = Self::require_option_value(version, "--version")?;
+        let (args, channel) = Self::consume_option(args, "--channel")?;
+        let channel = Self::require_option_value(channel, "--channel")?;
         let (args, description) = Self::consume_option(args, "--description")?;
         let Some(name) = args.first() else {
             return Err("runtime name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = match (path, url) {
-            (Some(path), None) => self.runtime_service().install(InstallRuntimeOptions {
+        let source_count = usize::from(path.is_some())
+            + usize::from(url.is_some())
+            + usize::from(manifest_url.is_some());
+        if source_count > 1 {
+            return Err(
+                "runtime install accepts only one of --path, --url, or --manifest-url".to_string(),
+            );
+        }
+        if manifest_url.is_none() {
+            if version.is_some() {
+                return Err(
+                    "runtime install only supports --version with --manifest-url".to_string(),
+                );
+            }
+            if channel.is_some() {
+                return Err(
+                    "runtime install only supports --channel with --manifest-url".to_string(),
+                );
+            }
+        }
+
+        let meta = match (path, url, manifest_url) {
+            (Some(path), None, None) => self.runtime_service().install(InstallRuntimeOptions {
                 name: name.clone(),
                 path,
                 description,
                 force,
             })?,
-            (None, Some(url)) => {
+            (None, Some(url), None) => {
                 self.runtime_service()
                     .install_from_url(InstallRuntimeFromUrlOptions {
                         name: name.clone(),
@@ -816,10 +844,32 @@ impl Cli {
                         force,
                     })?
             }
-            (Some(_), Some(_)) => {
-                return Err("runtime install accepts only one of --path or --url".to_string());
+            (None, None, Some(manifest_url)) => {
+                if version.is_none() {
+                    return Err(
+                        "runtime install with --manifest-url requires --version".to_string()
+                    );
+                }
+                if channel.is_some() {
+                    return Err(
+                        "runtime install with --manifest-url does not support --channel yet"
+                            .to_string(),
+                    );
+                }
+                self.runtime_service()
+                    .install_from_release(InstallRuntimeFromReleaseOptions {
+                        name: name.clone(),
+                        manifest_url,
+                        version,
+                        channel,
+                        description,
+                        force,
+                    })?
             }
-            (None, None) => return Err("runtime install requires --path or --url".to_string()),
+            (None, None, None) => {
+                return Err("runtime install requires --path, --url, or --manifest-url".to_string());
+            }
+            _ => unreachable!("source_count guards conflicting runtime install sources"),
         };
 
         if json_flag {
