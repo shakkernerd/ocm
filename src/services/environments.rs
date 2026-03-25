@@ -16,8 +16,8 @@ use crate::store::{
     select_snapshot_prune_candidates, summarize_snapshot,
 };
 use crate::types::{
-    EnvCleanupActionSummary, EnvCleanupSummary, EnvDoctorSummary, EnvMarkerRepairSummary,
-    EnvStatusSummary,
+    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
+    EnvMarkerRepairSummary, EnvStatusSummary,
 };
 use crate::types::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvExportSummary,
@@ -252,6 +252,14 @@ impl<'a> EnvironmentService<'a> {
             actions,
             Some(doctor_after),
         ))
+    }
+
+    pub fn cleanup_all_preview(&self) -> Result<EnvCleanupBatchSummary, String> {
+        self.cleanup_all_internal(false)
+    }
+
+    pub fn cleanup_all(&self) -> Result<EnvCleanupBatchSummary, String> {
+        self.cleanup_all_internal(true)
     }
 
     pub fn prune_candidates(&self, older_than_days: i64) -> Result<Vec<EnvMeta>, String> {
@@ -530,6 +538,32 @@ impl<'a> EnvironmentService<'a> {
                 })
             }
         }
+    }
+
+    fn cleanup_all_internal(&self, apply: bool) -> Result<EnvCleanupBatchSummary, String> {
+        let env_names = self
+            .list()?
+            .into_iter()
+            .map(|env| env.name)
+            .collect::<Vec<_>>();
+        let mut results = Vec::new();
+
+        for env_name in env_names {
+            let summary = if apply {
+                self.cleanup(&env_name)?
+            } else {
+                self.cleanup_preview(&env_name)?
+            };
+            if !summary.actions.is_empty() {
+                results.push(summary);
+            }
+        }
+
+        Ok(EnvCleanupBatchSummary {
+            apply,
+            count: results.len(),
+            results,
+        })
     }
 }
 

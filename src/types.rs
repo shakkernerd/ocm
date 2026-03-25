@@ -132,6 +132,14 @@ pub struct EnvCleanupSummary {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EnvCleanupBatchSummary {
+    pub apply: bool,
+    pub count: usize,
+    pub results: Vec<EnvCleanupSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeVerifySummary {
     pub name: String,
     pub binary_path: String,

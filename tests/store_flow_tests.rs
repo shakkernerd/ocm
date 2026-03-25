@@ -826,3 +826,53 @@ fn environment_cleanup_applies_marker_and_binding_repairs() {
             .any(|issue| issue.contains("has no default runtime or launcher"))
     );
 }
+
+#[test]
+fn environment_cleanup_all_limits_results_to_envs_with_safe_repairs() {
+    let root = TestDir::new("store-env-cleanup-all");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    create_environment(
+        CreateEnvironmentOptions {
+            name: "broken".to_string(),
+            root: None,
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    create_environment(
+        CreateEnvironmentOptions {
+            name: "healthy".to_string(),
+            root: None,
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    fs::remove_file(root.child("ocm-home/envs/broken/.ocm-env.json")).unwrap();
+
+    let service = EnvironmentService::new(&env, &cwd);
+    let preview = service.cleanup_all_preview().unwrap();
+    assert!(!preview.apply);
+    assert_eq!(preview.count, 1);
+    assert_eq!(preview.results.len(), 1);
+    assert_eq!(preview.results[0].env_name, "broken");
+
+    let applied = service.cleanup_all().unwrap();
+    assert!(applied.apply);
+    assert_eq!(applied.count, 1);
+    assert!(root.child("ocm-home/envs/broken/.ocm-env.json").exists());
+    assert!(root.child("ocm-home/envs/healthy/.ocm-env.json").exists());
+}
