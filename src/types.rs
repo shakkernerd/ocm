@@ -100,6 +100,18 @@ pub struct RuntimeVerifySummary {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeUpdateSummary {
+    pub name: String,
+    pub outcome: String,
+    pub binary_path: Option<String>,
+    pub source_kind: String,
+    pub release_version: Option<String>,
+    pub release_channel: Option<String>,
+    pub issue: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeBinarySummary {
     pub name: String,
     pub binary_path: String,

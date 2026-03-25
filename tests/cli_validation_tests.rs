@@ -416,4 +416,8 @@ fn runtime_update_requires_manifest_backing_and_rejects_ambiguous_defaults() {
     assert!(stderr(&ambiguous_default).contains(
         "runtime \"legacy\" does not have a stored release selector; pass --version or --channel"
     ));
+
+    let unexpected_name = run_ocm(&cwd, &env, &["runtime", "update", "--all", "stable"]);
+    assert_eq!(unexpected_name.status.code(), Some(1));
+    assert!(stderr(&unexpected_name).contains("unexpected arguments: stable"));
 }

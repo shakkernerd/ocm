@@ -4,6 +4,7 @@ use std::fs;
 
 use ocm::download::file_sha256;
 use ocm::paths::runtime_install_root;
+use serde_json::Value;
 
 use crate::support::{
     TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
@@ -602,6 +603,169 @@ fn runtime_update_without_arguments_reuses_the_stored_channel_selector() {
     assert!(output.contains("releaseChannel: stable"));
     assert!(output.contains("releaseSelectorKind: channel"));
     assert!(output.contains("releaseSelectorValue: stable"));
+}
+
+#[test]
+fn runtime_update_all_uses_stored_selectors_and_skips_registered_runtimes() {
+    let root = TestDir::new("runtime-update-all");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let external_path = bin_dir.join("external");
+    write_executable_script(&external_path, "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "external", "--path", "./bin/external"],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+
+    let pinned_body = b"runtime-v0.2.0";
+    let pinned_digest_path = root.child("sha256/openclaw-0.2.0");
+    fs::create_dir_all(pinned_digest_path.parent().unwrap()).unwrap();
+    fs::write(&pinned_digest_path, pinned_body).unwrap();
+    let pinned_sha256 = file_sha256(&pinned_digest_path).unwrap();
+
+    let pinned_next_body = b"runtime-v0.3.0";
+    let pinned_next_digest_path = root.child("sha256/openclaw-0.3.0");
+    fs::write(&pinned_next_digest_path, pinned_next_body).unwrap();
+    let pinned_next_sha256 = file_sha256(&pinned_next_digest_path).unwrap();
+
+    let pinned_server = TestHttpServer::serve_bytes_times(
+        "/artifacts/openclaw-0.2.0",
+        "application/octet-stream",
+        pinned_body,
+        2,
+    );
+    let pinned_next_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-0.3.0",
+        "application/octet-stream",
+        pinned_next_body,
+    );
+    let pinned_manifest_server = TestHttpServer::serve_bytes_sequence(
+        "/manifests/pinned.json",
+        "application/json",
+        vec![
+            format!(
+                "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+                pinned_server.url(),
+                pinned_sha256
+            )
+            .into_bytes(),
+            format!(
+                "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}},{{\"version\":\"0.3.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+                pinned_server.url(),
+                pinned_sha256,
+                pinned_next_server.url(),
+                pinned_next_sha256
+            )
+            .into_bytes(),
+        ],
+    );
+
+    let tracked_first_body = b"runtime-nightly-v0.2.0";
+    let tracked_first_digest_path = root.child("sha256/openclaw-nightly-0.2.0");
+    fs::write(&tracked_first_digest_path, tracked_first_body).unwrap();
+    let tracked_first_sha256 = file_sha256(&tracked_first_digest_path).unwrap();
+
+    let tracked_second_body = b"runtime-nightly-v0.3.0";
+    let tracked_second_digest_path = root.child("sha256/openclaw-nightly-0.3.0");
+    fs::write(&tracked_second_digest_path, tracked_second_body).unwrap();
+    let tracked_second_sha256 = file_sha256(&tracked_second_digest_path).unwrap();
+
+    let tracked_first_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-nightly-0.2.0",
+        "application/octet-stream",
+        tracked_first_body,
+    );
+    let tracked_second_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-nightly-0.3.0",
+        "application/octet-stream",
+        tracked_second_body,
+    );
+    let tracked_manifest_server = TestHttpServer::serve_bytes_sequence(
+        "/manifests/nightly.json",
+        "application/json",
+        vec![
+            format!(
+                "{{\"releases\":[{{\"version\":\"0.2.0-dev\",\"channel\":\"nightly\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+                tracked_first_server.url(),
+                tracked_first_sha256
+            )
+            .into_bytes(),
+            format!(
+                "{{\"releases\":[{{\"version\":\"0.3.0-dev\",\"channel\":\"nightly\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+                tracked_second_server.url(),
+                tracked_second_sha256
+            )
+            .into_bytes(),
+        ],
+    );
+
+    let install_pinned = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable-pinned",
+            "--manifest-url",
+            &pinned_manifest_server.url(),
+            "--version",
+            "0.2.0",
+        ],
+    );
+    assert!(
+        install_pinned.status.success(),
+        "{}",
+        stderr(&install_pinned)
+    );
+
+    let install_tracked = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "nightly",
+            "--manifest-url",
+            &tracked_manifest_server.url(),
+            "--channel",
+            "nightly",
+        ],
+    );
+    assert!(
+        install_tracked.status.success(),
+        "{}",
+        stderr(&install_tracked)
+    );
+
+    let update = run_ocm(&cwd, &env, &["runtime", "update", "--all", "--json"]);
+    assert!(update.status.success(), "{}", stderr(&update));
+    let value: Value = serde_json::from_str(&stdout(&update)).unwrap();
+    let array = value.as_array().unwrap();
+    assert_eq!(array.len(), 3);
+    assert!(array.iter().any(|item| {
+        item["name"] == "external"
+            && item["outcome"] == "skipped"
+            && item["issue"]
+                .as_str()
+                .unwrap()
+                .contains("not backed by a release manifest")
+    }));
+    assert!(array.iter().any(|item| {
+        item["name"] == "stable-pinned"
+            && item["outcome"] == "updated"
+            && item["releaseVersion"] == "0.2.0"
+    }));
+    assert!(array.iter().any(|item| {
+        item["name"] == "nightly"
+            && item["outcome"] == "updated"
+            && item["releaseVersion"] == "0.3.0-dev"
+            && item["releaseChannel"] == "nightly"
+    }));
 }
 
 #[test]

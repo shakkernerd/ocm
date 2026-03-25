@@ -8,8 +8,8 @@ use crate::store::{
 };
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
-    InstallRuntimeOptions, RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeVerifySummary,
-    UpdateRuntimeFromReleaseOptions,
+    InstallRuntimeOptions, RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeUpdateSummary,
+    RuntimeVerifySummary, UpdateRuntimeFromReleaseOptions,
 };
 
 pub struct RuntimeService<'a> {
@@ -116,6 +116,59 @@ impl<'a> RuntimeService<'a> {
     pub fn verify_all(&self) -> Result<Vec<RuntimeVerifySummary>, String> {
         let runtimes = list_runtimes(self.env, self.cwd)?;
         Ok(runtimes.into_iter().map(build_verify_summary).collect())
+    }
+
+    pub fn update_all_from_release(
+        &self,
+        version: Option<String>,
+        channel: Option<String>,
+    ) -> Result<Vec<RuntimeUpdateSummary>, String> {
+        if version.is_some() && channel.is_some() {
+            return Err("runtime update accepts only one of --version or --channel".to_string());
+        }
+
+        let runtimes = list_runtimes(self.env, self.cwd)?;
+        let mut out = Vec::with_capacity(runtimes.len());
+        for runtime in runtimes {
+            if runtime.source_manifest_url.is_none() {
+                out.push(RuntimeUpdateSummary {
+                    name: runtime.name,
+                    outcome: "skipped".to_string(),
+                    binary_path: Some(runtime.binary_path),
+                    source_kind: runtime.source_kind.as_str().to_string(),
+                    release_version: runtime.release_version,
+                    release_channel: runtime.release_channel,
+                    issue: Some("runtime is not backed by a release manifest".to_string()),
+                });
+                continue;
+            }
+
+            match self.update_from_release(UpdateRuntimeFromReleaseOptions {
+                name: runtime.name.clone(),
+                version: version.clone(),
+                channel: channel.clone(),
+            }) {
+                Ok(meta) => out.push(RuntimeUpdateSummary {
+                    name: meta.name,
+                    outcome: "updated".to_string(),
+                    binary_path: Some(meta.binary_path),
+                    source_kind: meta.source_kind.as_str().to_string(),
+                    release_version: meta.release_version,
+                    release_channel: meta.release_channel,
+                    issue: None,
+                }),
+                Err(error) => out.push(RuntimeUpdateSummary {
+                    name: runtime.name,
+                    outcome: "failed".to_string(),
+                    binary_path: Some(runtime.binary_path),
+                    source_kind: runtime.source_kind.as_str().to_string(),
+                    release_version: runtime.release_version,
+                    release_channel: runtime.release_channel,
+                    issue: Some(error),
+                }),
+            }
+        }
+        Ok(out)
     }
 
     pub fn which(&self, name: &str) -> Result<RuntimeBinarySummary, String> {
