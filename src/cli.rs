@@ -366,7 +366,9 @@ impl Cli {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, all) = Self::consume_flag(args, "--all");
         let env_name = if all {
-            Self::assert_no_extra_args(&args)?;
+            if !args.is_empty() {
+                return Err("env snapshot list accepts either <name> or --all".to_string());
+            }
             None
         } else {
             let Some(name) = args.first() else {

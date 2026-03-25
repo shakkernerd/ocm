@@ -144,6 +144,60 @@ fn env_import_requires_an_archive_and_non_empty_option_values() {
 }
 
 #[test]
+fn env_snapshot_create_requires_a_name_and_non_empty_label_values() {
+    let root = TestDir::new("cli-snapshot-create-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing_name = run_ocm(&cwd, &env, &["env", "snapshot", "create"]);
+    assert_eq!(missing_name.status.code(), Some(1));
+    assert!(stderr(&missing_name).contains("environment name is required"));
+
+    let empty_label = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "create", "demo", "--label="],
+    );
+    assert_eq!(empty_label.status.code(), Some(1));
+    assert!(stderr(&empty_label).contains("--label requires a value"));
+}
+
+#[test]
+fn env_snapshot_list_requires_a_name_or_all_and_rejects_conflicts() {
+    let root = TestDir::new("cli-snapshot-list-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing = run_ocm(&cwd, &env, &["env", "snapshot", "list"]);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(stderr(&missing).contains("environment name is required"));
+
+    let conflicting = run_ocm(&cwd, &env, &["env", "snapshot", "list", "demo", "--all"]);
+    assert_eq!(conflicting.status.code(), Some(1));
+    assert!(
+        stderr(&conflicting).contains("env snapshot list accepts either <name> or --all")
+    );
+}
+
+#[test]
+fn env_snapshot_restore_requires_both_name_and_snapshot_id() {
+    let root = TestDir::new("cli-snapshot-restore-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing_name = run_ocm(&cwd, &env, &["env", "snapshot", "restore"]);
+    assert_eq!(missing_name.status.code(), Some(1));
+    assert!(stderr(&missing_name).contains("environment name is required"));
+
+    let missing_snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "restore", "demo"]);
+    assert_eq!(missing_snapshot.status.code(), Some(1));
+    assert!(stderr(&missing_snapshot).contains("snapshot id is required"));
+}
+
+#[test]
 fn env_run_rejects_empty_and_unknown_launcher_overrides() {
     let root = TestDir::new("cli-run-launcher-validation");
     let cwd = root.child("workspace");
