@@ -1,3 +1,5 @@
+mod snapshots;
+
 use std::fs;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -8,22 +10,18 @@ use crate::execution::{
 };
 use crate::paths::{derive_env_paths, display_path};
 use crate::store::{
-    clone_environment, create_env_snapshot, create_environment, export_environment,
-    get_env_snapshot, get_environment, get_launcher, get_runtime, get_runtime_verified,
-    import_environment, list_all_env_snapshots, list_env_snapshots, list_environments, now_utc,
-    remove_environment, remove_env_snapshot, repair_environment_marker, restore_env_snapshot,
-    runtime_integrity_issue, save_environment, select_prune_candidates,
-    select_snapshot_prune_candidates, summarize_snapshot,
+    clone_environment, create_environment, export_environment, get_environment, get_launcher,
+    get_runtime, get_runtime_verified, import_environment, list_environments, now_utc,
+    remove_environment, repair_environment_marker, runtime_integrity_issue, save_environment,
+    select_prune_candidates,
 };
 use crate::types::{
     EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
     EnvMarkerRepairSummary, EnvStatusSummary,
 };
 use crate::types::{
-    CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvExportSummary,
-    EnvImportSummary, EnvMeta, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
-    EnvSnapshotSummary, ExecutionSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
-    RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions, EnvMarker,
+    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
+    EnvMeta, ExecutionSummary, ExportEnvironmentOptions, ImportEnvironmentOptions, EnvMarker,
 };
 
 pub enum ResolvedExecution {
@@ -78,84 +76,6 @@ impl<'a> EnvironmentService<'a> {
 
     pub fn import(&self, options: ImportEnvironmentOptions) -> Result<EnvImportSummary, String> {
         import_environment(options, self.env, self.cwd)
-    }
-
-    pub fn create_snapshot(
-        &self,
-        options: CreateEnvSnapshotOptions,
-    ) -> Result<EnvSnapshotSummary, String> {
-        let meta = create_env_snapshot(options, self.env, self.cwd)?;
-        Ok(summarize_snapshot(&meta))
-    }
-
-    pub fn list_snapshots(
-        &self,
-        env_name: Option<&str>,
-    ) -> Result<Vec<EnvSnapshotSummary>, String> {
-        let snapshots = match env_name {
-            Some(env_name) => list_env_snapshots(env_name, self.env, self.cwd)?,
-            None => list_all_env_snapshots(self.env, self.cwd)?,
-        };
-        Ok(snapshots.iter().map(summarize_snapshot).collect())
-    }
-
-    pub fn get_snapshot(
-        &self,
-        env_name: &str,
-        snapshot_id: &str,
-    ) -> Result<EnvSnapshotSummary, String> {
-        let snapshot = get_env_snapshot(env_name, snapshot_id, self.env, self.cwd)?;
-        Ok(summarize_snapshot(&snapshot))
-    }
-
-    pub fn restore_snapshot(
-        &self,
-        options: RestoreEnvSnapshotOptions,
-    ) -> Result<EnvSnapshotRestoreSummary, String> {
-        restore_env_snapshot(options, self.env, self.cwd)
-    }
-
-    pub fn remove_snapshot(
-        &self,
-        options: RemoveEnvSnapshotOptions,
-    ) -> Result<EnvSnapshotRemoveSummary, String> {
-        remove_env_snapshot(options, self.env, self.cwd)
-    }
-
-    pub fn prune_snapshot_candidates(
-        &self,
-        env_name: Option<&str>,
-        keep: Option<usize>,
-        older_than_days: Option<i64>,
-    ) -> Result<Vec<EnvSnapshotSummary>, String> {
-        let snapshots = match env_name {
-            Some(env_name) => list_env_snapshots(env_name, self.env, self.cwd)?,
-            None => list_all_env_snapshots(self.env, self.cwd)?,
-        };
-        let candidates =
-            select_snapshot_prune_candidates(&snapshots, keep, older_than_days, now_utc());
-        Ok(candidates.iter().map(summarize_snapshot).collect())
-    }
-
-    pub fn prune_snapshots(
-        &self,
-        env_name: Option<&str>,
-        keep: Option<usize>,
-        older_than_days: Option<i64>,
-    ) -> Result<Vec<EnvSnapshotRemoveSummary>, String> {
-        let candidates = self.prune_snapshot_candidates(env_name, keep, older_than_days)?;
-        let mut removed = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            removed.push(remove_env_snapshot(
-                RemoveEnvSnapshotOptions {
-                    env_name: candidate.env_name,
-                    snapshot_id: candidate.id,
-                },
-                self.env,
-                self.cwd,
-            )?);
-        }
-        Ok(removed)
     }
 
     pub fn list(&self) -> Result<Vec<EnvMeta>, String> {
