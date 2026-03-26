@@ -5,14 +5,12 @@ mod runtime;
 
 use std::collections::BTreeMap;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::paths::derive_env_paths;
 use crate::services::{EnvironmentService, LauncherService, RuntimeService};
-use crate::store::{ensure_store, summarize_env};
-use crate::types::EnvSummary;
+use crate::store::ensure_store;
 
 const VERSION: &str = "0.1.0";
 
@@ -150,112 +148,6 @@ impl Cli {
         }
         Self::assert_no_extra_args(&before[1..]).map_err(|_| message.to_string())?;
         Ok(())
-    }
-
-    fn handle_env_protect(&self, args: Vec<String>) -> Result<i32, String> {
-        if args.len() < 2 {
-            return Err(format!(
-                "usage: {} env protect <env> <on|off>",
-                self.command_example()
-            ));
-        }
-        let name = &args[0];
-        let value = args[1].trim().to_ascii_lowercase();
-        Self::assert_no_extra_args(&args[2..])?;
-        if value != "on" && value != "off" {
-            return Err("protection must be \"on\" or \"off\"".to_string());
-        }
-
-        let meta = self
-            .environment_service()
-            .set_protected(name, value == "on")?;
-        self.stdout_line(format!(
-            "Updated env {}: protected={}",
-            meta.name, meta.protected
-        ));
-        Ok(0)
-    }
-
-    fn handle_env_remove(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, force) = Self::consume_flag(args, "--force");
-        let Some(name) = args.first() else {
-            return Err("environment name is required".to_string());
-        };
-        Self::assert_no_extra_args(&args[1..])?;
-
-        let meta = self.environment_service().remove(name, force)?;
-        self.stdout_line(format!("Removed env {}", meta.name));
-        self.stdout_line(format!(
-            "  root: {}",
-            derive_env_paths(Path::new(&meta.root)).root.display()
-        ));
-        Ok(0)
-    }
-
-    fn handle_env_prune(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
-        let (args, yes) = Self::consume_flag(args, "--yes");
-        let (args, older_than_raw) = Self::consume_option(args, "--older-than")?;
-        Self::assert_no_extra_args(&args)?;
-
-        let older_than_days = match older_than_raw.as_deref() {
-            Some(raw) => Self::parse_positive_u32(raw, "--older-than")? as i64,
-            _ => 14,
-        };
-
-        let candidates = self
-            .environment_service()
-            .prune_candidates(older_than_days)?;
-
-        if !yes {
-            if json_flag {
-                let summaries = candidates.iter().map(summarize_env).collect::<Vec<_>>();
-                self.print_json(&serde_json::json!({
-                    "apply": false,
-                    "olderThanDays": older_than_days,
-                    "count": summaries.len(),
-                    "candidates": summaries,
-                }))?;
-                return Ok(0);
-            }
-
-            self.stdout_line(format!(
-                "Prune preview ({}d): {} candidate(s)",
-                older_than_days,
-                candidates.len()
-            ));
-            for meta in candidates {
-                self.stdout_line(format!(
-                    "  {}  {}",
-                    meta.name,
-                    derive_env_paths(Path::new(&meta.root)).root.display()
-                ));
-            }
-            self.stdout_line("Re-run with --yes to remove them.");
-            return Ok(0);
-        }
-
-        let mut removed = Vec::<EnvSummary>::new();
-        let removed_meta = self.environment_service().prune(older_than_days)?;
-        for meta in removed_meta {
-            removed.push(summarize_env(&meta));
-        }
-
-        if json_flag {
-            self.print_json(&serde_json::json!({
-                "apply": true,
-                "olderThanDays": older_than_days,
-                "count": removed.len(),
-                "removed": removed,
-            }))?;
-            return Ok(0);
-        }
-
-        self.stdout_line(format!("Pruned {} environment(s).", removed.len()));
-        for summary in removed {
-            self.stdout_line(format!("  {}  {}", summary.name, summary.root));
-        }
-        Ok(0)
     }
 
     pub fn run(&self, args: Vec<String>) -> i32 {
