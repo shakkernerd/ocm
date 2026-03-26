@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use ocm::archive::{EnvArchiveManifest, extract_env_archive, write_env_archive};
+use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive, write_env_archive};
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, write_text};
 

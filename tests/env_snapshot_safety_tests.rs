@@ -3,7 +3,7 @@ mod support;
 use std::fs;
 use std::path::Path;
 
-use ocm::archive::{EnvArchiveManifest, extract_env_archive, write_env_archive};
+use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive, write_env_archive};
 use ocm::store::list_env_snapshots;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr};

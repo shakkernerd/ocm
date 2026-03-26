@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use ocm::archive::{EnvArchiveManifest, extract_env_archive};
+use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive};
 use ocm::paths::{env_meta_path, launcher_meta_path, runtime_install_root, runtime_meta_path};
 use ocm::env::EnvironmentService;
 use ocm::store::{
