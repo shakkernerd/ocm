@@ -1,7 +1,8 @@
+use super::LauncherMeta;
 use std::path::{Path, PathBuf};
 
 use crate::infra::shell::quote_posix;
-use crate::types::{EnvMeta, LauncherMeta};
+use crate::types::EnvMeta;
 
 pub fn resolve_launcher_name(
     env_meta: &EnvMeta,
