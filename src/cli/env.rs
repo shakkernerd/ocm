@@ -6,10 +6,187 @@ use crate::runner::{run_direct, run_shell};
 use crate::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::store::summarize_env;
 use crate::types::{
-    CreateEnvSnapshotOptions, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
+    CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
+    ExportEnvironmentOptions, ImportEnvironmentOptions, RemoveEnvSnapshotOptions,
+    RestoreEnvSnapshotOptions,
 };
 
 impl Cli {
+    pub(super) fn handle_env_create(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, protect) = Self::consume_flag(args, "--protect");
+        let (args, root) = Self::consume_option(args, "--root")?;
+        let (args, port_raw) = Self::consume_option(args, "--port")?;
+        let gateway_port = match port_raw.as_deref() {
+            Some(raw) => Some(Self::parse_positive_u32(raw, "--port")?),
+            _ => None,
+        };
+        let (args, runtime_name) = Self::consume_option(args, "--runtime")?;
+        let runtime_name = Self::require_option_value(runtime_name, "--runtime")?;
+        let (args, launcher_name) = Self::consume_option(args, "--launcher")?;
+        let launcher_name = Self::require_option_value(launcher_name, "--launcher")?;
+
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = self
+            .environment_service()
+            .create(CreateEnvironmentOptions {
+                name: name.clone(),
+                root,
+                gateway_port,
+                default_runtime: runtime_name,
+                default_launcher: launcher_name,
+                protected: protect,
+            })?;
+
+        if json_flag {
+            self.print_json(&summarize_env(&meta))?;
+            return Ok(0);
+        }
+
+        let summary = summarize_env(&meta);
+        self.stdout_line(format!("Created env {}", summary.name));
+        self.stdout_line(format!("  root: {}", summary.root));
+        self.stdout_line(format!("  openclaw home: {}", summary.openclaw_home));
+        self.stdout_line(format!("  workspace: {}", summary.workspace_dir));
+        if let Some(port) = summary.gateway_port {
+            self.stdout_line(format!("  gateway port: {port}"));
+        }
+        if let Some(runtime) = summary.default_runtime.as_deref() {
+            self.stdout_line(format!("  runtime: {runtime}"));
+        }
+        if let Some(launcher) = summary.default_launcher.as_deref() {
+            self.stdout_line(format!("  launcher: {launcher}"));
+        }
+        self.stdout_line(format!(
+            "  activate: eval \"$({} env use {})\"",
+            self.command_example(),
+            summary.name
+        ));
+        Ok(0)
+    }
+
+    pub(super) fn handle_env_clone(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, root) = Self::consume_option(args, "--root")?;
+        let Some(source_name) = args.first() else {
+            return Err("source environment name is required".to_string());
+        };
+        let Some(target_name) = args.get(1) else {
+            return Err("target environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[2..])?;
+
+        let meta = self.environment_service().clone(CloneEnvironmentOptions {
+            source_name: source_name.clone(),
+            name: target_name.clone(),
+            root,
+        })?;
+
+        if json_flag {
+            self.print_json(&summarize_env(&meta))?;
+            return Ok(0);
+        }
+
+        let summary = summarize_env(&meta);
+        self.stdout_line(format!("Cloned env {} from {}", summary.name, source_name));
+        self.stdout_line(format!("  root: {}", summary.root));
+        self.stdout_line(format!("  openclaw home: {}", summary.openclaw_home));
+        self.stdout_line(format!("  workspace: {}", summary.workspace_dir));
+        self.stdout_line(format!(
+            "  activate: eval \"$({} env use {})\"",
+            self.command_example(),
+            summary.name
+        ));
+        Ok(0)
+    }
+
+    pub(super) fn handle_env_export(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, output) = Self::consume_option(args, "--output")?;
+        let output = Self::require_option_value(output, "--output")?;
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let summary = self
+            .environment_service()
+            .export(ExportEnvironmentOptions {
+                name: name.clone(),
+                output,
+            })?;
+
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_line(format!("Exported env {}", summary.name));
+        self.stdout_line(format!("  root: {}", summary.root));
+        self.stdout_line(format!("  archive: {}", summary.archive_path));
+        if let Some(runtime) = summary.default_runtime.as_deref() {
+            self.stdout_line(format!("  runtime: {runtime}"));
+        }
+        if let Some(launcher) = summary.default_launcher.as_deref() {
+            self.stdout_line(format!("  launcher: {launcher}"));
+        }
+        if summary.protected {
+            self.stdout_line("  protected: true");
+        }
+        Ok(0)
+    }
+
+    pub(super) fn handle_env_import(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, name) = Self::consume_option(args, "--name")?;
+        let name = Self::require_option_value(name, "--name")?;
+        let (args, root) = Self::consume_option(args, "--root")?;
+        let root = Self::require_option_value(root, "--root")?;
+        let Some(archive) = args.first() else {
+            return Err("archive path is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let summary = self
+            .environment_service()
+            .import(ImportEnvironmentOptions {
+                archive: archive.clone(),
+                name,
+                root,
+            })?;
+
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_line(format!(
+            "Imported env {} from {}",
+            summary.name, summary.source_name
+        ));
+        self.stdout_line(format!("  root: {}", summary.root));
+        self.stdout_line(format!("  archive: {}", summary.archive_path));
+        if let Some(runtime) = summary.default_runtime.as_deref() {
+            self.stdout_line(format!("  runtime: {runtime}"));
+        }
+        if let Some(launcher) = summary.default_launcher.as_deref() {
+            self.stdout_line(format!("  launcher: {launcher}"));
+        }
+        if summary.protected {
+            self.stdout_line("  protected: true");
+        }
+        self.stdout_line(format!(
+            "  activate: eval \"$({} env use {})\"",
+            self.command_example(),
+            summary.name
+        ));
+        Ok(0)
+    }
+
     pub(super) fn handle_env_doctor(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let Some(name) = args.first() else {
