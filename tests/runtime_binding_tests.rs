@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use ocm::paths::clean_path;
+use ocm::store::clean_path;
 
 use crate::support::{
     TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout, write_executable_script,

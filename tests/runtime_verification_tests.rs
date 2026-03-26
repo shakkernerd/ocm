@@ -3,7 +3,7 @@ mod support;
 use std::fs;
 
 use ocm::infra::download::file_sha256;
-use ocm::paths::runtime_install_root;
+use ocm::store::runtime_install_root;
 
 use crate::support::{TestDir, TestHttpServer, ocm_env, run_ocm, stderr, write_executable_script};
 

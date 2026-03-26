@@ -2,8 +2,8 @@ mod support;
 
 use std::fs;
 
-use ocm::paths::{clean_path, resolve_ocm_home, validate_name};
 use ocm::store::{add_launcher, add_runtime, clone_environment, create_environment};
+use ocm::store::{clean_path, resolve_ocm_home, validate_name};
 use ocm::types::{
     AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvironmentOptions,
 };

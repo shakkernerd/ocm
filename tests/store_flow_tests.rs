@@ -3,14 +3,14 @@ mod support;
 use std::fs;
 
 use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive};
-use ocm::paths::{env_meta_path, launcher_meta_path, runtime_install_root, runtime_meta_path};
 use ocm::env::EnvironmentService;
 use ocm::store::{
     add_launcher, add_runtime, clone_environment, create_env_snapshot, create_environment,
-    export_environment, get_env_snapshot, get_environment, get_launcher, get_runtime,
-    import_environment, install_runtime, list_all_env_snapshots, list_env_snapshots,
-    list_environments, list_launchers, list_runtimes, remove_env_snapshot, remove_environment,
-    remove_launcher, remove_runtime, repair_environment_marker, restore_env_snapshot,
+    env_meta_path, export_environment, get_env_snapshot, get_environment, get_launcher,
+    get_runtime, import_environment, install_runtime, launcher_meta_path,
+    list_all_env_snapshots, list_env_snapshots, list_environments, list_launchers,
+    list_runtimes, remove_env_snapshot, remove_environment, remove_launcher, remove_runtime,
+    repair_environment_marker, restore_env_snapshot, runtime_install_root, runtime_meta_path,
 };
 use ocm::types::{
     AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvSnapshotOptions,
