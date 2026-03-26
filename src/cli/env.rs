@@ -877,6 +877,36 @@ impl Cli {
             _ => Err(format!("unknown env snapshot command: {action}")),
         }
     }
+
+    pub(super) fn dispatch_env_command(
+        &self,
+        action: &str,
+        args: Vec<String>,
+    ) -> Result<i32, String> {
+        match action {
+            "create" => self.handle_env_create(args),
+            "clone" => self.handle_env_clone(args),
+            "export" => self.handle_env_export(args),
+            "import" => self.handle_env_import(args),
+            "snapshot" => self.dispatch_env_snapshot_command(args),
+            "list" => self.handle_env_list(args),
+            "show" => self.handle_env_show(args),
+            "status" => self.handle_env_status(args),
+            "doctor" => self.handle_env_doctor(args),
+            "cleanup" => self.handle_env_cleanup(args),
+            "repair-marker" => self.handle_env_repair_marker(args),
+            "use" => self.handle_env_use(args),
+            "exec" => self.handle_env_exec(args),
+            "resolve" => self.handle_env_resolve(args),
+            "run" => self.handle_env_run(args),
+            "set-runtime" => self.handle_env_set_runtime(args),
+            "set-launcher" => self.handle_env_set_launcher(args),
+            "protect" => self.handle_env_protect(args),
+            "remove" | "rm" => self.handle_env_remove(args),
+            "prune" => self.handle_env_prune(args),
+            _ => Err(format!("unknown env command: {action}")),
+        }
+    }
 }
 
 impl Cli {
