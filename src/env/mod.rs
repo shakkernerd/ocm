@@ -8,7 +8,9 @@ mod snapshots;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub use execution::ResolvedExecution;
+pub use execution::{
+    ExecutionBinding, ResolvedExecution, resolve_execution_binding, resolve_runtime_run_dir,
+};
 
 pub struct EnvironmentService<'a> {
     env: &'a BTreeMap<String, String>,

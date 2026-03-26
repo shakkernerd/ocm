@@ -1,8 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::EnvironmentService;
-use crate::execution::{ExecutionBinding, resolve_execution_binding};
+use super::{EnvironmentService, ExecutionBinding, resolve_execution_binding};
 use crate::paths::{derive_env_paths, display_path};
 use crate::store::{
     get_launcher, get_runtime, repair_environment_marker, runtime_integrity_issue, save_environment,

@@ -1,12 +1,53 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::EnvironmentService;
-use crate::execution::{
-    ExecutionBinding, resolve_execution_binding, resolve_runtime_run_dir,
-};
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
 use crate::store::{get_launcher, get_runtime_verified};
 use crate::types::{EnvMeta, ExecutionSummary};
+
+#[derive(Debug)]
+pub enum ExecutionBinding {
+    Launcher(String),
+    Runtime(String),
+}
+
+pub fn resolve_execution_binding(
+    env_meta: &EnvMeta,
+    runtime_override: Option<String>,
+    launcher_override: Option<String>,
+) -> Result<ExecutionBinding, String> {
+    let runtime_override = runtime_override.filter(|value| !value.trim().is_empty());
+    let launcher_override = launcher_override.filter(|value| !value.trim().is_empty());
+
+    if runtime_override.is_some() && launcher_override.is_some() {
+        return Err("env run accepts only one of --runtime or --launcher".to_string());
+    }
+
+    if let Some(runtime_name) = runtime_override {
+        return Ok(ExecutionBinding::Runtime(runtime_name));
+    }
+
+    if let Some(launcher_name) = launcher_override {
+        return Ok(ExecutionBinding::Launcher(launcher_name));
+    }
+
+    if let Some(runtime_name) = env_meta.default_runtime.clone() {
+        return Ok(ExecutionBinding::Runtime(runtime_name));
+    }
+
+    if let Some(launcher_name) = env_meta.default_launcher.clone() {
+        return Ok(ExecutionBinding::Launcher(launcher_name));
+    }
+
+    Err(format!(
+        "environment \"{}\" has no default runtime or launcher; use env set-runtime, env set-launcher, or pass --runtime/--launcher",
+        env_meta.name
+    ))
+}
+
+pub fn resolve_runtime_run_dir(fallback_cwd: &Path) -> PathBuf {
+    fallback_cwd.to_path_buf()
+}
 
 pub enum ResolvedExecution {
     Launcher {
