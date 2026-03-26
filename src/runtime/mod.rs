@@ -1,3 +1,4 @@
+mod install;
 mod registry;
 mod releases;
 mod verify;
