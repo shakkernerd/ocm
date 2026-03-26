@@ -1,8 +1,8 @@
+use super::{AddLauncherOptions, LauncherMeta};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::store::{add_launcher, get_launcher, list_launchers, remove_launcher};
-use crate::types::{AddLauncherOptions, LauncherMeta};
 
 pub struct LauncherService<'a> {
     env: &'a BTreeMap<String, String>,

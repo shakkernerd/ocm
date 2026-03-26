@@ -137,19 +137,7 @@ pub struct EnvCleanupBatchSummary {
     pub count: usize,
     pub results: Vec<EnvCleanupSummary>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LauncherMeta {
-    pub kind: String,
-    pub name: String,
-    pub command: String,
-    pub cwd: Option<String>,
-    pub description: Option<String>,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
-    pub updated_at: OffsetDateTime,
-}
+pub use crate::launcher::{AddLauncherOptions, LauncherMeta};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -294,12 +282,4 @@ pub struct RestoreEnvSnapshotOptions {
 pub struct RemoveEnvSnapshotOptions {
     pub env_name: String,
     pub snapshot_id: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct AddLauncherOptions {
-    pub name: String,
-    pub command: String,
-    pub cwd: Option<String>,
-    pub description: Option<String>,
 }

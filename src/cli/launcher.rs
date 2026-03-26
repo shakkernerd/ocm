@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::types::AddLauncherOptions;
+use crate::launcher::AddLauncherOptions;
 
 use super::Cli;
 

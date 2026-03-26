@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::types::{AddLauncherOptions, LauncherMeta};
+use crate::launcher::{AddLauncherOptions, LauncherMeta};
 
 use super::common::{load_json_files, path_exists, read_json, write_json};
 use super::layout::{display_path, launcher_meta_path, resolve_absolute_path, validate_name};
