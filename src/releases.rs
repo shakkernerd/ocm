@@ -78,6 +78,24 @@ pub fn select_release(
     }
 }
 
+pub fn query_releases(
+    manifest: &RuntimeReleaseManifest,
+    version: Option<&str>,
+    channel: Option<&str>,
+) -> Result<Vec<RuntimeRelease>, String> {
+    let version = version.map(str::trim).filter(|value| !value.is_empty());
+    let channel = channel.map(str::trim).filter(|value| !value.is_empty());
+
+    match (version, channel) {
+        (None, None) => Ok(manifest.releases.clone()),
+        (Some(version), None) => Ok(vec![select_release_by_version(manifest, version)?]),
+        (None, Some(channel)) => Ok(vec![select_release_by_channel(manifest, channel)?]),
+        (Some(_), Some(_)) => {
+            Err("runtime release selection accepts only one of --version or --channel".to_string())
+        }
+    }
+}
+
 fn validate_release(mut release: RuntimeRelease) -> Result<RuntimeRelease, String> {
     let version = release.version.trim();
     if version.is_empty() {
