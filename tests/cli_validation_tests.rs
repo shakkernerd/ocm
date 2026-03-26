@@ -347,6 +347,37 @@ fn env_cleanup_rejects_mixed_name_and_all_scope() {
 }
 
 #[test]
+fn runtime_releases_requires_manifest_url_and_non_conflicting_selectors() {
+    let root = TestDir::new("cli-runtime-releases-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing_manifest = run_ocm(&cwd, &env, &["runtime", "releases"]);
+    assert_eq!(missing_manifest.status.code(), Some(1));
+    assert!(stderr(&missing_manifest).contains("runtime releases requires --manifest-url"));
+
+    let conflicting = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "releases",
+            "--manifest-url",
+            "https://example.test/releases.json",
+            "--version",
+            "0.2.0",
+            "--channel",
+            "stable",
+        ],
+    );
+    assert_eq!(conflicting.status.code(), Some(1));
+    assert!(
+        stderr(&conflicting).contains("runtime releases accepts only one of --version or --channel")
+    );
+}
+
+#[test]
 fn env_repair_marker_requires_a_name() {
     let root = TestDir::new("cli-env-repair-marker-validation");
     let cwd = root.child("workspace");

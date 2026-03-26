@@ -1436,6 +1436,9 @@ impl Cli {
         let manifest_url = Self::require_option_value(manifest_url, "--manifest-url")?;
         Self::assert_no_extra_args(&args)?;
 
+        if manifest_url.is_none() {
+            return Err("runtime releases requires --manifest-url".to_string());
+        }
         if version.is_some() && channel.is_some() {
             return Err(
                 "runtime releases accepts only one of --version or --channel".to_string(),
