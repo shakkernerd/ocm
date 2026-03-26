@@ -4,6 +4,7 @@ use std::fs;
 
 use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive};
 use ocm::env::EnvironmentService;
+use ocm::launcher::AddLauncherOptions;
 use ocm::runtime::{AddRuntimeOptions, InstallRuntimeOptions, RuntimeSourceKind};
 use ocm::store::{
     add_launcher, add_runtime, clone_environment, create_env_snapshot, create_environment,
@@ -14,7 +15,7 @@ use ocm::store::{
     repair_environment_marker, restore_env_snapshot, runtime_install_root, runtime_meta_path,
 };
 use ocm::types::{
-    AddLauncherOptions, CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
+    CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
     ExportEnvironmentOptions, ImportEnvironmentOptions, RemoveEnvSnapshotOptions,
     RestoreEnvSnapshotOptions,
 };
