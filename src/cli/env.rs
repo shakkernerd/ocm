@@ -1,4 +1,7 @@
 use super::Cli;
+use crate::paths::validate_name;
+use crate::runner::{run_direct, run_shell};
+use crate::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::types::{
     CreateEnvSnapshotOptions, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
 };
@@ -301,5 +304,169 @@ impl Cli {
             "prune" => self.handle_env_snapshot_prune(args[1..].to_vec()),
             _ => Err(format!("unknown env snapshot command: {action}")),
         }
+    }
+}
+
+impl Cli {
+    pub(super) fn handle_env_use(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, shell_name) = Self::consume_option(args, "--shell")?;
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = self.environment_service().touch(name)?;
+        let shell = resolve_shell_name(shell_name.as_deref(), &self.env);
+        print!("{}", render_use_script(&meta, &shell));
+        Ok(0)
+    }
+
+    pub(super) fn handle_env_exec(&self, args: Vec<String>) -> Result<i32, String> {
+        let (before, after) = Self::split_on_double_dash(&args);
+        let Some(name) = before.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_command_separator(&before, "env exec requires -- before the command")?;
+        if after.is_empty() {
+            return Err("env exec requires a command after --".to_string());
+        }
+
+        let meta = self.environment_service().touch(name)?;
+        run_direct(
+            &after[0],
+            &after[1..],
+            &build_openclaw_env(&meta, &self.env),
+            &self.cwd,
+        )
+    }
+
+    pub(super) fn handle_env_resolve(&self, args: Vec<String>) -> Result<i32, String> {
+        let (before, after) = Self::split_on_double_dash(&args);
+        let (before, json_flag) = Self::consume_flag(before, "--json");
+        let (before, runtime_override) = Self::consume_option(before, "--runtime")?;
+        let runtime_override = Self::require_option_value(runtime_override, "--runtime")?;
+        let (before, launcher_override) = Self::consume_option(before, "--launcher")?;
+        let launcher_override = Self::require_option_value(launcher_override, "--launcher")?;
+        let Some(name) = before.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&before[1..])?;
+
+        let summary = self
+            .environment_service()
+            .resolve(name, runtime_override, launcher_override, &after)?
+            .into_summary();
+
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_line(format!("envName: {}", summary.env_name));
+        self.stdout_line(format!("bindingKind: {}", summary.binding_kind));
+        self.stdout_line(format!("bindingName: {}", summary.binding_name));
+        if let Some(command) = summary.command {
+            self.stdout_line(format!("command: {command}"));
+        }
+        if let Some(binary_path) = summary.binary_path {
+            self.stdout_line(format!("binaryPath: {binary_path}"));
+        }
+        if !summary.forwarded_args.is_empty() {
+            self.stdout_line(format!(
+                "forwardedArgs: {}",
+                summary.forwarded_args.join(" ")
+            ));
+        }
+        self.stdout_line(format!("runDir: {}", summary.run_dir));
+        Ok(0)
+    }
+
+    pub(super) fn handle_env_run(&self, args: Vec<String>) -> Result<i32, String> {
+        let (before, after) = Self::split_on_double_dash(&args);
+        let (before, runtime_override) = Self::consume_option(before, "--runtime")?;
+        let runtime_override = Self::require_option_value(runtime_override, "--runtime")?;
+        let (before, launcher_override) = Self::consume_option(before, "--launcher")?;
+        let launcher_override = Self::require_option_value(launcher_override, "--launcher")?;
+        let Some(name) = before.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_command_separator(&before, "env run requires -- before OpenClaw arguments")?;
+
+        let resolved = self.environment_service().resolve_run(
+            name,
+            runtime_override,
+            launcher_override,
+            &after,
+        )?;
+        match resolved {
+            crate::services::ResolvedExecution::Launcher {
+                env,
+                command,
+                run_dir,
+                ..
+            } => run_shell(&command, &build_openclaw_env(&env, &self.env), &run_dir),
+            crate::services::ResolvedExecution::Runtime {
+                env,
+                binary_path,
+                args,
+                run_dir,
+                ..
+            } => run_direct(
+                &binary_path,
+                &args,
+                &build_openclaw_env(&env, &self.env),
+                &run_dir,
+            ),
+        }
+    }
+
+    pub(super) fn handle_env_set_runtime(&self, args: Vec<String>) -> Result<i32, String> {
+        if args.len() < 2 {
+            return Err(format!(
+                "usage: {} env set-runtime <env> <runtime|none>",
+                self.command_example()
+            ));
+        }
+        let name = &args[0];
+        let runtime_name = &args[1];
+        Self::assert_no_extra_args(&args[2..])?;
+
+        let validated = if runtime_name.eq_ignore_ascii_case("none") {
+            runtime_name.to_string()
+        } else {
+            validate_name(runtime_name, "Runtime name")?
+        };
+        let meta = self.environment_service().set_runtime(name, &validated)?;
+        let default_runtime = meta.default_runtime.unwrap_or_else(|| "none".to_string());
+        self.stdout_line(format!(
+            "Updated env {}: defaultRuntime={default_runtime}",
+            meta.name
+        ));
+        Ok(0)
+    }
+
+    pub(super) fn handle_env_set_launcher(&self, args: Vec<String>) -> Result<i32, String> {
+        if args.len() < 2 {
+            return Err(format!(
+                "usage: {} env set-launcher <env> <launcher|none>",
+                self.command_example()
+            ));
+        }
+        let name = &args[0];
+        let launcher_name = &args[1];
+        Self::assert_no_extra_args(&args[2..])?;
+
+        let validated = if launcher_name.eq_ignore_ascii_case("none") {
+            launcher_name.to_string()
+        } else {
+            validate_name(launcher_name, "Launcher name")?
+        };
+        let meta = self.environment_service().set_launcher(name, &validated)?;
+        let default_launcher = meta.default_launcher.unwrap_or_else(|| "none".to_string());
+        self.stdout_line(format!(
+            "Updated env {}: defaultLauncher={default_launcher}",
+            meta.name
+        ));
+        Ok(0)
     }
 }
