@@ -1,4 +1,4 @@
-use crate::download::fetch_json;
+use crate::infra::download::fetch_json;
 use crate::types::{RuntimeRelease, RuntimeReleaseManifest};
 
 pub fn load_release_manifest(url: &str) -> Result<RuntimeReleaseManifest, String> {

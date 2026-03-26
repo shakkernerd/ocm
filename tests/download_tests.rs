@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use ocm::download::{
+use ocm::infra::download::{
     artifact_file_name_from_url, download_to_file, fetch_json, file_sha256, normalize_sha256,
     verify_file_sha256,
 };

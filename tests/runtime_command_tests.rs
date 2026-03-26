@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use ocm::download::file_sha256;
+use ocm::infra::download::file_sha256;
 use ocm::paths::runtime_install_root;
 use serde_json::Value;
 

@@ -1,5 +1,4 @@
 pub mod cli;
-pub mod download;
 pub mod env;
 pub mod infra;
 pub mod launcher;
