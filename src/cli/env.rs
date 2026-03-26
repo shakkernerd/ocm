@@ -1001,13 +1001,13 @@ impl Cli {
             &after,
         )?;
         match resolved {
-            crate::services::ResolvedExecution::Launcher {
+            crate::env::ResolvedExecution::Launcher {
                 env,
                 command,
                 run_dir,
                 ..
             } => run_shell(&command, &build_openclaw_env(&env, &self.env), &run_dir),
-            crate::services::ResolvedExecution::Runtime {
+            crate::env::ResolvedExecution::Runtime {
                 env,
                 binary_path,
                 args,
