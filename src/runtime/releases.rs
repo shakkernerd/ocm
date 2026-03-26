@@ -1,6 +1,5 @@
-use super::RuntimeService;
+use super::{RuntimeRelease, RuntimeReleaseManifest, RuntimeService};
 use crate::infra::download::fetch_json;
-use crate::types::{RuntimeRelease, RuntimeReleaseManifest};
 
 pub fn load_release_manifest(url: &str) -> Result<RuntimeReleaseManifest, String> {
     let manifest: RuntimeReleaseManifest = fetch_json(url)?;

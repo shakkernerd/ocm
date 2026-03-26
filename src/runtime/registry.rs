@@ -1,11 +1,9 @@
+use super::{AddRuntimeOptions, RuntimeMeta};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::store::{
     add_runtime, get_runtime_verified, list_runtimes, remove_runtime,
-};
-use crate::types::{
-    AddRuntimeOptions, RuntimeMeta,
 };
 
 pub struct RuntimeService<'a> {

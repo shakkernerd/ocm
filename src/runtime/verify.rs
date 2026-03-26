@@ -1,6 +1,5 @@
-use super::RuntimeService;
+use super::{RuntimeBinarySummary, RuntimeMeta, RuntimeService, RuntimeVerifySummary};
 use crate::store::{get_runtime, get_runtime_verified, list_runtimes, runtime_integrity_issue};
-use crate::types::{RuntimeBinarySummary, RuntimeMeta, RuntimeVerifySummary};
 
 impl<'a> RuntimeService<'a> {
     pub fn verify(&self, name: &str) -> Result<RuntimeVerifySummary, String> {

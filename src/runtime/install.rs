@@ -1,9 +1,9 @@
-use super::RuntimeService;
-use crate::store::{get_runtime, install_runtime, install_runtime_from_release, install_runtime_from_url, list_runtimes};
-use crate::types::{
+use super::{
     InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions,
-    RuntimeMeta, RuntimeUpdateBatchSummary, RuntimeUpdateSummary, UpdateRuntimeFromReleaseOptions,
+    RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService, RuntimeUpdateBatchSummary,
+    RuntimeUpdateSummary, UpdateRuntimeFromReleaseOptions,
 };
+use crate::store::{get_runtime, install_runtime, install_runtime_from_release, install_runtime_from_url, list_runtimes};
 
 impl<'a> RuntimeService<'a> {
     pub fn install(&self, options: InstallRuntimeOptions) -> Result<RuntimeMeta, String> {
@@ -46,10 +46,10 @@ impl<'a> RuntimeService<'a> {
                 existing.release_selector_kind.clone(),
                 existing.release_selector_value.clone(),
             ) {
-                (Some(crate::types::RuntimeReleaseSelectorKind::Version), Some(value)) => {
+                (Some(RuntimeReleaseSelectorKind::Version), Some(value)) => {
                     (Some(value), None)
                 }
-                (Some(crate::types::RuntimeReleaseSelectorKind::Channel), Some(value)) => {
+                (Some(RuntimeReleaseSelectorKind::Channel), Some(value)) => {
                     (None, Some(value))
                 }
                 _ => {
