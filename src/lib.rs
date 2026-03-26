@@ -2,6 +2,7 @@ pub mod archive;
 pub mod cli;
 pub mod download;
 pub mod execution;
+pub mod launcher;
 pub mod paths;
 pub mod releases;
 pub mod runner;
