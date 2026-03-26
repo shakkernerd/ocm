@@ -6,6 +6,7 @@ pub mod launcher;
 pub mod paths;
 pub mod releases;
 pub mod runner;
+pub mod runtime;
 pub mod services;
 pub mod shell;
 pub mod store;
