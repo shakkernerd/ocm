@@ -637,12 +637,13 @@ fn runtime_update_all_uses_stored_selectors_and_skips_registered_runtimes() {
         "/artifacts/openclaw-0.2.0",
         "application/octet-stream",
         pinned_body,
-        2,
+        3,
     );
-    let pinned_next_server = TestHttpServer::serve_bytes(
+    let pinned_next_server = TestHttpServer::serve_bytes_times(
         "/artifacts/openclaw-0.3.0",
         "application/octet-stream",
         pinned_next_body,
+        2,
     );
     let pinned_manifest_server = TestHttpServer::serve_bytes_sequence(
         "/manifests/pinned.json",
@@ -652,6 +653,14 @@ fn runtime_update_all_uses_stored_selectors_and_skips_registered_runtimes() {
                 "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
                 pinned_server.url(),
                 pinned_sha256
+            )
+            .into_bytes(),
+            format!(
+                "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}},{{\"version\":\"0.3.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+                pinned_server.url(),
+                pinned_sha256,
+                pinned_next_server.url(),
+                pinned_next_sha256
             )
             .into_bytes(),
             format!(
@@ -680,10 +689,11 @@ fn runtime_update_all_uses_stored_selectors_and_skips_registered_runtimes() {
         "application/octet-stream",
         tracked_first_body,
     );
-    let tracked_second_server = TestHttpServer::serve_bytes(
+    let tracked_second_server = TestHttpServer::serve_bytes_times(
         "/artifacts/openclaw-nightly-0.3.0",
         "application/octet-stream",
         tracked_second_body,
+        2,
     );
     let tracked_manifest_server = TestHttpServer::serve_bytes_sequence(
         "/manifests/nightly.json",
@@ -693,6 +703,12 @@ fn runtime_update_all_uses_stored_selectors_and_skips_registered_runtimes() {
                 "{{\"releases\":[{{\"version\":\"0.2.0-dev\",\"channel\":\"nightly\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
                 tracked_first_server.url(),
                 tracked_first_sha256
+            )
+            .into_bytes(),
+            format!(
+                "{{\"releases\":[{{\"version\":\"0.3.0-dev\",\"channel\":\"nightly\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+                tracked_second_server.url(),
+                tracked_second_sha256
             )
             .into_bytes(),
             format!(
@@ -745,7 +761,11 @@ fn runtime_update_all_uses_stored_selectors_and_skips_registered_runtimes() {
     let update = run_ocm(&cwd, &env, &["runtime", "update", "--all", "--json"]);
     assert!(update.status.success(), "{}", stderr(&update));
     let value: Value = serde_json::from_str(&stdout(&update)).unwrap();
-    let array = value.as_array().unwrap();
+    assert_eq!(value["count"], 3);
+    assert_eq!(value["updated"], 2);
+    assert_eq!(value["skipped"], 1);
+    assert_eq!(value["failed"], 0);
+    let array = value["results"].as_array().unwrap();
     assert_eq!(array.len(), 3);
     assert!(array.iter().any(|item| {
         item["name"] == "external"
@@ -766,6 +786,14 @@ fn runtime_update_all_uses_stored_selectors_and_skips_registered_runtimes() {
             && item["releaseVersion"] == "0.3.0-dev"
             && item["releaseChannel"] == "nightly"
     }));
+
+    let update_plain = run_ocm(&cwd, &env, &["runtime", "update", "--all"]);
+    assert!(update_plain.status.success(), "{}", stderr(&update_plain));
+    let plain_output = stdout(&update_plain);
+    assert!(plain_output.contains("Runtime update summary: total=3 updated=2 skipped=1 failed=0"));
+    assert!(plain_output.contains("external  outcome=skipped"));
+    assert!(plain_output.contains("stable-pinned  outcome=updated"));
+    assert!(plain_output.contains("nightly  outcome=updated"));
 }
 
 #[test]

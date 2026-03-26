@@ -1492,7 +1492,7 @@ impl Cli {
             };
 
             if json_flag {
-                self.print_json(&batch.results)?;
+                self.print_json(&batch)?;
                 return Ok(code);
             }
 
@@ -1501,6 +1501,10 @@ impl Cli {
                 return Ok(code);
             }
 
+            self.stdout_line(format!(
+                "Runtime update summary: total={} updated={} skipped={} failed={}",
+                batch.count, batch.updated, batch.skipped, batch.failed
+            ));
             for summary in batch.results {
                 let mut bits = vec![
                     summary.name,
