@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::shell::quote_posix;
+use crate::infra::shell::quote_posix;
 use crate::types::{EnvMeta, LauncherMeta};
 
 pub fn resolve_launcher_name(

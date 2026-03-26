@@ -1,4 +1,4 @@
-use crate::shell::{render_init_script, resolve_shell_name};
+use crate::infra::shell::{render_init_script, resolve_shell_name};
 
 use super::Cli;
 

@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::Cli;
+use crate::infra::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::paths::{derive_env_paths, validate_name};
 use crate::runner::{run_direct, run_shell};
-use crate::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::store::summarize_env;
 use crate::types::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
