@@ -4,17 +4,17 @@ use std::path::Path;
 use crate::releases::{load_release_manifest, query_releases};
 use crate::store::{
     add_runtime, get_runtime_verified, install_runtime, install_runtime_from_release,
-    install_runtime_from_url, list_runtimes, remove_runtime, runtime_integrity_issue,
+    install_runtime_from_url, list_runtimes, remove_runtime,
 };
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
-    InstallRuntimeOptions, RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeUpdateSummary,
-    RuntimeUpdateBatchSummary, RuntimeVerifySummary, UpdateRuntimeFromReleaseOptions,
+    InstallRuntimeOptions, RuntimeMeta, RuntimeRelease, RuntimeUpdateSummary,
+    RuntimeUpdateBatchSummary, UpdateRuntimeFromReleaseOptions,
 };
 
 pub struct RuntimeService<'a> {
-    env: &'a BTreeMap<String, String>,
-    cwd: &'a Path,
+    pub(super) env: &'a BTreeMap<String, String>,
+    pub(super) cwd: &'a Path,
 }
 
 impl<'a> RuntimeService<'a> {
@@ -114,16 +114,6 @@ impl<'a> RuntimeService<'a> {
         get_runtime_verified(name, self.env, self.cwd)
     }
 
-    pub fn verify(&self, name: &str) -> Result<RuntimeVerifySummary, String> {
-        let meta = crate::store::get_runtime(name, self.env, self.cwd)?;
-        Ok(build_verify_summary(meta))
-    }
-
-    pub fn verify_all(&self) -> Result<Vec<RuntimeVerifySummary>, String> {
-        let runtimes = list_runtimes(self.env, self.cwd)?;
-        Ok(runtimes.into_iter().map(build_verify_summary).collect())
-    }
-
     pub fn update_all_from_release(
         &self,
         version: Option<String>,
@@ -186,36 +176,7 @@ impl<'a> RuntimeService<'a> {
         })
     }
 
-    pub fn which(&self, name: &str) -> Result<RuntimeBinarySummary, String> {
-        let meta = get_runtime_verified(name, self.env, self.cwd)?;
-        Ok(RuntimeBinarySummary {
-            name: meta.name,
-            binary_path: meta.binary_path,
-            source_kind: meta.source_kind.as_str().to_string(),
-            release_version: meta.release_version,
-            release_channel: meta.release_channel,
-        })
-    }
-
     pub fn remove(&self, name: &str) -> Result<RuntimeMeta, String> {
         remove_runtime(name, self.env, self.cwd)
-    }
-}
-
-fn build_verify_summary(meta: RuntimeMeta) -> RuntimeVerifySummary {
-    let issue = runtime_integrity_issue(&meta);
-    RuntimeVerifySummary {
-        name: meta.name,
-        binary_path: meta.binary_path,
-        source_kind: meta.source_kind.as_str().to_string(),
-        source_path: meta.source_path,
-        source_url: meta.source_url,
-        source_manifest_url: meta.source_manifest_url,
-        source_sha256: meta.source_sha256,
-        release_version: meta.release_version,
-        release_channel: meta.release_channel,
-        install_root: meta.install_root,
-        healthy: issue.is_none(),
-        issue,
     }
 }
