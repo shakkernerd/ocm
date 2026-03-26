@@ -8,11 +8,11 @@ use crate::infra::download::{
     artifact_file_name_from_url, download_to_file, file_sha256, normalize_sha256,
     verify_file_sha256,
 };
-use crate::runtime::releases::{load_release_manifest, select_release};
-use crate::types::{
+use crate::runtime::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
     InstallRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind,
 };
+use crate::runtime::releases::{load_release_manifest, select_release};
 
 use super::layout::{
     clean_path, display_path, resolve_absolute_path, runtime_install_files_dir,

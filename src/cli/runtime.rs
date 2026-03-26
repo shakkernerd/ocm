@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::types::{
+use crate::runtime::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
     InstallRuntimeOptions, UpdateRuntimeFromReleaseOptions,
 };
