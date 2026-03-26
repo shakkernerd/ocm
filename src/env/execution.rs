@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use super::EnvironmentService;
 use crate::execution::{
-    ExecutionBinding, build_launcher_command, resolve_execution_binding, resolve_launcher_run_dir,
-    resolve_runtime_run_dir,
+    ExecutionBinding, resolve_execution_binding, resolve_runtime_run_dir,
 };
+use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
 use crate::store::{get_launcher, get_runtime_verified};
 use crate::types::{EnvMeta, ExecutionSummary};
 
