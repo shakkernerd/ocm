@@ -1,5 +1,5 @@
 mod common;
-mod environments;
+mod envs;
 mod layout;
 mod launchers;
 mod prune;
@@ -19,7 +19,7 @@ pub use layout::{
     resolve_user_home, runtime_install_files_dir, runtime_install_root, runtime_meta_path,
     snapshot_archive_path, snapshot_env_dir, snapshot_meta_path, validate_name,
 };
-pub use environments::{
+pub use envs::{
     clone_environment, create_environment, export_environment, get_environment,
     import_environment, list_environments, remove_environment, repair_environment_marker,
     save_environment,
