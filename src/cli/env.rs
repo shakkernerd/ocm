@@ -1,12 +1,154 @@
+use std::collections::BTreeMap;
+
 use super::Cli;
 use crate::paths::validate_name;
 use crate::runner::{run_direct, run_shell};
 use crate::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
+use crate::store::summarize_env;
 use crate::types::{
     CreateEnvSnapshotOptions, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
 };
 
 impl Cli {
+    pub(super) fn handle_env_list(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        Self::assert_no_extra_args(&args)?;
+
+        let envs = self.environment_service().list()?;
+        let summaries = envs.iter().map(summarize_env).collect::<Vec<_>>();
+        if json_flag {
+            self.print_json(&summaries)?;
+            return Ok(0);
+        }
+        if summaries.is_empty() {
+            self.stdout_line("No environments.");
+            return Ok(0);
+        }
+        for summary in summaries {
+            let mut bits = vec![summary.name, summary.root];
+            if let Some(runtime) = summary.default_runtime {
+                bits.push(format!("runtime={runtime}"));
+            }
+            if let Some(launcher) = summary.default_launcher {
+                bits.push(format!("launcher={launcher}"));
+            }
+            if let Some(port) = summary.gateway_port {
+                bits.push(format!("port={port}"));
+            }
+            if summary.protected {
+                bits.push("protected".to_string());
+            }
+            self.stdout_line(bits.join("  "));
+        }
+        Ok(0)
+    }
+
+    pub(super) fn handle_env_show(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = self.environment_service().get(name)?;
+        let summary = summarize_env(&meta);
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        let mut lines = BTreeMap::new();
+        lines.insert("name".to_string(), summary.name);
+        lines.insert("root".to_string(), summary.root);
+        lines.insert("openclawHome".to_string(), summary.openclaw_home);
+        lines.insert("stateDir".to_string(), summary.state_dir);
+        lines.insert("configPath".to_string(), summary.config_path);
+        lines.insert("workspaceDir".to_string(), summary.workspace_dir);
+        lines.insert("protected".to_string(), summary.protected.to_string());
+        lines.insert(
+            "createdAt".to_string(),
+            summary
+                .created_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|error| error.to_string())?,
+        );
+        if let Some(port) = summary.gateway_port {
+            lines.insert("gatewayPort".to_string(), port.to_string());
+        }
+        if let Some(runtime) = summary.default_runtime {
+            lines.insert("defaultRuntime".to_string(), runtime);
+        }
+        if let Some(launcher) = summary.default_launcher {
+            lines.insert("defaultLauncher".to_string(), launcher);
+        }
+        if let Some(last_used_at) = summary.last_used_at {
+            lines.insert(
+                "lastUsedAt".to_string(),
+                last_used_at
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+
+        for (key, value) in lines {
+            self.stdout_line(format!("{key}: {value}"));
+        }
+        Ok(0)
+    }
+
+    pub(super) fn handle_env_status(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let status = self.environment_service().status(name)?;
+        if json_flag {
+            self.print_json(&status)?;
+            return Ok(0);
+        }
+        self.stdout_line(format!("envName: {}", status.env_name));
+        self.stdout_line(format!("root: {}", status.root));
+        if let Some(runtime) = status.default_runtime {
+            self.stdout_line(format!("defaultRuntime: {runtime}"));
+        }
+        if let Some(launcher) = status.default_launcher {
+            self.stdout_line(format!("defaultLauncher: {launcher}"));
+        }
+        if let Some(kind) = status.resolved_kind {
+            self.stdout_line(format!("resolvedKind: {kind}"));
+        }
+        if let Some(name) = status.resolved_name {
+            self.stdout_line(format!("resolvedName: {name}"));
+        }
+        if let Some(binary_path) = status.binary_path {
+            self.stdout_line(format!("binaryPath: {binary_path}"));
+        }
+        if let Some(command) = status.command {
+            self.stdout_line(format!("command: {command}"));
+        }
+        if let Some(run_dir) = status.run_dir {
+            self.stdout_line(format!("runDir: {run_dir}"));
+        }
+        if let Some(source_kind) = status.runtime_source_kind {
+            self.stdout_line(format!("runtimeSourceKind: {source_kind}"));
+        }
+        if let Some(release_version) = status.runtime_release_version {
+            self.stdout_line(format!("runtimeReleaseVersion: {release_version}"));
+        }
+        if let Some(release_channel) = status.runtime_release_channel {
+            self.stdout_line(format!("runtimeReleaseChannel: {release_channel}"));
+        }
+        if let Some(runtime_health) = status.runtime_health {
+            self.stdout_line(format!("runtimeHealth: {runtime_health}"));
+        }
+        if let Some(issue) = status.issue {
+            self.stdout_line(format!("issue: {issue}"));
+        }
+        Ok(0)
+    }
+
     fn handle_env_snapshot_create(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, label) = Self::consume_option(args, "--label")?;
