@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::paths::derive_env_paths;
+use crate::store::derive_env_paths;
 use crate::types::EnvMeta;
 
 pub fn quote_posix(value: &str) -> String {
