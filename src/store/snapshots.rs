@@ -4,10 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::archive::{ArchivedEnvMeta, EnvArchiveManifest, extract_env_archive, write_env_archive};
-use crate::paths::{
-    derive_env_paths, display_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
-    validate_name,
-};
 use crate::types::{
     CreateEnvSnapshotOptions, EnvMarker, EnvMeta, EnvSnapshotMeta, EnvSnapshotRemoveSummary,
     EnvSnapshotRestoreSummary, EnvSnapshotSummary, RemoveEnvSnapshotOptions,
@@ -15,6 +11,10 @@ use crate::types::{
 };
 use time::{Duration, OffsetDateTime};
 
+use super::layout::{
+    derive_env_paths, display_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
+    validate_name,
+};
 use super::common::{copy_dir_recursive, load_json_files, path_exists, read_json, write_json};
 use super::{get_environment, now_utc, save_environment};
 

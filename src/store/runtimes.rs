@@ -8,16 +8,16 @@ use crate::download::{
     artifact_file_name_from_url, download_to_file, file_sha256, normalize_sha256,
     verify_file_sha256,
 };
-use crate::paths::{
-    clean_path, display_path, resolve_absolute_path, runtime_install_files_dir,
-    runtime_install_root, runtime_meta_path, validate_name,
-};
 use crate::releases::select_release;
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
     InstallRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind,
 };
 
+use super::layout::{
+    clean_path, display_path, resolve_absolute_path, runtime_install_files_dir,
+    runtime_install_root, runtime_meta_path, validate_name,
+};
 use super::common::{ensure_dir, load_json_files, path_exists, read_json, write_json};
 use super::now_utc;
 

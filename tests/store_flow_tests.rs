@@ -4,7 +4,7 @@ use std::fs;
 
 use ocm::archive::{EnvArchiveManifest, extract_env_archive};
 use ocm::paths::{env_meta_path, launcher_meta_path, runtime_install_root, runtime_meta_path};
-use ocm::services::EnvironmentService;
+use ocm::env::EnvironmentService;
 use ocm::store::{
     add_launcher, add_runtime, clone_environment, create_env_snapshot, create_environment,
     export_environment, get_env_snapshot, get_environment, get_launcher, get_runtime,
