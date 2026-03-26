@@ -1482,26 +1482,26 @@ impl Cli {
         let channel = Self::require_option_value(channel, "--channel")?;
         if all_flag {
             Self::assert_no_extra_args(&args)?;
-            let summaries = self
+            let batch = self
                 .runtime_service()
                 .update_all_from_release(version, channel)?;
-            let code = if summaries.iter().any(|summary| summary.outcome == "failed") {
+            let code = if batch.failed > 0 {
                 1
             } else {
                 0
             };
 
             if json_flag {
-                self.print_json(&summaries)?;
+                self.print_json(&batch.results)?;
                 return Ok(code);
             }
 
-            if summaries.is_empty() {
+            if batch.results.is_empty() {
                 self.stdout_line("No runtimes.");
                 return Ok(code);
             }
 
-            for summary in summaries {
+            for summary in batch.results {
                 let mut bits = vec![
                     summary.name,
                     format!("outcome={}", summary.outcome),

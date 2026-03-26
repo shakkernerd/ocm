@@ -9,7 +9,7 @@ use crate::store::{
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
     InstallRuntimeOptions, RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeUpdateSummary,
-    RuntimeVerifySummary, UpdateRuntimeFromReleaseOptions,
+    RuntimeUpdateBatchSummary, RuntimeVerifySummary, UpdateRuntimeFromReleaseOptions,
 };
 
 pub struct RuntimeService<'a> {
@@ -128,7 +128,7 @@ impl<'a> RuntimeService<'a> {
         &self,
         version: Option<String>,
         channel: Option<String>,
-    ) -> Result<Vec<RuntimeUpdateSummary>, String> {
+    ) -> Result<RuntimeUpdateBatchSummary, String> {
         if version.is_some() && channel.is_some() {
             return Err("runtime update accepts only one of --version or --channel".to_string());
         }
@@ -174,7 +174,16 @@ impl<'a> RuntimeService<'a> {
                 }),
             }
         }
-        Ok(out)
+        let updated = out.iter().filter(|summary| summary.outcome == "updated").count();
+        let skipped = out.iter().filter(|summary| summary.outcome == "skipped").count();
+        let failed = out.iter().filter(|summary| summary.outcome == "failed").count();
+        Ok(RuntimeUpdateBatchSummary {
+            count: out.len(),
+            updated,
+            skipped,
+            failed,
+            results: out,
+        })
     }
 
     pub fn which(&self, name: &str) -> Result<RuntimeBinarySummary, String> {

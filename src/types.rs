@@ -169,6 +169,16 @@ pub struct RuntimeUpdateSummary {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeUpdateBatchSummary {
+    pub count: usize,
+    pub updated: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub results: Vec<RuntimeUpdateSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeBinarySummary {
     pub name: String,
     pub binary_path: String,
