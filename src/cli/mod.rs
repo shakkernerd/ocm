@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::services::{EnvironmentService, LauncherService, RuntimeService};
+use crate::launcher::LauncherService;
+use crate::services::{EnvironmentService, RuntimeService};
 use crate::store::ensure_store;
 
 const VERSION: &str = "0.1.0";
