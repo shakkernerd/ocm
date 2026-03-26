@@ -6,7 +6,6 @@ pub mod infra;
 pub mod launcher;
 pub mod paths;
 pub mod releases;
-pub mod runner;
 pub mod runtime;
 pub mod store;
 pub mod types;
