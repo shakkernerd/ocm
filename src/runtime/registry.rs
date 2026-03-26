@@ -1,15 +1,14 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::releases::{load_release_manifest, query_releases};
 use crate::store::{
     add_runtime, get_runtime_verified, install_runtime, install_runtime_from_release,
     install_runtime_from_url, list_runtimes, remove_runtime,
 };
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
-    InstallRuntimeOptions, RuntimeMeta, RuntimeRelease, RuntimeUpdateSummary,
-    RuntimeUpdateBatchSummary, UpdateRuntimeFromReleaseOptions,
+    InstallRuntimeOptions, RuntimeMeta, RuntimeUpdateSummary, RuntimeUpdateBatchSummary,
+    UpdateRuntimeFromReleaseOptions,
 };
 
 pub struct RuntimeService<'a> {
@@ -98,16 +97,6 @@ impl<'a> RuntimeService<'a> {
 
     pub fn list(&self) -> Result<Vec<RuntimeMeta>, String> {
         list_runtimes(self.env, self.cwd)
-    }
-
-    pub fn releases_from_manifest(
-        &self,
-        url: &str,
-        version: Option<&str>,
-        channel: Option<&str>,
-    ) -> Result<Vec<RuntimeRelease>, String> {
-        let manifest = load_release_manifest(url)?;
-        query_releases(&manifest, version, channel)
     }
 
     pub fn show(&self, name: &str) -> Result<RuntimeMeta, String> {
