@@ -925,3 +925,60 @@ fn runtime_releases_lists_manifest_entries() {
     assert!(json_output.contains("\"version\": \"0.2.0\""));
     assert!(json_output.contains("\"channel\": \"stable\""));
 }
+
+#[test]
+fn runtime_releases_can_filter_by_version_or_channel() {
+    let root = TestDir::new("runtime-releases-filtered");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let manifest_body = b"{\"releases\":[{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"https://example.test/openclaw-stable\",\"sha256\":\"abc123\"},{\"version\":\"0.3.0-dev\",\"channel\":\"nightly\",\"url\":\"https://example.test/openclaw-nightly\"}]}";
+    let env = ocm_env(&root);
+
+    let version_server = TestHttpServer::serve_bytes(
+        "/manifests/releases-version.json",
+        "application/json",
+        manifest_body,
+    );
+    let by_version = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "releases",
+            "--manifest-url",
+            &version_server.url(),
+            "--version",
+            "0.2.0",
+        ],
+    );
+    assert!(by_version.status.success(), "{}", stderr(&by_version));
+    let version_output = stdout(&by_version);
+    assert!(version_output.contains("0.2.0"));
+    assert!(version_output.contains("channel=stable"));
+    assert!(!version_output.contains("0.3.0-dev"));
+
+    let channel_server = TestHttpServer::serve_bytes(
+        "/manifests/releases-channel.json",
+        "application/json",
+        manifest_body,
+    );
+    let by_channel = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "releases",
+            "--manifest-url",
+            &channel_server.url(),
+            "--channel",
+            "nightly",
+            "--json",
+        ],
+    );
+    assert!(by_channel.status.success(), "{}", stderr(&by_channel));
+    let value: Value = serde_json::from_str(&stdout(&by_channel)).unwrap();
+    let array = value.as_array().unwrap();
+    assert_eq!(array.len(), 1);
+    assert_eq!(array[0]["version"], "0.3.0-dev");
+    assert_eq!(array[0]["channel"], "nightly");
+}

@@ -49,9 +49,14 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("env cleanup --all --yes"));
     assert!(output.contains("env repair-marker <name> [--json]"));
     assert!(output.contains("env repair-marker refactor-a --json"));
-    assert!(output.contains("runtime releases --manifest-url <url> [--json]"));
     assert!(output.contains(
-        "runtime releases --manifest-url https://example.test/openclaw-releases.json --json"
+        "runtime releases --manifest-url <url> [--version <version> | --channel <channel>] [--json]"
+    ));
+    assert!(output.contains(
+        "runtime releases --manifest-url https://example.test/openclaw-releases.json --channel stable"
+    ));
+    assert!(output.contains(
+        "runtime releases --manifest-url https://example.test/openclaw-releases.json --version 0.2.0 --json"
     ));
     assert!(output.contains("launcher list [--json]"));
     assert!(output.contains("launcher show <name> [--json]"));
