@@ -1,7 +1,9 @@
-use super::{EnvironmentService, ExecutionBinding, resolve_execution_binding, resolve_runtime_run_dir};
+use super::{
+    EnvStatusSummary, EnvironmentService, ExecutionBinding, resolve_execution_binding,
+    resolve_runtime_run_dir,
+};
 use crate::launcher::resolve_launcher_run_dir;
 use crate::store::{get_launcher, runtime_integrity_issue};
-use crate::types::EnvStatusSummary;
 
 impl<'a> EnvironmentService<'a> {
     pub fn status(&self, name: &str) -> Result<EnvStatusSummary, String> {

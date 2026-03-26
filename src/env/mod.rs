@@ -4,12 +4,17 @@ mod health;
 mod inspect;
 mod lifecycle;
 mod snapshots;
+mod types;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 pub use execution::{
     ExecutionBinding, ResolvedExecution, resolve_execution_binding, resolve_runtime_run_dir,
+};
+pub use types::{
+    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
+    EnvMarkerRepairSummary, EnvStatusSummary, ExecutionSummary,
 };
 
 pub struct EnvironmentService<'a> {

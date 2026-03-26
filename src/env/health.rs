@@ -1,15 +1,15 @@
 use std::fs;
 use std::path::Path;
 
-use super::{EnvironmentService, ExecutionBinding, resolve_execution_binding};
+use super::{
+    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
+    EnvMarkerRepairSummary, EnvironmentService, ExecutionBinding, resolve_execution_binding,
+};
 use crate::store::{derive_env_paths, display_path};
 use crate::store::{
     get_launcher, get_runtime, repair_environment_marker, runtime_integrity_issue, save_environment,
 };
-use crate::types::{
-    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
-    EnvMarker, EnvMarkerRepairSummary, EnvMeta,
-};
+use crate::types::{EnvMarker, EnvMeta};
 
 #[derive(Clone, Debug)]
 struct PlannedCleanupAction {
