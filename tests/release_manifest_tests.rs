@@ -2,7 +2,7 @@ mod support;
 
 use serde_json::json;
 
-use ocm::releases::{
+use ocm::runtime::releases::{
     load_release_manifest, query_releases, select_release, select_release_by_channel,
     select_release_by_version,
 };

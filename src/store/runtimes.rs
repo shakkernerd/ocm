@@ -8,7 +8,7 @@ use crate::infra::download::{
     artifact_file_name_from_url, download_to_file, file_sha256, normalize_sha256,
     verify_file_sha256,
 };
-use crate::releases::select_release;
+use crate::runtime::releases::{load_release_manifest, select_release};
 use crate::types::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
     InstallRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind,
@@ -362,7 +362,7 @@ pub fn install_runtime_from_release(
     let name = validate_name(&options.name, "Runtime name")?;
     let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
 
-    let manifest = crate::releases::load_release_manifest(&options.manifest_url)?;
+    let manifest = load_release_manifest(&options.manifest_url)?;
     let (release_selector_kind, release_selector_value) =
         match (options.version.as_deref(), options.channel.as_deref()) {
             (Some(version), None) => (

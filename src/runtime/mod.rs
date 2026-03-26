@@ -1,6 +1,6 @@
 mod install;
 mod registry;
-mod releases;
+pub mod releases;
 mod verify;
 
 pub use registry::RuntimeService;
