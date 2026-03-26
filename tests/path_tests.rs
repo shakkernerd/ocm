@@ -2,10 +2,11 @@ mod support;
 
 use std::fs;
 
+use ocm::runtime::AddRuntimeOptions;
 use ocm::store::{add_launcher, add_runtime, clone_environment, create_environment};
 use ocm::store::{clean_path, resolve_ocm_home, validate_name};
 use ocm::types::{
-    AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvironmentOptions,
+    AddLauncherOptions, CloneEnvironmentOptions, CreateEnvironmentOptions,
 };
 
 use crate::support::{TestDir, base_env, ocm_env, path_string};

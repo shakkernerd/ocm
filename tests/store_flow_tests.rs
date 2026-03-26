@@ -4,6 +4,7 @@ use std::fs;
 
 use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive};
 use ocm::env::EnvironmentService;
+use ocm::runtime::{AddRuntimeOptions, InstallRuntimeOptions, RuntimeSourceKind};
 use ocm::store::{
     add_launcher, add_runtime, clone_environment, create_env_snapshot, create_environment,
     env_meta_path, export_environment, get_env_snapshot, get_environment, get_launcher,
@@ -13,10 +14,9 @@ use ocm::store::{
     repair_environment_marker, restore_env_snapshot, runtime_install_root, runtime_meta_path,
 };
 use ocm::types::{
-    AddLauncherOptions, AddRuntimeOptions, CloneEnvironmentOptions, CreateEnvSnapshotOptions,
-    CreateEnvironmentOptions, ExportEnvironmentOptions, ImportEnvironmentOptions,
-    InstallRuntimeOptions, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
-    RuntimeSourceKind,
+    AddLauncherOptions, CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
+    ExportEnvironmentOptions, ImportEnvironmentOptions, RemoveEnvSnapshotOptions,
+    RestoreEnvSnapshotOptions,
 };
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
