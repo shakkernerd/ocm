@@ -1,9 +1,10 @@
-mod manage;
 mod inspect;
+mod manage;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
+pub use inspect::{DiscoveredServiceList, DiscoveredServiceSummary};
 pub use inspect::{ServiceSummary, ServiceSummaryList};
 pub use manage::{
     ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary, ServiceLogSummary,
@@ -26,6 +27,10 @@ impl<'a> ServiceService<'a> {
 
     pub fn status(&self, name: &str) -> Result<ServiceSummary, String> {
         inspect::service_status(name, self.env, self.cwd)
+    }
+
+    pub fn discover(&self) -> Result<DiscoveredServiceList, String> {
+        inspect::discover_services(self.env, self.cwd)
     }
 
     pub fn install(&self, name: &str) -> Result<ServiceInstallSummary, String> {

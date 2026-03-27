@@ -91,6 +91,7 @@ fn help_mentions_launcher_runtime_and_service_commands() {
     assert!(output.contains("runtime remove <name>"));
     assert!(output.contains("service adopt-global <env> [--dry-run] [--json]"));
     assert!(output.contains("service restore-global <env> [--dry-run] [--json]"));
+    assert!(output.contains("service discover [--json]"));
     assert!(output.contains("service install <env> [--json]"));
     assert!(output.contains("service list [--json]"));
     assert!(output.contains("service status <env> [--json]"));
@@ -102,6 +103,7 @@ fn help_mentions_launcher_runtime_and_service_commands() {
     assert!(output.contains("service uninstall <env> [--json]"));
     assert!(output.contains("service adopt-global refactor-a --dry-run --json"));
     assert!(output.contains("service restore-global refactor-a --dry-run --json"));
+    assert!(output.contains("service discover --json"));
     assert!(output.contains("service install refactor-a --json"));
     assert!(output.contains("service list"));
     assert!(output.contains("service status refactor-a --json"));

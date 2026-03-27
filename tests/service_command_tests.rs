@@ -37,6 +37,29 @@ fn allocate_free_port() -> u16 {
         .port()
 }
 
+fn write_launch_agent_plist(path: &Path, label: &str, env_vars: &[(&str, &str)]) {
+    let env_section = env_vars
+        .iter()
+        .map(|(key, value)| format!("      <key>{key}</key>\n      <string>{value}</string>\n"))
+        .collect::<String>();
+    write_text(
+        path,
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+{env_section}    </dict>
+  </dict>
+</plist>
+"#
+        ),
+    );
+}
+
 #[test]
 fn service_list_reports_launcher_and_runtime_bindings_in_json() {
     let root = TestDir::new("service-list");
@@ -44,7 +67,11 @@ fn service_list_reports_launcher_and_runtime_bindings_in_json() {
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
 
     let runtime_path = root.child("bin/openclaw");
@@ -62,10 +89,18 @@ fn service_list_reports_launcher_and_runtime_bindings_in_json() {
     );
     assert!(runtime.status.success(), "{}", stderr(&runtime));
 
-    let demo = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let demo = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(demo.status.success(), "{}", stderr(&demo));
 
-    let prod = run_ocm(&cwd, &env, &["env", "create", "prod", "--runtime", "managed"]);
+    let prod = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "prod", "--runtime", "managed"],
+    );
     assert!(prod.status.success(), "{}", stderr(&prod));
 
     let output = run_ocm(&cwd, &env, &["service", "list", "--json"]);
@@ -88,11 +123,17 @@ fn service_list_reports_launcher_and_runtime_bindings_in_json() {
     assert_eq!(demo["bindingName"], "stable");
     assert_eq!(demo["gatewayPort"], 18789);
     assert_eq!(demo["managedLabel"], "ai.openclaw.gateway.ocm.demo");
-    assert_eq!(demo["managedPlistPath"], format!(
-        "{}/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist",
-        root.child("home").display()
-    ));
-    assert_eq!(demo["runDir"], path_string(&root.child("ocm-home/envs/demo")));
+    assert_eq!(
+        demo["managedPlistPath"],
+        format!(
+            "{}/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist",
+            root.child("home").display()
+        )
+    );
+    assert_eq!(
+        demo["runDir"],
+        path_string(&root.child("ocm-home/envs/demo"))
+    );
     assert!(
         demo["command"]
             .as_str()
@@ -114,7 +155,10 @@ fn service_list_reports_launcher_and_runtime_bindings_in_json() {
     assert_eq!(prod["bindingName"], "managed");
     assert_eq!(prod["binaryPath"], path_string(&runtime_path));
     assert_eq!(prod["gatewayPort"], 18790);
-    assert_eq!(prod["runDir"], path_string(&root.child("ocm-home/envs/prod")));
+    assert_eq!(
+        prod["runDir"],
+        path_string(&root.child("ocm-home/envs/prod"))
+    );
     assert_eq!(
         prod["args"],
         serde_json::json!(["gateway", "run", "--port", "18790"])
@@ -144,7 +188,10 @@ fn service_status_reports_missing_binding_issue() {
     assert_eq!(summary["canAdoptGlobal"], false);
     assert_eq!(summary["canRestoreGlobal"], false);
     assert_eq!(summary["latestBackupPlistPath"], Value::Null);
-    assert_eq!(summary["issue"], "environment \"bare\" has no default runtime or launcher; use env set-runtime, env set-launcher, or pass --runtime/--launcher");
+    assert_eq!(
+        summary["issue"],
+        "environment \"bare\" has no default runtime or launcher; use env set-runtime, env set-launcher, or pass --runtime/--launcher"
+    );
 }
 
 #[test]
@@ -155,9 +202,17 @@ fn service_status_reports_adoption_and_restore_readiness() {
     let mut env = ocm_env(&root);
     install_fake_launchctl(&root, &mut env);
 
-    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
     let assigned_port = allocate_free_port();
     write_text(
@@ -220,6 +275,136 @@ fn service_status_requires_target_or_all() {
 }
 
 #[test]
+fn service_discover_lists_ocm_global_and_foreign_services_in_json() {
+    let root = TestDir::new("service-discover");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let demo_config_path = path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json"));
+    let demo_state_dir = path_string(&root.child("ocm-home/envs/demo/.openclaw"));
+    let demo_openclaw_home = demo_state_dir.clone();
+    write_launch_agent_plist(
+        &root.child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist"),
+        "ai.openclaw.gateway.ocm.demo",
+        &[
+            ("OPENCLAW_CONFIG_PATH", demo_config_path.as_str()),
+            ("OPENCLAW_STATE_DIR", demo_state_dir.as_str()),
+            ("OPENCLAW_HOME", demo_openclaw_home.as_str()),
+            ("OPENCLAW_GATEWAY_PORT", "18789"),
+        ],
+    );
+    write_launch_agent_plist(
+        &root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist"),
+        "ai.openclaw.gateway",
+        &[
+            ("OPENCLAW_CONFIG_PATH", demo_config_path.as_str()),
+            ("OPENCLAW_GATEWAY_PORT", "18789"),
+        ],
+    );
+    write_launch_agent_plist(
+        &root.child("home/Library/LaunchAgents/com.example.openclaw.staging.plist"),
+        "com.example.openclaw.staging",
+        &[
+            (
+                "OPENCLAW_CONFIG_PATH",
+                "/srv/openclaw/staging/openclaw.json",
+            ),
+            ("OPENCLAW_STATE_DIR", "/srv/openclaw/staging"),
+            ("OPENCLAW_HOME", "/srv/openclaw/staging"),
+            ("OPENCLAW_GATEWAY_PORT", "19789"),
+        ],
+    );
+
+    let output = run_ocm(&cwd, &env, &["service", "discover", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let services = summary["services"].as_array().unwrap();
+    assert_eq!(services.len(), 3);
+
+    let managed = services
+        .iter()
+        .find(|service| service["label"] == "ai.openclaw.gateway.ocm.demo")
+        .unwrap();
+    assert_eq!(managed["sourceKind"], "ocm-managed");
+    assert_eq!(managed["matchedEnvName"], "demo");
+    assert_eq!(managed["gatewayPort"], 18789);
+    assert_eq!(managed["stateDir"], demo_state_dir);
+    assert_eq!(managed["openclawHome"], demo_openclaw_home);
+    assert_eq!(managed["adoptable"], false);
+    assert_eq!(managed["adoptReason"], "already managed by ocm");
+
+    let global = services
+        .iter()
+        .find(|service| service["label"] == "ai.openclaw.gateway")
+        .unwrap();
+    assert_eq!(global["sourceKind"], "openclaw-global");
+    assert_eq!(global["matchedEnvName"], "demo");
+    assert_eq!(global["adoptable"], true);
+    assert_eq!(
+        global["adoptReason"],
+        "ready to adopt into env \"demo\" with service adopt-global"
+    );
+
+    let foreign = services
+        .iter()
+        .find(|service| service["label"] == "com.example.openclaw.staging")
+        .unwrap();
+    assert_eq!(foreign["sourceKind"], "foreign");
+    assert_eq!(foreign["matchedEnvName"], Value::Null);
+    assert_eq!(foreign["gatewayPort"], 19789);
+    assert_eq!(foreign["adoptable"], false);
+    assert_eq!(
+        foreign["adoptReason"],
+        "foreign OpenClaw services are discoverable but not adoptable yet"
+    );
+}
+
+#[test]
+fn service_discover_ignores_unrelated_launch_agents() {
+    let root = TestDir::new("service-discover-unrelated");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    write_launch_agent_plist(
+        &root.child("home/Library/LaunchAgents/com.example.other.plist"),
+        "com.example.other",
+        &[("SOME_KEY", "some-value")],
+    );
+
+    let output = run_ocm(&cwd, &env, &["service", "discover", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["services"], serde_json::json!([]));
+}
+
+#[test]
+fn service_discover_requires_no_extra_args() {
+    let root = TestDir::new("service-discover-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["service", "discover", "demo"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("unexpected arguments: demo"));
+}
+
+#[test]
 fn service_install_persists_a_gateway_port_and_writes_a_launch_agent() {
     let root = TestDir::new("service-install");
     let cwd = root.child("workspace");
@@ -227,9 +412,17 @@ fn service_install_persists_a_gateway_port_and_writes_a_launch_agent() {
     let mut env = ocm_env(&root);
     install_fake_launchctl(&root, &mut env);
 
-    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
     let assigned_port = allocate_free_port();
     write_text(
@@ -246,11 +439,9 @@ fn service_install_persists_a_gateway_port_and_writes_a_launch_agent() {
     assert_eq!(summary["previousGatewayPort"], Value::Null);
     assert_eq!(
         summary["warnings"],
-        serde_json::json!([
-            format!(
-                "assigned gateway port {assigned_port} to env \"demo\" and saved it to env metadata for service stability"
-            )
-        ])
+        serde_json::json!([format!(
+            "assigned gateway port {assigned_port} to env \"demo\" and saved it to env metadata for service stability"
+        )])
     );
 
     let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
@@ -281,9 +472,17 @@ fn service_install_auto_provisions_the_next_free_port_when_needed() {
     let mut env = ocm_env(&root);
     install_fake_launchctl(&root, &mut env);
 
-    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
     let occupied = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let occupied_port = occupied.local_addr().unwrap().port();
@@ -301,11 +500,9 @@ fn service_install_auto_provisions_the_next_free_port_when_needed() {
     assert_eq!(summary["previousGatewayPort"], occupied_port);
     assert_eq!(
         summary["warnings"],
-        serde_json::json!([
-            format!(
-                "gateway port {occupied_port} was unavailable; assigned {assigned_port} to env \"demo\" and saved it to env metadata"
-            )
-        ])
+        serde_json::json!([format!(
+            "gateway port {occupied_port} was unavailable; assigned {assigned_port} to env \"demo\" and saved it to env metadata"
+        )])
     );
 
     let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
@@ -322,9 +519,17 @@ fn service_lifecycle_commands_use_the_env_scoped_launch_agent_label() {
     let mut env = ocm_env(&root);
     install_fake_launchctl(&root, &mut env);
 
-    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
 
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
@@ -343,9 +548,11 @@ fn service_lifecycle_commands_use_the_env_scoped_launch_agent_label() {
     assert!(launchctl_log.contains("kickstart -k gui/"));
     assert!(launchctl_log.contains("bootout gui/"));
     assert!(launchctl_log.contains("ai.openclaw.gateway.ocm.demo"));
-    assert!(!root
-        .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-        .exists());
+    assert!(
+        !root
+            .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
+            .exists()
+    );
 }
 
 #[test]
@@ -423,7 +630,11 @@ fn service_logs_validate_arguments_and_missing_files() {
     assert_eq!(missing_name.status.code(), Some(1));
     assert!(stderr(&missing_name).contains("service logs requires <env>"));
 
-    let conflicting = run_ocm(&cwd, &env, &["service", "logs", "demo", "--stdout", "--stderr"]);
+    let conflicting = run_ocm(
+        &cwd,
+        &env,
+        &["service", "logs", "demo", "--stdout", "--stderr"],
+    );
     assert_eq!(conflicting.status.code(), Some(1));
     assert!(stderr(&conflicting).contains("service logs accepts only one of --stdout or --stderr"));
 
@@ -446,9 +657,17 @@ fn service_adopt_global_migrates_a_matching_global_launch_agent() {
     let mut env = ocm_env(&root);
     install_fake_launchctl(&root, &mut env);
 
-    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
     let assigned_port = allocate_free_port();
     write_text(
@@ -489,12 +708,15 @@ fn service_adopt_global_migrates_a_matching_global_launch_agent() {
     assert!(backup_plist_path.contains("/ocm-home/services/backups/ai.openclaw.gateway."));
     assert!(backup_plist_path.ends_with(".plist"));
 
-    assert!(!root
-        .child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
-        .exists());
-    assert!(root
-        .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-        .exists());
+    assert!(
+        !root
+            .child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
+            .exists()
+    );
+    assert!(
+        root.child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
+            .exists()
+    );
     assert!(Path::new(backup_plist_path).exists());
 
     let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
@@ -512,11 +734,23 @@ fn service_adopt_global_rejects_mismatched_global_plists() {
     let mut env = ocm_env(&root);
     install_fake_launchctl(&root, &mut env);
 
-    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
-    let demo = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let demo = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(demo.status.success(), "{}", stderr(&demo));
-    let other = run_ocm(&cwd, &env, &["env", "create", "other", "--launcher", "stable"]);
+    let other = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "other", "--launcher", "stable"],
+    );
     assert!(other.status.success(), "{}", stderr(&other));
 
     write_text(
@@ -550,9 +784,17 @@ fn service_adopt_global_dry_run_reports_the_plan_without_mutating_state() {
     let mut env = ocm_env(&root);
     install_fake_launchctl(&root, &mut env);
 
-    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
     let assigned_port = allocate_free_port();
     write_text(
@@ -593,12 +835,15 @@ fn service_adopt_global_dry_run_reports_the_plan_without_mutating_state() {
     let backup_plist_path = summary["backupPlistPath"].as_str().unwrap();
     assert!(backup_plist_path.contains("/ocm-home/services/backups/ai.openclaw.gateway."));
 
-    assert!(root
-        .child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
-        .exists());
-    assert!(!root
-        .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-        .exists());
+    assert!(
+        root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
+            .exists()
+    );
+    assert!(
+        !root
+            .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
+            .exists()
+    );
     assert!(!Path::new(backup_plist_path).exists());
 
     let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
@@ -620,9 +865,17 @@ fn service_restore_global_restores_the_latest_matching_backup() {
     let mut env = ocm_env(&root);
     install_fake_launchctl(&root, &mut env);
 
-    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
     let assigned_port = allocate_free_port();
     write_text(
@@ -653,7 +906,10 @@ fn service_restore_global_restores_the_latest_matching_backup() {
     let adopted = run_ocm(&cwd, &env, &["service", "adopt-global", "demo", "--json"]);
     assert!(adopted.status.success(), "{}", stderr(&adopted));
     let adopted_summary: Value = serde_json::from_str(&stdout(&adopted)).unwrap();
-    let backup_plist_path = adopted_summary["backupPlistPath"].as_str().unwrap().to_string();
+    let backup_plist_path = adopted_summary["backupPlistPath"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert!(Path::new(&backup_plist_path).exists());
 
     let restored = run_ocm(&cwd, &env, &["service", "restore-global", "demo", "--json"]);
@@ -668,9 +924,11 @@ fn service_restore_global_restores_the_latest_matching_backup() {
 
     let global_plist = root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist");
     assert!(global_plist.exists());
-    assert!(!root
-        .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-        .exists());
+    assert!(
+        !root
+            .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
+            .exists()
+    );
     assert_eq!(
         fs::read_to_string(&global_plist).unwrap(),
         fs::read_to_string(Path::new(&backup_plist_path)).unwrap()
@@ -690,9 +948,17 @@ fn service_restore_global_dry_run_reports_the_latest_matching_backup_without_mut
     let mut env = ocm_env(&root);
     install_fake_launchctl(&root, &mut env);
 
-    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
     let assigned_port = allocate_free_port();
     write_text(
@@ -723,7 +989,10 @@ fn service_restore_global_dry_run_reports_the_latest_matching_backup_without_mut
     let adopted = run_ocm(&cwd, &env, &["service", "adopt-global", "demo", "--json"]);
     assert!(adopted.status.success(), "{}", stderr(&adopted));
     let adopted_summary: Value = serde_json::from_str(&stdout(&adopted)).unwrap();
-    let backup_plist_path = adopted_summary["backupPlistPath"].as_str().unwrap().to_string();
+    let backup_plist_path = adopted_summary["backupPlistPath"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let launchctl_log_before = fs::read_to_string(root.child("launchctl.log")).unwrap();
 
     let restored = run_ocm(
@@ -738,12 +1007,15 @@ fn service_restore_global_dry_run_reports_the_latest_matching_backup_without_mut
     assert_eq!(summary["restored"], false);
     assert_eq!(summary["backupPlistPath"], backup_plist_path);
 
-    assert!(!root
-        .child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
-        .exists());
-    assert!(root
-        .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-        .exists());
+    assert!(
+        !root
+            .child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
+            .exists()
+    );
+    assert!(
+        root.child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
+            .exists()
+    );
     assert_eq!(
         fs::read_to_string(root.child("launchctl.log")).unwrap(),
         launchctl_log_before

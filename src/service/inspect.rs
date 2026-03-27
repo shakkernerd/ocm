@@ -60,6 +60,32 @@ pub struct ServiceSummaryList {
     pub services: Vec<ServiceSummary>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredServiceSummary {
+    pub label: String,
+    pub plist_path: String,
+    pub source_kind: String,
+    pub installed: bool,
+    pub loaded: bool,
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub state: Option<String>,
+    pub config_path: Option<String>,
+    pub state_dir: Option<String>,
+    pub openclaw_home: Option<String>,
+    pub gateway_port: Option<u32>,
+    pub matched_env_name: Option<String>,
+    pub adoptable: bool,
+    pub adopt_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredServiceList {
+    pub services: Vec<DiscoveredServiceSummary>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum ServiceLaunchSpec {
     Launcher {
@@ -117,6 +143,99 @@ pub fn service_status(
     let meta = get_environment(name, env, cwd)?;
     let global = inspect_job(GLOBAL_GATEWAY_LABEL, &global_plist_path(env));
     build_service_summary(meta, &global, env, cwd)
+}
+
+pub fn discover_services(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<DiscoveredServiceList, String> {
+    let envs = list_environments(env, cwd)?;
+    let mut env_config_paths = BTreeMap::new();
+    for meta in envs {
+        let config_path = display_path(&derive_env_paths(Path::new(&meta.root)).config_path);
+        env_config_paths.insert(config_path, meta.name);
+    }
+
+    let launch_agents_dir = launch_agents_dir(env);
+    if !launch_agents_dir.exists() {
+        return Ok(DiscoveredServiceList {
+            services: Vec::new(),
+        });
+    }
+
+    let mut services = Vec::new();
+    for entry in fs::read_dir(&launch_agents_dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let plist_path = entry.path();
+        if plist_path.extension().and_then(|value| value.to_str()) != Some("plist") {
+            continue;
+        }
+
+        let label = read_launch_agent_label(&plist_path)?
+            .or_else(|| {
+                plist_path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .map(|value| value.to_string())
+            })
+            .unwrap_or_else(|| display_path(&plist_path));
+        let config_path = read_launch_agent_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH")?;
+        let state_dir = read_launch_agent_environment_value(&plist_path, "OPENCLAW_STATE_DIR")?;
+        let openclaw_home = read_launch_agent_environment_value(&plist_path, "OPENCLAW_HOME")?;
+        let gateway_port =
+            read_launch_agent_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT")?
+                .and_then(|value| value.parse::<u32>().ok());
+
+        if !looks_like_openclaw_service(
+            &label,
+            config_path.as_deref(),
+            state_dir.as_deref(),
+            openclaw_home.as_deref(),
+            gateway_port,
+        ) {
+            continue;
+        }
+
+        let status = inspect_job(&label, &plist_path);
+        let config_path = config_path.or(status.config_path.clone());
+        let gateway_port = gateway_port.or(status.gateway_port);
+        let matched_env_name = config_path
+            .as_deref()
+            .and_then(|value| env_config_paths.get(value))
+            .cloned();
+        let source_kind = discovered_source_kind(&label).to_string();
+        let (adoptable, adopt_reason) = discover_adoption_state(
+            &source_kind,
+            matched_env_name.as_deref(),
+            config_path.as_deref(),
+        );
+
+        services.push(DiscoveredServiceSummary {
+            label,
+            plist_path: display_path(&plist_path),
+            source_kind,
+            installed: status.installed,
+            loaded: status.loaded,
+            running: status.running,
+            pid: status.pid,
+            state: status.state,
+            config_path,
+            state_dir,
+            openclaw_home,
+            gateway_port,
+            matched_env_name,
+            adoptable,
+            adopt_reason,
+        });
+    }
+
+    services.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then(left.plist_path.cmp(&right.plist_path))
+    });
+
+    Ok(DiscoveredServiceList { services })
 }
 
 fn build_service_summary(
@@ -315,7 +434,10 @@ pub(crate) fn current_uid() -> Option<u32> {
     if !output.status.success() {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout).trim().parse::<u32>().ok()
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u32>()
+        .ok()
 }
 
 fn parse_launchctl_print(raw: &str, status: &mut LaunchdJobStatus) {
@@ -374,6 +496,74 @@ fn latest_matching_global_backup_path(
     Ok(matches.pop())
 }
 
+fn looks_like_openclaw_service(
+    label: &str,
+    config_path: Option<&str>,
+    state_dir: Option<&str>,
+    openclaw_home: Option<&str>,
+    gateway_port: Option<u32>,
+) -> bool {
+    label.contains("openclaw")
+        || config_path.is_some()
+        || state_dir.is_some()
+        || openclaw_home.is_some()
+        || gateway_port.is_some()
+}
+
+fn discovered_source_kind(label: &str) -> &'static str {
+    if label.starts_with(OCM_GATEWAY_LABEL_PREFIX) {
+        "ocm-managed"
+    } else if label == GLOBAL_GATEWAY_LABEL {
+        "openclaw-global"
+    } else {
+        "foreign"
+    }
+}
+
+fn discover_adoption_state(
+    source_kind: &str,
+    matched_env_name: Option<&str>,
+    config_path: Option<&str>,
+) -> (bool, Option<String>) {
+    match source_kind {
+        "ocm-managed" => (false, Some("already managed by ocm".to_string())),
+        "openclaw-global" => {
+            if let Some(env_name) = matched_env_name {
+                (
+                    true,
+                    Some(format!(
+                        "ready to adopt into env \"{env_name}\" with service adopt-global"
+                    )),
+                )
+            } else if config_path.is_some() {
+                (
+                    false,
+                    Some(
+                        "create or import a matching env before adopting this global service"
+                            .to_string(),
+                    ),
+                )
+            } else {
+                (
+                    false,
+                    Some(
+                        "cannot map this global service to an env because it has no OPENCLAW_CONFIG_PATH"
+                            .to_string(),
+                    ),
+                )
+            }
+        }
+        _ => (
+            false,
+            Some("foreign OpenClaw services are discoverable but not adoptable yet".to_string()),
+        ),
+    }
+}
+
+fn read_launch_agent_label(plist_path: &Path) -> Result<Option<String>, String> {
+    read_plist_string_value(plist_path, "Label")
+}
+
 fn read_launch_agent_environment_value(
     plist_path: &Path,
     key: &str,
@@ -392,10 +582,23 @@ fn read_launch_agent_environment_value(
     };
     let env_section = &env_section[..dict_end_offset];
     let key_marker = format!("<key>{key}</key>");
-    let Some(key_offset) = env_section.find(&key_marker) else {
+    read_plist_string_value_from_section(env_section, &key_marker)
+}
+
+fn read_plist_string_value(plist_path: &Path, key: &str) -> Result<Option<String>, String> {
+    let raw = fs::read_to_string(plist_path).map_err(|error| error.to_string())?;
+    let key_marker = format!("<key>{key}</key>");
+    read_plist_string_value_from_section(&raw, &key_marker)
+}
+
+fn read_plist_string_value_from_section(
+    section: &str,
+    key_marker: &str,
+) -> Result<Option<String>, String> {
+    let Some(key_offset) = section.find(key_marker) else {
         return Ok(None);
     };
-    let entry = &env_section[key_offset + key_marker.len()..];
+    let entry = &section[key_offset + key_marker.len()..];
     let Some(string_start_offset) = entry.find("<string>") else {
         return Ok(None);
     };
@@ -417,7 +620,10 @@ fn plist_unescape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LaunchdJobStatus, managed_service_label, parse_launchctl_print};
+    use super::{
+        LaunchdJobStatus, discover_adoption_state, discovered_source_kind,
+        looks_like_openclaw_service, managed_service_label, parse_launchctl_print,
+    };
 
     #[test]
     fn managed_service_labels_are_env_scoped() {
@@ -449,6 +655,66 @@ environment = {
         assert_eq!(
             status.config_path.as_deref(),
             Some("/Users/example/.ocm/envs/test/.openclaw/openclaw.json")
+        );
+    }
+
+    #[test]
+    fn discover_classification_is_stable() {
+        assert_eq!(
+            discovered_source_kind("ai.openclaw.gateway.ocm.demo"),
+            "ocm-managed"
+        );
+        assert_eq!(
+            discovered_source_kind("ai.openclaw.gateway"),
+            "openclaw-global"
+        );
+        assert_eq!(
+            discovered_source_kind("com.example.openclaw.staging"),
+            "foreign"
+        );
+    }
+
+    #[test]
+    fn discover_identifies_openclaw_services_from_label_or_env_vars() {
+        assert!(looks_like_openclaw_service(
+            "com.example.openclaw",
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(looks_like_openclaw_service(
+            "com.example.something",
+            Some("/tmp/openclaw.json"),
+            None,
+            None,
+            None,
+        ));
+        assert!(!looks_like_openclaw_service(
+            "com.example.something",
+            None,
+            None,
+            None,
+            None,
+        ));
+    }
+
+    #[test]
+    fn discover_adoption_state_is_explicit() {
+        let (adoptable, reason) =
+            discover_adoption_state("openclaw-global", Some("demo"), Some("/tmp/openclaw.json"));
+        assert!(adoptable);
+        assert_eq!(
+            reason.as_deref(),
+            Some("ready to adopt into env \"demo\" with service adopt-global")
+        );
+
+        let (adoptable, reason) =
+            discover_adoption_state("foreign", Some("demo"), Some("/tmp/openclaw.json"));
+        assert!(!adoptable);
+        assert_eq!(
+            reason.as_deref(),
+            Some("foreign OpenClaw services are discoverable but not adoptable yet")
         );
     }
 }

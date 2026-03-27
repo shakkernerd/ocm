@@ -1,6 +1,6 @@
 use crate::service::{
-    ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary, ServiceSummary,
-    ServiceSummaryList, ServiceRestoreSummary,
+    DiscoveredServiceList, ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary,
+    ServiceRestoreSummary, ServiceSummary, ServiceSummaryList,
 };
 
 fn daemon_state(installed: bool, loaded: bool, running: bool) -> &'static str {
@@ -146,13 +146,55 @@ pub fn service_status(summary: &ServiceSummary) -> Vec<String> {
     lines
 }
 
+pub fn service_discover(summary: &DiscoveredServiceList) -> Vec<String> {
+    if summary.services.is_empty() {
+        return vec!["No OpenClaw services discovered.".to_string()];
+    }
+
+    let mut lines = Vec::new();
+    for service in &summary.services {
+        lines.push(format!(
+            "{}  source={}  state={}",
+            service.label,
+            service.source_kind,
+            daemon_state(service.installed, service.loaded, service.running)
+        ));
+        lines.push(format!("  plist: {}", service.plist_path));
+        if let Some(config_path) = service.config_path.as_deref() {
+            lines.push(format!("  config: {config_path}"));
+        }
+        if let Some(state_dir) = service.state_dir.as_deref() {
+            lines.push(format!("  stateDir: {state_dir}"));
+        }
+        if let Some(openclaw_home) = service.openclaw_home.as_deref() {
+            lines.push(format!("  openclawHome: {openclaw_home}"));
+        }
+        if let Some(gateway_port) = service.gateway_port {
+            lines.push(format!("  port: {gateway_port}"));
+        }
+        if let Some(matched_env_name) = service.matched_env_name.as_deref() {
+            lines.push(format!("  matchedEnv: {matched_env_name}"));
+            if service.adoptable {
+                lines.push(format!("  adopt: service adopt-global {matched_env_name}"));
+            }
+        }
+        if let Some(reason) = service.adopt_reason.as_deref() {
+            lines.push(format!("  note: {reason}"));
+        }
+    }
+    lines
+}
+
 pub fn service_installed(summary: &ServiceInstallSummary) -> Vec<String> {
     let mut lines = vec![
         format!("Installed service {}", summary.env_name),
         format!("  label: {}", summary.managed_label),
         format!("  plist: {}", summary.managed_plist_path),
         format!("  port: {}", summary.gateway_port),
-        format!("  binding: {}:{}", summary.binding_kind, summary.binding_name),
+        format!(
+            "  binding: {}:{}",
+            summary.binding_kind, summary.binding_name
+        ),
         format!("  run dir: {}", summary.run_dir),
         format!("  stdout: {}", summary.stdout_path),
         format!("  stderr: {}", summary.stderr_path),

@@ -1,6 +1,20 @@
 use super::{Cli, render};
 
 impl Cli {
+    pub(super) fn handle_service_discover(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        Self::assert_no_extra_args(&args)?;
+
+        let services = self.service_service().discover()?;
+        if json_flag {
+            self.print_json(&services)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::service::service_discover(&services));
+        Ok(0)
+    }
+
     pub(super) fn handle_service_restore_global(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, dry_run) = Self::consume_flag(args, "--dry-run");
@@ -202,6 +216,7 @@ impl Cli {
         rest: Vec<String>,
     ) -> Result<i32, String> {
         match action {
+            "discover" => self.handle_service_discover(rest),
             "adopt-global" => self.handle_service_adopt_global(rest),
             "restore-global" => self.handle_service_restore_global(rest),
             "install" => self.handle_service_install(rest),
