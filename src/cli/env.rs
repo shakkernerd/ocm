@@ -163,11 +163,16 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[2..])?;
 
-        let meta = self.environment_service().clone(CloneEnvironmentOptions {
-            source_name: source_name.clone(),
-            name: target_name.clone(),
-            root,
-        })?;
+        let meta = self.with_progress(
+            format!("Cloning env {source_name} to {target_name}"),
+            || {
+                self.environment_service().clone(CloneEnvironmentOptions {
+                    source_name: source_name.clone(),
+                    name: target_name.clone(),
+                    root,
+                })
+            },
+        )?;
 
         if json_flag {
             self.print_json(&summarize_env(&meta))?;
@@ -198,12 +203,12 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let summary = self
-            .environment_service()
-            .export(ExportEnvironmentOptions {
+        let summary = self.with_progress(format!("Exporting env {name}"), || {
+            self.environment_service().export(ExportEnvironmentOptions {
                 name: name.clone(),
                 output,
-            })?;
+            })
+        })?;
 
         if json_flag {
             self.print_json(&summary)?;
@@ -225,13 +230,13 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let summary = self
-            .environment_service()
-            .import(ImportEnvironmentOptions {
+        let summary = self.with_progress("Importing environment archive", || {
+            self.environment_service().import(ImportEnvironmentOptions {
                 archive: archive.clone(),
                 name,
                 root,
-            })?;
+            })
+        })?;
 
         if json_flag {
             self.print_json(&summary)?;
@@ -384,12 +389,13 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let snapshot = self
-            .environment_service()
-            .create_snapshot(CreateEnvSnapshotOptions {
-                env_name: name.clone(),
-                label,
-            })?;
+        let snapshot = self.with_progress(format!("Creating snapshot for {name}"), || {
+            self.environment_service()
+                .create_snapshot(CreateEnvSnapshotOptions {
+                    env_name: name.clone(),
+                    label,
+                })
+        })?;
 
         if json_flag {
             self.print_json(&snapshot)?;
@@ -455,12 +461,16 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[2..])?;
 
-        let restored = self
-            .environment_service()
-            .restore_snapshot(RestoreEnvSnapshotOptions {
-                env_name: name.clone(),
-                snapshot_id: snapshot_id.clone(),
-            })?;
+        let restored = self.with_progress(
+            format!("Restoring snapshot {snapshot_id} for {name}"),
+            || {
+                self.environment_service()
+                    .restore_snapshot(RestoreEnvSnapshotOptions {
+                        env_name: name.clone(),
+                        snapshot_id: snapshot_id.clone(),
+                    })
+            },
+        )?;
 
         if json_flag {
             self.print_json(&restored)?;

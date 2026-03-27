@@ -129,20 +129,26 @@ impl Cli {
         }
 
         let meta = match (path, url, manifest_url) {
-            (Some(path), None, None) => self.runtime_service().install(InstallRuntimeOptions {
-                name: name.clone(),
-                path,
-                description,
-                force,
-            })?,
-            (None, Some(url), None) => {
-                self.runtime_service()
-                    .install_from_url(InstallRuntimeFromUrlOptions {
+            (Some(path), None, None) => {
+                self.with_progress(format!("Installing runtime {name}"), || {
+                    self.runtime_service().install(InstallRuntimeOptions {
                         name: name.clone(),
-                        url,
+                        path,
                         description,
                         force,
-                    })?
+                    })
+                })?
+            }
+            (None, Some(url), None) => {
+                self.with_progress(format!("Downloading runtime {name}"), || {
+                    self.runtime_service()
+                        .install_from_url(InstallRuntimeFromUrlOptions {
+                            name: name.clone(),
+                            url,
+                            description,
+                            force,
+                        })
+                })?
             }
             (None, None, Some(manifest_url)) => {
                 if version.is_some() && channel.is_some() {
@@ -157,15 +163,17 @@ impl Cli {
                             .to_string(),
                     );
                 }
-                self.runtime_service()
-                    .install_from_release(InstallRuntimeFromReleaseOptions {
-                        name: name.clone(),
-                        manifest_url,
-                        version,
-                        channel,
-                        description,
-                        force,
-                    })?
+                self.with_progress(format!("Installing runtime {name}"), || {
+                    self.runtime_service()
+                        .install_from_release(InstallRuntimeFromReleaseOptions {
+                            name: name.clone(),
+                            manifest_url,
+                            version,
+                            channel,
+                            description,
+                            force,
+                        })
+                })?
             }
             (None, None, None) => {
                 return Err("runtime install requires --path, --url, or --manifest-url".to_string());
@@ -221,9 +229,10 @@ impl Cli {
         let channel = Self::require_option_value(channel, "--channel")?;
         if all_flag {
             Self::assert_no_extra_args(&args)?;
-            let batch = self
-                .runtime_service()
-                .update_all_from_release(version, channel)?;
+            let batch = self.with_progress("Updating runtimes", || {
+                self.runtime_service()
+                    .update_all_from_release(version, channel)
+            })?;
             let code = if batch.failed > 0 { 1 } else { 0 };
 
             if json_flag {
@@ -239,13 +248,14 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = self
-            .runtime_service()
-            .update_from_release(UpdateRuntimeFromReleaseOptions {
-                name: name.clone(),
-                version,
-                channel,
-            })?;
+        let meta = self.with_progress(format!("Updating runtime {name}"), || {
+            self.runtime_service()
+                .update_from_release(UpdateRuntimeFromReleaseOptions {
+                    name: name.clone(),
+                    version,
+                    channel,
+                })
+        })?;
 
         if json_flag {
             self.print_json(&meta)?;

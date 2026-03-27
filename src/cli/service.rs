@@ -24,7 +24,14 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let summary = self.service_service().restore_global(name, dry_run)?;
+        let summary = self.with_progress(
+            if dry_run {
+                format!("Planning global service restore for {name}")
+            } else {
+                format!("Restoring global service for {name}")
+            },
+            || self.service_service().restore_global(name, dry_run),
+        )?;
         if json_flag {
             self.print_json(&summary)?;
             return Ok(0);
@@ -42,7 +49,14 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let summary = self.service_service().adopt_global(name, dry_run)?;
+        let summary = self.with_progress(
+            if dry_run {
+                format!("Planning global service adoption for {name}")
+            } else {
+                format!("Adopting global service for {name}")
+            },
+            || self.service_service().adopt_global(name, dry_run),
+        )?;
         if json_flag {
             self.print_json(&summary)?;
             return Ok(0);
@@ -88,7 +102,9 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let summary = self.service_service().install(name)?;
+        let summary = self.with_progress(format!("Installing service for {name}"), || {
+            self.service_service().install(name)
+        })?;
         if json_flag {
             self.print_json(&summary)?;
             return Ok(0);
