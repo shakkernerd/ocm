@@ -1,6 +1,7 @@
 mod env;
 mod init;
 mod launcher;
+mod render;
 mod runtime;
 
 use std::collections::BTreeMap;
@@ -36,6 +37,16 @@ impl Cli {
 
     fn stdout_line(&self, line: impl AsRef<str>) {
         println!("{}", line.as_ref());
+    }
+
+    fn stdout_lines<I, S>(&self, lines: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for line in lines {
+            self.stdout_line(line);
+        }
     }
 
     fn stderr_line(&self, line: impl AsRef<str>) {
