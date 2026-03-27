@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub use inspect::{ServiceSummary, ServiceSummaryList};
-pub use manage::{ServiceActionSummary, ServiceInstallSummary, ServiceLogSummary};
+pub use manage::{
+    ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary, ServiceLogSummary,
+};
 
 pub struct ServiceService<'a> {
     env: &'a BTreeMap<String, String>,
@@ -27,6 +29,10 @@ impl<'a> ServiceService<'a> {
 
     pub fn install(&self, name: &str) -> Result<ServiceInstallSummary, String> {
         manage::install_service(name, self.env, self.cwd)
+    }
+
+    pub fn adopt_global(&self, name: &str) -> Result<ServiceAdoptionSummary, String> {
+        manage::adopt_global_service(name, self.env, self.cwd)
     }
 
     pub fn start(&self, name: &str) -> Result<ServiceActionSummary, String> {

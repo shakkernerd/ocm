@@ -1,4 +1,7 @@
-use crate::service::{ServiceActionSummary, ServiceInstallSummary, ServiceSummary, ServiceSummaryList};
+use crate::service::{
+    ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary, ServiceSummary,
+    ServiceSummaryList,
+};
 
 fn daemon_state(installed: bool, loaded: bool, running: bool) -> &'static str {
     if running {
@@ -148,6 +151,21 @@ pub fn service_installed(summary: &ServiceInstallSummary) -> Vec<String> {
     if !summary.args.is_empty() {
         lines.push(format!("  args: {}", summary.args.join(" ")));
     }
+    for warning in &summary.warnings {
+        lines.push(format!("  warning: {warning}"));
+    }
+    lines
+}
+
+pub fn service_adopted(summary: &ServiceAdoptionSummary) -> Vec<String> {
+    let mut lines = vec![
+        format!("Adopted global service {}", summary.env_name),
+        format!("  global label: {}", summary.global_label),
+        format!("  global plist: {}", summary.global_plist_path),
+        format!("  managed label: {}", summary.managed_label),
+        format!("  managed plist: {}", summary.managed_plist_path),
+        format!("  port: {}", summary.gateway_port),
+    ];
     for warning in &summary.warnings {
         lines.push(format!("  warning: {warning}"));
     }

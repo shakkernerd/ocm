@@ -1,6 +1,23 @@
 use super::{Cli, render};
 
 impl Cli {
+    pub(super) fn handle_service_adopt_global(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("service adopt-global requires <env>".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let summary = self.service_service().adopt_global(name)?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::service::service_adopted(&summary));
+        Ok(0)
+    }
+
     pub(super) fn handle_service_logs(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, stderr_flag) = Self::consume_flag(args, "--stderr");
@@ -166,6 +183,7 @@ impl Cli {
         rest: Vec<String>,
     ) -> Result<i32, String> {
         match action {
+            "adopt-global" => self.handle_service_adopt_global(rest),
             "install" => self.handle_service_install(rest),
             "list" => self.handle_service_list(rest),
             "status" => self.handle_service_status(rest),

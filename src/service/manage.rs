@@ -9,8 +9,8 @@ use std::process::Command;
 use serde::Serialize;
 
 use super::inspect::{
-    ServiceLaunchSpec, current_uid, managed_plist_path, managed_service_label,
-    resolve_service_launch, service_status,
+    ServiceLaunchSpec, current_uid, global_plist_path, managed_plist_path,
+    managed_service_label, resolve_service_launch, service_status, GLOBAL_GATEWAY_LABEL,
 };
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::infra::shell::build_openclaw_env;
@@ -79,6 +79,20 @@ pub struct ServiceLogSummary {
     pub content: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceAdoptionSummary {
+    pub env_name: String,
+    pub service_kind: String,
+    pub global_label: String,
+    pub global_plist_path: String,
+    pub managed_label: String,
+    pub managed_plist_path: String,
+    pub gateway_port: u32,
+    pub adopted: bool,
+    pub warnings: Vec<String>,
+}
+
 struct PreparedService {
     env_meta: EnvMeta,
     binding_kind: String,
@@ -102,6 +116,12 @@ struct PersistedGatewayPort {
     env_meta: EnvMeta,
     persisted_gateway_port: bool,
     previous_gateway_port: Option<u32>,
+}
+
+struct GlobalServiceBinding {
+    plist_path: PathBuf,
+    config_path: Option<String>,
+    gateway_port: Option<u32>,
 }
 
 pub fn install_service(
@@ -130,6 +150,44 @@ pub fn install_service(
         stderr_path: display_path(&prepared.stderr_path),
         persisted_gateway_port: prepared.persisted_gateway_port,
         previous_gateway_port: prepared.previous_gateway_port,
+        warnings: prepared.warnings,
+    })
+}
+
+pub fn adopt_global_service(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ServiceAdoptionSummary, String> {
+    let target_env = EnvironmentService::new(env, cwd).get(name)?;
+    let global = read_global_service_binding(env)?;
+    let target_config_path = display_path(&derive_env_paths(Path::new(&target_env.root)).config_path);
+    let global_config_path = global
+        .config_path
+        .clone()
+        .ok_or_else(|| "global OpenClaw service does not expose OPENCLAW_CONFIG_PATH for adoption".to_string())?;
+    if global_config_path != target_config_path {
+        return Err(format!(
+            "global OpenClaw service points at a different env; expected {} but found {}",
+            target_config_path, global_config_path
+        ));
+    }
+
+    let prepared = prepare_service_with_allowed_busy_port(name, env, cwd, global.gateway_port)?;
+    write_plist_file(&prepared, env)?;
+    bootout_global_service()?;
+    activate_launch_agent(&prepared.managed_label, &prepared.managed_plist_path)?;
+    fs::remove_file(&global.plist_path).map_err(|error| error.to_string())?;
+
+    Ok(ServiceAdoptionSummary {
+        env_name: prepared.env_meta.name,
+        service_kind: "gateway".to_string(),
+        global_label: GLOBAL_GATEWAY_LABEL.to_string(),
+        global_plist_path: display_path(&global.plist_path),
+        managed_label: prepared.managed_label,
+        managed_plist_path: display_path(&prepared.managed_plist_path),
+        gateway_port: prepared.env_meta.gateway_port.unwrap_or_default(),
+        adopted: true,
         warnings: prepared.warnings,
     })
 }
@@ -322,7 +380,16 @@ fn prepare_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<PreparedService, String> {
-    let port_assignment = persist_service_gateway_port(name, env, cwd)?;
+    prepare_service_with_allowed_busy_port(name, env, cwd, None)
+}
+
+fn prepare_service_with_allowed_busy_port(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    allowed_busy_port: Option<u32>,
+) -> Result<PreparedService, String> {
+    let port_assignment = persist_service_gateway_port(name, env, cwd, allowed_busy_port)?;
     let env_meta = port_assignment.env_meta;
     let launch = resolve_service_launch(&env_meta, env, cwd)?;
     let managed_label = managed_service_label(&env_meta.name);
@@ -416,6 +483,7 @@ fn persist_service_gateway_port(
     name: &str,
     env: &BTreeMap<String, String>,
     cwd: &Path,
+    allowed_busy_port: Option<u32>,
 ) -> Result<PersistedGatewayPort, String> {
     let service = EnvironmentService::new(env, cwd);
     let original = service.get(name)?;
@@ -423,7 +491,12 @@ fn persist_service_gateway_port(
     let current_summary = service_status(name, env, cwd)?;
     let reserved_ports = collect_reserved_ports(name, env, cwd)?;
     let preferred_port = effective.gateway_port.unwrap_or_default();
-    let chosen_port = choose_gateway_port(preferred_port, &reserved_ports, &current_summary);
+    let chosen_port = choose_gateway_port(
+        preferred_port,
+        &reserved_ports,
+        &current_summary,
+        allowed_busy_port,
+    );
     let persisted_gateway_port = original.gateway_port != Some(chosen_port);
     let previous_gateway_port = if chosen_port != preferred_port {
         Some(preferred_port)
@@ -473,13 +546,17 @@ fn choose_gateway_port(
     preferred_port: u32,
     reserved_ports: &BTreeSet<u32>,
     current_summary: &super::ServiceSummary,
+    allowed_busy_port: Option<u32>,
 ) -> u32 {
     let mut port = preferred_port.max(18_789);
     loop {
         let managed_self_running =
             current_summary.installed && (current_summary.loaded || current_summary.running);
+        let allowed_busy = allowed_busy_port == Some(port);
         let available = !reserved_ports.contains(&port)
-            && (port_is_available(port) || managed_self_running && current_summary.gateway_port == port);
+            && (port_is_available(port)
+                || allowed_busy
+                || managed_self_running && current_summary.gateway_port == port);
         if available {
             return port;
         }
@@ -690,6 +767,73 @@ fn activate_launch_agent(label: &str, plist_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn read_global_service_binding(env: &BTreeMap<String, String>) -> Result<GlobalServiceBinding, String> {
+    let plist_path = global_plist_path(env);
+    if !plist_path.exists() {
+        return Err("global OpenClaw service is not installed".to_string());
+    }
+
+    Ok(GlobalServiceBinding {
+        config_path: read_launch_agent_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH")?,
+        gateway_port: read_launch_agent_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT")?
+            .and_then(|value| value.parse::<u32>().ok()),
+        plist_path,
+    })
+}
+
+fn bootout_global_service() -> Result<(), String> {
+    let target = format!("{}/{}", gui_domain(), GLOBAL_GATEWAY_LABEL);
+    let bootout = run_launchctl(["bootout", target.as_str()])?;
+    if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
+        return Err(format!(
+            "launchctl bootout failed: {}",
+            launchctl_detail(&bootout)
+        ));
+    }
+    Ok(())
+}
+
+fn read_launch_agent_environment_value(
+    plist_path: &Path,
+    key: &str,
+) -> Result<Option<String>, String> {
+    let raw = fs::read_to_string(plist_path).map_err(|error| error.to_string())?;
+    let Some(env_section_start) = raw.find("<key>EnvironmentVariables</key>") else {
+        return Ok(None);
+    };
+    let env_section = &raw[env_section_start..];
+    let Some(dict_start_offset) = env_section.find("<dict>") else {
+        return Ok(None);
+    };
+    let env_section = &env_section[dict_start_offset + "<dict>".len()..];
+    let Some(dict_end_offset) = env_section.find("</dict>") else {
+        return Ok(None);
+    };
+    let env_section = &env_section[..dict_end_offset];
+    let key_marker = format!("<key>{key}</key>");
+    let Some(key_offset) = env_section.find(&key_marker) else {
+        return Ok(None);
+    };
+    let entry = &env_section[key_offset + key_marker.len()..];
+    let Some(string_start_offset) = entry.find("<string>") else {
+        return Ok(None);
+    };
+    let entry = &entry[string_start_offset + "<string>".len()..];
+    let Some(string_end_offset) = entry.find("</string>") else {
+        return Ok(None);
+    };
+    Ok(Some(plist_unescape(&entry[..string_end_offset])))
+}
+
+fn plist_unescape(value: &str) -> String {
+    value
+        .replace("&apos;", "'")
+        .replace("&quot;", "\"")
+        .replace("&gt;", ">")
+        .replace("&lt;", "<")
+        .replace("&amp;", "&")
+}
+
 fn gui_domain() -> String {
     current_uid()
         .map(|uid| format!("gui/{uid}"))
@@ -721,10 +865,13 @@ fn launchctl_not_loaded(output: &std::process::Output) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_launch_agent_plist, plist_escape, service_install_warnings, tail_text,
+        build_launch_agent_plist, plist_escape, plist_unescape, read_launch_agent_environment_value,
+        service_install_warnings, tail_text,
     };
     use std::collections::BTreeMap;
+    use std::fs;
     use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn plist_escape_handles_xml_special_characters() {
@@ -776,5 +923,43 @@ mod tests {
         assert_eq!(tail_text("a\nb\nc", 1), "c");
         assert_eq!(tail_text("a\nb\n", 5), "a\nb\n");
         assert_eq!(tail_text("a\nb\n", 0), "");
+    }
+
+    #[test]
+    fn plist_environment_values_round_trip() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ocm-service-global-plist-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        let plist_path = root.join("ai.openclaw.gateway.plist");
+        fs::write(
+            &plist_path,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+  <dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>OPENCLAW_CONFIG_PATH</key>
+      <string>/tmp/demo/openclaw.json</string>
+      <key>OPENCLAW_GATEWAY_PORT</key>
+      <string>18790</string>
+    </dict>
+  </dict>
+</plist>
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_launch_agent_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH").unwrap(),
+            Some("/tmp/demo/openclaw.json".to_string())
+        );
+        assert_eq!(
+            read_launch_agent_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT").unwrap(),
+            Some("18790".to_string())
+        );
+        assert_eq!(plist_unescape("&lt;a&amp;b&gt;"), "<a&b>");
+        fs::remove_dir_all(&root).unwrap();
     }
 }
