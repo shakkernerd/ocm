@@ -107,6 +107,21 @@ fn help_mentions_launcher_and_runtime_commands() {
 }
 
 #[test]
+fn help_uses_ocm_self_for_usage_examples() {
+    let root = TestDir::new("launcher-help-ocm-self");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert("OCM_SELF".to_string(), "./bin/ocm".to_string());
+
+    let help = run_ocm(&cwd, &env, &["help"]);
+    assert!(help.status.success(), "{}", stderr(&help));
+    let output = stdout(&help);
+    assert!(output.contains("./bin/ocm help"));
+    assert!(output.contains("eval \"$(./bin/ocm env use refactor-a)\""));
+}
+
+#[test]
 fn unknown_launcher_commands_use_launcher_specific_errors() {
     let root = TestDir::new("launcher-unknown-command");
     let cwd = root.child("workspace");
