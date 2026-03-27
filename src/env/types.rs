@@ -1,4 +1,51 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvMeta {
+    pub kind: String,
+    pub name: String,
+    pub root: String,
+    pub gateway_port: Option<u32>,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub protected: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub last_used_at: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvSummary {
+    pub name: String,
+    pub root: String,
+    pub openclaw_home: String,
+    pub state_dir: String,
+    pub config_path: String,
+    pub workspace_dir: String,
+    pub gateway_port: Option<u32>,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub protected: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub last_used_at: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvMarker {
+    pub kind: String,
+    pub name: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

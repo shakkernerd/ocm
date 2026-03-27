@@ -13,8 +13,8 @@ pub use execution::{
     ExecutionBinding, ResolvedExecution, resolve_execution_binding, resolve_runtime_run_dir,
 };
 pub use types::{
-    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
-    EnvMarkerRepairSummary, EnvStatusSummary, ExecutionSummary,
+    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary, EnvMarker,
+    EnvMarkerRepairSummary, EnvMeta, EnvStatusSummary, EnvSummary, ExecutionSummary,
 };
 
 pub struct EnvironmentService<'a> {

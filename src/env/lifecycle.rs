@@ -1,11 +1,11 @@
-use super::EnvironmentService;
+use super::{EnvMeta, EnvironmentService};
 use crate::store::{
     clone_environment, create_environment, export_environment, get_environment, get_launcher,
     get_runtime_verified, import_environment, list_environments, now_utc, remove_environment,
     save_environment, select_prune_candidates,
 };
 use crate::types::{
-    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary, EnvMeta,
+    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
     ExportEnvironmentOptions, ImportEnvironmentOptions,
 };
 

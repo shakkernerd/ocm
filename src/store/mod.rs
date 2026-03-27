@@ -11,7 +11,7 @@ use std::path::Path;
 
 use time::OffsetDateTime;
 
-use crate::types::{EnvMeta, EnvSummary};
+use crate::env::{EnvMeta, EnvSummary};
 use common::ensure_dir;
 pub use layout::{
     EnvPaths, StorePaths, clean_path, default_env_root, derive_env_paths, display_path,

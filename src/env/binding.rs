@@ -1,6 +1,5 @@
-use super::EnvironmentService;
+use super::{EnvMeta, EnvironmentService};
 use crate::store::{get_environment, get_launcher, get_runtime_verified, save_environment};
-use crate::types::EnvMeta;
 
 impl<'a> EnvironmentService<'a> {
     pub fn set_launcher(&self, name: &str, launcher_name: &str) -> Result<EnvMeta, String> {

@@ -1,6 +1,6 @@
 use time::Duration;
 
-use crate::types::EnvMeta;
+use crate::env::EnvMeta;
 
 use super::now_utc;
 

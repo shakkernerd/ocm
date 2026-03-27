@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use super::{EnvironmentService, ExecutionSummary};
+use super::{EnvMeta, EnvironmentService, ExecutionSummary};
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
 use crate::store::{get_launcher, get_runtime_verified};
-use crate::types::EnvMeta;
 
 #[derive(Debug)]
 pub enum ExecutionBinding {
