@@ -1,5 +1,28 @@
-use super::{RuntimeRelease, RuntimeReleaseManifest, RuntimeService};
+use serde::{Deserialize, Serialize};
+
+use super::RuntimeService;
 use crate::infra::download::fetch_json;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeReleaseManifest {
+    #[serde(default)]
+    pub kind: Option<String>,
+    pub releases: Vec<RuntimeRelease>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRelease {
+    pub version: String,
+    #[serde(default)]
+    pub channel: Option<String>,
+    pub url: String,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
 
 pub fn load_release_manifest(url: &str) -> Result<RuntimeReleaseManifest, String> {
     let manifest: RuntimeReleaseManifest = fetch_json(url)?;

@@ -1,14 +1,14 @@
 mod install;
 mod registry;
 pub mod releases;
-mod types;
 mod verify;
 
-pub use registry::RuntimeService;
-pub use types::{
-    AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
-    InstallRuntimeOptions, RuntimeBinarySummary, RuntimeMeta, RuntimeRelease,
-    RuntimeReleaseManifest, RuntimeReleaseSelectorKind, RuntimeSourceKind,
-    RuntimeUpdateBatchSummary, RuntimeUpdateSummary, RuntimeVerifySummary,
-    UpdateRuntimeFromReleaseOptions,
+pub use install::{
+    InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions,
+    RuntimeUpdateBatchSummary, RuntimeUpdateSummary, UpdateRuntimeFromReleaseOptions,
 };
+pub use registry::{
+    AddRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService, RuntimeSourceKind,
+};
+pub use releases::{RuntimeRelease, RuntimeReleaseManifest};
+pub use verify::{RuntimeBinarySummary, RuntimeVerifySummary};

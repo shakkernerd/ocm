@@ -1,9 +1,66 @@
 use super::{
-    InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions,
-    RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService, RuntimeUpdateBatchSummary,
-    RuntimeUpdateSummary, UpdateRuntimeFromReleaseOptions,
+    RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService,
 };
-use crate::store::{get_runtime, install_runtime, install_runtime_from_release, install_runtime_from_url, list_runtimes};
+use serde::Serialize;
+use crate::store::{
+    get_runtime, install_runtime, install_runtime_from_release, install_runtime_from_url,
+    list_runtimes,
+};
+
+#[derive(Clone, Debug)]
+pub struct InstallRuntimeOptions {
+    pub name: String,
+    pub path: String,
+    pub description: Option<String>,
+    pub force: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct InstallRuntimeFromUrlOptions {
+    pub name: String,
+    pub url: String,
+    pub description: Option<String>,
+    pub force: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct InstallRuntimeFromReleaseOptions {
+    pub name: String,
+    pub manifest_url: String,
+    pub version: Option<String>,
+    pub channel: Option<String>,
+    pub description: Option<String>,
+    pub force: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct UpdateRuntimeFromReleaseOptions {
+    pub name: String,
+    pub version: Option<String>,
+    pub channel: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeUpdateSummary {
+    pub name: String,
+    pub outcome: String,
+    pub binary_path: Option<String>,
+    pub source_kind: String,
+    pub release_version: Option<String>,
+    pub release_channel: Option<String>,
+    pub issue: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeUpdateBatchSummary {
+    pub count: usize,
+    pub updated: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub results: Vec<RuntimeUpdateSummary>,
+}
 
 impl<'a> RuntimeService<'a> {
     pub fn install(&self, options: InstallRuntimeOptions) -> Result<RuntimeMeta, String> {
@@ -46,12 +103,8 @@ impl<'a> RuntimeService<'a> {
                 existing.release_selector_kind.clone(),
                 existing.release_selector_value.clone(),
             ) {
-                (Some(RuntimeReleaseSelectorKind::Version), Some(value)) => {
-                    (Some(value), None)
-                }
-                (Some(RuntimeReleaseSelectorKind::Channel), Some(value)) => {
-                    (None, Some(value))
-                }
+                (Some(RuntimeReleaseSelectorKind::Version), Some(value)) => (Some(value), None),
+                (Some(RuntimeReleaseSelectorKind::Channel), Some(value)) => (None, Some(value)),
                 _ => {
                     return Err(format!(
                         "runtime \"{}\" does not have a stored release selector; pass --version or --channel",
@@ -126,9 +179,18 @@ impl<'a> RuntimeService<'a> {
                 }),
             }
         }
-        let updated = out.iter().filter(|summary| summary.outcome == "updated").count();
-        let skipped = out.iter().filter(|summary| summary.outcome == "skipped").count();
-        let failed = out.iter().filter(|summary| summary.outcome == "failed").count();
+        let updated = out
+            .iter()
+            .filter(|summary| summary.outcome == "updated")
+            .count();
+        let skipped = out
+            .iter()
+            .filter(|summary| summary.outcome == "skipped")
+            .count();
+        let failed = out
+            .iter()
+            .filter(|summary| summary.outcome == "failed")
+            .count();
         Ok(RuntimeUpdateBatchSummary {
             count: out.len(),
             updated,

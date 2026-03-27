@@ -1,10 +1,86 @@
-use super::{AddRuntimeOptions, RuntimeMeta};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::store::{
-    add_runtime, get_runtime_verified, list_runtimes, remove_runtime,
-};
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
+use crate::store::{add_runtime, get_runtime_verified, list_runtimes, remove_runtime};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeSourceKind {
+    Registered,
+    Installed,
+}
+
+impl RuntimeSourceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Registered => "registered",
+            Self::Installed => "installed",
+        }
+    }
+}
+
+fn default_runtime_source_kind() -> RuntimeSourceKind {
+    RuntimeSourceKind::Registered
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeReleaseSelectorKind {
+    Version,
+    Channel,
+}
+
+impl RuntimeReleaseSelectorKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Version => "version",
+            Self::Channel => "channel",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeMeta {
+    pub kind: String,
+    pub name: String,
+    pub binary_path: String,
+    #[serde(default = "default_runtime_source_kind")]
+    pub source_kind: RuntimeSourceKind,
+    #[serde(default)]
+    pub source_path: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub source_manifest_url: Option<String>,
+    #[serde(default)]
+    pub source_sha256: Option<String>,
+    #[serde(default)]
+    pub release_version: Option<String>,
+    #[serde(default)]
+    pub release_channel: Option<String>,
+    #[serde(default)]
+    pub release_selector_kind: Option<RuntimeReleaseSelectorKind>,
+    #[serde(default)]
+    pub release_selector_value: Option<String>,
+    #[serde(default)]
+    pub install_root: Option<String>,
+    pub description: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug)]
+pub struct AddRuntimeOptions {
+    pub name: String,
+    pub path: String,
+    pub description: Option<String>,
+}
 
 pub struct RuntimeService<'a> {
     pub(super) env: &'a BTreeMap<String, String>,

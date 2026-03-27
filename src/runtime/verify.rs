@@ -1,5 +1,33 @@
-use super::{RuntimeBinarySummary, RuntimeMeta, RuntimeService, RuntimeVerifySummary};
+use super::{RuntimeMeta, RuntimeService};
+use serde::Serialize;
 use crate::store::{get_runtime, get_runtime_verified, list_runtimes, runtime_integrity_issue};
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeVerifySummary {
+    pub name: String,
+    pub binary_path: String,
+    pub source_kind: String,
+    pub source_path: Option<String>,
+    pub source_url: Option<String>,
+    pub source_manifest_url: Option<String>,
+    pub source_sha256: Option<String>,
+    pub release_version: Option<String>,
+    pub release_channel: Option<String>,
+    pub install_root: Option<String>,
+    pub healthy: bool,
+    pub issue: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeBinarySummary {
+    pub name: String,
+    pub binary_path: String,
+    pub source_kind: String,
+    pub release_version: Option<String>,
+    pub release_channel: Option<String>,
+}
 
 impl<'a> RuntimeService<'a> {
     pub fn verify(&self, name: &str) -> Result<RuntimeVerifySummary, String> {
