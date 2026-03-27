@@ -16,6 +16,10 @@ pub use lifecycle::{
     CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
     ExportEnvironmentOptions, ImportEnvironmentOptions,
 };
+pub use snapshots::{
+    CreateEnvSnapshotOptions, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
+    EnvSnapshotSummary, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
+};
 pub use types::{
     EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary, EnvMarker,
     EnvMarkerRepairSummary, EnvMeta, EnvStatusSummary, EnvSummary, ExecutionSummary,

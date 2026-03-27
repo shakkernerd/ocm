@@ -1,13 +1,67 @@
+use serde::Serialize;
+
 use super::EnvironmentService;
 use crate::store::{
     create_env_snapshot, get_env_snapshot, list_all_env_snapshots, list_env_snapshots, now_utc,
     remove_env_snapshot, restore_env_snapshot, select_snapshot_prune_candidates,
     summarize_snapshot,
 };
-use crate::types::{
-    CreateEnvSnapshotOptions, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
-    EnvSnapshotSummary, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
-};
+
+#[derive(Clone, Debug)]
+pub struct CreateEnvSnapshotOptions {
+    pub env_name: String,
+    pub label: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvSnapshotSummary {
+    pub id: String,
+    pub env_name: String,
+    pub label: Option<String>,
+    pub archive_path: String,
+    pub source_root: String,
+    pub gateway_port: Option<u32>,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub protected: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: time::OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvSnapshotRestoreSummary {
+    pub env_name: String,
+    pub snapshot_id: String,
+    pub label: Option<String>,
+    pub root: String,
+    pub archive_path: String,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub protected: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvSnapshotRemoveSummary {
+    pub env_name: String,
+    pub snapshot_id: String,
+    pub label: Option<String>,
+    pub archive_path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct RestoreEnvSnapshotOptions {
+    pub env_name: String,
+    pub snapshot_id: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct RemoveEnvSnapshotOptions {
+    pub env_name: String,
+    pub snapshot_id: String,
+}
 
 impl<'a> EnvironmentService<'a> {
     pub fn create_snapshot(
