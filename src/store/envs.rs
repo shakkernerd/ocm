@@ -3,13 +3,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::env::{EnvMarker, EnvMeta};
+use crate::env::{
+    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
+    EnvMarker, EnvMarkerRepairSummary, EnvMeta, ExportEnvironmentOptions,
+    ImportEnvironmentOptions,
+};
 use crate::infra::archive::{
     ArchivedEnvMeta, EnvArchiveManifest, extract_env_archive, write_env_archive,
-};
-use crate::types::{
-    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
-    EnvMarkerRepairSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
 };
 
 use super::layout::{

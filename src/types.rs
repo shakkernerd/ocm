@@ -6,11 +6,6 @@ pub use crate::env::{
     EnvMarker, EnvMarkerRepairSummary, EnvMeta, EnvStatusSummary, EnvSummary, ExecutionSummary,
 };
 
-pub use crate::env::{
-    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
-    ExportEnvironmentOptions, ImportEnvironmentOptions,
-};
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvSnapshotMeta {

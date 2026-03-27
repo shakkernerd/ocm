@@ -2,8 +2,11 @@ mod support;
 
 use std::fs;
 
+use ocm::env::{
+    CloneEnvironmentOptions, CreateEnvironmentOptions, ExportEnvironmentOptions,
+    ImportEnvironmentOptions, EnvironmentService,
+};
 use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive};
-use ocm::env::EnvironmentService;
 use ocm::launcher::AddLauncherOptions;
 use ocm::runtime::{AddRuntimeOptions, InstallRuntimeOptions, RuntimeSourceKind};
 use ocm::store::{
@@ -15,9 +18,7 @@ use ocm::store::{
     repair_environment_marker, restore_env_snapshot, runtime_install_root, runtime_meta_path,
 };
 use ocm::types::{
-    CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
-    ExportEnvironmentOptions, ImportEnvironmentOptions, RemoveEnvSnapshotOptions,
-    RestoreEnvSnapshotOptions,
+    CreateEnvSnapshotOptions, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
 };
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
