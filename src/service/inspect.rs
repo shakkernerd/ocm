@@ -75,6 +75,9 @@ pub struct DiscoveredServiceSummary {
     pub state_dir: Option<String>,
     pub openclaw_home: Option<String>,
     pub gateway_port: Option<u32>,
+    pub program: Option<String>,
+    pub program_arguments: Vec<String>,
+    pub working_directory: Option<String>,
     pub matched_env_name: Option<String>,
     pub adoptable: bool,
     pub adopt_reason: Option<String>,
@@ -182,12 +185,18 @@ pub fn discover_services(
         let config_path = read_launch_agent_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH")?;
         let state_dir = read_launch_agent_environment_value(&plist_path, "OPENCLAW_STATE_DIR")?;
         let openclaw_home = read_launch_agent_environment_value(&plist_path, "OPENCLAW_HOME")?;
+        let program_arguments = read_plist_array_values(&plist_path, "ProgramArguments")?;
+        let program = read_plist_string_value(&plist_path, "Program")?
+            .or_else(|| program_arguments.first().cloned());
+        let working_directory = read_plist_string_value(&plist_path, "WorkingDirectory")?;
         let gateway_port =
             read_launch_agent_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT")?
                 .and_then(|value| value.parse::<u32>().ok());
 
         if !looks_like_openclaw_service(
             &label,
+            program.as_deref(),
+            &program_arguments,
             config_path.as_deref(),
             state_dir.as_deref(),
             openclaw_home.as_deref(),
@@ -223,6 +232,9 @@ pub fn discover_services(
             state_dir,
             openclaw_home,
             gateway_port,
+            program,
+            program_arguments,
+            working_directory,
             matched_env_name,
             adoptable,
             adopt_reason,
@@ -498,16 +510,26 @@ fn latest_matching_global_backup_path(
 
 fn looks_like_openclaw_service(
     label: &str,
+    program: Option<&str>,
+    program_arguments: &[String],
     config_path: Option<&str>,
     state_dir: Option<&str>,
     openclaw_home: Option<&str>,
     gateway_port: Option<u32>,
 ) -> bool {
-    label.contains("openclaw")
+    string_mentions_openclaw(label)
+        || program.is_some_and(string_mentions_openclaw)
+        || program_arguments
+            .iter()
+            .any(|value| string_mentions_openclaw(value))
         || config_path.is_some()
         || state_dir.is_some()
         || openclaw_home.is_some()
         || gateway_port.is_some()
+}
+
+fn string_mentions_openclaw(value: &str) -> bool {
+    value.to_ascii_lowercase().contains("openclaw")
 }
 
 fn discovered_source_kind(label: &str) -> &'static str {
@@ -591,6 +613,12 @@ fn read_plist_string_value(plist_path: &Path, key: &str) -> Result<Option<String
     read_plist_string_value_from_section(&raw, &key_marker)
 }
 
+fn read_plist_array_values(plist_path: &Path, key: &str) -> Result<Vec<String>, String> {
+    let raw = fs::read_to_string(plist_path).map_err(|error| error.to_string())?;
+    let key_marker = format!("<key>{key}</key>");
+    read_plist_array_values_from_section(&raw, &key_marker)
+}
+
 fn read_plist_string_value_from_section(
     section: &str,
     key_marker: &str,
@@ -609,6 +637,34 @@ fn read_plist_string_value_from_section(
     Ok(Some(plist_unescape(&entry[..string_end_offset])))
 }
 
+fn read_plist_array_values_from_section(
+    section: &str,
+    key_marker: &str,
+) -> Result<Vec<String>, String> {
+    let Some(key_offset) = section.find(key_marker) else {
+        return Ok(Vec::new());
+    };
+    let entry = &section[key_offset + key_marker.len()..];
+    let Some(array_start_offset) = entry.find("<array>") else {
+        return Ok(Vec::new());
+    };
+    let entry = &entry[array_start_offset + "<array>".len()..];
+    let Some(array_end_offset) = entry.find("</array>") else {
+        return Ok(Vec::new());
+    };
+    let mut array_section = &entry[..array_end_offset];
+    let mut values = Vec::new();
+    while let Some(string_start_offset) = array_section.find("<string>") {
+        let string_section = &array_section[string_start_offset + "<string>".len()..];
+        let Some(string_end_offset) = string_section.find("</string>") else {
+            break;
+        };
+        values.push(plist_unescape(&string_section[..string_end_offset]));
+        array_section = &string_section[string_end_offset + "</string>".len()..];
+    }
+    Ok(values)
+}
+
 fn plist_unescape(value: &str) -> String {
     value
         .replace("&apos;", "'")
@@ -623,6 +679,7 @@ mod tests {
     use super::{
         LaunchdJobStatus, discover_adoption_state, discovered_source_kind,
         looks_like_openclaw_service, managed_service_label, parse_launchctl_print,
+        read_plist_array_values_from_section, string_mentions_openclaw,
     };
 
     #[test]
@@ -679,19 +736,34 @@ environment = {
         assert!(looks_like_openclaw_service(
             "com.example.openclaw",
             None,
+            &[],
+            None,
             None,
             None,
             None
         ));
         assert!(looks_like_openclaw_service(
             "com.example.something",
+            Some("/usr/local/bin/openclaw"),
+            &[],
             Some("/tmp/openclaw.json"),
+            None,
+            None,
+            None,
+        ));
+        assert!(looks_like_openclaw_service(
+            "com.example.something",
+            Some("/bin/sh"),
+            &["openclaw gateway run".to_string()],
+            None,
             None,
             None,
             None,
         ));
         assert!(!looks_like_openclaw_service(
             "com.example.something",
+            Some("/bin/sh"),
+            &["echo hello".to_string()],
             None,
             None,
             None,
@@ -715,6 +787,35 @@ environment = {
         assert_eq!(
             reason.as_deref(),
             Some("foreign OpenClaw services are discoverable but not adoptable yet")
+        );
+    }
+
+    #[test]
+    fn string_matching_for_openclaw_is_case_insensitive() {
+        assert!(string_mentions_openclaw("/Users/example/OpenClaw"));
+    }
+
+    #[test]
+    fn plist_array_values_round_trip() {
+        let values = read_plist_array_values_from_section(
+            r#"
+<key>ProgramArguments</key>
+<array>
+  <string>/bin/sh</string>
+  <string>-lc</string>
+  <string>openclaw gateway run</string>
+</array>
+"#,
+            "<key>ProgramArguments</key>",
+        )
+        .unwrap();
+        assert_eq!(
+            values,
+            vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "openclaw gateway run".to_string(),
+            ]
         );
     }
 }

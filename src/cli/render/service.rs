@@ -172,6 +172,18 @@ pub fn service_discover(summary: &DiscoveredServiceList) -> Vec<String> {
         if let Some(gateway_port) = service.gateway_port {
             lines.push(format!("  port: {gateway_port}"));
         }
+        if let Some(program) = service.program.as_deref() {
+            lines.push(format!("  program: {program}"));
+        }
+        if !service.program_arguments.is_empty() {
+            lines.push(format!(
+                "  programArguments: {}",
+                service.program_arguments.join(" | ")
+            ));
+        }
+        if let Some(working_directory) = service.working_directory.as_deref() {
+            lines.push(format!("  workingDirectory: {working_directory}"));
+        }
         if let Some(matched_env_name) = service.matched_env_name.as_deref() {
             lines.push(format!("  matchedEnv: {matched_env_name}"));
             if service.adoptable {

@@ -37,7 +37,25 @@ fn allocate_free_port() -> u16 {
         .port()
 }
 
-fn write_launch_agent_plist(path: &Path, label: &str, env_vars: &[(&str, &str)]) {
+fn write_launch_agent_plist(
+    path: &Path,
+    label: &str,
+    program_arguments: &[&str],
+    working_directory: Option<&str>,
+    env_vars: &[(&str, &str)],
+) {
+    let program_arguments_section = if program_arguments.is_empty() {
+        String::new()
+    } else {
+        let values = program_arguments
+            .iter()
+            .map(|value| format!("      <string>{value}</string>\n"))
+            .collect::<String>();
+        format!("    <key>ProgramArguments</key>\n    <array>\n{values}    </array>\n")
+    };
+    let working_directory_section = working_directory
+        .map(|value| format!("    <key>WorkingDirectory</key>\n    <string>{value}</string>\n"))
+        .unwrap_or_default();
     let env_section = env_vars
         .iter()
         .map(|(key, value)| format!("      <key>{key}</key>\n      <string>{value}</string>\n"))
@@ -50,6 +68,7 @@ fn write_launch_agent_plist(path: &Path, label: &str, env_vars: &[(&str, &str)])
   <dict>
     <key>Label</key>
     <string>{label}</string>
+{program_arguments_section}{working_directory_section}
     <key>EnvironmentVariables</key>
     <dict>
 {env_section}    </dict>
@@ -300,6 +319,8 @@ fn service_discover_lists_ocm_global_and_foreign_services_in_json() {
     write_launch_agent_plist(
         &root.child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist"),
         "ai.openclaw.gateway.ocm.demo",
+        &["/bin/sh", "-lc", "openclaw gateway run --port 18789"],
+        Some(&demo_state_dir),
         &[
             ("OPENCLAW_CONFIG_PATH", demo_config_path.as_str()),
             ("OPENCLAW_STATE_DIR", demo_state_dir.as_str()),
@@ -311,6 +332,14 @@ fn service_discover_lists_ocm_global_and_foreign_services_in_json() {
         &root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist"),
         "ai.openclaw.gateway",
         &[
+            "/opt/openclaw/bin/openclaw",
+            "gateway",
+            "run",
+            "--port",
+            "18789",
+        ],
+        Some("/srv/openclaw/global"),
+        &[
             ("OPENCLAW_CONFIG_PATH", demo_config_path.as_str()),
             ("OPENCLAW_GATEWAY_PORT", "18789"),
         ],
@@ -318,6 +347,8 @@ fn service_discover_lists_ocm_global_and_foreign_services_in_json() {
     write_launch_agent_plist(
         &root.child("home/Library/LaunchAgents/com.example.openclaw.staging.plist"),
         "com.example.openclaw.staging",
+        &["/bin/sh", "-lc", "openclaw gateway run --port 19789"],
+        Some("/srv/openclaw/staging"),
         &[
             (
                 "OPENCLAW_CONFIG_PATH",
@@ -344,6 +375,12 @@ fn service_discover_lists_ocm_global_and_foreign_services_in_json() {
     assert_eq!(managed["gatewayPort"], 18789);
     assert_eq!(managed["stateDir"], demo_state_dir);
     assert_eq!(managed["openclawHome"], demo_openclaw_home);
+    assert_eq!(managed["program"], "/bin/sh");
+    assert_eq!(
+        managed["programArguments"],
+        serde_json::json!(["/bin/sh", "-lc", "openclaw gateway run --port 18789"])
+    );
+    assert_eq!(managed["workingDirectory"], demo_state_dir);
     assert_eq!(managed["adoptable"], false);
     assert_eq!(managed["adoptReason"], "already managed by ocm");
 
@@ -353,6 +390,18 @@ fn service_discover_lists_ocm_global_and_foreign_services_in_json() {
         .unwrap();
     assert_eq!(global["sourceKind"], "openclaw-global");
     assert_eq!(global["matchedEnvName"], "demo");
+    assert_eq!(global["program"], "/opt/openclaw/bin/openclaw");
+    assert_eq!(
+        global["programArguments"],
+        serde_json::json!([
+            "/opt/openclaw/bin/openclaw",
+            "gateway",
+            "run",
+            "--port",
+            "18789"
+        ])
+    );
+    assert_eq!(global["workingDirectory"], "/srv/openclaw/global");
     assert_eq!(global["adoptable"], true);
     assert_eq!(
         global["adoptReason"],
@@ -366,6 +415,12 @@ fn service_discover_lists_ocm_global_and_foreign_services_in_json() {
     assert_eq!(foreign["sourceKind"], "foreign");
     assert_eq!(foreign["matchedEnvName"], Value::Null);
     assert_eq!(foreign["gatewayPort"], 19789);
+    assert_eq!(foreign["program"], "/bin/sh");
+    assert_eq!(
+        foreign["programArguments"],
+        serde_json::json!(["/bin/sh", "-lc", "openclaw gateway run --port 19789"])
+    );
+    assert_eq!(foreign["workingDirectory"], "/srv/openclaw/staging");
     assert_eq!(foreign["adoptable"], false);
     assert_eq!(
         foreign["adoptReason"],
@@ -383,6 +438,8 @@ fn service_discover_ignores_unrelated_launch_agents() {
     write_launch_agent_plist(
         &root.child("home/Library/LaunchAgents/com.example.other.plist"),
         "com.example.other",
+        &["/usr/bin/echo", "hello"],
+        Some("/tmp"),
         &[("SOME_KEY", "some-value")],
     );
 
@@ -390,6 +447,51 @@ fn service_discover_ignores_unrelated_launch_agents() {
     assert!(output.status.success(), "{}", stderr(&output));
     let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(summary["services"], serde_json::json!([]));
+}
+
+#[test]
+fn service_discover_finds_openclaw_programs_without_openclaw_env_vars() {
+    let root = TestDir::new("service-discover-program-only");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    write_launch_agent_plist(
+        &root.child("home/Library/LaunchAgents/com.example.gateway.plist"),
+        "com.example.gateway",
+        &[
+            "/usr/local/bin/openclaw",
+            "gateway",
+            "run",
+            "--port",
+            "19790",
+        ],
+        Some("/srv/openclaw/program-only"),
+        &[("PATH", "/usr/local/bin:/usr/bin:/bin")],
+    );
+
+    let output = run_ocm(&cwd, &env, &["service", "discover", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let services = summary["services"].as_array().unwrap();
+    assert_eq!(services.len(), 1);
+    assert_eq!(services[0]["label"], "com.example.gateway");
+    assert_eq!(services[0]["sourceKind"], "foreign");
+    assert_eq!(services[0]["program"], "/usr/local/bin/openclaw");
+    assert_eq!(
+        services[0]["programArguments"],
+        serde_json::json!([
+            "/usr/local/bin/openclaw",
+            "gateway",
+            "run",
+            "--port",
+            "19790"
+        ])
+    );
+    assert_eq!(
+        services[0]["workingDirectory"],
+        "/srv/openclaw/program-only"
+    );
 }
 
 #[test]
