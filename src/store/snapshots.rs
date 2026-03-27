@@ -11,7 +11,7 @@ use crate::env::{
 use crate::infra::archive::{
     ArchivedEnvMeta, EnvArchiveManifest, extract_env_archive, write_env_archive,
 };
-use crate::types::EnvSnapshotMeta;
+use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 
 use super::layout::{
@@ -22,6 +22,24 @@ use super::common::{copy_dir_recursive, load_json_files, path_exists, read_json,
 use super::{get_environment, now_utc, save_environment};
 
 static NEXT_RESTORE_ID: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvSnapshotMeta {
+    pub kind: String,
+    pub id: String,
+    pub env_name: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    pub archive_path: String,
+    pub source_root: String,
+    pub gateway_port: Option<u32>,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub protected: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
 
 pub fn create_env_snapshot(
     options: CreateEnvSnapshotOptions,
@@ -402,8 +420,7 @@ fn remove_snapshot_parent_if_empty(
 mod tests {
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-    use super::select_snapshot_prune_candidates;
-    use crate::types::EnvSnapshotMeta;
+    use super::{EnvSnapshotMeta, select_snapshot_prune_candidates};
 
     #[test]
     fn snapshot_prune_selection_keeps_the_newest_snapshots_per_environment() {
