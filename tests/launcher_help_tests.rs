@@ -5,8 +5,8 @@ use std::fs;
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
 #[test]
-fn help_mentions_launcher_runtime_and_service_commands() {
-    let root = TestDir::new("launcher-help");
+fn top_level_help_is_clean_and_points_to_topics() {
+    let root = TestDir::new("help-root");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
@@ -14,127 +14,23 @@ fn help_mentions_launcher_runtime_and_service_commands() {
     let help = run_ocm(&cwd, &env, &["help"]);
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
-    assert!(output.contains("init [zsh|bash|sh|fish]"));
-    assert!(output.contains("init bash"));
-    assert!(output.contains("init fish"));
-    assert!(output.contains("launcher add <name> --command"));
-    assert!(output.contains("env clone <source> <target> [--root <path>] [--json]"));
-    assert!(output.contains("env clone refactor-a refactor-b"));
-    assert!(output.contains("env export <name> [--output <path>] [--json]"));
-    assert!(output.contains("env export refactor-a --output ./backups/refactor-a.ocm-env.tar"));
-    assert!(output.contains("env import <archive> [--name <name>] [--root <path>] [--json]"));
-    assert!(output.contains("env import ./backups/refactor-a.ocm-env.tar --name refactor-b"));
-    assert!(output.contains("env snapshot create <name> [--label <label>] [--json]"));
-    assert!(output.contains("env snapshot create refactor-a --label before-upgrade"));
-    assert!(output.contains("env snapshot show <name> <snapshot> [--json]"));
-    assert!(output.contains("env snapshot list <name> [--json]"));
-    assert!(output.contains("env snapshot list --all [--json]"));
-    assert!(output.contains("env snapshot restore <name> <snapshot> [--json]"));
-    assert!(output.contains("env snapshot remove <name> <snapshot> [--json]"));
-    assert!(output.contains(
-        "env snapshot prune (<name> | --all) [--keep <count>] [--older-than <days>] [--yes] [--json]"
-    ));
-    assert!(output.contains("env snapshot show refactor-a 1742922000-123456789"));
-    assert!(output.contains("env snapshot list refactor-a"));
-    assert!(output.contains("env snapshot list --all --json"));
-    assert!(output.contains("env snapshot restore refactor-a 1742922000-123456789"));
-    assert!(output.contains("env snapshot remove refactor-a 1742922000-123456789"));
-    assert!(output.contains("env snapshot prune refactor-a --keep 5 --yes"));
-    assert!(output.contains("env snapshot prune --all --older-than 30 --json"));
-    assert!(output.contains("env list [--raw] [--json]"));
-    assert!(output.contains("env doctor <name> [--json]"));
-    assert!(output.contains("env doctor refactor-a --json"));
-    assert!(output.contains("env cleanup (<name> | --all) [--yes] [--json]"));
-    assert!(output.contains("env cleanup refactor-a --json"));
-    assert!(output.contains("env cleanup refactor-a --yes"));
-    assert!(output.contains("env cleanup --all --yes"));
-    assert!(output.contains("env repair-marker <name> [--json]"));
-    assert!(output.contains("env repair-marker refactor-a --json"));
-    assert!(output.contains(
-        "runtime releases --manifest-url <url> [--version <version> | --channel <channel>] [--json]"
-    ));
-    assert!(output.contains(
-        "runtime releases --manifest-url https://example.test/openclaw-releases.json --channel stable"
-    ));
-    assert!(output.contains(
-        "runtime releases --manifest-url https://example.test/openclaw-releases.json --version 0.2.0 --json"
-    ));
-    assert!(output.contains("launcher list [--raw] [--json]"));
-    assert!(output.contains("launcher show <name> [--json]"));
-    assert!(output.contains("launcher remove <name>"));
-    assert!(output.contains("runtime add <name> --path <binary> [--description <text>]"));
-    assert!(output.contains(
-        "runtime install <name> (--path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force]"
-    ));
-    assert!(output.contains(
-        "runtime update (<name> | --all) [--version <version> | --channel <channel>] [--json]"
-    ));
-    assert!(output.contains("runtime update stable"));
-    assert!(output.contains("runtime update --all"));
-    assert!(output.contains(
-        "runtime install stable --manifest-url https://example.test/openclaw-releases.json --version 0.2.0"
-    ));
-    assert!(output.contains(
-        "runtime install stable --manifest-url https://example.test/openclaw-releases.json --channel stable"
-    ));
-    assert!(output.contains("runtime update stable --version 0.3.0"));
-    assert!(output.contains("runtime list [--raw] [--json]"));
-    assert!(output.contains("runtime show <name> [--json]"));
-    assert!(output.contains("runtime verify (<name> | --all) [--json]"));
-    assert!(output.contains("runtime verify --all"));
+    assert!(output.contains("OpenClaw Manager"));
     assert!(
-        output.contains(
-            "runtime install nightly --url https://example.test/openclaw-nightly --force"
-        )
+        output
+            .contains("Manage isolated OpenClaw environments, runtimes, launchers, and services.")
     );
-    assert!(output.contains("runtime which <name> [--json]"));
-    assert!(output.contains("runtime which nightly --json"));
-    assert!(output.contains("runtime remove <name>"));
-    assert!(output.contains("service adopt-global <env> [--dry-run] [--json]"));
-    assert!(output.contains("service restore-global <env> [--dry-run] [--json]"));
-    assert!(output.contains("service discover [--raw] [--json]"));
-    assert!(output.contains("service install <env> [--json]"));
-    assert!(output.contains("service list [--raw] [--json]"));
-    assert!(output.contains("service status <env> [--json]"));
-    assert!(output.contains("service status --all [--raw] [--json]"));
-    assert!(output.contains("service logs <env> [--stderr] [--tail <count>] [--json]"));
-    assert!(output.contains("service start <env> [--json]"));
-    assert!(output.contains("service stop <env> [--json]"));
-    assert!(output.contains("service restart <env> [--json]"));
-    assert!(output.contains("service uninstall <env> [--json]"));
-    assert!(output.contains("service adopt-global refactor-a --dry-run --json"));
-    assert!(output.contains("service restore-global refactor-a --dry-run --json"));
-    assert!(output.contains("service discover --json"));
-    assert!(output.contains("service install refactor-a --json"));
-    assert!(output.contains("service list"));
-    assert!(output.contains("service status refactor-a --json"));
-    assert!(output.contains("service status --all"));
-    assert!(output.contains("service logs refactor-a"));
-    assert!(output.contains("service logs refactor-a --stderr --tail 50"));
-    assert!(output.contains("service start refactor-a"));
-    assert!(output.contains("service restart refactor-a --json"));
-    assert!(output.contains("service stop refactor-a"));
-    assert!(output.contains("service uninstall refactor-a"));
-    assert!(output.contains(
-        "env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]"
-    ));
-    assert!(output.contains("env status <name> [--json]"));
-    assert!(output.contains(
-        "env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]"
-    ));
-    assert!(
-        output.contains(
-            "env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>"
-        )
-    );
-    assert!(output.contains("env set-runtime <name> <runtime|none>"));
-    assert!(output.contains("env set-launcher <name> <launcher|none>"));
-    assert!(!output.contains("version add <name> --command"));
+    assert!(output.contains("ocm <command> [args]"));
+    assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
+    assert!(output.contains("launcher add stable --command openclaw"));
+    assert!(output.contains("ocm help env"));
+    assert!(output.contains("ocm help runtime install"));
+    assert!(!output.contains("env snapshot restore <name> <snapshot>"));
+    assert!(!output.contains("service restore-global <env> [--dry-run] [--json]"));
 }
 
 #[test]
-fn help_uses_ocm_self_for_usage_examples() {
-    let root = TestDir::new("launcher-help-ocm-self");
+fn help_uses_ocm_self_for_root_and_leaf_examples() {
+    let root = TestDir::new("help-ocm-self");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let mut env = ocm_env(&root);
@@ -143,8 +39,99 @@ fn help_uses_ocm_self_for_usage_examples() {
     let help = run_ocm(&cwd, &env, &["help"]);
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
-    assert!(output.contains("./bin/ocm help"));
-    assert!(output.contains("eval \"$(./bin/ocm env use refactor-a)\""));
+    assert!(output.contains("./bin/ocm <command> [args]"));
+    assert!(output.contains("eval \"$(./bin/ocm env use demo)\""));
+
+    let help = run_ocm(&cwd, &env, &["help", "env", "run"]);
+    assert!(help.status.success(), "{}", stderr(&help));
+    let output = stdout(&help);
+    assert!(output.contains(
+        "./bin/ocm env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>"
+    ));
+    assert!(output.contains("./bin/ocm env run demo -- onboard"));
+}
+
+#[test]
+fn env_group_help_is_available_from_help_and_bare_group() {
+    let root = TestDir::new("help-env-group");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "env"]);
+    let bare = run_ocm(&cwd, &env, &["env"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(bare.status.success(), "{}", stderr(&bare));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&bare));
+    assert!(output.contains("Environment commands"));
+    assert!(output.contains("snapshot create"));
+    assert!(output.contains("Portability:"));
+    assert!(output.contains("ocm help env create"));
+    assert!(output.contains("ocm help env snapshot"));
+}
+
+#[test]
+fn env_run_help_is_available_through_help_keyword_and_flag() {
+    let root = TestDir::new("help-env-run");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "env", "run"]);
+    let via_flag = run_ocm(&cwd, &env, &["env", "run", "--help"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(via_flag.status.success(), "{}", stderr(&via_flag));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&via_flag));
+    assert!(output.contains("Run OpenClaw inside an environment"));
+    assert!(output.contains(
+        "ocm env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>"
+    ));
+    assert!(output.contains("The target environment is isolated through OPENCLAW_HOME."));
+}
+
+#[test]
+fn nested_snapshot_help_is_available() {
+    let root = TestDir::new("help-env-snapshot");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let group = run_ocm(&cwd, &env, &["env", "snapshot"]);
+    assert!(group.status.success(), "{}", stderr(&group));
+    let output = stdout(&group);
+    assert!(output.contains("Environment snapshot commands"));
+    assert!(output.contains("snapshot prune"));
+
+    let leaf = run_ocm(&cwd, &env, &["env", "snapshot", "create", "--help"]);
+    assert!(leaf.status.success(), "{}", stderr(&leaf));
+    let output = stdout(&leaf);
+    assert!(output.contains("Create an environment snapshot"));
+    assert!(output.contains("ocm env snapshot create <name> [--label <label>] [--json]"));
+}
+
+#[test]
+fn runtime_and_service_leaf_help_are_command_specific() {
+    let root = TestDir::new("help-runtime-service");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let runtime = run_ocm(&cwd, &env, &["help", "runtime", "install"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let output = stdout(&runtime);
+    assert!(output.contains("Install a managed runtime"));
+    assert!(output.contains("--manifest-url <url>"));
+    assert!(output.contains("Exactly one install source must be provided."));
+
+    let service = run_ocm(&cwd, &env, &["service", "discover", "--help"]);
+    assert!(service.status.success(), "{}", stderr(&service));
+    let output = stdout(&service);
+    assert!(output.contains("Discover OpenClaw services"));
+    assert!(output.contains("ocm service discover [--raw] [--json]"));
 }
 
 #[test]
