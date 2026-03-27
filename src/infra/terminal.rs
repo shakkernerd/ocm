@@ -254,7 +254,7 @@ fn pad(value: &str, width: usize, align: Align) -> String {
 }
 
 fn display_width(value: &str) -> usize {
-    value.chars().count()
+    UnicodeWidthStr::width(value)
 }
 
 #[cfg(test)]
@@ -313,3 +313,4 @@ mod tests {
         assert_eq!(tags, "[launcher:dev] [running]");
     }
 }
+use unicode_width::UnicodeWidthStr;

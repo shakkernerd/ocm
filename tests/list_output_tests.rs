@@ -124,6 +124,11 @@ fn env_and_service_detail_commands_accept_raw_output_mode() {
     assert!(stdout(&env_resolve).contains("bindingKind: launcher"));
     assert!(!stdout(&env_resolve).contains("┌"));
 
+    let env_doctor = run_ocm(&cwd, &env, &["env", "doctor", "demo", "--raw"]);
+    assert!(env_doctor.status.success(), "{}", stderr(&env_doctor));
+    assert!(stdout(&env_doctor).contains("healthy: true"));
+    assert!(!stdout(&env_doctor).contains("┌"));
+
     let service_status = run_ocm(&cwd, &env, &["service", "status", "demo", "--raw"]);
     assert!(
         service_status.status.success(),
@@ -164,6 +169,10 @@ fn list_output_flags_reject_mixed_json_and_raw() {
     let env_resolve = run_ocm(&cwd, &env, &["env", "resolve", "demo", "--json", "--raw"]);
     assert_eq!(env_resolve.status.code(), Some(1));
     assert!(stderr(&env_resolve).contains("env resolve accepts only one of --json or --raw"));
+
+    let env_doctor = run_ocm(&cwd, &env, &["env", "doctor", "demo", "--json", "--raw"]);
+    assert_eq!(env_doctor.status.code(), Some(1));
+    assert!(stderr(&env_doctor).contains("env doctor accepts only one of --json or --raw"));
 
     let service_status = run_ocm(
         &cwd,

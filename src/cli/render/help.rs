@@ -513,10 +513,19 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
         "doctor" => render_leaf(
             "Inspect environment health",
             "Report environment problems without changing anything.",
-            vec![format!("{cmd} env doctor <name> [--json]")],
-            &[("--json", "Print doctor findings as JSON")],
-            vec![format!("{cmd} env doctor demo")],
-            &[],
+            vec![format!("{cmd} env doctor <name> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain key/value output instead of TTY card rendering",
+                ),
+                ("--json", "Print doctor findings as JSON"),
+            ],
+            vec![
+                format!("{cmd} env doctor demo"),
+                format!("{cmd} env doctor demo --raw"),
+            ],
+            &["TTY output uses grouped cards by default. Piped output stays plain."],
         ),
         "cleanup" => render_leaf(
             "Repair safe environment issues",

@@ -129,7 +129,66 @@ pub fn env_imported(summary: &EnvImportSummary, command_example: &str) -> Vec<St
     lines
 }
 
-pub fn env_doctor(doctor: &EnvDoctorSummary) -> Vec<String> {
+pub fn env_doctor(doctor: &EnvDoctorSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return env_doctor_raw(doctor);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Environment doctor {}", doctor.env_name),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.push(render_tags(&env_doctor_tags(doctor), profile.color));
+
+    push_card(
+        &mut lines,
+        "Summary",
+        vec![
+            KeyValueRow::plain("Root", doctor.root.clone()),
+            KeyValueRow::new(
+                "Healthy",
+                if doctor.healthy { "yes" } else { "no" },
+                if doctor.healthy {
+                    Tone::Success
+                } else {
+                    Tone::Danger
+                },
+            ),
+            optional_value_row("Default runtime", doctor.default_runtime.clone()),
+            optional_value_row("Default launcher", doctor.default_launcher.clone()),
+            doctor_resolution_row(doctor),
+        ],
+        profile.color,
+    );
+
+    push_card(
+        &mut lines,
+        "Checks",
+        vec![
+            doctor_state_row("Root", &doctor.root_status),
+            doctor_state_row("Marker", &doctor.marker_status),
+            doctor_state_row("Runtime", &doctor.runtime_status),
+            doctor_state_row("Launcher", &doctor.launcher_status),
+            doctor_state_row("Resolution", &doctor.resolution_status),
+        ],
+        profile.color,
+    );
+
+    if !doctor.issues.is_empty() {
+        let issue_rows = doctor
+            .issues
+            .iter()
+            .enumerate()
+            .map(|(index, issue)| KeyValueRow::danger(format!("#{}", index + 1), issue.clone()))
+            .collect::<Vec<_>>();
+        push_card(&mut lines, "Issues", issue_rows, profile.color);
+    }
+
+    lines
+}
+
+fn env_doctor_raw(doctor: &EnvDoctorSummary) -> Vec<String> {
     let mut lines = vec![
         format!("envName: {}", doctor.env_name),
         format!("root: {}", doctor.root),
@@ -398,6 +457,47 @@ fn env_status_tags(status: &EnvStatusSummary) -> Vec<Cell> {
     tags
 }
 
+fn env_doctor_tags(doctor: &EnvDoctorSummary) -> Vec<Cell> {
+    let mut tags = vec![if doctor.healthy {
+        Cell::success("healthy")
+    } else {
+        Cell::danger("needs attention")
+    }];
+    if let (Some(kind), Some(name)) = (
+        doctor.resolved_kind.as_deref(),
+        doctor.resolved_name.as_deref(),
+    ) {
+        tags.push(Cell::accent(format!("{kind}:{name}")));
+    }
+    if !doctor.issues.is_empty() {
+        tags.push(Cell::warning(format!("{} issue(s)", doctor.issues.len())));
+    }
+    tags
+}
+
+fn doctor_resolution_row(doctor: &EnvDoctorSummary) -> KeyValueRow {
+    match (
+        doctor.resolved_kind.as_deref(),
+        doctor.resolved_name.as_deref(),
+    ) {
+        (Some(kind), Some(name)) => KeyValueRow::accent("Resolved", format!("{kind}:{name}")),
+        _ => KeyValueRow::muted("Resolved", "—"),
+    }
+}
+
+fn doctor_state_row(label: &str, status: &str) -> KeyValueRow {
+    KeyValueRow::new(label, status, doctor_state_tone(status))
+}
+
+fn doctor_state_tone(status: &str) -> Tone {
+    match status {
+        "ok" => Tone::Success,
+        "unbound" => Tone::Muted,
+        "missing" | "mismatch" | "invalid" | "broken" | "error" => Tone::Danger,
+        _ => Tone::Warning,
+    }
+}
+
 fn state_tone(state: &str) -> Tone {
     match state {
         "ok" | "running" | "match" => Tone::Success,
@@ -414,8 +514,8 @@ fn state_tone(state: &str) -> Tone {
 mod tests {
     use time::OffsetDateTime;
 
-    use super::{RenderProfile, env_list, env_resolved, env_show, env_status};
-    use crate::env::{EnvStatusSummary, EnvSummary, ExecutionSummary};
+    use super::{RenderProfile, env_doctor, env_list, env_resolved, env_show, env_status};
+    use crate::env::{EnvDoctorSummary, EnvStatusSummary, EnvSummary, ExecutionSummary};
 
     #[test]
     fn env_list_pretty_uses_a_table() {
@@ -522,6 +622,34 @@ mod tests {
         assert!(lines[1].contains("[launcher:stable]"));
         assert!(lines.iter().any(|line| line.contains("Resolution")));
         assert!(lines.iter().any(|line| line.contains("Forwarded args")));
+    }
+
+    #[test]
+    fn env_doctor_pretty_uses_cards() {
+        let lines = env_doctor(
+            &EnvDoctorSummary {
+                env_name: "demo".to_string(),
+                root: "/tmp/demo".to_string(),
+                default_runtime: None,
+                default_launcher: Some("stable".to_string()),
+                healthy: false,
+                root_status: "ok".to_string(),
+                marker_status: "mismatch".to_string(),
+                runtime_status: "unbound".to_string(),
+                launcher_status: "ok".to_string(),
+                resolution_status: "ok".to_string(),
+                resolved_kind: Some("launcher".to_string()),
+                resolved_name: Some("stable".to_string()),
+                issues: vec!["environment marker name mismatch".to_string()],
+            },
+            RenderProfile::pretty(false),
+        );
+
+        assert_eq!(lines[0], "Environment doctor demo");
+        assert!(lines[1].contains("[needs attention]"));
+        assert!(lines.iter().any(|line| line.contains("Summary")));
+        assert!(lines.iter().any(|line| line.contains("Checks")));
+        assert!(lines.iter().any(|line| line.contains("Issues")));
     }
 }
 

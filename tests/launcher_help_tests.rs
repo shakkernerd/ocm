@@ -131,6 +131,11 @@ fn env_and_service_status_style_help_mentions_raw_mode() {
         "ocm env resolve <name> [--runtime <name> | --launcher <name>] [--raw] [--json] [-- <openclaw args...>]"
     ));
 
+    let env_doctor = run_ocm(&cwd, &env, &["help", "env", "doctor"]);
+    assert!(env_doctor.status.success(), "{}", stderr(&env_doctor));
+    let output = stdout(&env_doctor);
+    assert!(output.contains("ocm env doctor <name> [--raw] [--json]"));
+
     let service_status = run_ocm(&cwd, &env, &["help", "service", "status"]);
     assert!(
         service_status.status.success(),

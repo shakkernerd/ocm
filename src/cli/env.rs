@@ -243,7 +243,7 @@ impl Cli {
     }
 
     pub(super) fn handle_env_doctor(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "env doctor")?;
         let Some(name) = args.first() else {
             return Err("environment name is required".to_string());
         };
@@ -255,7 +255,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::env::env_doctor(&doctor));
+        self.stdout_lines(render::env::env_doctor(&doctor, profile));
         Ok(0)
     }
 
