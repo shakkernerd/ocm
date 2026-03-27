@@ -5,7 +5,7 @@ use std::fs;
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
 #[test]
-fn help_mentions_launcher_and_runtime_commands() {
+fn help_mentions_launcher_runtime_and_service_commands() {
     let root = TestDir::new("launcher-help");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -89,6 +89,12 @@ fn help_mentions_launcher_and_runtime_commands() {
     assert!(output.contains("runtime which <name> [--json]"));
     assert!(output.contains("runtime which nightly --json"));
     assert!(output.contains("runtime remove <name>"));
+    assert!(output.contains("service list [--json]"));
+    assert!(output.contains("service status <env> [--json]"));
+    assert!(output.contains("service status --all [--json]"));
+    assert!(output.contains("service list"));
+    assert!(output.contains("service status refactor-a --json"));
+    assert!(output.contains("service status --all"));
     assert!(output.contains(
         "env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]"
     ));

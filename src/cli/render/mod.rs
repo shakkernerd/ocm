@@ -1,6 +1,7 @@
 pub mod env;
 pub mod launcher;
 pub mod runtime;
+pub mod service;
 
 use std::collections::BTreeMap;
 
