@@ -38,7 +38,11 @@ pub fn env_pruned(removed: &[EnvSummary]) -> Vec<String> {
     lines
 }
 
-pub fn env_created(summary: &EnvSummary, command_example: &str) -> Vec<String> {
+pub fn env_created(
+    summary: &EnvSummary,
+    gateway_port_source: Option<&str>,
+    command_example: &str,
+) -> Vec<String> {
     let mut lines = vec![
         format!("Created env {}", summary.name),
         format!("  root: {}", summary.root),
@@ -46,7 +50,7 @@ pub fn env_created(summary: &EnvSummary, command_example: &str) -> Vec<String> {
         format!("  workspace: {}", summary.workspace_dir),
     ];
     if let Some(port) = summary.gateway_port {
-        lines.push(format!("  gateway port: {port}"));
+        lines.push(render_gateway_port_line(port, gateway_port_source));
     }
     if let Some(runtime) = summary.default_runtime.as_deref() {
         lines.push(format!("  runtime: {runtime}"));
@@ -61,17 +65,26 @@ pub fn env_created(summary: &EnvSummary, command_example: &str) -> Vec<String> {
     lines
 }
 
-pub fn env_cloned(summary: &EnvSummary, source_name: &str, command_example: &str) -> Vec<String> {
-    vec![
+pub fn env_cloned(
+    summary: &EnvSummary,
+    gateway_port_source: Option<&str>,
+    source_name: &str,
+    command_example: &str,
+) -> Vec<String> {
+    let mut lines = vec![
         format!("Cloned env {} from {}", summary.name, source_name),
         format!("  root: {}", summary.root),
         format!("  openclaw home: {}", summary.openclaw_home),
         format!("  workspace: {}", summary.workspace_dir),
-        format!(
-            "  activate: eval \"$({command_example} env use {})\"",
-            summary.name
-        ),
-    ]
+    ];
+    if let Some(port) = summary.gateway_port {
+        lines.push(render_gateway_port_line(port, gateway_port_source));
+    }
+    lines.push(format!(
+        "  activate: eval \"$({command_example} env use {})\"",
+        summary.name
+    ));
+    lines
 }
 
 pub fn env_exported(summary: &EnvExportSummary) -> Vec<String> {
@@ -276,6 +289,13 @@ fn optional_number_cell(value: Option<u32>) -> Cell {
     match value {
         Some(value) => Cell::right(value.to_string(), Tone::Accent),
         None => Cell::muted("—"),
+    }
+}
+
+fn render_gateway_port_line(port: u32, source: Option<&str>) -> String {
+    match source {
+        Some("metadata") | None => format!("  gateway port: {port}"),
+        Some(source) => format!("  effective gateway port: {port} ({source})"),
     }
 }
 

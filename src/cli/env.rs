@@ -138,8 +138,16 @@ impl Cli {
             return Ok(0);
         }
 
-        let summary = summarize_env(&meta);
-        self.stdout_lines(render::env::env_created(&summary, &self.command_example()));
+        let (gateway_port, gateway_port_source) =
+            self.environment_service().resolve_effective_gateway_port(&meta)?;
+        let mut display_meta = meta.clone();
+        display_meta.gateway_port = Some(gateway_port);
+        let summary = summarize_env(&display_meta);
+        self.stdout_lines(render::env::env_created(
+            &summary,
+            Some(gateway_port_source),
+            &self.command_example(),
+        ));
         Ok(0)
     }
 
@@ -165,9 +173,14 @@ impl Cli {
             return Ok(0);
         }
 
-        let summary = summarize_env(&meta);
+        let (gateway_port, gateway_port_source) =
+            self.environment_service().resolve_effective_gateway_port(&meta)?;
+        let mut display_meta = meta.clone();
+        display_meta.gateway_port = Some(gateway_port);
+        let summary = summarize_env(&display_meta);
         self.stdout_lines(render::env::env_cloned(
             &summary,
+            Some(gateway_port_source),
             source_name,
             &self.command_example(),
         ));
