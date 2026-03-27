@@ -10,4 +10,5 @@ sha2 = "0.10"
 tar = "0.4"
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 ureq = "2.12"
+indicatif = "0.18"
 unicode-width = "0.2"

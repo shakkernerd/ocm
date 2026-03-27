@@ -9,7 +9,9 @@ mod service;
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
 use crate::env::EnvironmentService;
@@ -87,6 +89,10 @@ impl Cli {
         io::stdout().is_terminal()
     }
 
+    fn stderr_is_terminal(&self) -> bool {
+        io::stderr().is_terminal()
+    }
+
     fn color_output_enabled(&self) -> bool {
         self.stdout_is_terminal()
             && !self.env.contains_key("NO_COLOR")
@@ -95,6 +101,37 @@ impl Cli {
                 .get("TERM")
                 .map(|value| value != "dumb")
                 .unwrap_or(true)
+    }
+
+    fn progress_output_enabled(&self) -> bool {
+        self.stderr_is_terminal()
+            && self
+                .env
+                .get("TERM")
+                .map(|value| value != "dumb")
+                .unwrap_or(true)
+    }
+
+    fn with_progress<T, F>(&self, message: impl Into<String>, work: F) -> Result<T, String>
+    where
+        F: FnOnce() -> Result<T, String>,
+    {
+        if !self.progress_output_enabled() {
+            return work();
+        }
+
+        let bar = ProgressBar::new_spinner();
+        let style = ProgressStyle::with_template("{spinner:.cyan} {msg}")
+            .map_err(|error| error.to_string())?
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]);
+        bar.set_style(style);
+        bar.set_message(message.into());
+        bar.enable_steady_tick(Duration::from_millis(90));
+        bar.tick();
+
+        let result = work();
+        bar.finish_and_clear();
+        result
     }
 
     fn consume_human_output_flags(
