@@ -4,7 +4,7 @@ use std::fs;
 
 use ocm::store::clean_path;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_text};
 
 #[test]
 fn env_use_prints_activation_exports_for_the_selected_environment() {
@@ -187,4 +187,62 @@ fn env_run_overrides_parent_openclaw_environment_state() {
             "unset"
         )
     );
+}
+
+#[test]
+fn env_use_auto_assigns_distinct_gateway_ports_for_fresh_envs() {
+    let root = TestDir::new("behavior-env-use-auto-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create_demo = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(create_demo.status.success(), "{}", stderr(&create_demo));
+
+    let create_test = run_ocm(&cwd, &env, &["env", "create", "test"]);
+    assert!(create_test.status.success(), "{}", stderr(&create_test));
+
+    let demo_use = run_ocm(&cwd, &env, &["env", "use", "demo"]);
+    assert!(demo_use.status.success(), "{}", stderr(&demo_use));
+    assert!(stdout(&demo_use).contains("export OPENCLAW_GATEWAY_PORT='18789'"));
+
+    let test_use = run_ocm(&cwd, &env, &["env", "use", "test"]);
+    assert!(test_use.status.success(), "{}", stderr(&test_use));
+    assert!(stdout(&test_use).contains("export OPENCLAW_GATEWAY_PORT='18790'"));
+}
+
+#[test]
+fn env_exec_skips_gateway_port_claimed_by_an_initialized_environment() {
+    let root = TestDir::new("behavior-env-exec-config-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create_demo = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(create_demo.status.success(), "{}", stderr(&create_demo));
+
+    let create_test = run_ocm(&cwd, &env, &["env", "create", "test"]);
+    assert!(create_test.status.success(), "{}", stderr(&create_test));
+
+    let demo_root = root.child("ocm-home/envs/demo");
+    write_text(
+        &demo_root.join(".openclaw/openclaw.json"),
+        "{\n  \"gateway\": {\n    \"port\": 18789\n  }\n}\n",
+    );
+
+    let exec_output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "exec",
+            "test",
+            "--",
+            "sh",
+            "-lc",
+            "printf '%s' \"$OPENCLAW_GATEWAY_PORT\"",
+        ],
+    );
+    assert!(exec_output.status.success(), "{}", stderr(&exec_output));
+    assert_eq!(stdout(&exec_output), "18790");
 }

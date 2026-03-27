@@ -1,4 +1,9 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use time::Duration;
 use time::OffsetDateTime;
 
@@ -8,6 +13,8 @@ use crate::store::{
     get_runtime_verified, import_environment, list_environments, now_utc, remove_environment,
     save_environment,
 };
+
+const DEFAULT_GATEWAY_PORT: u32 = 18_789;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,6 +125,11 @@ pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<En
 }
 
 impl<'a> EnvironmentService<'a> {
+    pub fn apply_effective_gateway_port(&self, mut meta: EnvMeta) -> Result<EnvMeta, String> {
+        meta.gateway_port = Some(self.resolve_effective_gateway_port(&meta)?);
+        Ok(meta)
+    }
+
     pub fn create(&self, options: CreateEnvironmentOptions) -> Result<EnvMeta, String> {
         if let Some(runtime_name) = options.default_runtime.as_deref() {
             get_runtime_verified(runtime_name, self.env, self.cwd)?;
@@ -177,4 +189,66 @@ impl<'a> EnvironmentService<'a> {
         }
         Ok(removed)
     }
+
+    fn resolve_effective_gateway_port(&self, target: &EnvMeta) -> Result<u32, String> {
+        if let Some(port) = target.gateway_port {
+            return Ok(port);
+        }
+
+        if let Some(port) = read_config_gateway_port(target) {
+            return Ok(port);
+        }
+
+        let mut envs = list_environments(self.env, self.cwd)?;
+        envs.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+
+        let mut claimed_ports = BTreeSet::new();
+        let mut effective_ports = BTreeMap::new();
+
+        for meta in &envs {
+            if let Some(port) = meta.gateway_port.or_else(|| read_config_gateway_port(meta)) {
+                claimed_ports.insert(port);
+                effective_ports.insert(meta.name.clone(), port);
+            }
+        }
+
+        for meta in &envs {
+            if effective_ports.contains_key(&meta.name) {
+                continue;
+            }
+
+            let port = next_gateway_port(&claimed_ports);
+            claimed_ports.insert(port);
+            effective_ports.insert(meta.name.clone(), port);
+        }
+
+        effective_ports
+            .get(&target.name)
+            .copied()
+            .ok_or_else(|| format!("failed to resolve gateway port for env \"{}\"", target.name))
+    }
+}
+
+fn read_config_gateway_port(meta: &EnvMeta) -> Option<u32> {
+    let config_path = crate::store::derive_env_paths(Path::new(&meta.root)).config_path;
+    let raw = fs::read_to_string(config_path).ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    let port = value.get("gateway")?.get("port")?.as_u64()?;
+    if (1..=u16::MAX as u64).contains(&port) {
+        Some(port as u32)
+    } else {
+        None
+    }
+}
+
+fn next_gateway_port(claimed_ports: &BTreeSet<u32>) -> u32 {
+    let mut port = DEFAULT_GATEWAY_PORT;
+    while claimed_ports.contains(&port) {
+        port += 1;
+    }
+    port
 }

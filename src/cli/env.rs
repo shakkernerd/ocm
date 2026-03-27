@@ -606,7 +606,9 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = self.environment_service().touch(name)?;
+        let meta = self
+            .environment_service()
+            .apply_effective_gateway_port(self.environment_service().touch(name)?)?;
         let shell = resolve_shell_name(shell_name.as_deref(), &self.env);
         print!("{}", render_use_script(&meta, &shell));
         Ok(0)
@@ -622,7 +624,9 @@ impl Cli {
             return Err("env exec requires a command after --".to_string());
         }
 
-        let meta = self.environment_service().touch(name)?;
+        let meta = self
+            .environment_service()
+            .apply_effective_gateway_port(self.environment_service().touch(name)?)?;
         run_direct(
             &after[0],
             &after[1..],

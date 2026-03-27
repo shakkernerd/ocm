@@ -86,7 +86,7 @@ impl<'a> EnvironmentService<'a> {
         launcher_override: Option<String>,
         args: &[String],
     ) -> Result<ResolvedExecution, String> {
-        let env = self.get(name)?;
+        let env = self.apply_effective_gateway_port(self.get(name)?)?;
         self.resolve_execution(env, runtime_override, launcher_override, args)
     }
 
@@ -97,7 +97,7 @@ impl<'a> EnvironmentService<'a> {
         launcher_override: Option<String>,
         args: &[String],
     ) -> Result<ResolvedExecution, String> {
-        let env = self.touch(name)?;
+        let env = self.apply_effective_gateway_port(self.touch(name)?)?;
         self.resolve_execution(env, runtime_override, launcher_override, args)
     }
 
