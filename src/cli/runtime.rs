@@ -32,7 +32,7 @@ impl Cli {
     }
 
     pub(super) fn handle_runtime_list(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "runtime list")?;
         Self::assert_no_extra_args(&args)?;
 
         let runtimes = self.runtime_service().list()?;
@@ -40,7 +40,7 @@ impl Cli {
             self.print_json(&runtimes)?;
             return Ok(0);
         }
-        self.stdout_lines(render::runtime::runtime_list(&runtimes));
+        self.stdout_lines(render::runtime::runtime_list(&runtimes, profile));
         Ok(0)
     }
 

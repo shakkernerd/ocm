@@ -2,7 +2,8 @@ use super::{Cli, render};
 
 impl Cli {
     pub(super) fn handle_service_discover(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "service discover")?;
         Self::assert_no_extra_args(&args)?;
 
         let services = self.service_service().discover()?;
@@ -11,7 +12,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_discover(&services));
+        self.stdout_lines(render::service::service_discover(&services, profile));
         Ok(0)
     }
 
@@ -98,7 +99,7 @@ impl Cli {
     }
 
     pub(super) fn handle_service_list(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "service list")?;
         Self::assert_no_extra_args(&args)?;
 
         let services = self.service_service().list()?;
@@ -107,12 +108,12 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_list(&services));
+        self.stdout_lines(render::service::service_list(&services, profile));
         Ok(0)
     }
 
     pub(super) fn handle_service_status(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "service status")?;
         let (args, all_flag) = Self::consume_flag(args, "--all");
 
         if all_flag {
@@ -123,7 +124,7 @@ impl Cli {
                 return Ok(0);
             }
 
-            self.stdout_lines(render::service::service_list(&services));
+            self.stdout_lines(render::service::service_list(&services, profile));
             return Ok(0);
         }
 

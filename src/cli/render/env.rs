@@ -5,8 +5,9 @@ use crate::env::{
     EnvImportSummary, EnvMarkerRepairSummary, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
     EnvSnapshotSummary, EnvStatusSummary, EnvSummary, ExecutionSummary,
 };
+use crate::infra::terminal::{Cell, Tone, render_table};
 
-use super::{format_key_value_lines, format_rfc3339};
+use super::{RenderProfile, format_key_value_lines, format_rfc3339};
 
 pub fn env_protected(name: &str, protected: bool) -> Vec<String> {
     vec![format!("Updated env {name}: protected={protected}")]
@@ -206,10 +207,44 @@ pub fn env_marker_repaired(repaired: &EnvMarkerRepairSummary) -> Vec<String> {
     ]
 }
 
-pub fn env_list(summaries: &[EnvSummary]) -> Vec<String> {
+pub fn env_list(summaries: &[EnvSummary], profile: RenderProfile) -> Vec<String> {
     if summaries.is_empty() {
         return vec!["No environments.".to_string()];
     }
+    if !profile.pretty {
+        return env_list_raw(summaries);
+    }
+
+    let rows = summaries
+        .iter()
+        .map(|summary| {
+            let flags = if summary.protected {
+                "protected"
+            } else {
+                "—"
+            };
+            vec![
+                Cell::accent(summary.name.clone()),
+                Cell::muted(summary.root.clone()),
+                optional_cell(summary.default_runtime.as_deref(), Tone::Accent),
+                optional_cell(summary.default_launcher.as_deref(), Tone::Accent),
+                optional_number_cell(summary.gateway_port),
+                if summary.protected {
+                    Cell::warning(flags)
+                } else {
+                    Cell::muted(flags)
+                },
+            ]
+        })
+        .collect::<Vec<_>>();
+    render_table(
+        &["Name", "Root", "Runtime", "Launcher", "Port", "Flags"],
+        &rows,
+        profile.color,
+    )
+}
+
+fn env_list_raw(summaries: &[EnvSummary]) -> Vec<String> {
     let mut lines = Vec::with_capacity(summaries.len());
     for summary in summaries {
         let mut bits = vec![summary.name.clone(), summary.root.clone()];
@@ -228,6 +263,53 @@ pub fn env_list(summaries: &[EnvSummary]) -> Vec<String> {
         lines.push(bits.join("  "));
     }
     lines
+}
+
+fn optional_cell(value: Option<&str>, tone: Tone) -> Cell {
+    match value {
+        Some(value) => Cell::new(value, crate::infra::terminal::Align::Left, tone),
+        None => Cell::muted("—"),
+    }
+}
+
+fn optional_number_cell(value: Option<u32>) -> Cell {
+    match value {
+        Some(value) => Cell::right(value.to_string(), Tone::Accent),
+        None => Cell::muted("—"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use time::OffsetDateTime;
+
+    use super::{RenderProfile, env_list};
+    use crate::env::EnvSummary;
+
+    #[test]
+    fn env_list_pretty_uses_a_table() {
+        let summaries = vec![EnvSummary {
+            name: "demo".to_string(),
+            root: "/tmp/demo".to_string(),
+            openclaw_home: "/tmp/demo/.openclaw".to_string(),
+            state_dir: "/tmp/demo/.openclaw".to_string(),
+            config_path: "/tmp/demo/.openclaw/openclaw.json".to_string(),
+            workspace_dir: "/tmp/demo/workspace".to_string(),
+            gateway_port: Some(18789),
+            default_runtime: None,
+            default_launcher: Some("stable".to_string()),
+            protected: true,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            last_used_at: None,
+        }];
+
+        let lines = env_list(&summaries, RenderProfile::pretty(false));
+        assert!(lines[0].starts_with('┌'));
+        assert!(lines[1].contains("Name"));
+        assert!(lines[3].contains("demo"));
+        assert!(lines[3].contains("protected"));
+        assert!(lines[4].starts_with('└'));
+    }
 }
 
 pub fn env_show(summary: &EnvSummary) -> Result<Vec<String>, String> {

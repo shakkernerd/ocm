@@ -31,7 +31,7 @@ impl Cli {
     }
 
     pub(super) fn handle_launcher_list(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "launcher list")?;
         Self::assert_no_extra_args(&args)?;
 
         let launchers = self.launcher_service().list()?;
@@ -39,7 +39,7 @@ impl Cli {
             self.print_json(&launchers)?;
             return Ok(0);
         }
-        self.stdout_lines(render::launcher::launcher_list(&launchers));
+        self.stdout_lines(render::launcher::launcher_list(&launchers, profile));
         Ok(0)
     }
 

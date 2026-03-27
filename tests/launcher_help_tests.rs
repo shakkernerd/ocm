@@ -41,6 +41,7 @@ fn help_mentions_launcher_runtime_and_service_commands() {
     assert!(output.contains("env snapshot remove refactor-a 1742922000-123456789"));
     assert!(output.contains("env snapshot prune refactor-a --keep 5 --yes"));
     assert!(output.contains("env snapshot prune --all --older-than 30 --json"));
+    assert!(output.contains("env list [--raw] [--json]"));
     assert!(output.contains("env doctor <name> [--json]"));
     assert!(output.contains("env doctor refactor-a --json"));
     assert!(output.contains("env cleanup (<name> | --all) [--yes] [--json]"));
@@ -58,7 +59,7 @@ fn help_mentions_launcher_runtime_and_service_commands() {
     assert!(output.contains(
         "runtime releases --manifest-url https://example.test/openclaw-releases.json --version 0.2.0 --json"
     ));
-    assert!(output.contains("launcher list [--json]"));
+    assert!(output.contains("launcher list [--raw] [--json]"));
     assert!(output.contains("launcher show <name> [--json]"));
     assert!(output.contains("launcher remove <name>"));
     assert!(output.contains("runtime add <name> --path <binary> [--description <text>]"));
@@ -77,7 +78,7 @@ fn help_mentions_launcher_runtime_and_service_commands() {
         "runtime install stable --manifest-url https://example.test/openclaw-releases.json --channel stable"
     ));
     assert!(output.contains("runtime update stable --version 0.3.0"));
-    assert!(output.contains("runtime list [--json]"));
+    assert!(output.contains("runtime list [--raw] [--json]"));
     assert!(output.contains("runtime show <name> [--json]"));
     assert!(output.contains("runtime verify (<name> | --all) [--json]"));
     assert!(output.contains("runtime verify --all"));
@@ -91,11 +92,11 @@ fn help_mentions_launcher_runtime_and_service_commands() {
     assert!(output.contains("runtime remove <name>"));
     assert!(output.contains("service adopt-global <env> [--dry-run] [--json]"));
     assert!(output.contains("service restore-global <env> [--dry-run] [--json]"));
-    assert!(output.contains("service discover [--json]"));
+    assert!(output.contains("service discover [--raw] [--json]"));
     assert!(output.contains("service install <env> [--json]"));
-    assert!(output.contains("service list [--json]"));
+    assert!(output.contains("service list [--raw] [--json]"));
     assert!(output.contains("service status <env> [--json]"));
-    assert!(output.contains("service status --all [--json]"));
+    assert!(output.contains("service status --all [--raw] [--json]"));
     assert!(output.contains("service logs <env> [--stderr] [--tail <count>] [--json]"));
     assert!(output.contains("service start <env> [--json]"));
     assert!(output.contains("service stop <env> [--json]"));

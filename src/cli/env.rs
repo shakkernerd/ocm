@@ -304,7 +304,7 @@ impl Cli {
     }
 
     pub(super) fn handle_env_list(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "env list")?;
         Self::assert_no_extra_args(&args)?;
 
         let envs = self.environment_service().list()?;
@@ -313,7 +313,7 @@ impl Cli {
             self.print_json(&summaries)?;
             return Ok(0);
         }
-        self.stdout_lines(render::env::env_list(&summaries));
+        self.stdout_lines(render::env::env_list(&summaries, profile));
         Ok(0)
     }
 

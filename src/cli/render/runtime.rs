@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
+use crate::infra::terminal::{Cell, render_table};
 use crate::runtime::{
     RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeUpdateBatchSummary,
     RuntimeVerifySummary,
 };
 
-use super::{format_key_value_lines, format_rfc3339};
+use super::{RenderProfile, format_key_value_lines, format_rfc3339};
 
 pub fn runtime_added(meta: &RuntimeMeta) -> Vec<String> {
     vec![
@@ -14,10 +15,34 @@ pub fn runtime_added(meta: &RuntimeMeta) -> Vec<String> {
     ]
 }
 
-pub fn runtime_list(runtimes: &[RuntimeMeta]) -> Vec<String> {
+pub fn runtime_list(runtimes: &[RuntimeMeta], profile: RenderProfile) -> Vec<String> {
     if runtimes.is_empty() {
         return vec!["No runtimes.".to_string()];
     }
+    if !profile.pretty {
+        return runtime_list_raw(runtimes);
+    }
+
+    let rows = runtimes
+        .iter()
+        .map(|meta| {
+            vec![
+                Cell::accent(meta.name.clone()),
+                Cell::plain(meta.source_kind.as_str()),
+                optional_cell(meta.release_version.as_deref()),
+                optional_cell(meta.release_channel.as_deref()),
+                Cell::muted(meta.binary_path.clone()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    render_table(
+        &["Name", "Source", "Release", "Channel", "Binary"],
+        &rows,
+        profile.color,
+    )
+}
+
+fn runtime_list_raw(runtimes: &[RuntimeMeta]) -> Vec<String> {
     let mut lines = Vec::with_capacity(runtimes.len());
     for meta in runtimes {
         let mut bits = vec![
@@ -34,6 +59,10 @@ pub fn runtime_list(runtimes: &[RuntimeMeta]) -> Vec<String> {
         lines.push(bits.join("  "));
     }
     lines
+}
+
+fn optional_cell(value: Option<&str>) -> Cell {
+    value.map(Cell::plain).unwrap_or_else(|| Cell::muted("—"))
 }
 
 pub fn runtime_show(meta: &RuntimeMeta) -> Result<Vec<String>, String> {

@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
+use crate::infra::terminal::{Cell, render_table};
 use crate::launcher::LauncherMeta;
 
-use super::{format_key_value_lines, format_rfc3339};
+use super::{RenderProfile, format_key_value_lines, format_rfc3339};
 
 pub fn launcher_added(meta: &LauncherMeta) -> Vec<String> {
     let mut lines = vec![
@@ -15,10 +16,31 @@ pub fn launcher_added(meta: &LauncherMeta) -> Vec<String> {
     lines
 }
 
-pub fn launcher_list(launchers: &[LauncherMeta]) -> Vec<String> {
+pub fn launcher_list(launchers: &[LauncherMeta], profile: RenderProfile) -> Vec<String> {
     if launchers.is_empty() {
         return vec!["No launchers.".to_string()];
     }
+    if !profile.pretty {
+        return launcher_list_raw(launchers);
+    }
+
+    let rows = launchers
+        .iter()
+        .map(|meta| {
+            vec![
+                Cell::accent(meta.name.clone()),
+                Cell::plain(meta.command.clone()),
+                meta.cwd
+                    .as_deref()
+                    .map(Cell::muted)
+                    .unwrap_or_else(|| Cell::muted("—")),
+            ]
+        })
+        .collect::<Vec<_>>();
+    render_table(&["Name", "Command", "Cwd"], &rows, profile.color)
+}
+
+fn launcher_list_raw(launchers: &[LauncherMeta]) -> Vec<String> {
     let mut lines = Vec::with_capacity(launchers.len());
     for meta in launchers {
         let mut bits = vec![meta.name.clone(), meta.command.clone()];
