@@ -1,12 +1,40 @@
 mod support;
 
 use std::fs;
+use std::net::TcpListener;
 
 use serde_json::Value;
 
 use crate::support::{
-    TestDir, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
+    TestDir, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script, write_text,
 };
+
+fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<String, String>) {
+    let bin_dir = root.child("fake-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let log_path = root.child("launchctl.log");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  print)\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
+        path_string(&log_path)
+    );
+    write_executable_script(&bin_dir.join("launchctl"), &script);
+
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let combined_path = if existing_path.is_empty() {
+        path_string(&bin_dir)
+    } else {
+        format!("{}:{existing_path}", path_string(&bin_dir))
+    };
+    env.insert("PATH".to_string(), combined_path);
+}
+
+fn allocate_free_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
 
 #[test]
 fn service_list_reports_launcher_and_runtime_bindings_in_json() {
@@ -123,13 +151,173 @@ fn service_status_requires_target_or_all() {
 }
 
 #[test]
+fn service_install_persists_a_gateway_port_and_writes_a_launch_agent() {
+    let root = TestDir::new("service-install");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let assigned_port = allocate_free_port();
+    write_text(
+        &root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
+        &format!("{{\"gateway\":{{\"port\":{assigned_port}}}}}\n"),
+    );
+
+    let output = run_ocm(&cwd, &env, &["service", "install", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["envName"], "demo");
+    assert_eq!(summary["gatewayPort"], assigned_port);
+    assert_eq!(summary["persistedGatewayPort"], true);
+    assert_eq!(summary["previousGatewayPort"], Value::Null);
+    assert_eq!(
+        summary["warnings"],
+        serde_json::json!([
+            format!(
+                "assigned gateway port {assigned_port} to env \"demo\" and saved it to env metadata for service stability"
+            )
+        ])
+    );
+
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_meta: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    assert_eq!(env_meta["gatewayPort"], assigned_port);
+
+    let plist_path = root.child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist");
+    let plist = fs::read_to_string(&plist_path).unwrap();
+    assert!(plist.contains("ai.openclaw.gateway.ocm.demo"));
+    assert!(plist.contains("<string>/bin/sh</string>"));
+    assert!(plist.contains(&format!(
+        "openclaw &apos;gateway&apos; &apos;run&apos; &apos;--port&apos; &apos;{assigned_port}&apos;"
+    )));
+    assert!(plist.contains("<key>OPENCLAW_GATEWAY_PORT</key>"));
+    assert!(plist.contains(&format!("<string>{assigned_port}</string>")));
+
+    let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
+    assert!(launchctl_log.contains("bootout gui/"));
+    assert!(launchctl_log.contains("bootstrap gui/"));
+}
+
+#[test]
+fn service_install_auto_provisions_the_next_free_port_when_needed() {
+    let root = TestDir::new("service-install-port-reassign");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let occupied_port = allocate_free_port();
+    write_text(
+        &root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
+        &format!("{{\"gateway\":{{\"port\":{occupied_port}}}}}\n"),
+    );
+
+    let _occupied = TcpListener::bind(("127.0.0.1", occupied_port)).unwrap();
+
+    let output = run_ocm(&cwd, &env, &["service", "install", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let assigned_port = summary["gatewayPort"].as_u64().unwrap() as u16;
+    assert!(assigned_port > occupied_port);
+    assert_eq!(summary["persistedGatewayPort"], true);
+    assert_eq!(summary["previousGatewayPort"], occupied_port);
+    assert_eq!(
+        summary["warnings"],
+        serde_json::json!([
+            format!(
+                "gateway port {occupied_port} was unavailable; assigned {assigned_port} to env \"demo\" and saved it to env metadata"
+            )
+        ])
+    );
+
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_meta: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    assert_eq!(env_meta["gatewayPort"], assigned_port);
+}
+
+#[test]
+fn service_lifecycle_commands_use_the_env_scoped_launch_agent_label() {
+    let root = TestDir::new("service-lifecycle");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+    let stop = run_ocm(&cwd, &env, &["service", "stop", "demo"]);
+    assert!(stop.status.success(), "{}", stderr(&stop));
+    let start = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+    let restart = run_ocm(&cwd, &env, &["service", "restart", "demo"]);
+    assert!(restart.status.success(), "{}", stderr(&restart));
+    let uninstall = run_ocm(&cwd, &env, &["service", "uninstall", "demo"]);
+    assert!(uninstall.status.success(), "{}", stderr(&uninstall));
+
+    let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
+    assert!(launchctl_log.contains("bootstrap gui/"));
+    assert!(launchctl_log.contains("kickstart -k gui/"));
+    assert!(launchctl_log.contains("bootout gui/"));
+    assert!(launchctl_log.contains("ai.openclaw.gateway.ocm.demo"));
+    assert!(!root
+        .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
+        .exists());
+}
+
+#[test]
+fn service_install_requires_a_target_env() {
+    let root = TestDir::new("service-install-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["service", "install"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("service install requires <env>"));
+}
+
+#[test]
+fn service_lifecycle_commands_require_a_target_env() {
+    let root = TestDir::new("service-lifecycle-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    for action in ["start", "stop", "restart", "uninstall"] {
+        let output = run_ocm(&cwd, &env, &["service", action]);
+        assert_eq!(output.status.code(), Some(1), "action={action}");
+        assert!(
+            stderr(&output).contains(&format!("service {action} requires <env>")),
+            "action={action}\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
 fn unknown_service_commands_use_service_specific_errors() {
     let root = TestDir::new("service-unknown-command");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let output = run_ocm(&cwd, &env, &["service", "restart"]);
+    let output = run_ocm(&cwd, &env, &["service", "reload"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("unknown service command: restart"));
+    assert!(stderr(&output).contains("unknown service command: reload"));
 }

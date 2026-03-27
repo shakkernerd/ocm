@@ -1,6 +1,23 @@
 use super::{Cli, render};
 
 impl Cli {
+    pub(super) fn handle_service_install(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("service install requires <env>".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let summary = self.service_service().install(name)?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::service::service_installed(&summary));
+        Ok(0)
+    }
+
     pub(super) fn handle_service_list(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         Self::assert_no_extra_args(&args)?;
@@ -46,14 +63,87 @@ impl Cli {
         Ok(0)
     }
 
+    pub(super) fn handle_service_start(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("service start requires <env>".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let summary = self.service_service().start(name)?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::service::service_action(&summary));
+        Ok(0)
+    }
+
+    pub(super) fn handle_service_stop(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("service stop requires <env>".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let summary = self.service_service().stop(name)?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::service::service_action(&summary));
+        Ok(0)
+    }
+
+    pub(super) fn handle_service_restart(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("service restart requires <env>".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let summary = self.service_service().restart(name)?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::service::service_action(&summary));
+        Ok(0)
+    }
+
+    pub(super) fn handle_service_uninstall(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let Some(name) = args.first() else {
+            return Err("service uninstall requires <env>".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let summary = self.service_service().uninstall(name)?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::service::service_action(&summary));
+        Ok(0)
+    }
+
     pub(super) fn dispatch_service_command(
         &self,
         action: &str,
         rest: Vec<String>,
     ) -> Result<i32, String> {
         match action {
+            "install" => self.handle_service_install(rest),
             "list" => self.handle_service_list(rest),
             "status" => self.handle_service_status(rest),
+            "start" => self.handle_service_start(rest),
+            "stop" => self.handle_service_stop(rest),
+            "restart" => self.handle_service_restart(rest),
+            "uninstall" => self.handle_service_uninstall(rest),
             _ => Err(format!("unknown service command: {action}")),
         }
     }

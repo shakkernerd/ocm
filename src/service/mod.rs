@@ -1,9 +1,11 @@
+mod manage;
 mod inspect;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 pub use inspect::{ServiceSummary, ServiceSummaryList};
+pub use manage::{ServiceActionSummary, ServiceInstallSummary};
 
 pub struct ServiceService<'a> {
     env: &'a BTreeMap<String, String>,
@@ -21,5 +23,25 @@ impl<'a> ServiceService<'a> {
 
     pub fn status(&self, name: &str) -> Result<ServiceSummary, String> {
         inspect::service_status(name, self.env, self.cwd)
+    }
+
+    pub fn install(&self, name: &str) -> Result<ServiceInstallSummary, String> {
+        manage::install_service(name, self.env, self.cwd)
+    }
+
+    pub fn start(&self, name: &str) -> Result<ServiceActionSummary, String> {
+        manage::start_service(name, self.env, self.cwd)
+    }
+
+    pub fn stop(&self, name: &str) -> Result<ServiceActionSummary, String> {
+        manage::stop_service(name, self.env, self.cwd)
+    }
+
+    pub fn restart(&self, name: &str) -> Result<ServiceActionSummary, String> {
+        manage::restart_service(name, self.env, self.cwd)
+    }
+
+    pub fn uninstall(&self, name: &str) -> Result<ServiceActionSummary, String> {
+        manage::uninstall_service(name, self.env, self.cwd)
     }
 }

@@ -8,8 +8,8 @@ use crate::env::{EnvMeta, EnvironmentService, resolve_execution_binding};
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
 use crate::store::{derive_env_paths, display_path, get_environment, get_launcher, get_runtime_verified, list_environments, resolve_user_home};
 
-const GLOBAL_GATEWAY_LABEL: &str = "ai.openclaw.gateway";
-const OCM_GATEWAY_LABEL_PREFIX: &str = "ai.openclaw.gateway.ocm.";
+pub(crate) const GLOBAL_GATEWAY_LABEL: &str = "ai.openclaw.gateway";
+pub(crate) const OCM_GATEWAY_LABEL_PREFIX: &str = "ai.openclaw.gateway.ocm.";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,7 +53,7 @@ pub struct ServiceSummaryList {
 }
 
 #[derive(Clone, Debug)]
-enum ServiceLaunchSpec {
+pub(crate) enum ServiceLaunchSpec {
     Launcher {
         binding_name: String,
         command: String,
@@ -68,14 +68,14 @@ enum ServiceLaunchSpec {
 }
 
 #[derive(Clone, Debug, Default)]
-struct LaunchdJobStatus {
-    installed: bool,
-    loaded: bool,
-    running: bool,
-    pid: Option<u32>,
-    state: Option<String>,
-    config_path: Option<String>,
-    gateway_port: Option<u32>,
+pub(crate) struct LaunchdJobStatus {
+    pub(crate) installed: bool,
+    pub(crate) loaded: bool,
+    pub(crate) running: bool,
+    pub(crate) pid: Option<u32>,
+    pub(crate) state: Option<String>,
+    pub(crate) config_path: Option<String>,
+    pub(crate) gateway_port: Option<u32>,
 }
 
 pub fn list_services(
@@ -197,7 +197,7 @@ fn build_service_summary(
     })
 }
 
-fn resolve_service_launch(
+pub(crate) fn resolve_service_launch(
     env: &EnvMeta,
     process_env: &BTreeMap<String, String>,
     cwd: &Path,
@@ -233,23 +233,23 @@ fn resolve_service_launch(
     }
 }
 
-fn managed_service_label(name: &str) -> String {
+pub(crate) fn managed_service_label(name: &str) -> String {
     format!("{OCM_GATEWAY_LABEL_PREFIX}{name}")
 }
 
-fn managed_plist_path(name: &str, env: &BTreeMap<String, String>) -> PathBuf {
+pub(crate) fn managed_plist_path(name: &str, env: &BTreeMap<String, String>) -> PathBuf {
     launch_agents_dir(env).join(format!("{}.plist", managed_service_label(name)))
 }
 
-fn global_plist_path(env: &BTreeMap<String, String>) -> PathBuf {
+pub(crate) fn global_plist_path(env: &BTreeMap<String, String>) -> PathBuf {
     launch_agents_dir(env).join(format!("{GLOBAL_GATEWAY_LABEL}.plist"))
 }
 
-fn launch_agents_dir(env: &BTreeMap<String, String>) -> PathBuf {
+pub(crate) fn launch_agents_dir(env: &BTreeMap<String, String>) -> PathBuf {
     resolve_user_home(env).join("Library").join("LaunchAgents")
 }
 
-fn inspect_job(label: &str, plist_path: &Path) -> LaunchdJobStatus {
+pub(crate) fn inspect_job(label: &str, plist_path: &Path) -> LaunchdJobStatus {
     let mut status = LaunchdJobStatus {
         installed: plist_path.exists(),
         ..LaunchdJobStatus::default()
@@ -283,8 +283,7 @@ fn inspect_job(label: &str, plist_path: &Path) -> LaunchdJobStatus {
     status
 }
 
-#[cfg(target_os = "macos")]
-fn current_uid() -> Option<u32> {
+pub(crate) fn current_uid() -> Option<u32> {
     let output = Command::new("id").arg("-u").output().ok()?;
     if !output.status.success() {
         return None;

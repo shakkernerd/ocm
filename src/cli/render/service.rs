@@ -1,4 +1,4 @@
-use crate::service::{ServiceSummary, ServiceSummaryList};
+use crate::service::{ServiceActionSummary, ServiceInstallSummary, ServiceSummary, ServiceSummaryList};
 
 fn daemon_state(installed: bool, loaded: bool, running: bool) -> &'static str {
     if running {
@@ -125,5 +125,53 @@ pub fn service_status(summary: &ServiceSummary) -> Vec<String> {
         lines.push(format!("issue: {issue}"));
     }
 
+    lines
+}
+
+pub fn service_installed(summary: &ServiceInstallSummary) -> Vec<String> {
+    let mut lines = vec![
+        format!("Installed service {}", summary.env_name),
+        format!("  label: {}", summary.managed_label),
+        format!("  plist: {}", summary.managed_plist_path),
+        format!("  port: {}", summary.gateway_port),
+        format!("  binding: {}:{}", summary.binding_kind, summary.binding_name),
+        format!("  run dir: {}", summary.run_dir),
+        format!("  stdout: {}", summary.stdout_path),
+        format!("  stderr: {}", summary.stderr_path),
+    ];
+    if let Some(command) = summary.command.as_deref() {
+        lines.push(format!("  command: {command}"));
+    }
+    if let Some(binary_path) = summary.binary_path.as_deref() {
+        lines.push(format!("  binary path: {binary_path}"));
+    }
+    if !summary.args.is_empty() {
+        lines.push(format!("  args: {}", summary.args.join(" ")));
+    }
+    for warning in &summary.warnings {
+        lines.push(format!("  warning: {warning}"));
+    }
+    lines
+}
+
+pub fn service_action(summary: &ServiceActionSummary) -> Vec<String> {
+    let title = match summary.action.as_str() {
+        "start" => "Started",
+        "stop" => "Stopped",
+        "restart" => "Restarted",
+        "uninstall" => "Uninstalled",
+        _ => "Updated",
+    };
+    let mut lines = vec![
+        format!("{title} service {}", summary.env_name),
+        format!("  label: {}", summary.managed_label),
+        format!("  plist: {}", summary.managed_plist_path),
+    ];
+    if let Some(port) = summary.gateway_port {
+        lines.push(format!("  port: {port}"));
+    }
+    for warning in &summary.warnings {
+        lines.push(format!("  warning: {warning}"));
+    }
     lines
 }

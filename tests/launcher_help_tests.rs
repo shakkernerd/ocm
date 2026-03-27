@@ -89,12 +89,22 @@ fn help_mentions_launcher_runtime_and_service_commands() {
     assert!(output.contains("runtime which <name> [--json]"));
     assert!(output.contains("runtime which nightly --json"));
     assert!(output.contains("runtime remove <name>"));
+    assert!(output.contains("service install <env> [--json]"));
     assert!(output.contains("service list [--json]"));
     assert!(output.contains("service status <env> [--json]"));
     assert!(output.contains("service status --all [--json]"));
+    assert!(output.contains("service start <env> [--json]"));
+    assert!(output.contains("service stop <env> [--json]"));
+    assert!(output.contains("service restart <env> [--json]"));
+    assert!(output.contains("service uninstall <env> [--json]"));
+    assert!(output.contains("service install refactor-a --json"));
     assert!(output.contains("service list"));
     assert!(output.contains("service status refactor-a --json"));
     assert!(output.contains("service status --all"));
+    assert!(output.contains("service start refactor-a"));
+    assert!(output.contains("service restart refactor-a --json"));
+    assert!(output.contains("service stop refactor-a"));
+    assert!(output.contains("service uninstall refactor-a"));
     assert!(output.contains(
         "env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect]"
     ));
