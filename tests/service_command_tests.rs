@@ -281,6 +281,96 @@ fn service_lifecycle_commands_use_the_env_scoped_launch_agent_label() {
 }
 
 #[test]
+fn service_logs_reads_stdout_and_stderr_logs() {
+    let root = TestDir::new("service-logs");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    write_text(
+        &root.child("ocm-home/envs/demo/.openclaw/logs/gateway.log"),
+        "one\ntwo\nthree\n",
+    );
+    write_text(
+        &root.child("ocm-home/envs/demo/.openclaw/logs/gateway.err.log"),
+        "stderr-a\nstderr-b\n",
+    );
+
+    let stdout_logs = run_ocm(&cwd, &env, &["service", "logs", "demo"]);
+    assert!(stdout_logs.status.success(), "{}", stderr(&stdout_logs));
+    assert_eq!(stdout(&stdout_logs), "one\ntwo\nthree\n");
+
+    let stderr_logs = run_ocm(&cwd, &env, &["service", "logs", "demo", "--stderr"]);
+    assert!(stderr_logs.status.success(), "{}", stderr(&stderr_logs));
+    assert_eq!(stdout(&stderr_logs), "stderr-a\nstderr-b\n");
+}
+
+#[test]
+fn service_logs_supports_tail_and_json_output() {
+    let root = TestDir::new("service-logs-tail");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    write_text(
+        &root.child("ocm-home/envs/demo/.openclaw/logs/gateway.log"),
+        "line-1\nline-2\nline-3\n",
+    );
+
+    let tailed = run_ocm(&cwd, &env, &["service", "logs", "demo", "--tail", "2"]);
+    assert!(tailed.status.success(), "{}", stderr(&tailed));
+    assert_eq!(stdout(&tailed), "line-2\nline-3\n");
+
+    let json_logs = run_ocm(
+        &cwd,
+        &env,
+        &["service", "logs", "demo", "--tail", "1", "--json"],
+    );
+    assert!(json_logs.status.success(), "{}", stderr(&json_logs));
+    let summary: Value = serde_json::from_str(&stdout(&json_logs)).unwrap();
+    assert_eq!(summary["envName"], "demo");
+    assert_eq!(summary["stream"], "stdout");
+    assert_eq!(
+        summary["path"],
+        path_string(&root.child("ocm-home/envs/demo/.openclaw/logs/gateway.log"))
+    );
+    assert_eq!(summary["tailLines"], 1);
+    assert_eq!(summary["content"], "line-3\n");
+}
+
+#[test]
+fn service_logs_validate_arguments_and_missing_files() {
+    let root = TestDir::new("service-logs-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let missing_name = run_ocm(&cwd, &env, &["service", "logs"]);
+    assert_eq!(missing_name.status.code(), Some(1));
+    assert!(stderr(&missing_name).contains("service logs requires <env>"));
+
+    let conflicting = run_ocm(&cwd, &env, &["service", "logs", "demo", "--stdout", "--stderr"]);
+    assert_eq!(conflicting.status.code(), Some(1));
+    assert!(stderr(&conflicting).contains("service logs accepts only one of --stdout or --stderr"));
+
+    let bad_tail = run_ocm(&cwd, &env, &["service", "logs", "demo", "--tail", "0"]);
+    assert_eq!(bad_tail.status.code(), Some(1));
+    assert!(stderr(&bad_tail).contains("--tail must be a positive integer"));
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let missing_log = run_ocm(&cwd, &env, &["service", "logs", "demo"]);
+    assert_eq!(missing_log.status.code(), Some(1));
+    assert!(stderr(&missing_log).contains("stdout log does not exist for env \"demo\""));
+}
+
+#[test]
 fn service_install_requires_a_target_env() {
     let root = TestDir::new("service-install-validation");
     let cwd = root.child("workspace");

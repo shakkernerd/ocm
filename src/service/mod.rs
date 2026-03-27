@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub use inspect::{ServiceSummary, ServiceSummaryList};
-pub use manage::{ServiceActionSummary, ServiceInstallSummary};
+pub use manage::{ServiceActionSummary, ServiceInstallSummary, ServiceLogSummary};
 
 pub struct ServiceService<'a> {
     env: &'a BTreeMap<String, String>,
@@ -43,5 +43,14 @@ impl<'a> ServiceService<'a> {
 
     pub fn uninstall(&self, name: &str) -> Result<ServiceActionSummary, String> {
         manage::uninstall_service(name, self.env, self.cwd)
+    }
+
+    pub fn logs(
+        &self,
+        name: &str,
+        stream: &str,
+        tail_lines: Option<usize>,
+    ) -> Result<ServiceLogSummary, String> {
+        manage::service_logs(name, stream, tail_lines, self.env, self.cwd)
     }
 }

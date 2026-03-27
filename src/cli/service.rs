@@ -1,6 +1,35 @@
 use super::{Cli, render};
 
 impl Cli {
+    pub(super) fn handle_service_logs(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, stderr_flag) = Self::consume_flag(args, "--stderr");
+        let (args, stdout_flag) = Self::consume_flag(args, "--stdout");
+        let (args, tail_raw) = Self::consume_option(args, "--tail")?;
+        let tail_lines = match tail_raw.as_deref() {
+            Some(raw) => Some(Self::parse_positive_u32(raw, "--tail")? as usize),
+            None => None,
+        };
+        if stdout_flag && stderr_flag {
+            return Err("service logs accepts only one of --stdout or --stderr".to_string());
+        }
+
+        let Some(name) = args.first() else {
+            return Err("service logs requires <env>".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let stream = if stderr_flag { "stderr" } else { "stdout" };
+        let summary = self.service_service().logs(name, stream, tail_lines)?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_text(&summary.content)?;
+        Ok(0)
+    }
+
     pub(super) fn handle_service_install(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let Some(name) = args.first() else {
@@ -140,6 +169,7 @@ impl Cli {
             "install" => self.handle_service_install(rest),
             "list" => self.handle_service_list(rest),
             "status" => self.handle_service_status(rest),
+            "logs" => self.handle_service_logs(rest),
             "start" => self.handle_service_start(rest),
             "stop" => self.handle_service_stop(rest),
             "restart" => self.handle_service_restart(rest),

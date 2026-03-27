@@ -93,6 +93,7 @@ fn help_mentions_launcher_runtime_and_service_commands() {
     assert!(output.contains("service list [--json]"));
     assert!(output.contains("service status <env> [--json]"));
     assert!(output.contains("service status --all [--json]"));
+    assert!(output.contains("service logs <env> [--stderr] [--tail <count>] [--json]"));
     assert!(output.contains("service start <env> [--json]"));
     assert!(output.contains("service stop <env> [--json]"));
     assert!(output.contains("service restart <env> [--json]"));
@@ -101,6 +102,8 @@ fn help_mentions_launcher_runtime_and_service_commands() {
     assert!(output.contains("service list"));
     assert!(output.contains("service status refactor-a --json"));
     assert!(output.contains("service status --all"));
+    assert!(output.contains("service logs refactor-a"));
+    assert!(output.contains("service logs refactor-a --stderr --tail 50"));
     assert!(output.contains("service start refactor-a"));
     assert!(output.contains("service restart refactor-a --json"));
     assert!(output.contains("service stop refactor-a"));

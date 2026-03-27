@@ -68,6 +68,17 @@ pub struct ServiceActionSummary {
     pub warnings: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceLogSummary {
+    pub env_name: String,
+    pub service_kind: String,
+    pub stream: String,
+    pub path: String,
+    pub tail_lines: Option<usize>,
+    pub content: String,
+}
+
 struct PreparedService {
     env_meta: EnvMeta,
     binding_kind: String,
@@ -257,6 +268,47 @@ pub fn uninstall_service(
     })
 }
 
+pub fn service_logs(
+    name: &str,
+    stream: &str,
+    tail_lines: Option<usize>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ServiceLogSummary, String> {
+    let env_meta = EnvironmentService::new(env, cwd).get(name)?;
+    let stream = normalize_log_stream(stream)?;
+    let log_path = match stream {
+        "stdout" => service_stdout_log_path(&env_meta),
+        "stderr" => service_stderr_log_path(&env_meta),
+        _ => unreachable!("normalize_log_stream validates service log stream"),
+    };
+
+    if !log_path.exists() {
+        return Err(format!(
+            "{} log does not exist for env \"{}\": {}",
+            stream,
+            env_meta.name,
+            display_path(&log_path)
+        ));
+    }
+
+    let raw = fs::read_to_string(&log_path).map_err(|error| error.to_string())?;
+    let content = if let Some(tail_lines) = tail_lines {
+        tail_text(&raw, tail_lines)
+    } else {
+        raw
+    };
+
+    Ok(ServiceLogSummary {
+        env_name: env_meta.name,
+        service_kind: "gateway".to_string(),
+        stream: stream.to_string(),
+        path: display_path(&log_path),
+        tail_lines,
+        content,
+    })
+}
+
 fn prepare_existing_service(
     name: &str,
     env: &BTreeMap<String, String>,
@@ -275,9 +327,9 @@ fn prepare_service(
     let launch = resolve_service_launch(&env_meta, env, cwd)?;
     let managed_label = managed_service_label(&env_meta.name);
     let managed_plist_path = managed_plist_path(&env_meta.name, env);
-    let log_dir = derive_env_paths(Path::new(&env_meta.root)).state_dir.join("logs");
-    let stdout_path = log_dir.join("gateway.log");
-    let stderr_path = log_dir.join("gateway.err.log");
+    let log_dir = service_log_dir(&env_meta);
+    let stdout_path = service_stdout_log_path(&env_meta);
+    let stderr_path = service_stderr_log_path(&env_meta);
     let (binding_kind, binding_name, command, binary_path, args, program_arguments, run_dir) =
         match launch {
             ServiceLaunchSpec::Launcher {
@@ -437,6 +489,44 @@ fn choose_gateway_port(
 
 fn port_is_available(port: u32) -> bool {
     TcpListener::bind(("127.0.0.1", port as u16)).is_ok()
+}
+
+fn normalize_log_stream(stream: &str) -> Result<&str, String> {
+    match stream.trim().to_ascii_lowercase().as_str() {
+        "stdout" => Ok("stdout"),
+        "stderr" => Ok("stderr"),
+        _ => Err(format!("unsupported service log stream: {stream}")),
+    }
+}
+
+fn tail_text(raw: &str, tail_lines: usize) -> String {
+    if tail_lines == 0 {
+        return String::new();
+    }
+
+    let trailing_newline = raw.ends_with('\n');
+    let lines = raw.lines().collect::<Vec<_>>();
+    if lines.len() <= tail_lines {
+        return raw.to_string();
+    }
+
+    let mut content = lines[lines.len() - tail_lines..].join("\n");
+    if trailing_newline {
+        content.push('\n');
+    }
+    content
+}
+
+fn service_log_dir(env_meta: &EnvMeta) -> PathBuf {
+    derive_env_paths(Path::new(&env_meta.root)).state_dir.join("logs")
+}
+
+fn service_stdout_log_path(env_meta: &EnvMeta) -> PathBuf {
+    service_log_dir(env_meta).join("gateway.log")
+}
+
+fn service_stderr_log_path(env_meta: &EnvMeta) -> PathBuf {
+    service_log_dir(env_meta).join("gateway.err.log")
 }
 
 fn write_plist_file(
@@ -630,7 +720,9 @@ fn launchctl_not_loaded(output: &std::process::Output) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_launch_agent_plist, plist_escape, service_install_warnings};
+    use super::{
+        build_launch_agent_plist, plist_escape, service_install_warnings, tail_text,
+    };
     use std::collections::BTreeMap;
     use std::path::Path;
 
@@ -676,5 +768,13 @@ mod tests {
         assert!(plist.contains("openclaw gateway run"));
         assert!(plist.contains("<key>EnvironmentVariables</key>"));
         assert!(plist.contains("/tmp/stdout.log"));
+    }
+
+    #[test]
+    fn tail_text_keeps_the_requested_number_of_lines() {
+        assert_eq!(tail_text("a\nb\nc\n", 2), "b\nc\n");
+        assert_eq!(tail_text("a\nb\nc", 1), "c");
+        assert_eq!(tail_text("a\nb\n", 5), "a\nb\n");
+        assert_eq!(tail_text("a\nb\n", 0), "");
     }
 }
