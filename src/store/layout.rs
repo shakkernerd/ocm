@@ -2,7 +2,24 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
-use crate::types::{EnvPaths, StorePaths};
+#[derive(Clone, Debug)]
+pub struct EnvPaths {
+    pub root: PathBuf,
+    pub openclaw_home: PathBuf,
+    pub state_dir: PathBuf,
+    pub config_path: PathBuf,
+    pub workspace_dir: PathBuf,
+    pub marker_path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub struct StorePaths {
+    pub home: PathBuf,
+    pub envs_dir: PathBuf,
+    pub launchers_dir: PathBuf,
+    pub runtimes_dir: PathBuf,
+    pub snapshots_dir: PathBuf,
+}
 
 pub fn display_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()

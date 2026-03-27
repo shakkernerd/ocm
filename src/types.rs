@@ -1,17 +1,5 @@
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-
-#[derive(Clone, Debug)]
-pub struct EnvPaths {
-    pub root: PathBuf,
-    pub openclaw_home: PathBuf,
-    pub state_dir: PathBuf,
-    pub config_path: PathBuf,
-    pub workspace_dir: PathBuf,
-    pub marker_path: PathBuf,
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,15 +50,6 @@ pub struct EnvMarker {
     pub name: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-}
-
-#[derive(Clone, Debug)]
-pub struct StorePaths {
-    pub home: PathBuf,
-    pub envs_dir: PathBuf,
-    pub launchers_dir: PathBuf,
-    pub runtimes_dir: PathBuf,
-    pub snapshots_dir: PathBuf,
 }
 
 #[derive(Clone, Debug)]
