@@ -31,8 +31,12 @@ impl<'a> ServiceService<'a> {
         manage::install_service(name, self.env, self.cwd)
     }
 
-    pub fn adopt_global(&self, name: &str) -> Result<ServiceAdoptionSummary, String> {
-        manage::adopt_global_service(name, self.env, self.cwd)
+    pub fn adopt_global(
+        &self,
+        name: &str,
+        dry_run: bool,
+    ) -> Result<ServiceAdoptionSummary, String> {
+        manage::adopt_global_service(name, self.env, self.cwd, dry_run)
     }
 
     pub fn start(&self, name: &str) -> Result<ServiceActionSummary, String> {

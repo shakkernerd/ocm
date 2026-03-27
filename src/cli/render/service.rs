@@ -159,9 +159,14 @@ pub fn service_installed(summary: &ServiceInstallSummary) -> Vec<String> {
 
 pub fn service_adopted(summary: &ServiceAdoptionSummary) -> Vec<String> {
     let mut lines = vec![
-        format!("Adopted global service {}", summary.env_name),
+        if summary.dry_run {
+            format!("Would adopt global service {}", summary.env_name)
+        } else {
+            format!("Adopted global service {}", summary.env_name)
+        },
         format!("  global label: {}", summary.global_label),
         format!("  global plist: {}", summary.global_plist_path),
+        format!("  backup plist: {}", summary.backup_plist_path),
         format!("  managed label: {}", summary.managed_label),
         format!("  managed plist: {}", summary.managed_plist_path),
         format!("  port: {}", summary.gateway_port),

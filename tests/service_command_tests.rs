@@ -2,6 +2,7 @@ mod support;
 
 use std::fs;
 use std::net::TcpListener;
+use std::path::Path;
 
 use serde_json::Value;
 
@@ -415,7 +416,11 @@ fn service_adopt_global_migrates_a_matching_global_launch_agent() {
     assert_eq!(summary["globalLabel"], "ai.openclaw.gateway");
     assert_eq!(summary["managedLabel"], "ai.openclaw.gateway.ocm.demo");
     assert_eq!(summary["gatewayPort"], assigned_port);
+    assert_eq!(summary["dryRun"], false);
     assert_eq!(summary["adopted"], true);
+    let backup_plist_path = summary["backupPlistPath"].as_str().unwrap();
+    assert!(backup_plist_path.contains("/ocm-home/services/backups/ai.openclaw.gateway."));
+    assert!(backup_plist_path.ends_with(".plist"));
 
     assert!(!root
         .child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
@@ -423,6 +428,7 @@ fn service_adopt_global_migrates_a_matching_global_launch_agent() {
     assert!(root
         .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
         .exists());
+    assert!(Path::new(backup_plist_path).exists());
 
     let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
     assert!(launchctl_log.contains("bootout gui/"));
@@ -467,6 +473,76 @@ fn service_adopt_global_rejects_mismatched_global_plists() {
     let output = run_ocm(&cwd, &env, &["service", "adopt-global", "demo"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("global OpenClaw service points at a different env"));
+}
+
+#[test]
+fn service_adopt_global_dry_run_reports_the_plan_without_mutating_state() {
+    let root = TestDir::new("service-adopt-global-dry-run");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let assigned_port = allocate_free_port();
+    write_text(
+        &root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
+        &format!("{{\"gateway\":{{\"port\":{assigned_port}}}}}\n"),
+    );
+    write_text(
+        &root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist"),
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+  <dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>OPENCLAW_CONFIG_PATH</key>
+      <string>{}</string>
+      <key>OPENCLAW_GATEWAY_PORT</key>
+      <string>{}</string>
+    </dict>
+  </dict>
+</plist>
+"#,
+            path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json")),
+            assigned_port
+        ),
+    );
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["service", "adopt-global", "demo", "--dry-run", "--json"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["envName"], "demo");
+    assert_eq!(summary["dryRun"], true);
+    assert_eq!(summary["adopted"], false);
+    let backup_plist_path = summary["backupPlistPath"].as_str().unwrap();
+    assert!(backup_plist_path.contains("/ocm-home/services/backups/ai.openclaw.gateway."));
+
+    assert!(root
+        .child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
+        .exists());
+    assert!(!root
+        .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
+        .exists());
+    assert!(!Path::new(backup_plist_path).exists());
+
+    let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
+    assert!(!launchctl_log.contains("bootstrap gui/"));
+    assert!(!launchctl_log.contains("ai.openclaw.gateway.ocm.demo.plist"));
+    assert!(!launchctl_log.contains("bootout gui/"));
+
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_meta: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    assert_eq!(env_meta["gatewayPort"], Value::Null);
 }
 
 #[test]

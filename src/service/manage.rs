@@ -14,7 +14,10 @@ use super::inspect::{
 };
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::infra::shell::build_openclaw_env;
-use crate::store::{derive_env_paths, display_path, list_environments, save_environment};
+use crate::store::{
+    derive_env_paths, display_path, list_environments, now_utc, resolve_ocm_home,
+    save_environment,
+};
 
 const DEFAULT_SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 const LAUNCH_AGENT_DIR_MODE: u32 = 0o755;
@@ -86,9 +89,11 @@ pub struct ServiceAdoptionSummary {
     pub service_kind: String,
     pub global_label: String,
     pub global_plist_path: String,
+    pub backup_plist_path: String,
     pub managed_label: String,
     pub managed_plist_path: String,
     pub gateway_port: u32,
+    pub dry_run: bool,
     pub adopted: bool,
     pub warnings: Vec<String>,
 }
@@ -122,6 +127,12 @@ struct GlobalServiceBinding {
     plist_path: PathBuf,
     config_path: Option<String>,
     gateway_port: Option<u32>,
+}
+
+struct PreparedGlobalAdoption {
+    prepared: PreparedService,
+    global: GlobalServiceBinding,
+    backup_plist_path: PathBuf,
 }
 
 pub fn install_service(
@@ -158,37 +169,32 @@ pub fn adopt_global_service(
     name: &str,
     env: &BTreeMap<String, String>,
     cwd: &Path,
+    dry_run: bool,
 ) -> Result<ServiceAdoptionSummary, String> {
-    let target_env = EnvironmentService::new(env, cwd).get(name)?;
-    let global = read_global_service_binding(env)?;
-    let target_config_path = display_path(&derive_env_paths(Path::new(&target_env.root)).config_path);
-    let global_config_path = global
-        .config_path
-        .clone()
-        .ok_or_else(|| "global OpenClaw service does not expose OPENCLAW_CONFIG_PATH for adoption".to_string())?;
-    if global_config_path != target_config_path {
-        return Err(format!(
-            "global OpenClaw service points at a different env; expected {} but found {}",
-            target_config_path, global_config_path
-        ));
+    let adoption = prepare_global_adoption(name, env, cwd, !dry_run)?;
+    if !dry_run {
+        write_plist_file(&adoption.prepared, env)?;
+        backup_global_plist(&adoption.global.plist_path, &adoption.backup_plist_path)?;
+        bootout_global_service()?;
+        activate_launch_agent(
+            &adoption.prepared.managed_label,
+            &adoption.prepared.managed_plist_path,
+        )?;
+        fs::remove_file(&adoption.global.plist_path).map_err(|error| error.to_string())?;
     }
 
-    let prepared = prepare_service_with_allowed_busy_port(name, env, cwd, global.gateway_port)?;
-    write_plist_file(&prepared, env)?;
-    bootout_global_service()?;
-    activate_launch_agent(&prepared.managed_label, &prepared.managed_plist_path)?;
-    fs::remove_file(&global.plist_path).map_err(|error| error.to_string())?;
-
     Ok(ServiceAdoptionSummary {
-        env_name: prepared.env_meta.name,
+        env_name: adoption.prepared.env_meta.name,
         service_kind: "gateway".to_string(),
         global_label: GLOBAL_GATEWAY_LABEL.to_string(),
-        global_plist_path: display_path(&global.plist_path),
-        managed_label: prepared.managed_label,
-        managed_plist_path: display_path(&prepared.managed_plist_path),
-        gateway_port: prepared.env_meta.gateway_port.unwrap_or_default(),
-        adopted: true,
-        warnings: prepared.warnings,
+        global_plist_path: display_path(&adoption.global.plist_path),
+        backup_plist_path: display_path(&adoption.backup_plist_path),
+        managed_label: adoption.prepared.managed_label,
+        managed_plist_path: display_path(&adoption.prepared.managed_plist_path),
+        gateway_port: adoption.prepared.env_meta.gateway_port.unwrap_or_default(),
+        dry_run,
+        adopted: !dry_run,
+        warnings: adoption.prepared.warnings,
     })
 }
 
@@ -380,7 +386,7 @@ fn prepare_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<PreparedService, String> {
-    prepare_service_with_allowed_busy_port(name, env, cwd, None)
+    prepare_service_with_allowed_busy_port(name, env, cwd, None, true)
 }
 
 fn prepare_service_with_allowed_busy_port(
@@ -388,8 +394,15 @@ fn prepare_service_with_allowed_busy_port(
     env: &BTreeMap<String, String>,
     cwd: &Path,
     allowed_busy_port: Option<u32>,
+    persist_gateway_port: bool,
 ) -> Result<PreparedService, String> {
-    let port_assignment = persist_service_gateway_port(name, env, cwd, allowed_busy_port)?;
+    let port_assignment = persist_service_gateway_port(
+        name,
+        env,
+        cwd,
+        allowed_busy_port,
+        persist_gateway_port,
+    )?;
     let env_meta = port_assignment.env_meta;
     let launch = resolve_service_launch(&env_meta, env, cwd)?;
     let managed_label = managed_service_label(&env_meta.name);
@@ -484,6 +497,7 @@ fn persist_service_gateway_port(
     env: &BTreeMap<String, String>,
     cwd: &Path,
     allowed_busy_port: Option<u32>,
+    persist_gateway_port: bool,
 ) -> Result<PersistedGatewayPort, String> {
     let service = EnvironmentService::new(env, cwd);
     let original = service.get(name)?;
@@ -516,8 +530,13 @@ fn persist_service_gateway_port(
 
     let mut updated = original;
     updated.gateway_port = Some(chosen_port);
+    let env_meta = if persist_gateway_port {
+        save_environment(updated, env, cwd)?
+    } else {
+        updated
+    };
     Ok(PersistedGatewayPort {
-        env_meta: save_environment(updated, env, cwd)?,
+        env_meta,
         persisted_gateway_port,
         previous_gateway_port,
     })
@@ -634,6 +653,39 @@ fn write_plist_file(
     fs::write(&prepared.managed_plist_path, plist).map_err(|error| error.to_string())?;
     set_mode(&prepared.managed_plist_path, LAUNCH_AGENT_PLIST_MODE)?;
     Ok(())
+}
+
+fn prepare_global_adoption(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    persist_gateway_port: bool,
+) -> Result<PreparedGlobalAdoption, String> {
+    let target_env = EnvironmentService::new(env, cwd).get(name)?;
+    let global = read_global_service_binding(env)?;
+    let target_config_path =
+        display_path(&derive_env_paths(Path::new(&target_env.root)).config_path);
+    let global_config_path = global.config_path.clone().ok_or_else(|| {
+        "global OpenClaw service does not expose OPENCLAW_CONFIG_PATH for adoption".to_string()
+    })?;
+    if global_config_path != target_config_path {
+        return Err(format!(
+            "global OpenClaw service points at a different env; expected {} but found {}",
+            target_config_path, global_config_path
+        ));
+    }
+
+    Ok(PreparedGlobalAdoption {
+        prepared: prepare_service_with_allowed_busy_port(
+            name,
+            env,
+            cwd,
+            global.gateway_port,
+            persist_gateway_port,
+        )?,
+        backup_plist_path: global_plist_backup_path(env, cwd)?,
+        global,
+    })
 }
 
 fn build_service_environment(
@@ -767,6 +819,16 @@ fn activate_launch_agent(label: &str, plist_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn backup_global_plist(source_path: &Path, backup_path: &Path) -> Result<(), String> {
+    let Some(parent) = backup_path.parent() else {
+        return Err("failed to resolve backup directory for global service plist".to_string());
+    };
+    ensure_secure_dir(parent)?;
+    fs::copy(source_path, backup_path).map_err(|error| error.to_string())?;
+    set_mode(backup_path, LAUNCH_AGENT_PLIST_MODE)?;
+    Ok(())
+}
+
 fn read_global_service_binding(env: &BTreeMap<String, String>) -> Result<GlobalServiceBinding, String> {
     let plist_path = global_plist_path(env);
     if !plist_path.exists() {
@@ -779,6 +841,19 @@ fn read_global_service_binding(env: &BTreeMap<String, String>) -> Result<GlobalS
             .and_then(|value| value.parse::<u32>().ok()),
         plist_path,
     })
+}
+
+fn global_plist_backup_path(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let backup_root = resolve_ocm_home(env, cwd)?
+        .join("services")
+        .join("backups");
+    let timestamp = now_utc().unix_timestamp_nanos();
+    Ok(backup_root.join(format!(
+        "{GLOBAL_GATEWAY_LABEL}.{timestamp}.plist"
+    )))
 }
 
 fn bootout_global_service() -> Result<(), String> {

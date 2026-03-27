@@ -3,12 +3,13 @@ use super::{Cli, render};
 impl Cli {
     pub(super) fn handle_service_adopt_global(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, dry_run) = Self::consume_flag(args, "--dry-run");
         let Some(name) = args.first() else {
             return Err("service adopt-global requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let summary = self.service_service().adopt_global(name)?;
+        let summary = self.service_service().adopt_global(name, dry_run)?;
         if json_flag {
             self.print_json(&summary)?;
             return Ok(0);
