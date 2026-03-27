@@ -98,6 +98,22 @@ pub struct ServiceAdoptionSummary {
     pub warnings: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceRestoreSummary {
+    pub env_name: String,
+    pub service_kind: String,
+    pub global_label: String,
+    pub global_plist_path: String,
+    pub backup_plist_path: String,
+    pub managed_label: String,
+    pub managed_plist_path: String,
+    pub gateway_port: u32,
+    pub dry_run: bool,
+    pub restored: bool,
+    pub warnings: Vec<String>,
+}
+
 struct PreparedService {
     env_meta: EnvMeta,
     binding_kind: String,
@@ -133,6 +149,16 @@ struct PreparedGlobalAdoption {
     prepared: PreparedService,
     global: GlobalServiceBinding,
     backup_plist_path: PathBuf,
+}
+
+struct PreparedGlobalRestore {
+    env_meta: EnvMeta,
+    global_plist_path: PathBuf,
+    backup_plist_path: PathBuf,
+    managed_label: String,
+    managed_plist_path: PathBuf,
+    gateway_port: u32,
+    warnings: Vec<String>,
 }
 
 pub fn install_service(
@@ -195,6 +221,37 @@ pub fn adopt_global_service(
         dry_run,
         adopted: !dry_run,
         warnings: adoption.prepared.warnings,
+    })
+}
+
+pub fn restore_global_service(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    dry_run: bool,
+) -> Result<ServiceRestoreSummary, String> {
+    let restore = prepare_global_restore(name, env, cwd)?;
+    if !dry_run {
+        restore_global_plist(&restore.backup_plist_path, &restore.global_plist_path)?;
+        bootout_managed_service(&restore.managed_label)?;
+        activate_launch_agent(GLOBAL_GATEWAY_LABEL, &restore.global_plist_path)?;
+        if restore.managed_plist_path.exists() {
+            fs::remove_file(&restore.managed_plist_path).map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(ServiceRestoreSummary {
+        env_name: restore.env_meta.name,
+        service_kind: "gateway".to_string(),
+        global_label: GLOBAL_GATEWAY_LABEL.to_string(),
+        global_plist_path: display_path(&restore.global_plist_path),
+        backup_plist_path: display_path(&restore.backup_plist_path),
+        managed_label: restore.managed_label,
+        managed_plist_path: display_path(&restore.managed_plist_path),
+        gateway_port: restore.gateway_port,
+        dry_run,
+        restored: !dry_run,
+        warnings: restore.warnings,
     })
 }
 
@@ -688,6 +745,43 @@ fn prepare_global_adoption(
     })
 }
 
+fn prepare_global_restore(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PreparedGlobalRestore, String> {
+    let service = EnvironmentService::new(env, cwd);
+    let env_meta = service.apply_effective_gateway_port(service.get(name)?)?;
+    let global_plist_path = global_plist_path(env);
+    if global_plist_path.exists() {
+        return Err("global OpenClaw service is already installed; remove it before restoring from backup".to_string());
+    }
+
+    let backup = latest_matching_global_plist_backup(&env_meta, env, cwd)?;
+    let managed_label = managed_service_label(&env_meta.name);
+    let managed_plist_path = managed_plist_path(&env_meta.name, env);
+    let mut warnings = Vec::new();
+    if !managed_plist_path.exists() {
+        warnings.push(format!(
+            "managed service plist is absent for env \"{}\"; restoring the global plist anyway",
+            env_meta.name
+        ));
+    }
+
+    Ok(PreparedGlobalRestore {
+        gateway_port: backup
+            .gateway_port
+            .or(env_meta.gateway_port)
+            .unwrap_or_default(),
+        env_meta,
+        global_plist_path,
+        backup_plist_path: backup.plist_path,
+        managed_label,
+        managed_plist_path,
+        warnings,
+    })
+}
+
 fn build_service_environment(
     env_meta: &EnvMeta,
     launchd_label: &str,
@@ -829,35 +923,109 @@ fn backup_global_plist(source_path: &Path, backup_path: &Path) -> Result<(), Str
     Ok(())
 }
 
+fn restore_global_plist(backup_path: &Path, global_path: &Path) -> Result<(), String> {
+    let Some(parent) = global_path.parent() else {
+        return Err("failed to resolve LaunchAgents directory for global service restore".to_string());
+    };
+    ensure_secure_dir(parent)?;
+    fs::copy(backup_path, global_path).map_err(|error| error.to_string())?;
+    set_mode(global_path, LAUNCH_AGENT_PLIST_MODE)?;
+    Ok(())
+}
+
 fn read_global_service_binding(env: &BTreeMap<String, String>) -> Result<GlobalServiceBinding, String> {
     let plist_path = global_plist_path(env);
     if !plist_path.exists() {
         return Err("global OpenClaw service is not installed".to_string());
     }
 
-    Ok(GlobalServiceBinding {
-        config_path: read_launch_agent_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH")?,
-        gateway_port: read_launch_agent_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT")?
-            .and_then(|value| value.parse::<u32>().ok()),
-        plist_path,
-    })
+    read_service_binding(&plist_path)
 }
 
 fn global_plist_backup_path(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<PathBuf, String> {
-    let backup_root = resolve_ocm_home(env, cwd)?
-        .join("services")
-        .join("backups");
+    let backup_root = global_plist_backup_dir(env, cwd)?;
     let timestamp = now_utc().unix_timestamp_nanos();
     Ok(backup_root.join(format!(
         "{GLOBAL_GATEWAY_LABEL}.{timestamp}.plist"
     )))
 }
 
+fn global_plist_backup_dir(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    Ok(resolve_ocm_home(env, cwd)?.join("services").join("backups"))
+}
+
+fn latest_matching_global_plist_backup(
+    env_meta: &EnvMeta,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<GlobalServiceBinding, String> {
+    let backup_dir = global_plist_backup_dir(env, cwd)?;
+    if !backup_dir.exists() {
+        return Err(format!(
+            "no global service backup exists for env \"{}\"",
+            env_meta.name
+        ));
+    }
+
+    let target_config_path = display_path(&derive_env_paths(Path::new(&env_meta.root)).config_path);
+    let mut bindings = Vec::new();
+    for entry in fs::read_dir(&backup_dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !file_name.starts_with(&format!("{GLOBAL_GATEWAY_LABEL}.")) || !file_name.ends_with(".plist") {
+            continue;
+        }
+        let binding = read_service_binding(&path)?;
+        if binding.config_path.as_deref() == Some(target_config_path.as_str()) {
+            bindings.push(binding);
+        }
+    }
+
+    bindings.sort_by(|left, right| {
+        left.plist_path
+            .file_name()
+            .cmp(&right.plist_path.file_name())
+    });
+    bindings.pop().ok_or_else(|| {
+        format!(
+            "no global service backup matches env \"{}\"",
+            env_meta.name
+        )
+    })
+}
+
+fn read_service_binding(plist_path: &Path) -> Result<GlobalServiceBinding, String> {
+    Ok(GlobalServiceBinding {
+        config_path: read_launch_agent_environment_value(plist_path, "OPENCLAW_CONFIG_PATH")?,
+        gateway_port: read_launch_agent_environment_value(plist_path, "OPENCLAW_GATEWAY_PORT")?
+            .and_then(|value| value.parse::<u32>().ok()),
+        plist_path: plist_path.to_path_buf(),
+    })
+}
+
 fn bootout_global_service() -> Result<(), String> {
     let target = format!("{}/{}", gui_domain(), GLOBAL_GATEWAY_LABEL);
+    let bootout = run_launchctl(["bootout", target.as_str()])?;
+    if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
+        return Err(format!(
+            "launchctl bootout failed: {}",
+            launchctl_detail(&bootout)
+        ));
+    }
+    Ok(())
+}
+
+fn bootout_managed_service(label: &str) -> Result<(), String> {
+    let target = format!("{}/{}", gui_domain(), label);
     let bootout = run_launchctl(["bootout", target.as_str()])?;
     if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
         return Err(format!(

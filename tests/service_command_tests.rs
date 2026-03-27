@@ -546,6 +546,171 @@ fn service_adopt_global_dry_run_reports_the_plan_without_mutating_state() {
 }
 
 #[test]
+fn service_restore_global_restores_the_latest_matching_backup() {
+    let root = TestDir::new("service-restore-global");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let assigned_port = allocate_free_port();
+    write_text(
+        &root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
+        &format!("{{\"gateway\":{{\"port\":{assigned_port}}}}}\n"),
+    );
+    write_text(
+        &root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist"),
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+  <dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>OPENCLAW_CONFIG_PATH</key>
+      <string>{}</string>
+      <key>OPENCLAW_GATEWAY_PORT</key>
+      <string>{}</string>
+    </dict>
+  </dict>
+</plist>
+"#,
+            path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json")),
+            assigned_port
+        ),
+    );
+
+    let adopted = run_ocm(&cwd, &env, &["service", "adopt-global", "demo", "--json"]);
+    assert!(adopted.status.success(), "{}", stderr(&adopted));
+    let adopted_summary: Value = serde_json::from_str(&stdout(&adopted)).unwrap();
+    let backup_plist_path = adopted_summary["backupPlistPath"].as_str().unwrap().to_string();
+    assert!(Path::new(&backup_plist_path).exists());
+
+    let restored = run_ocm(&cwd, &env, &["service", "restore-global", "demo", "--json"]);
+    assert!(restored.status.success(), "{}", stderr(&restored));
+    let summary: Value = serde_json::from_str(&stdout(&restored)).unwrap();
+    assert_eq!(summary["envName"], "demo");
+    assert_eq!(summary["globalLabel"], "ai.openclaw.gateway");
+    assert_eq!(summary["gatewayPort"], assigned_port);
+    assert_eq!(summary["dryRun"], false);
+    assert_eq!(summary["restored"], true);
+    assert_eq!(summary["backupPlistPath"], backup_plist_path);
+
+    let global_plist = root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist");
+    assert!(global_plist.exists());
+    assert!(!root
+        .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
+        .exists());
+    assert_eq!(
+        fs::read_to_string(&global_plist).unwrap(),
+        fs::read_to_string(Path::new(&backup_plist_path)).unwrap()
+    );
+
+    let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
+    assert!(launchctl_log.contains("bootout gui/"));
+    assert!(launchctl_log.contains("ai.openclaw.gateway.ocm.demo"));
+    assert!(launchctl_log.contains("ai.openclaw.gateway.plist"));
+}
+
+#[test]
+fn service_restore_global_dry_run_reports_the_latest_matching_backup_without_mutation() {
+    let root = TestDir::new("service-restore-global-dry-run");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let assigned_port = allocate_free_port();
+    write_text(
+        &root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
+        &format!("{{\"gateway\":{{\"port\":{assigned_port}}}}}\n"),
+    );
+    write_text(
+        &root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist"),
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+  <dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>OPENCLAW_CONFIG_PATH</key>
+      <string>{}</string>
+      <key>OPENCLAW_GATEWAY_PORT</key>
+      <string>{}</string>
+    </dict>
+  </dict>
+</plist>
+"#,
+            path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json")),
+            assigned_port
+        ),
+    );
+
+    let adopted = run_ocm(&cwd, &env, &["service", "adopt-global", "demo", "--json"]);
+    assert!(adopted.status.success(), "{}", stderr(&adopted));
+    let adopted_summary: Value = serde_json::from_str(&stdout(&adopted)).unwrap();
+    let backup_plist_path = adopted_summary["backupPlistPath"].as_str().unwrap().to_string();
+    let launchctl_log_before = fs::read_to_string(root.child("launchctl.log")).unwrap();
+
+    let restored = run_ocm(
+        &cwd,
+        &env,
+        &["service", "restore-global", "demo", "--dry-run", "--json"],
+    );
+    assert!(restored.status.success(), "{}", stderr(&restored));
+    let summary: Value = serde_json::from_str(&stdout(&restored)).unwrap();
+    assert_eq!(summary["envName"], "demo");
+    assert_eq!(summary["dryRun"], true);
+    assert_eq!(summary["restored"], false);
+    assert_eq!(summary["backupPlistPath"], backup_plist_path);
+
+    assert!(!root
+        .child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
+        .exists());
+    assert!(root
+        .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
+        .exists());
+    assert_eq!(
+        fs::read_to_string(root.child("launchctl.log")).unwrap(),
+        launchctl_log_before
+    );
+}
+
+#[test]
+fn service_restore_global_rejects_missing_backups() {
+    let root = TestDir::new("service-restore-global-missing-backup");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let output = run_ocm(&cwd, &env, &["service", "restore-global", "demo"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("no global service backup exists for env \"demo\""));
+}
+
+#[test]
+fn service_restore_global_requires_a_target_env() {
+    let root = TestDir::new("service-restore-global-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["service", "restore-global"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("service restore-global requires <env>"));
+}
+
+#[test]
 fn service_adopt_global_requires_a_target_env() {
     let root = TestDir::new("service-adopt-global-validation");
     let cwd = root.child("workspace");

@@ -7,6 +7,7 @@ use std::path::Path;
 pub use inspect::{ServiceSummary, ServiceSummaryList};
 pub use manage::{
     ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary, ServiceLogSummary,
+    ServiceRestoreSummary,
 };
 
 pub struct ServiceService<'a> {
@@ -37,6 +38,14 @@ impl<'a> ServiceService<'a> {
         dry_run: bool,
     ) -> Result<ServiceAdoptionSummary, String> {
         manage::adopt_global_service(name, self.env, self.cwd, dry_run)
+    }
+
+    pub fn restore_global(
+        &self,
+        name: &str,
+        dry_run: bool,
+    ) -> Result<ServiceRestoreSummary, String> {
+        manage::restore_global_service(name, self.env, self.cwd, dry_run)
     }
 
     pub fn start(&self, name: &str) -> Result<ServiceActionSummary, String> {

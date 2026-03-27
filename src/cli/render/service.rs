@@ -1,6 +1,6 @@
 use crate::service::{
     ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary, ServiceSummary,
-    ServiceSummaryList,
+    ServiceSummaryList, ServiceRestoreSummary,
 };
 
 fn daemon_state(installed: bool, loaded: bool, running: bool) -> &'static str {
@@ -163,6 +163,26 @@ pub fn service_adopted(summary: &ServiceAdoptionSummary) -> Vec<String> {
             format!("Would adopt global service {}", summary.env_name)
         } else {
             format!("Adopted global service {}", summary.env_name)
+        },
+        format!("  global label: {}", summary.global_label),
+        format!("  global plist: {}", summary.global_plist_path),
+        format!("  backup plist: {}", summary.backup_plist_path),
+        format!("  managed label: {}", summary.managed_label),
+        format!("  managed plist: {}", summary.managed_plist_path),
+        format!("  port: {}", summary.gateway_port),
+    ];
+    for warning in &summary.warnings {
+        lines.push(format!("  warning: {warning}"));
+    }
+    lines
+}
+
+pub fn service_restored(summary: &ServiceRestoreSummary) -> Vec<String> {
+    let mut lines = vec![
+        if summary.dry_run {
+            format!("Would restore global service {}", summary.env_name)
+        } else {
+            format!("Restored global service {}", summary.env_name)
         },
         format!("  global label: {}", summary.global_label),
         format!("  global plist: {}", summary.global_plist_path),
