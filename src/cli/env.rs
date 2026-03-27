@@ -1,16 +1,15 @@
-use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::Cli;
+use super::{Cli, render};
 use crate::env::{
-    CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
-    EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
-    RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
+    CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvSummary,
+    ExportEnvironmentOptions, ImportEnvironmentOptions, RemoveEnvSnapshotOptions,
+    RestoreEnvSnapshotOptions,
 };
 use crate::infra::process::{run_direct, run_shell};
 use crate::infra::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
-use crate::store::{derive_env_paths, validate_name};
 use crate::store::summarize_env;
+use crate::store::{derive_env_paths, validate_name};
 
 impl Cli {
     pub(super) fn handle_env_protect(&self, args: Vec<String>) -> Result<i32, String> {
@@ -30,10 +29,7 @@ impl Cli {
         let meta = self
             .environment_service()
             .set_protected(name, value == "on")?;
-        self.stdout_line(format!(
-            "Updated env {}: protected={}",
-            meta.name, meta.protected
-        ));
+        self.stdout_lines(render::env::env_protected(&meta.name, meta.protected));
         Ok(0)
     }
 
@@ -45,11 +41,11 @@ impl Cli {
         Self::assert_no_extra_args(&args[1..])?;
 
         let meta = self.environment_service().remove(name, force)?;
-        self.stdout_line(format!("Removed env {}", meta.name));
-        self.stdout_line(format!(
-            "  root: {}",
-            derive_env_paths(Path::new(&meta.root)).root.display()
-        ));
+        let root = derive_env_paths(Path::new(&meta.root))
+            .root
+            .display()
+            .to_string();
+        self.stdout_lines(render::env::env_removed(&meta.name, &root));
         Ok(0)
     }
 
@@ -67,32 +63,23 @@ impl Cli {
         let candidates = self
             .environment_service()
             .prune_candidates(older_than_days)?;
+        let candidate_summaries = candidates.iter().map(summarize_env).collect::<Vec<_>>();
 
         if !yes {
             if json_flag {
-                let summaries = candidates.iter().map(summarize_env).collect::<Vec<_>>();
                 self.print_json(&serde_json::json!({
                     "apply": false,
                     "olderThanDays": older_than_days,
-                    "count": summaries.len(),
-                    "candidates": summaries,
+                    "count": candidate_summaries.len(),
+                    "candidates": candidate_summaries,
                 }))?;
                 return Ok(0);
             }
 
-            self.stdout_line(format!(
-                "Prune preview ({}d): {} candidate(s)",
+            self.stdout_lines(render::env::env_prune_preview(
                 older_than_days,
-                candidates.len()
+                &candidate_summaries,
             ));
-            for meta in candidates {
-                self.stdout_line(format!(
-                    "  {}  {}",
-                    meta.name,
-                    derive_env_paths(Path::new(&meta.root)).root.display()
-                ));
-            }
-            self.stdout_line("Re-run with --yes to remove them.");
             return Ok(0);
         }
 
@@ -112,10 +99,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("Pruned {} environment(s).", removed.len()));
-        for summary in removed {
-            self.stdout_line(format!("  {}  {}", summary.name, summary.root));
-        }
+        self.stdout_lines(render::env::env_pruned(&removed));
         Ok(0)
     }
 
@@ -155,24 +139,7 @@ impl Cli {
         }
 
         let summary = summarize_env(&meta);
-        self.stdout_line(format!("Created env {}", summary.name));
-        self.stdout_line(format!("  root: {}", summary.root));
-        self.stdout_line(format!("  openclaw home: {}", summary.openclaw_home));
-        self.stdout_line(format!("  workspace: {}", summary.workspace_dir));
-        if let Some(port) = summary.gateway_port {
-            self.stdout_line(format!("  gateway port: {port}"));
-        }
-        if let Some(runtime) = summary.default_runtime.as_deref() {
-            self.stdout_line(format!("  runtime: {runtime}"));
-        }
-        if let Some(launcher) = summary.default_launcher.as_deref() {
-            self.stdout_line(format!("  launcher: {launcher}"));
-        }
-        self.stdout_line(format!(
-            "  activate: eval \"$({} env use {})\"",
-            self.command_example(),
-            summary.name
-        ));
+        self.stdout_lines(render::env::env_created(&summary, &self.command_example()));
         Ok(0)
     }
 
@@ -199,14 +166,10 @@ impl Cli {
         }
 
         let summary = summarize_env(&meta);
-        self.stdout_line(format!("Cloned env {} from {}", summary.name, source_name));
-        self.stdout_line(format!("  root: {}", summary.root));
-        self.stdout_line(format!("  openclaw home: {}", summary.openclaw_home));
-        self.stdout_line(format!("  workspace: {}", summary.workspace_dir));
-        self.stdout_line(format!(
-            "  activate: eval \"$({} env use {})\"",
-            self.command_example(),
-            summary.name
+        self.stdout_lines(render::env::env_cloned(
+            &summary,
+            source_name,
+            &self.command_example(),
         ));
         Ok(0)
     }
@@ -232,18 +195,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("Exported env {}", summary.name));
-        self.stdout_line(format!("  root: {}", summary.root));
-        self.stdout_line(format!("  archive: {}", summary.archive_path));
-        if let Some(runtime) = summary.default_runtime.as_deref() {
-            self.stdout_line(format!("  runtime: {runtime}"));
-        }
-        if let Some(launcher) = summary.default_launcher.as_deref() {
-            self.stdout_line(format!("  launcher: {launcher}"));
-        }
-        if summary.protected {
-            self.stdout_line("  protected: true");
-        }
+        self.stdout_lines(render::env::env_exported(&summary));
         Ok(0)
     }
 
@@ -271,26 +223,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!(
-            "Imported env {} from {}",
-            summary.name, summary.source_name
-        ));
-        self.stdout_line(format!("  root: {}", summary.root));
-        self.stdout_line(format!("  archive: {}", summary.archive_path));
-        if let Some(runtime) = summary.default_runtime.as_deref() {
-            self.stdout_line(format!("  runtime: {runtime}"));
-        }
-        if let Some(launcher) = summary.default_launcher.as_deref() {
-            self.stdout_line(format!("  launcher: {launcher}"));
-        }
-        if summary.protected {
-            self.stdout_line("  protected: true");
-        }
-        self.stdout_line(format!(
-            "  activate: eval \"$({} env use {})\"",
-            self.command_example(),
-            summary.name
-        ));
+        self.stdout_lines(render::env::env_imported(&summary, &self.command_example()));
         Ok(0)
     }
 
@@ -307,29 +240,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("envName: {}", doctor.env_name));
-        self.stdout_line(format!("root: {}", doctor.root));
-        self.stdout_line(format!("healthy: {}", doctor.healthy));
-        self.stdout_line(format!("rootStatus: {}", doctor.root_status));
-        self.stdout_line(format!("markerStatus: {}", doctor.marker_status));
-        self.stdout_line(format!("runtimeStatus: {}", doctor.runtime_status));
-        self.stdout_line(format!("launcherStatus: {}", doctor.launcher_status));
-        self.stdout_line(format!("resolutionStatus: {}", doctor.resolution_status));
-        if let Some(runtime) = doctor.default_runtime {
-            self.stdout_line(format!("defaultRuntime: {runtime}"));
-        }
-        if let Some(launcher) = doctor.default_launcher {
-            self.stdout_line(format!("defaultLauncher: {launcher}"));
-        }
-        if let Some(kind) = doctor.resolved_kind {
-            self.stdout_line(format!("resolvedKind: {kind}"));
-        }
-        if let Some(name) = doctor.resolved_name {
-            self.stdout_line(format!("resolvedName: {name}"));
-        }
-        for issue in doctor.issues {
-            self.stdout_line(format!("issue: {issue}"));
-        }
+        self.stdout_lines(render::env::env_doctor(&doctor));
         Ok(0)
     }
 
@@ -352,23 +263,7 @@ impl Cli {
                 return Ok(0);
             }
 
-            if cleanup.apply {
-                self.stdout_line(format!("Applied cleanup (--all): {} env(s)", cleanup.count));
-            } else {
-                self.stdout_line(format!("Cleanup preview (--all): {} env(s)", cleanup.count));
-            }
-            for result in cleanup.results {
-                self.stdout_line(format!("  {}", result.env_name));
-                self.stdout_line(format!("    root: {}", result.root));
-                if result.apply {
-                    self.stdout_line(format!("    applied fixes: {}", result.actions.len()));
-                } else {
-                    self.stdout_line(format!("    safe fixes: {}", result.actions.len()));
-                }
-                for action in result.actions {
-                    self.stdout_line(format!("    {}: {}", action.kind, action.description));
-                }
-            }
+            self.stdout_lines(render::env::env_cleanup_batch(&cleanup));
             return Ok(0);
         }
 
@@ -387,37 +282,7 @@ impl Cli {
             return Ok(0);
         }
 
-        if cleanup.apply {
-            self.stdout_line(format!("Applied cleanup for env {}", cleanup.env_name));
-        } else {
-            self.stdout_line(format!("Cleanup preview for env {}", cleanup.env_name));
-        }
-        self.stdout_line(format!("  root: {}", cleanup.root));
-        if cleanup.apply {
-            self.stdout_line(format!("  applied fixes: {}", cleanup.actions.len()));
-        } else {
-            self.stdout_line(format!("  safe fixes: {}", cleanup.actions.len()));
-        }
-        for action in &cleanup.actions {
-            self.stdout_line(format!("  {}: {}", action.kind, action.description));
-        }
-        if cleanup.apply {
-            if let Some(healthy_after) = cleanup.healthy_after {
-                self.stdout_line(format!("  healthy after: {healthy_after}"));
-            }
-            if let Some(issues_after) = cleanup.issues_after {
-                for issue in issues_after {
-                    self.stdout_line(format!("  issue: {issue}"));
-                }
-            }
-        } else {
-            for issue in cleanup.issues_before {
-                self.stdout_line(format!("  issue: {issue}"));
-            }
-            if !cleanup.actions.is_empty() {
-                self.stdout_line("  re-run with --yes to apply them");
-            }
-        }
+        self.stdout_lines(render::env::env_cleanup(&cleanup));
         Ok(0)
     }
 
@@ -434,9 +299,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("Repaired marker for env {}", repaired.env_name));
-        self.stdout_line(format!("  root: {}", repaired.root));
-        self.stdout_line(format!("  marker: {}", repaired.marker_path));
+        self.stdout_lines(render::env::env_marker_repaired(&repaired));
         Ok(0)
     }
 
@@ -450,26 +313,7 @@ impl Cli {
             self.print_json(&summaries)?;
             return Ok(0);
         }
-        if summaries.is_empty() {
-            self.stdout_line("No environments.");
-            return Ok(0);
-        }
-        for summary in summaries {
-            let mut bits = vec![summary.name, summary.root];
-            if let Some(runtime) = summary.default_runtime {
-                bits.push(format!("runtime={runtime}"));
-            }
-            if let Some(launcher) = summary.default_launcher {
-                bits.push(format!("launcher={launcher}"));
-            }
-            if let Some(port) = summary.gateway_port {
-                bits.push(format!("port={port}"));
-            }
-            if summary.protected {
-                bits.push("protected".to_string());
-            }
-            self.stdout_line(bits.join("  "));
-        }
+        self.stdout_lines(render::env::env_list(&summaries));
         Ok(0)
     }
 
@@ -487,42 +331,7 @@ impl Cli {
             return Ok(0);
         }
 
-        let mut lines = BTreeMap::new();
-        lines.insert("name".to_string(), summary.name);
-        lines.insert("root".to_string(), summary.root);
-        lines.insert("openclawHome".to_string(), summary.openclaw_home);
-        lines.insert("stateDir".to_string(), summary.state_dir);
-        lines.insert("configPath".to_string(), summary.config_path);
-        lines.insert("workspaceDir".to_string(), summary.workspace_dir);
-        lines.insert("protected".to_string(), summary.protected.to_string());
-        lines.insert(
-            "createdAt".to_string(),
-            summary
-                .created_at
-                .format(&time::format_description::well_known::Rfc3339)
-                .map_err(|error| error.to_string())?,
-        );
-        if let Some(port) = summary.gateway_port {
-            lines.insert("gatewayPort".to_string(), port.to_string());
-        }
-        if let Some(runtime) = summary.default_runtime {
-            lines.insert("defaultRuntime".to_string(), runtime);
-        }
-        if let Some(launcher) = summary.default_launcher {
-            lines.insert("defaultLauncher".to_string(), launcher);
-        }
-        if let Some(last_used_at) = summary.last_used_at {
-            lines.insert(
-                "lastUsedAt".to_string(),
-                last_used_at
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .map_err(|error| error.to_string())?,
-            );
-        }
-
-        for (key, value) in lines {
-            self.stdout_line(format!("{key}: {value}"));
-        }
+        self.stdout_lines(render::env::env_show(&summary)?);
         Ok(0)
     }
 
@@ -538,44 +347,7 @@ impl Cli {
             self.print_json(&status)?;
             return Ok(0);
         }
-        self.stdout_line(format!("envName: {}", status.env_name));
-        self.stdout_line(format!("root: {}", status.root));
-        if let Some(runtime) = status.default_runtime {
-            self.stdout_line(format!("defaultRuntime: {runtime}"));
-        }
-        if let Some(launcher) = status.default_launcher {
-            self.stdout_line(format!("defaultLauncher: {launcher}"));
-        }
-        if let Some(kind) = status.resolved_kind {
-            self.stdout_line(format!("resolvedKind: {kind}"));
-        }
-        if let Some(name) = status.resolved_name {
-            self.stdout_line(format!("resolvedName: {name}"));
-        }
-        if let Some(binary_path) = status.binary_path {
-            self.stdout_line(format!("binaryPath: {binary_path}"));
-        }
-        if let Some(command) = status.command {
-            self.stdout_line(format!("command: {command}"));
-        }
-        if let Some(run_dir) = status.run_dir {
-            self.stdout_line(format!("runDir: {run_dir}"));
-        }
-        if let Some(source_kind) = status.runtime_source_kind {
-            self.stdout_line(format!("runtimeSourceKind: {source_kind}"));
-        }
-        if let Some(release_version) = status.runtime_release_version {
-            self.stdout_line(format!("runtimeReleaseVersion: {release_version}"));
-        }
-        if let Some(release_channel) = status.runtime_release_channel {
-            self.stdout_line(format!("runtimeReleaseChannel: {release_channel}"));
-        }
-        if let Some(runtime_health) = status.runtime_health {
-            self.stdout_line(format!("runtimeHealth: {runtime_health}"));
-        }
-        if let Some(issue) = status.issue {
-            self.stdout_line(format!("issue: {issue}"));
-        }
+        self.stdout_lines(render::env::env_status(&status));
         Ok(0)
     }
 
@@ -600,15 +372,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!(
-            "Created snapshot {} for env {}",
-            snapshot.id, snapshot.env_name
-        ));
-        self.stdout_line(format!("  archive: {}", snapshot.archive_path));
-        self.stdout_line(format!("  root: {}", snapshot.source_root));
-        if let Some(label) = snapshot.label.as_deref() {
-            self.stdout_line(format!("  label: {label}"));
-        }
+        self.stdout_lines(render::env::env_snapshot_created(&snapshot));
         Ok(0)
     }
 
@@ -628,32 +392,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("snapshotId: {}", snapshot.id));
-        self.stdout_line(format!("envName: {}", snapshot.env_name));
-        self.stdout_line(format!("archivePath: {}", snapshot.archive_path));
-        self.stdout_line(format!("sourceRoot: {}", snapshot.source_root));
-        if let Some(label) = snapshot.label {
-            self.stdout_line(format!("label: {label}"));
-        }
-        if let Some(port) = snapshot.gateway_port {
-            self.stdout_line(format!("gatewayPort: {port}"));
-        }
-        if let Some(runtime) = snapshot.default_runtime {
-            self.stdout_line(format!("defaultRuntime: {runtime}"));
-        }
-        if let Some(launcher) = snapshot.default_launcher {
-            self.stdout_line(format!("defaultLauncher: {launcher}"));
-        }
-        if snapshot.protected {
-            self.stdout_line("protected: true");
-        }
-        self.stdout_line(format!(
-            "createdAt: {}",
-            snapshot
-                .created_at
-                .format(&time::format_description::well_known::Rfc3339)
-                .map_err(|error| error.to_string())?
-        ));
+        self.stdout_lines(render::env::env_snapshot_show(&snapshot)?);
         Ok(0)
     }
 
@@ -678,18 +417,7 @@ impl Cli {
             self.print_json(&snapshots)?;
             return Ok(0);
         }
-        if snapshots.is_empty() {
-            self.stdout_line("No snapshots.");
-            return Ok(0);
-        }
-        for snapshot in snapshots {
-            let mut bits = vec![snapshot.id, snapshot.env_name];
-            if let Some(label) = snapshot.label {
-                bits.push(format!("label={label}"));
-            }
-            bits.push(snapshot.archive_path);
-            self.stdout_line(bits.join("  "));
-        }
+        self.stdout_lines(render::env::env_snapshot_list(&snapshots));
         Ok(0)
     }
 
@@ -715,24 +443,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!(
-            "Restored env {} from snapshot {}",
-            restored.env_name, restored.snapshot_id
-        ));
-        self.stdout_line(format!("  root: {}", restored.root));
-        self.stdout_line(format!("  archive: {}", restored.archive_path));
-        if let Some(label) = restored.label.as_deref() {
-            self.stdout_line(format!("  label: {label}"));
-        }
-        if let Some(runtime) = restored.default_runtime.as_deref() {
-            self.stdout_line(format!("  runtime: {runtime}"));
-        }
-        if let Some(launcher) = restored.default_launcher.as_deref() {
-            self.stdout_line(format!("  launcher: {launcher}"));
-        }
-        if restored.protected {
-            self.stdout_line("  protected: true");
-        }
+        self.stdout_lines(render::env::env_snapshot_restored(&restored));
         Ok(0)
     }
 
@@ -758,14 +469,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!(
-            "Removed snapshot {} for env {}",
-            removed.snapshot_id, removed.env_name
-        ));
-        self.stdout_line(format!("  archive: {}", removed.archive_path));
-        if let Some(label) = removed.label.as_deref() {
-            self.stdout_line(format!("  label: {label}"));
-        }
+        self.stdout_lines(render::env::env_snapshot_removed(&removed));
         Ok(0)
     }
 
@@ -803,9 +507,11 @@ impl Cli {
 
         let scope_label = env_name.unwrap_or("all");
         if !yes {
-            let candidates =
-                self.environment_service()
-                    .prune_snapshot_candidates(env_name, keep, older_than_days)?;
+            let candidates = self.environment_service().prune_snapshot_candidates(
+                env_name,
+                keep,
+                older_than_days,
+            )?;
             if json_flag {
                 self.print_json(&serde_json::json!({
                     "apply": false,
@@ -818,25 +524,16 @@ impl Cli {
                 return Ok(0);
             }
 
-            self.stdout_line(format!(
-                "Snapshot prune preview ({scope_label}): {} candidate(s)",
-                candidates.len()
+            self.stdout_lines(render::env::env_snapshot_prune_preview(
+                scope_label,
+                &candidates,
             ));
-            for candidate in candidates {
-                let mut bits = vec![candidate.id, candidate.env_name];
-                if let Some(label) = candidate.label {
-                    bits.push(format!("label={label}"));
-                }
-                bits.push(candidate.archive_path);
-                self.stdout_line(bits.join("  "));
-            }
-            self.stdout_line("Re-run with --yes to remove them.");
             return Ok(0);
         }
 
-        let removed = self
-            .environment_service()
-            .prune_snapshots(env_name, keep, older_than_days)?;
+        let removed =
+            self.environment_service()
+                .prune_snapshots(env_name, keep, older_than_days)?;
 
         if json_flag {
             self.print_json(&serde_json::json!({
@@ -850,15 +547,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("Pruned {} snapshot(s).", removed.len()));
-        for snapshot in removed {
-            let mut bits = vec![snapshot.snapshot_id, snapshot.env_name];
-            if let Some(label) = snapshot.label {
-                bits.push(format!("label={label}"));
-            }
-            bits.push(snapshot.archive_path);
-            self.stdout_line(format!("  {}", bits.join("  ")));
-        }
+        self.stdout_lines(render::env::env_snapshot_pruned(&removed));
         Ok(0)
     }
 
@@ -964,22 +653,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("envName: {}", summary.env_name));
-        self.stdout_line(format!("bindingKind: {}", summary.binding_kind));
-        self.stdout_line(format!("bindingName: {}", summary.binding_name));
-        if let Some(command) = summary.command {
-            self.stdout_line(format!("command: {command}"));
-        }
-        if let Some(binary_path) = summary.binary_path {
-            self.stdout_line(format!("binaryPath: {binary_path}"));
-        }
-        if !summary.forwarded_args.is_empty() {
-            self.stdout_line(format!(
-                "forwardedArgs: {}",
-                summary.forwarded_args.join(" ")
-            ));
-        }
-        self.stdout_line(format!("runDir: {}", summary.run_dir));
+        self.stdout_lines(render::env::env_resolved(&summary));
         Ok(0)
     }
 
@@ -1040,9 +714,9 @@ impl Cli {
         };
         let meta = self.environment_service().set_runtime(name, &validated)?;
         let default_runtime = meta.default_runtime.unwrap_or_else(|| "none".to_string());
-        self.stdout_line(format!(
-            "Updated env {}: defaultRuntime={default_runtime}",
-            meta.name
+        self.stdout_lines(render::env::env_runtime_updated(
+            &meta.name,
+            &default_runtime,
         ));
         Ok(0)
     }
@@ -1065,9 +739,9 @@ impl Cli {
         };
         let meta = self.environment_service().set_launcher(name, &validated)?;
         let default_launcher = meta.default_launcher.unwrap_or_else(|| "none".to_string());
-        self.stdout_line(format!(
-            "Updated env {}: defaultLauncher={default_launcher}",
-            meta.name
+        self.stdout_lines(render::env::env_launcher_updated(
+            &meta.name,
+            &default_launcher,
         ));
         Ok(0)
     }
