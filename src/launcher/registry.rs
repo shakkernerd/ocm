@@ -1,8 +1,32 @@
-use super::{AddLauncherOptions, LauncherMeta};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
 use crate::store::{add_launcher, get_launcher, list_launchers, remove_launcher};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherMeta {
+    pub kind: String,
+    pub name: String,
+    pub command: String,
+    pub cwd: Option<String>,
+    pub description: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug)]
+pub struct AddLauncherOptions {
+    pub name: String,
+    pub command: String,
+    pub cwd: Option<String>,
+    pub description: Option<String>,
+}
 
 pub struct LauncherService<'a> {
     env: &'a BTreeMap<String, String>,
