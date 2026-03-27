@@ -139,7 +139,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_status(&summary));
+        self.stdout_lines(render::service::service_status(&summary, profile));
         Ok(0)
     }
 

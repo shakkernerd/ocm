@@ -1,5 +1,7 @@
 use super::RenderProfile;
-use crate::infra::terminal::{Cell, Tone, paint, render_table};
+use crate::infra::terminal::{
+    Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, render_tags,
+};
 use crate::service::{
     DiscoveredServiceList, ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary,
     ServiceRestoreSummary, ServiceSummary, ServiceSummaryList,
@@ -187,7 +189,93 @@ fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
     lines
 }
 
-pub fn service_status(summary: &ServiceSummary) -> Vec<String> {
+pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return service_status_raw(summary);
+    }
+
+    let managed_state = daemon_state(summary.installed, summary.loaded, summary.running);
+    let global_state = global_relation(summary);
+    let mut lines = vec![paint(
+        &format!("Service {}", summary.env_name),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.push(render_tags(&service_status_tags(summary), profile.color));
+
+    push_card(
+        &mut lines,
+        "Status",
+        vec![
+            KeyValueRow::plain("Kind", summary.service_kind.clone()),
+            KeyValueRow::accent("Port", summary.gateway_port.to_string()),
+            KeyValueRow::new("Managed", managed_state, state_tone(managed_state)),
+            KeyValueRow::new("Global", global_state, state_tone(global_state)),
+            optional_value_row(
+                "Binding",
+                summary
+                    .binding_kind
+                    .as_deref()
+                    .zip(summary.binding_name.as_deref())
+                    .map(|(kind, name)| format!("{kind}:{name}")),
+            ),
+        ],
+        profile.color,
+    );
+
+    push_card(
+        &mut lines,
+        "Managed service",
+        vec![
+            KeyValueRow::plain("Label", summary.managed_label.clone()),
+            KeyValueRow::plain("Plist", summary.managed_plist_path.clone()),
+            optional_value_row("PID", summary.pid.map(|pid| pid.to_string())),
+            optional_value_row("Launchd state", summary.state.clone()),
+        ],
+        profile.color,
+    );
+
+    let mut launch = vec![KeyValueRow::plain("Run dir", summary.run_dir.clone())];
+    if let Some(command) = summary.command.as_ref() {
+        launch.push(KeyValueRow::accent("Command", command.clone()));
+    }
+    if let Some(binary_path) = summary.binary_path.as_ref() {
+        launch.push(KeyValueRow::accent("Binary", binary_path.clone()));
+    }
+    if !summary.args.is_empty() {
+        launch.push(KeyValueRow::plain("Args", summary.args.join(" ")));
+    }
+    push_card(&mut lines, "Launch", launch, profile.color);
+
+    push_card(
+        &mut lines,
+        "Global service",
+        vec![
+            KeyValueRow::plain("Label", summary.global_label.clone()),
+            bool_row("Matches env", summary.global_matches_env),
+            optional_value_row("PID", summary.global_pid.map(|pid| pid.to_string())),
+            optional_value_row("Config path", summary.global_config_path.clone()),
+            bool_row("Backup available", summary.backup_available),
+            bool_row("Can adopt", summary.can_adopt_global),
+            bool_row("Can restore", summary.can_restore_global),
+            optional_value_row("Latest backup", summary.latest_backup_plist_path.clone()),
+        ],
+        profile.color,
+    );
+
+    if let Some(issue) = summary.issue.as_ref() {
+        push_card(
+            &mut lines,
+            "Issue",
+            vec![KeyValueRow::danger("Problem", issue.clone())],
+            profile.color,
+        );
+    }
+
+    lines
+}
+
+fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
     let global_state = global_relation(summary);
     let mut lines = vec![
         format!("envName: {}", summary.env_name),
@@ -200,10 +288,7 @@ pub fn service_status(summary: &ServiceSummary) -> Vec<String> {
             "managedState: {}",
             daemon_state(summary.installed, summary.loaded, summary.running)
         ),
-        format!(
-            "globalState: {}",
-            global_state
-        ),
+        format!("globalState: {}", global_state),
         format!("globalMatchesEnv: {}", summary.global_matches_env),
         format!("backupAvailable: {}", summary.backup_available),
         format!("canAdoptGlobal: {}", summary.can_adopt_global),
@@ -452,6 +537,59 @@ pub fn service_action(summary: &ServiceActionSummary) -> Vec<String> {
     lines
 }
 
+fn push_card(lines: &mut Vec<String>, title: &str, rows: Vec<KeyValueRow>, color: bool) {
+    if rows.is_empty() {
+        return;
+    }
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.extend(render_key_value_card(title, &rows, color));
+}
+
+fn optional_value_row(label: &str, value: Option<String>) -> KeyValueRow {
+    match value {
+        Some(value) => KeyValueRow::plain(label, value),
+        None => KeyValueRow::muted(label, "—"),
+    }
+}
+
+fn bool_row(label: &str, value: bool) -> KeyValueRow {
+    if value {
+        KeyValueRow::warning(label, "yes")
+    } else {
+        KeyValueRow::muted(label, "no")
+    }
+}
+
+fn service_status_tags(summary: &ServiceSummary) -> Vec<Cell> {
+    let managed_state = daemon_state(summary.installed, summary.loaded, summary.running);
+    let global_state = global_relation(summary);
+    let mut tags = vec![
+        Cell::accent(format!("port {}", summary.gateway_port)),
+        Cell::new(
+            format!("managed {managed_state}"),
+            crate::infra::terminal::Align::Left,
+            state_tone(managed_state),
+        ),
+        Cell::new(
+            format!("global {global_state}"),
+            crate::infra::terminal::Align::Left,
+            state_tone(global_state),
+        ),
+    ];
+    if let (Some(kind), Some(name)) = (
+        summary.binding_kind.as_deref(),
+        summary.binding_name.as_deref(),
+    ) {
+        tags.push(Cell::accent(format!("{kind}:{name}")));
+    }
+    if summary.issue.is_some() {
+        tags.push(Cell::danger("needs attention"));
+    }
+    tags
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RenderProfile, service_list, service_status};
@@ -510,7 +648,25 @@ mod tests {
 
     #[test]
     fn service_status_uses_relation_style_global_state() {
-        let lines = service_status(&ServiceSummary {
+        let lines = service_status(&sample_service_summary(), RenderProfile::raw());
+
+        assert!(lines.contains(&"globalState: loaded-other".to_string()));
+        assert!(lines.contains(&"globalMatchesEnv: false".to_string()));
+    }
+
+    #[test]
+    fn service_status_pretty_uses_cards_and_tags() {
+        let lines = service_status(&sample_service_summary(), RenderProfile::pretty(false));
+
+        assert_eq!(lines[0], "Service demo");
+        assert!(lines[1].contains("[port 18789]"));
+        assert!(lines[1].contains("[managed loaded]"));
+        assert!(lines.iter().any(|line| line.contains("Managed service")));
+        assert!(lines.iter().any(|line| line.contains("Global service")));
+    }
+
+    fn sample_service_summary() -> ServiceSummary {
+        ServiceSummary {
             env_name: "demo".to_string(),
             service_kind: "gateway".to_string(),
             managed_label: "ai.openclaw.gateway.ocm.demo".to_string(),
@@ -539,9 +695,6 @@ mod tests {
             can_adopt_global: false,
             can_restore_global: false,
             issue: None,
-        });
-
-        assert!(lines.contains(&"globalState: loaded-other".to_string()));
-        assert!(lines.contains(&"globalMatchesEnv: false".to_string()));
+        }
     }
 }

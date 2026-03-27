@@ -106,6 +106,45 @@ fn env_run_help_is_available_through_help_keyword_and_flag() {
 }
 
 #[test]
+fn env_and_service_status_style_help_mentions_raw_mode() {
+    let root = TestDir::new("help-status-style");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let env_show = run_ocm(&cwd, &env, &["help", "env", "show"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let output = stdout(&env_show);
+    assert!(output.contains("ocm env show <name> [--raw] [--json]"));
+    assert!(output.contains("TTY output uses grouped cards by default."));
+
+    let env_status = run_ocm(&cwd, &env, &["help", "env", "status"]);
+    assert!(env_status.status.success(), "{}", stderr(&env_status));
+    let output = stdout(&env_status);
+    assert!(output.contains("ocm env status <name> [--raw] [--json]"));
+    assert!(output.contains("--raw"));
+
+    let env_resolve = run_ocm(&cwd, &env, &["help", "env", "resolve"]);
+    assert!(env_resolve.status.success(), "{}", stderr(&env_resolve));
+    let output = stdout(&env_resolve);
+    assert!(output.contains(
+        "ocm env resolve <name> [--runtime <name> | --launcher <name>] [--raw] [--json] [-- <openclaw args...>]"
+    ));
+
+    let service_status = run_ocm(&cwd, &env, &["help", "service", "status"]);
+    assert!(
+        service_status.status.success(),
+        "{}",
+        stderr(&service_status)
+    );
+    let output = stdout(&service_status);
+    assert!(output.contains("ocm service status <env> [--raw] [--json]"));
+    assert!(
+        output.contains("TTY output uses cards for one env and a table for `--all` by default.")
+    );
+}
+
+#[test]
 fn nested_snapshot_help_is_available() {
     let root = TestDir::new("help-env-snapshot");
     let cwd = root.child("workspace");

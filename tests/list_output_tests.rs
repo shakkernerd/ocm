@@ -89,6 +89,52 @@ fn launcher_runtime_and_service_lists_accept_raw_output_mode() {
 }
 
 #[test]
+fn env_and_service_detail_commands_accept_raw_output_mode() {
+    let root = TestDir::new("detail-raw");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--raw"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    assert!(stdout(&env_show).contains("name: demo"));
+    assert!(!stdout(&env_show).contains("┌"));
+
+    let env_status = run_ocm(&cwd, &env, &["env", "status", "demo", "--raw"]);
+    assert!(env_status.status.success(), "{}", stderr(&env_status));
+    assert!(stdout(&env_status).contains("gatewayPort: 18789"));
+    assert!(!stdout(&env_status).contains("┌"));
+
+    let env_resolve = run_ocm(&cwd, &env, &["env", "resolve", "demo", "--raw"]);
+    assert!(env_resolve.status.success(), "{}", stderr(&env_resolve));
+    assert!(stdout(&env_resolve).contains("bindingKind: launcher"));
+    assert!(!stdout(&env_resolve).contains("┌"));
+
+    let service_status = run_ocm(&cwd, &env, &["service", "status", "demo", "--raw"]);
+    assert!(
+        service_status.status.success(),
+        "{}",
+        stderr(&service_status)
+    );
+    assert!(stdout(&service_status).contains("managedState: absent"));
+    assert!(!stdout(&service_status).contains("┌"));
+}
+
+#[test]
 fn list_output_flags_reject_mixed_json_and_raw() {
     let root = TestDir::new("list-output-flags-validation");
     let cwd = root.child("workspace");
@@ -106,4 +152,24 @@ fn list_output_flags_reject_mixed_json_and_raw() {
     let service = run_ocm(&cwd, &env, &["service", "list", "--json", "--raw"]);
     assert_eq!(service.status.code(), Some(1));
     assert!(stderr(&service).contains("service list accepts only one of --json or --raw"));
+
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json", "--raw"]);
+    assert_eq!(env_show.status.code(), Some(1));
+    assert!(stderr(&env_show).contains("env show accepts only one of --json or --raw"));
+
+    let env_status = run_ocm(&cwd, &env, &["env", "status", "demo", "--json", "--raw"]);
+    assert_eq!(env_status.status.code(), Some(1));
+    assert!(stderr(&env_status).contains("env status accepts only one of --json or --raw"));
+
+    let env_resolve = run_ocm(&cwd, &env, &["env", "resolve", "demo", "--json", "--raw"]);
+    assert_eq!(env_resolve.status.code(), Some(1));
+    assert!(stderr(&env_resolve).contains("env resolve accepts only one of --json or --raw"));
+
+    let service_status = run_ocm(
+        &cwd,
+        &env,
+        &["service", "status", "demo", "--json", "--raw"],
+    );
+    assert_eq!(service_status.status.code(), Some(1));
+    assert!(stderr(&service_status).contains("service status accepts only one of --json or --raw"));
 }

@@ -5,7 +5,9 @@ use crate::env::{
     EnvImportSummary, EnvMarkerRepairSummary, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
     EnvSnapshotSummary, EnvStatusSummary, EnvSummary, ExecutionSummary,
 };
-use crate::infra::terminal::{Cell, Tone, render_table};
+use crate::infra::terminal::{
+    Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, render_tags,
+};
 
 use super::{RenderProfile, format_key_value_lines, format_rfc3339};
 
@@ -299,12 +301,121 @@ fn render_gateway_port_line(port: u32, source: Option<&str>) -> String {
     }
 }
 
+fn push_card(lines: &mut Vec<String>, title: &str, rows: Vec<KeyValueRow>, color: bool) {
+    if rows.is_empty() {
+        return;
+    }
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.extend(render_key_value_card(title, &rows, color));
+}
+
+fn optional_value_row(label: &str, value: Option<String>) -> KeyValueRow {
+    match value {
+        Some(value) => KeyValueRow::plain(label, value),
+        None => KeyValueRow::muted(label, "—"),
+    }
+}
+
+fn bool_row(label: &str, value: bool) -> KeyValueRow {
+    if value {
+        KeyValueRow::warning(label, "yes")
+    } else {
+        KeyValueRow::muted(label, "no")
+    }
+}
+
+fn optional_state_row(label: &str, value: Option<String>) -> KeyValueRow {
+    match value {
+        Some(value) => KeyValueRow::new(label, value.clone(), state_tone(&value)),
+        None => KeyValueRow::muted(label, "—"),
+    }
+}
+
+fn resolution_row(status: &EnvStatusSummary) -> KeyValueRow {
+    match (
+        status.resolved_kind.as_deref(),
+        status.resolved_name.as_deref(),
+    ) {
+        (Some(kind), Some(name)) => KeyValueRow::accent("Resolved", format!("{kind}:{name}")),
+        _ => KeyValueRow::muted("Resolved", "—"),
+    }
+}
+
+fn env_show_tags(summary: &EnvSummary) -> Vec<Cell> {
+    let mut tags = Vec::new();
+    if let Some(runtime) = summary.default_runtime.as_deref() {
+        tags.push(Cell::accent(format!("runtime:{runtime}")));
+    }
+    if let Some(launcher) = summary.default_launcher.as_deref() {
+        tags.push(Cell::accent(format!("launcher:{launcher}")));
+    }
+    if let Some(port) = summary.gateway_port {
+        tags.push(Cell::accent(format!("port {port}")));
+    }
+    if summary.protected {
+        tags.push(Cell::warning("protected"));
+    }
+    tags
+}
+
+fn env_status_tags(status: &EnvStatusSummary) -> Vec<Cell> {
+    let mut tags = Vec::new();
+    if let (Some(kind), Some(name)) = (
+        status.resolved_kind.as_deref(),
+        status.resolved_name.as_deref(),
+    ) {
+        tags.push(Cell::accent(format!("{kind}:{name}")));
+    }
+    if let Some(port) = status.gateway_port {
+        tags.push(Cell::accent(format!("port {port}")));
+    }
+    if let Some(runtime_health) = status.runtime_health.as_deref() {
+        tags.push(Cell::new(
+            format!("runtime {runtime_health}"),
+            crate::infra::terminal::Align::Left,
+            state_tone(runtime_health),
+        ));
+    }
+    if let Some(state) = status.managed_service_state.as_deref() {
+        tags.push(Cell::new(
+            format!("managed {state}"),
+            crate::infra::terminal::Align::Left,
+            state_tone(state),
+        ));
+    }
+    if let Some(state) = status.global_service_state.as_deref() {
+        tags.push(Cell::new(
+            format!("global {state}"),
+            crate::infra::terminal::Align::Left,
+            state_tone(state),
+        ));
+    }
+    if status.issue.is_some() {
+        tags.push(Cell::danger("needs attention"));
+    }
+    tags
+}
+
+fn state_tone(state: &str) -> Tone {
+    match state {
+        "ok" | "running" | "match" => Tone::Success,
+        "loaded" | "installed" | "loaded-other" | "installed-other" | "running-other" => {
+            Tone::Warning
+        }
+        "broken" | "missing" => Tone::Danger,
+        "absent" => Tone::Muted,
+        _ => Tone::Plain,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use time::OffsetDateTime;
 
-    use super::{RenderProfile, env_list};
-    use crate::env::EnvSummary;
+    use super::{RenderProfile, env_list, env_resolved, env_show, env_status};
+    use crate::env::{EnvStatusSummary, EnvSummary, ExecutionSummary};
 
     #[test]
     fn env_list_pretty_uses_a_table() {
@@ -330,9 +441,140 @@ mod tests {
         assert!(lines[3].contains("protected"));
         assert!(lines[4].starts_with('└'));
     }
+
+    #[test]
+    fn env_show_pretty_uses_cards() {
+        let lines = env_show(
+            &EnvSummary {
+                name: "demo".to_string(),
+                root: "/tmp/demo".to_string(),
+                openclaw_home: "/tmp/demo".to_string(),
+                state_dir: "/tmp/demo/.openclaw".to_string(),
+                config_path: "/tmp/demo/.openclaw/openclaw.json".to_string(),
+                workspace_dir: "/tmp/demo/.openclaw/workspace".to_string(),
+                gateway_port: Some(18789),
+                default_runtime: None,
+                default_launcher: Some("stable".to_string()),
+                protected: false,
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                last_used_at: None,
+            },
+            RenderProfile::pretty(false),
+        )
+        .unwrap();
+
+        assert_eq!(lines[0], "Environment demo");
+        assert!(lines[1].contains("[launcher:stable]"));
+        assert!(lines[1].contains("[port 18789]"));
+        assert!(lines.iter().any(|line| line.contains("Paths")));
+        assert!(lines.iter().any(|line| line.contains("Metadata")));
+    }
+
+    #[test]
+    fn env_status_pretty_uses_cards_and_tags() {
+        let lines = env_status(
+            &EnvStatusSummary {
+                env_name: "demo".to_string(),
+                root: "/tmp/demo".to_string(),
+                gateway_port: Some(18789),
+                gateway_port_source: Some("computed".to_string()),
+                default_runtime: None,
+                default_launcher: Some("stable".to_string()),
+                resolved_kind: Some("launcher".to_string()),
+                resolved_name: Some("stable".to_string()),
+                binary_path: None,
+                command: Some("openclaw".to_string()),
+                run_dir: Some("/tmp/demo".to_string()),
+                runtime_source_kind: None,
+                runtime_release_version: None,
+                runtime_release_channel: None,
+                runtime_health: None,
+                managed_service_state: Some("running".to_string()),
+                global_service_state: Some("absent".to_string()),
+                issue: None,
+            },
+            RenderProfile::pretty(false),
+        );
+
+        assert_eq!(lines[0], "Environment status demo");
+        assert!(lines[1].contains("[launcher:stable]"));
+        assert!(lines[1].contains("[managed running]"));
+        assert!(lines.iter().any(|line| line.contains("Binding")));
+        assert!(lines.iter().any(|line| line.contains("Gateway")));
+    }
+
+    #[test]
+    fn env_resolved_pretty_uses_cards() {
+        let lines = env_resolved(
+            &ExecutionSummary {
+                env_name: "demo".to_string(),
+                binding_kind: "launcher".to_string(),
+                binding_name: "stable".to_string(),
+                command: Some("openclaw".to_string()),
+                binary_path: None,
+                forwarded_args: vec!["status".to_string()],
+                run_dir: "/tmp/demo".to_string(),
+            },
+            RenderProfile::pretty(false),
+        );
+
+        assert_eq!(lines[0], "Execution plan demo");
+        assert!(lines[1].contains("[launcher:stable]"));
+        assert!(lines.iter().any(|line| line.contains("Resolution")));
+        assert!(lines.iter().any(|line| line.contains("Forwarded args")));
+    }
 }
 
-pub fn env_show(summary: &EnvSummary) -> Result<Vec<String>, String> {
+pub fn env_show(summary: &EnvSummary, profile: RenderProfile) -> Result<Vec<String>, String> {
+    if !profile.pretty {
+        return env_show_raw(summary);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Environment {}", summary.name),
+        Tone::Strong,
+        profile.color,
+    )];
+    let tags = env_show_tags(summary);
+    if !tags.is_empty() {
+        lines.push(render_tags(&tags, profile.color));
+    }
+
+    push_card(
+        &mut lines,
+        "Paths",
+        vec![
+            KeyValueRow::plain("Root", summary.root.clone()),
+            KeyValueRow::plain("OpenClaw home", summary.openclaw_home.clone()),
+            KeyValueRow::plain("State dir", summary.state_dir.clone()),
+            KeyValueRow::plain("Config path", summary.config_path.clone()),
+            KeyValueRow::plain("Workspace", summary.workspace_dir.clone()),
+        ],
+        profile.color,
+    );
+
+    let mut metadata = vec![
+        optional_value_row(
+            "Gateway port",
+            summary.gateway_port.map(|value| value.to_string()),
+        ),
+        optional_value_row("Runtime", summary.default_runtime.clone()),
+        optional_value_row("Launcher", summary.default_launcher.clone()),
+        bool_row("Protected", summary.protected),
+        KeyValueRow::plain("Created", format_rfc3339(summary.created_at)?),
+    ];
+    if let Some(last_used_at) = summary.last_used_at {
+        metadata.push(KeyValueRow::plain(
+            "Last used",
+            format_rfc3339(last_used_at)?,
+        ));
+    }
+    push_card(&mut lines, "Metadata", metadata, profile.color);
+
+    Ok(lines)
+}
+
+fn env_show_raw(summary: &EnvSummary) -> Result<Vec<String>, String> {
     let mut lines = BTreeMap::new();
     lines.insert("name".to_string(), summary.name.clone());
     lines.insert("root".to_string(), summary.root.clone());
@@ -357,7 +599,92 @@ pub fn env_show(summary: &EnvSummary) -> Result<Vec<String>, String> {
     Ok(format_key_value_lines(lines))
 }
 
-pub fn env_status(status: &EnvStatusSummary) -> Vec<String> {
+pub fn env_status(status: &EnvStatusSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return env_status_raw(status);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Environment status {}", status.env_name),
+        Tone::Strong,
+        profile.color,
+    )];
+    let tags = env_status_tags(status);
+    if !tags.is_empty() {
+        lines.push(render_tags(&tags, profile.color));
+    }
+
+    push_card(
+        &mut lines,
+        "Binding",
+        vec![
+            optional_value_row("Default runtime", status.default_runtime.clone()),
+            optional_value_row("Default launcher", status.default_launcher.clone()),
+            resolution_row(status),
+            optional_value_row("Run dir", status.run_dir.clone()),
+        ],
+        profile.color,
+    );
+
+    let mut execution = Vec::new();
+    if let Some(command) = status.command.as_ref() {
+        execution.push(KeyValueRow::accent("Command", command.clone()));
+    }
+    if let Some(binary_path) = status.binary_path.as_ref() {
+        execution.push(KeyValueRow::accent("Binary", binary_path.clone()));
+    }
+    if let Some(source_kind) = status.runtime_source_kind.as_ref() {
+        execution.push(KeyValueRow::plain("Runtime source", source_kind.clone()));
+    }
+    if let Some(release_version) = status.runtime_release_version.as_ref() {
+        execution.push(KeyValueRow::plain(
+            "Release version",
+            release_version.clone(),
+        ));
+    }
+    if let Some(release_channel) = status.runtime_release_channel.as_ref() {
+        execution.push(KeyValueRow::plain(
+            "Release channel",
+            release_channel.clone(),
+        ));
+    }
+    if let Some(runtime_health) = status.runtime_health.as_ref() {
+        execution.push(KeyValueRow::new(
+            "Runtime health",
+            runtime_health.clone(),
+            state_tone(runtime_health),
+        ));
+    }
+    if !execution.is_empty() {
+        push_card(&mut lines, "Execution", execution, profile.color);
+    }
+
+    push_card(
+        &mut lines,
+        "Gateway",
+        vec![
+            optional_value_row("Port", status.gateway_port.map(|value| value.to_string())),
+            optional_value_row("Port source", status.gateway_port_source.clone()),
+            optional_state_row("Managed service", status.managed_service_state.clone()),
+            optional_state_row("Global service", status.global_service_state.clone()),
+            KeyValueRow::plain("Root", status.root.clone()),
+        ],
+        profile.color,
+    );
+
+    if let Some(issue) = status.issue.as_ref() {
+        push_card(
+            &mut lines,
+            "Issue",
+            vec![KeyValueRow::danger("Problem", issue.clone())],
+            profile.color,
+        );
+    }
+
+    lines
+}
+
+fn env_status_raw(status: &EnvStatusSummary) -> Vec<String> {
     let mut lines = vec![
         format!("envName: {}", status.env_name),
         format!("root: {}", status.root),
@@ -544,7 +871,49 @@ pub fn env_snapshot_pruned(removed: &[EnvSnapshotRemoveSummary]) -> Vec<String> 
     lines
 }
 
-pub fn env_resolved(summary: &ExecutionSummary) -> Vec<String> {
+pub fn env_resolved(summary: &ExecutionSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return env_resolved_raw(summary);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Execution plan {}", summary.env_name),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.push(render_tags(
+        &[Cell::accent(format!(
+            "{}:{}",
+            summary.binding_kind, summary.binding_name
+        ))],
+        profile.color,
+    ));
+
+    let mut resolution = vec![
+        KeyValueRow::accent(
+            "Binding",
+            format!("{}:{}", summary.binding_kind, summary.binding_name),
+        ),
+        KeyValueRow::plain("Run dir", summary.run_dir.clone()),
+    ];
+    if let Some(command) = summary.command.as_ref() {
+        resolution.push(KeyValueRow::accent("Command", command.clone()));
+    }
+    if let Some(binary_path) = summary.binary_path.as_ref() {
+        resolution.push(KeyValueRow::accent("Binary", binary_path.clone()));
+    }
+    if !summary.forwarded_args.is_empty() {
+        resolution.push(KeyValueRow::plain(
+            "Forwarded args",
+            summary.forwarded_args.join(" "),
+        ));
+    }
+    push_card(&mut lines, "Resolution", resolution, profile.color);
+
+    lines
+}
+
+fn env_resolved_raw(summary: &ExecutionSummary) -> Vec<String> {
     let mut lines = vec![
         format!("envName: {}", summary.env_name),
         format!("bindingKind: {}", summary.binding_kind),

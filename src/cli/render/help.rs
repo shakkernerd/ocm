@@ -478,21 +478,37 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
         "show" => render_leaf(
             "Show an environment",
             "Print stored metadata for one environment.",
-            vec![format!("{cmd} env show <name> [--json]")],
-            &[("--json", "Print the environment metadata as JSON")],
-            vec![format!("{cmd} env show demo")],
-            &[],
+            vec![format!("{cmd} env show <name> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain key/value output instead of TTY card rendering",
+                ),
+                ("--json", "Print the environment metadata as JSON"),
+            ],
+            vec![
+                format!("{cmd} env show demo"),
+                format!("{cmd} env show demo --raw"),
+            ],
+            &["TTY output uses grouped cards by default. Piped output stays plain."],
         ),
         "status" => render_leaf(
             "Show environment status",
             "Inspect the environment, its bindings, and related service state.",
-            vec![format!("{cmd} env status <name> [--json]")],
-            &[("--json", "Print the status summary as JSON")],
+            vec![format!("{cmd} env status <name> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain key/value output instead of TTY card rendering",
+                ),
+                ("--json", "Print the status summary as JSON"),
+            ],
             vec![
                 format!("{cmd} env status demo"),
+                format!("{cmd} env status demo --raw"),
                 format!("{cmd} env status demo --json"),
             ],
-            &[],
+            &["TTY output uses grouped cards by default. Piped output stays plain."],
         ),
         "doctor" => render_leaf(
             "Inspect environment health",
@@ -560,7 +576,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Show what an environment would run",
             "Resolve the runtime or launcher that would be used without executing it.",
             vec![format!(
-                "{cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--json] [-- <openclaw args...>]"
+                "{cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--raw] [--json] [-- <openclaw args...>]"
             )],
             &[
                 (
@@ -571,13 +587,21 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                     "--launcher <name>",
                     "Override the bound launcher for this resolution",
                 ),
+                (
+                    "--raw",
+                    "Force plain key/value output instead of TTY card rendering",
+                ),
                 ("--json", "Print the resolution summary as JSON"),
             ],
             vec![
                 format!("{cmd} env resolve demo"),
+                format!("{cmd} env resolve demo --raw"),
                 format!("{cmd} env resolve demo --launcher dev -- onboard"),
             ],
-            &["Arguments after `--` are treated as OpenClaw arguments."],
+            &[
+                "TTY output uses grouped cards by default. Piped output stays plain.",
+                "Arguments after `--` are treated as OpenClaw arguments.",
+            ],
         ),
         "run" => render_leaf(
             "Run OpenClaw inside an environment",
@@ -1066,19 +1090,20 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             "Show service status",
             "Inspect one environment service or every environment service.",
             vec![
-                format!("{cmd} service status <env> [--json]"),
+                format!("{cmd} service status <env> [--raw] [--json]"),
                 format!("{cmd} service status --all [--raw] [--json]"),
             ],
             &[
+                ("--raw", "Force plain output instead of TTY cards or tables"),
                 ("--all", "Show every environment service"),
-                ("--raw", "Force plain line output for `--all`"),
                 ("--json", "Print service summaries as JSON"),
             ],
             vec![
                 format!("{cmd} service status demo"),
+                format!("{cmd} service status demo --raw"),
                 format!("{cmd} service status --all"),
             ],
-            &[],
+            &["TTY output uses cards for one env and a table for `--all` by default."],
         ),
         "logs" => render_leaf(
             "Read service logs",

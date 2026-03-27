@@ -138,8 +138,9 @@ impl Cli {
             return Ok(0);
         }
 
-        let (gateway_port, gateway_port_source) =
-            self.environment_service().resolve_effective_gateway_port(&meta)?;
+        let (gateway_port, gateway_port_source) = self
+            .environment_service()
+            .resolve_effective_gateway_port(&meta)?;
         let mut display_meta = meta.clone();
         display_meta.gateway_port = Some(gateway_port);
         let summary = summarize_env(&display_meta);
@@ -173,8 +174,9 @@ impl Cli {
             return Ok(0);
         }
 
-        let (gateway_port, gateway_port_source) =
-            self.environment_service().resolve_effective_gateway_port(&meta)?;
+        let (gateway_port, gateway_port_source) = self
+            .environment_service()
+            .resolve_effective_gateway_port(&meta)?;
         let mut display_meta = meta.clone();
         display_meta.gateway_port = Some(gateway_port);
         let summary = summarize_env(&display_meta);
@@ -323,7 +325,10 @@ impl Cli {
         let envs = self.environment_service().list()?;
         let summaries = envs
             .into_iter()
-            .map(|meta| self.environment_service().apply_effective_gateway_port(meta))
+            .map(|meta| {
+                self.environment_service()
+                    .apply_effective_gateway_port(meta)
+            })
             .collect::<Result<Vec<_>, _>>()?
             .iter()
             .map(summarize_env)
@@ -337,7 +342,7 @@ impl Cli {
     }
 
     pub(super) fn handle_env_show(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "env show")?;
         let Some(name) = args.first() else {
             return Err("environment name is required".to_string());
         };
@@ -350,12 +355,12 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::env::env_show(&summary)?);
+        self.stdout_lines(render::env::env_show(&summary, profile)?);
         Ok(0)
     }
 
     pub(super) fn handle_env_status(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "env status")?;
         let Some(name) = args.first() else {
             return Err("environment name is required".to_string());
         };
@@ -366,7 +371,7 @@ impl Cli {
             self.print_json(&status)?;
             return Ok(0);
         }
-        self.stdout_lines(render::env::env_status(&status));
+        self.stdout_lines(render::env::env_status(&status, profile));
         Ok(0)
     }
 
@@ -656,7 +661,8 @@ impl Cli {
 
     pub(super) fn handle_env_resolve(&self, args: Vec<String>) -> Result<i32, String> {
         let (before, after) = Self::split_on_double_dash(&args);
-        let (before, json_flag) = Self::consume_flag(before, "--json");
+        let (before, json_flag, profile) =
+            self.consume_human_output_flags(before, "env resolve")?;
         let (before, runtime_override) = Self::consume_option(before, "--runtime")?;
         let runtime_override = Self::require_option_value(runtime_override, "--runtime")?;
         let (before, launcher_override) = Self::consume_option(before, "--launcher")?;
@@ -676,7 +682,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::env::env_resolved(&summary));
+        self.stdout_lines(render::env::env_resolved(&summary, profile));
         Ok(0)
     }
 
