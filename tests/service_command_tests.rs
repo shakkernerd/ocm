@@ -101,6 +101,10 @@ fn service_list_reports_launcher_and_runtime_bindings_in_json() {
     );
     assert_eq!(demo["installed"], false);
     assert_eq!(demo["globalMatchesEnv"], false);
+    assert_eq!(demo["backupAvailable"], false);
+    assert_eq!(demo["canAdoptGlobal"], false);
+    assert_eq!(demo["canRestoreGlobal"], false);
+    assert_eq!(demo["latestBackupPlistPath"], Value::Null);
 
     let prod = services
         .iter()
@@ -136,7 +140,71 @@ fn service_status_reports_missing_binding_issue() {
     assert_eq!(summary["gatewayPort"], 18789);
     assert_eq!(summary["bindingKind"], Value::Null);
     assert_eq!(summary["bindingName"], Value::Null);
+    assert_eq!(summary["backupAvailable"], false);
+    assert_eq!(summary["canAdoptGlobal"], false);
+    assert_eq!(summary["canRestoreGlobal"], false);
+    assert_eq!(summary["latestBackupPlistPath"], Value::Null);
     assert_eq!(summary["issue"], "environment \"bare\" has no default runtime or launcher; use env set-runtime, env set-launcher, or pass --runtime/--launcher");
+}
+
+#[test]
+fn service_status_reports_adoption_and_restore_readiness() {
+    let root = TestDir::new("service-status-readiness");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(&cwd, &env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let assigned_port = allocate_free_port();
+    write_text(
+        &root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
+        &format!("{{\"gateway\":{{\"port\":{assigned_port}}}}}\n"),
+    );
+    write_text(
+        &root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist"),
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+  <dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>OPENCLAW_CONFIG_PATH</key>
+      <string>{}</string>
+      <key>OPENCLAW_GATEWAY_PORT</key>
+      <string>{}</string>
+    </dict>
+  </dict>
+</plist>
+"#,
+            path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json")),
+            assigned_port
+        ),
+    );
+
+    let before = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(before.status.success(), "{}", stderr(&before));
+    let before_summary: Value = serde_json::from_str(&stdout(&before)).unwrap();
+    assert_eq!(before_summary["canAdoptGlobal"], true);
+    assert_eq!(before_summary["canRestoreGlobal"], false);
+    assert_eq!(before_summary["backupAvailable"], false);
+    assert_eq!(before_summary["latestBackupPlistPath"], Value::Null);
+
+    let adopted = run_ocm(&cwd, &env, &["service", "adopt-global", "demo", "--json"]);
+    assert!(adopted.status.success(), "{}", stderr(&adopted));
+    let adopted_summary: Value = serde_json::from_str(&stdout(&adopted)).unwrap();
+    let backup_plist_path = adopted_summary["backupPlistPath"].clone();
+
+    let after = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(after.status.success(), "{}", stderr(&after));
+    let after_summary: Value = serde_json::from_str(&stdout(&after)).unwrap();
+    assert_eq!(after_summary["canAdoptGlobal"], false);
+    assert_eq!(after_summary["canRestoreGlobal"], true);
+    assert_eq!(after_summary["backupAvailable"], true);
+    assert_eq!(after_summary["latestBackupPlistPath"], backup_plist_path);
 }
 
 #[test]
@@ -217,13 +285,12 @@ fn service_install_auto_provisions_the_next_free_port_when_needed() {
     assert!(launcher.status.success(), "{}", stderr(&launcher));
     let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
     assert!(created.status.success(), "{}", stderr(&created));
-    let occupied_port = allocate_free_port();
+    let occupied = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let occupied_port = occupied.local_addr().unwrap().port();
     write_text(
         &root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
         &format!("{{\"gateway\":{{\"port\":{occupied_port}}}}}\n"),
     );
-
-    let _occupied = TcpListener::bind(("127.0.0.1", occupied_port)).unwrap();
 
     let output = run_ocm(&cwd, &env, &["service", "install", "demo", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));

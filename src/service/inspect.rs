@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -6,7 +7,10 @@ use serde::Serialize;
 
 use crate::env::{EnvMeta, EnvironmentService, resolve_execution_binding};
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
-use crate::store::{derive_env_paths, display_path, get_environment, get_launcher, get_runtime_verified, list_environments, resolve_user_home};
+use crate::store::{
+    derive_env_paths, display_path, get_environment, get_launcher, get_runtime_verified,
+    list_environments, resolve_ocm_home, resolve_user_home,
+};
 
 pub(crate) const GLOBAL_GATEWAY_LABEL: &str = "ai.openclaw.gateway";
 pub(crate) const OCM_GATEWAY_LABEL_PREFIX: &str = "ai.openclaw.gateway.ocm.";
@@ -37,6 +41,10 @@ pub struct ServiceSummary {
     pub global_pid: Option<u32>,
     pub global_matches_env: bool,
     pub global_config_path: Option<String>,
+    pub latest_backup_plist_path: Option<String>,
+    pub backup_available: bool,
+    pub can_adopt_global: bool,
+    pub can_restore_global: bool,
     pub issue: Option<String>,
 }
 
@@ -129,6 +137,11 @@ fn build_service_summary(
         .as_deref()
         .map(|value| value == env_config_path)
         .unwrap_or(false);
+    let latest_backup_plist_path =
+        latest_matching_global_backup_path(&env_config_path, process_env, cwd)?;
+    let backup_available = latest_backup_plist_path.is_some();
+    let can_adopt_global = global.installed && global_matches_env;
+    let can_restore_global = !global.installed && backup_available;
 
     let (binding_kind, binding_name, command, binary_path, args, run_dir, issue) = match launch {
         Ok(ServiceLaunchSpec::Launcher {
@@ -193,6 +206,12 @@ fn build_service_summary(
         global_pid: global.pid,
         global_matches_env,
         global_config_path: global.config_path.clone(),
+        latest_backup_plist_path: latest_backup_plist_path
+            .as_ref()
+            .map(|path| display_path(path)),
+        backup_available,
+        can_adopt_global,
+        can_restore_global,
         issue,
     })
 }
@@ -261,6 +280,14 @@ pub(crate) fn inspect_job(label: &str, plist_path: &Path) -> LaunchdJobStatus {
         return status;
     }
 
+    status.config_path = read_launch_agent_environment_value(plist_path, "OPENCLAW_CONFIG_PATH")
+        .ok()
+        .flatten();
+    status.gateway_port = read_launch_agent_environment_value(plist_path, "OPENCLAW_GATEWAY_PORT")
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<u32>().ok());
+
     #[cfg(target_os = "macos")]
     {
         let Some(uid) = current_uid() else {
@@ -312,6 +339,80 @@ fn parse_launchctl_print(raw: &str, status: &mut LaunchdJobStatus) {
             status.gateway_port = value.trim().parse::<u32>().ok();
         }
     }
+}
+
+fn latest_matching_global_backup_path(
+    env_config_path: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let backup_dir = resolve_ocm_home(env, cwd)?.join("services").join("backups");
+    if !backup_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut matches = Vec::new();
+    for entry in fs::read_dir(&backup_dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !file_name.starts_with(&format!("{GLOBAL_GATEWAY_LABEL}."))
+            || !file_name.ends_with(".plist")
+        {
+            continue;
+        }
+        if read_launch_agent_environment_value(&path, "OPENCLAW_CONFIG_PATH")?.as_deref()
+            == Some(env_config_path)
+        {
+            matches.push(path);
+        }
+    }
+
+    matches.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+    Ok(matches.pop())
+}
+
+fn read_launch_agent_environment_value(
+    plist_path: &Path,
+    key: &str,
+) -> Result<Option<String>, String> {
+    let raw = fs::read_to_string(plist_path).map_err(|error| error.to_string())?;
+    let Some(env_section_start) = raw.find("<key>EnvironmentVariables</key>") else {
+        return Ok(None);
+    };
+    let env_section = &raw[env_section_start..];
+    let Some(dict_start_offset) = env_section.find("<dict>") else {
+        return Ok(None);
+    };
+    let env_section = &env_section[dict_start_offset + "<dict>".len()..];
+    let Some(dict_end_offset) = env_section.find("</dict>") else {
+        return Ok(None);
+    };
+    let env_section = &env_section[..dict_end_offset];
+    let key_marker = format!("<key>{key}</key>");
+    let Some(key_offset) = env_section.find(&key_marker) else {
+        return Ok(None);
+    };
+    let entry = &env_section[key_offset + key_marker.len()..];
+    let Some(string_start_offset) = entry.find("<string>") else {
+        return Ok(None);
+    };
+    let entry = &entry[string_start_offset + "<string>".len()..];
+    let Some(string_end_offset) = entry.find("</string>") else {
+        return Ok(None);
+    };
+    Ok(Some(plist_unescape(&entry[..string_end_offset])))
+}
+
+fn plist_unescape(value: &str) -> String {
+    value
+        .replace("&apos;", "'")
+        .replace("&quot;", "\"")
+        .replace("&gt;", ">")
+        .replace("&lt;", "<")
+        .replace("&amp;", "&")
 }
 
 #[cfg(test)]

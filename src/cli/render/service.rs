@@ -67,6 +67,15 @@ pub fn service_list(summary: &ServiceSummaryList) -> Vec<String> {
         if let Some(issue) = service.issue.as_deref() {
             bits.push(format!("issue={issue}"));
         }
+        if service.can_adopt_global {
+            bits.push("adopt=ready".to_string());
+        }
+        if service.can_restore_global {
+            bits.push("restore=ready".to_string());
+        }
+        if service.backup_available {
+            bits.push("backup=present".to_string());
+        }
         lines.push(bits.join("  "));
     }
 
@@ -94,6 +103,9 @@ pub fn service_status(summary: &ServiceSummary) -> Vec<String> {
             )
         ),
         format!("globalMatchesEnv: {}", summary.global_matches_env),
+        format!("backupAvailable: {}", summary.backup_available),
+        format!("canAdoptGlobal: {}", summary.can_adopt_global),
+        format!("canRestoreGlobal: {}", summary.can_restore_global),
     ];
 
     if let (Some(kind), Some(name)) = (
@@ -123,6 +135,9 @@ pub fn service_status(summary: &ServiceSummary) -> Vec<String> {
     }
     if let Some(global_config_path) = summary.global_config_path.as_deref() {
         lines.push(format!("globalConfigPath: {global_config_path}"));
+    }
+    if let Some(latest_backup_plist_path) = summary.latest_backup_plist_path.as_deref() {
+        lines.push(format!("latestBackupPlistPath: {latest_backup_plist_path}"));
     }
     if let Some(issue) = summary.issue.as_deref() {
         lines.push(format!("issue: {issue}"));
