@@ -14,15 +14,16 @@ pub use execution::{
 };
 pub use lifecycle::{
     CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
-    ExportEnvironmentOptions, ImportEnvironmentOptions,
+    ExportEnvironmentOptions, ImportEnvironmentOptions, select_prune_candidates,
 };
 pub use snapshots::{
     CreateEnvSnapshotOptions, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
     EnvSnapshotSummary, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
+    select_snapshot_prune_candidates,
 };
 pub use types::{
-    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary, EnvMarker,
-    EnvMarkerRepairSummary, EnvMeta, EnvStatusSummary, EnvSummary, ExecutionSummary,
+    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
+    EnvMarker, EnvMarkerRepairSummary, EnvMeta, EnvStatusSummary, EnvSummary, ExecutionSummary,
 };
 
 pub struct EnvironmentService<'a> {

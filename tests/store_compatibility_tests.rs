@@ -2,11 +2,9 @@ mod support;
 
 use std::fs;
 
-use ocm::env::EnvMeta;
+use ocm::env::{EnvMeta, select_prune_candidates};
 use ocm::runtime::RuntimeSourceKind;
-use ocm::store::{
-    ensure_store, get_environment, get_launcher, get_runtime, now_utc, select_prune_candidates,
-};
+use ocm::store::{ensure_store, get_environment, get_launcher, get_runtime, now_utc};
 use time::Duration;
 
 use crate::support::{TestDir, ocm_env, path_string, write_text};

@@ -1,10 +1,11 @@
 use serde::Serialize;
+use time::Duration;
 
 use super::{EnvMeta, EnvironmentService};
 use crate::store::{
     clone_environment, create_environment, export_environment, get_environment, get_launcher,
     get_runtime_verified, import_environment, list_environments, now_utc, remove_environment,
-    save_environment, select_prune_candidates,
+    save_environment,
 };
 
 #[derive(Clone, Debug)]
@@ -58,6 +59,15 @@ pub struct EnvImportSummary {
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
+}
+
+pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<EnvMeta> {
+    let cutoff = now_utc() - Duration::days(older_than_days);
+    envs.iter()
+        .filter(|meta| !meta.protected)
+        .filter(|meta| meta.last_used_at.unwrap_or(meta.created_at) < cutoff)
+        .cloned()
+        .collect()
 }
 
 impl<'a> EnvironmentService<'a> {

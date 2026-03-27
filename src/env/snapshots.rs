@@ -1,10 +1,12 @@
+use std::collections::BTreeMap;
+
 use serde::Serialize;
+use time::{Duration, OffsetDateTime};
 
 use super::EnvironmentService;
 use crate::store::{
     create_env_snapshot, get_env_snapshot, list_all_env_snapshots, list_env_snapshots, now_utc,
-    remove_env_snapshot, restore_env_snapshot, select_snapshot_prune_candidates,
-    summarize_snapshot,
+    remove_env_snapshot, restore_env_snapshot, summarize_snapshot,
 };
 
 #[derive(Clone, Debug)]
@@ -63,6 +65,52 @@ pub struct RemoveEnvSnapshotOptions {
     pub snapshot_id: String,
 }
 
+pub fn select_snapshot_prune_candidates(
+    snapshots: &[EnvSnapshotSummary],
+    keep: Option<usize>,
+    older_than_days: Option<i64>,
+    now: OffsetDateTime,
+) -> Vec<EnvSnapshotSummary> {
+    let mut grouped = BTreeMap::<String, Vec<EnvSnapshotSummary>>::new();
+    for snapshot in snapshots {
+        grouped
+            .entry(snapshot.env_name.clone())
+            .or_default()
+            .push(snapshot.clone());
+    }
+
+    let cutoff = older_than_days.map(|days| now - Duration::days(days));
+    let keep = keep.unwrap_or(0);
+    let mut out = Vec::new();
+
+    for snapshots in grouped.values_mut() {
+        sort_snapshots(snapshots);
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            if index < keep {
+                continue;
+            }
+            if let Some(cutoff) = cutoff
+                && snapshot.created_at > cutoff
+            {
+                continue;
+            }
+            out.push(snapshot.clone());
+        }
+    }
+
+    sort_snapshots(&mut out);
+    out
+}
+
+fn sort_snapshots(snapshots: &mut [EnvSnapshotSummary]) {
+    snapshots.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+}
+
 impl<'a> EnvironmentService<'a> {
     pub fn create_snapshot(
         &self,
@@ -112,13 +160,13 @@ impl<'a> EnvironmentService<'a> {
         keep: Option<usize>,
         older_than_days: Option<i64>,
     ) -> Result<Vec<EnvSnapshotSummary>, String> {
-        let snapshots = match env_name {
-            Some(env_name) => list_env_snapshots(env_name, self.env, self.cwd)?,
-            None => list_all_env_snapshots(self.env, self.cwd)?,
-        };
-        let candidates =
-            select_snapshot_prune_candidates(&snapshots, keep, older_than_days, now_utc());
-        Ok(candidates.iter().map(summarize_snapshot).collect())
+        let snapshots = self.list_snapshots(env_name)?;
+        Ok(select_snapshot_prune_candidates(
+            &snapshots,
+            keep,
+            older_than_days,
+            now_utc(),
+        ))
     }
 
     pub fn prune_snapshots(
@@ -140,5 +188,68 @@ impl<'a> EnvironmentService<'a> {
             )?);
         }
         Ok(removed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EnvSnapshotSummary, select_snapshot_prune_candidates};
+    use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
+
+    #[test]
+    fn snapshot_prune_selection_keeps_the_newest_snapshots_per_environment() {
+        let now = parse_time("2026-03-25T22:00:00Z");
+        let snapshots = vec![
+            snapshot("alpha-3", "alpha", now - time::Duration::days(1)),
+            snapshot("alpha-2", "alpha", now - time::Duration::days(2)),
+            snapshot("alpha-1", "alpha", now - time::Duration::days(3)),
+            snapshot("beta-2", "beta", now - time::Duration::days(1)),
+            snapshot("beta-1", "beta", now - time::Duration::days(2)),
+        ];
+
+        let candidates = select_snapshot_prune_candidates(&snapshots, Some(1), None, now);
+        let ids = candidates
+            .iter()
+            .map(|snapshot| snapshot.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["beta-1", "alpha-2", "alpha-1"]);
+    }
+
+    #[test]
+    fn snapshot_prune_selection_respects_age_cutoffs_after_the_keep_floor() {
+        let now = parse_time("2026-03-25T22:00:00Z");
+        let snapshots = vec![
+            snapshot("alpha-new", "alpha", now - time::Duration::days(1)),
+            snapshot("alpha-old", "alpha", now - time::Duration::days(10)),
+            snapshot("beta-kept", "beta", now - time::Duration::days(30)),
+            snapshot("beta-old", "beta", now - time::Duration::days(40)),
+        ];
+
+        let candidates = select_snapshot_prune_candidates(&snapshots, Some(1), Some(7), now);
+        let ids = candidates
+            .iter()
+            .map(|snapshot| snapshot.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["alpha-old", "beta-old"]);
+    }
+
+    fn snapshot(id: &str, env_name: &str, created_at: OffsetDateTime) -> EnvSnapshotSummary {
+        EnvSnapshotSummary {
+            id: id.to_string(),
+            env_name: env_name.to_string(),
+            label: None,
+            archive_path: format!("/tmp/{id}.tar"),
+            source_root: format!("/tmp/{env_name}"),
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+            created_at,
+        }
+    }
+
+    fn parse_time(raw: &str) -> OffsetDateTime {
+        OffsetDateTime::parse(raw, &Rfc3339).unwrap()
     }
 }

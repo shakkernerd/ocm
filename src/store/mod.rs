@@ -1,8 +1,7 @@
 mod common;
 mod envs;
-mod layout;
 mod launchers;
-mod prune;
+mod layout;
 mod runtimes;
 mod snapshots;
 
@@ -11,29 +10,27 @@ use std::path::Path;
 
 use time::OffsetDateTime;
 
-use crate::env::{EnvMeta, EnvSummary};
+use crate::env::EnvMeta;
+use crate::env::EnvSummary;
 use common::ensure_dir;
+pub use envs::{
+    clone_environment, create_environment, export_environment, get_environment, import_environment,
+    list_environments, remove_environment, repair_environment_marker, save_environment,
+};
+pub use launchers::{add_launcher, get_launcher, list_launchers, remove_launcher};
 pub use layout::{
     EnvPaths, StorePaths, clean_path, default_env_root, derive_env_paths, display_path,
     env_meta_path, launcher_meta_path, resolve_absolute_path, resolve_ocm_home,
     resolve_store_paths, resolve_user_home, runtime_install_files_dir, runtime_install_root,
     runtime_meta_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path, validate_name,
 };
-pub use envs::{
-    clone_environment, create_environment, export_environment, get_environment,
-    import_environment, list_environments, remove_environment, repair_environment_marker,
-    save_environment,
-};
-pub use launchers::{add_launcher, get_launcher, list_launchers, remove_launcher};
-pub use prune::select_prune_candidates;
 pub use runtimes::{
     add_runtime, get_runtime, get_runtime_verified, install_runtime, install_runtime_from_release,
     install_runtime_from_url, list_runtimes, remove_runtime, runtime_integrity_issue,
 };
 pub use snapshots::{
     create_env_snapshot, get_env_snapshot, list_all_env_snapshots, list_env_snapshots,
-    remove_env_snapshot, restore_env_snapshot, select_snapshot_prune_candidates,
-    summarize_snapshot,
+    remove_env_snapshot, restore_env_snapshot, summarize_snapshot,
 };
 
 pub fn now_utc() -> OffsetDateTime {
