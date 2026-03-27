@@ -1,8 +1,22 @@
 use std::path::{Path, PathBuf};
 
-use super::{EnvMeta, EnvironmentService, ExecutionSummary};
+use serde::Serialize;
+
+use super::{EnvMeta, EnvironmentService};
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
 use crate::store::{get_launcher, get_runtime_verified};
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionSummary {
+    pub env_name: String,
+    pub binding_kind: String,
+    pub binding_name: String,
+    pub command: Option<String>,
+    pub binary_path: Option<String>,
+    pub forwarded_args: Vec<String>,
+    pub run_dir: String,
+}
 
 #[derive(Debug)]
 pub enum ExecutionBinding {

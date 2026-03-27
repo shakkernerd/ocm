@@ -1,9 +1,29 @@
+use serde::Serialize;
+
 use super::{
-    EnvStatusSummary, EnvironmentService, ExecutionBinding, resolve_execution_binding,
-    resolve_runtime_run_dir,
+    EnvironmentService, ExecutionBinding, resolve_execution_binding, resolve_runtime_run_dir,
 };
 use crate::launcher::resolve_launcher_run_dir;
 use crate::store::{get_launcher, runtime_integrity_issue};
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvStatusSummary {
+    pub env_name: String,
+    pub root: String,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub resolved_kind: Option<String>,
+    pub resolved_name: Option<String>,
+    pub binary_path: Option<String>,
+    pub command: Option<String>,
+    pub run_dir: Option<String>,
+    pub runtime_source_kind: Option<String>,
+    pub runtime_release_version: Option<String>,
+    pub runtime_release_channel: Option<String>,
+    pub runtime_health: Option<String>,
+    pub issue: Option<String>,
+}
 
 impl<'a> EnvironmentService<'a> {
     pub fn status(&self, name: &str) -> Result<EnvStatusSummary, String> {

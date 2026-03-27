@@ -1,15 +1,70 @@
 use std::fs;
 use std::path::Path;
 
-use super::{
-    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
-    EnvMarker, EnvMarkerRepairSummary, EnvMeta, EnvironmentService, ExecutionBinding,
-    resolve_execution_binding,
-};
+use serde::Serialize;
+
+use super::{EnvMarker, EnvMeta, EnvironmentService, ExecutionBinding, resolve_execution_binding};
 use crate::store::{derive_env_paths, display_path};
 use crate::store::{
     get_launcher, get_runtime, repair_environment_marker, runtime_integrity_issue, save_environment,
 };
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvDoctorSummary {
+    pub env_name: String,
+    pub root: String,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub healthy: bool,
+    pub root_status: String,
+    pub marker_status: String,
+    pub runtime_status: String,
+    pub launcher_status: String,
+    pub resolution_status: String,
+    pub resolved_kind: Option<String>,
+    pub resolved_name: Option<String>,
+    pub issues: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvMarkerRepairSummary {
+    pub env_name: String,
+    pub root: String,
+    pub marker_path: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvCleanupActionSummary {
+    pub kind: String,
+    pub description: String,
+    pub applied: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvCleanupSummary {
+    pub env_name: String,
+    pub root: String,
+    pub apply: bool,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub healthy_before: bool,
+    pub healthy_after: Option<bool>,
+    pub actions: Vec<EnvCleanupActionSummary>,
+    pub issues_before: Vec<String>,
+    pub issues_after: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvCleanupBatchSummary {
+    pub apply: bool,
+    pub count: usize,
+    pub results: Vec<EnvCleanupSummary>,
+}
 
 #[derive(Clone, Debug)]
 struct PlannedCleanupAction {
@@ -49,10 +104,12 @@ impl<'a> EnvironmentService<'a> {
             }
         }
 
-        if actions
-            .iter()
-            .any(|action| matches!(action.kind, "clear-missing-runtime" | "clear-missing-launcher"))
-        {
+        if actions.iter().any(|action| {
+            matches!(
+                action.kind,
+                "clear-missing-runtime" | "clear-missing-launcher"
+            )
+        }) {
             env = save_environment(env, self.env, self.cwd)?;
         } else {
             env = self.get(name)?;

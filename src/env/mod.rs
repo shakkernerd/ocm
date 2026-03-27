@@ -4,26 +4,28 @@ mod health;
 mod inspect;
 mod lifecycle;
 mod snapshots;
-mod types;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
+pub use execution::ExecutionSummary;
 pub use execution::{
     ExecutionBinding, ResolvedExecution, resolve_execution_binding, resolve_runtime_run_dir,
 };
+pub use health::{
+    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
+    EnvMarkerRepairSummary,
+};
+pub use inspect::EnvStatusSummary;
 pub use lifecycle::{
     CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
-    ExportEnvironmentOptions, ImportEnvironmentOptions, select_prune_candidates,
+    EnvMarker, EnvMeta, EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    select_prune_candidates,
 };
 pub use snapshots::{
     CreateEnvSnapshotOptions, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
     EnvSnapshotSummary, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
     select_snapshot_prune_candidates,
-};
-pub use types::{
-    EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
-    EnvMarker, EnvMarkerRepairSummary, EnvMeta, EnvStatusSummary, EnvSummary, ExecutionSummary,
 };
 
 pub struct EnvironmentService<'a> {
