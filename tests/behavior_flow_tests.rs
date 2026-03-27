@@ -109,3 +109,82 @@ fn env_run_uses_the_registered_launcher_and_its_cwd() {
         format!("{}|{}", expected_run_dir.display(), env_root.display())
     );
 }
+
+#[test]
+fn env_run_overrides_parent_openclaw_environment_state() {
+    let root = TestDir::new("behavior-env-run-parent-env");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "inspect", "--command", "sh"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create_demo = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "inspect"],
+    );
+    assert!(create_demo.status.success(), "{}", stderr(&create_demo));
+
+    let create_test = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "test", "--launcher", "inspect"],
+    );
+    assert!(create_test.status.success(), "{}", stderr(&create_test));
+
+    let demo_root = clean_path(&root.child("ocm-home/envs/demo"));
+    env.insert(
+        "OPENCLAW_HOME".to_string(),
+        demo_root.display().to_string(),
+    );
+    env.insert(
+        "OPENCLAW_STATE_DIR".to_string(),
+        demo_root.join(".openclaw").display().to_string(),
+    );
+    env.insert(
+        "OPENCLAW_CONFIG_PATH".to_string(),
+        demo_root
+            .join(".openclaw/openclaw.json")
+            .display()
+            .to_string(),
+    );
+    env.insert("OCM_ACTIVE_ENV".to_string(), "demo".to_string());
+    env.insert(
+        "OCM_ACTIVE_ENV_ROOT".to_string(),
+        demo_root.display().to_string(),
+    );
+    env.insert("OPENCLAW_PROFILE".to_string(), "legacy".to_string());
+
+    let run_output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "run",
+            "test",
+            "--",
+            "-lc",
+            "printf '%s|%s|%s|%s|%s' \"$OPENCLAW_HOME\" \"$OPENCLAW_STATE_DIR\" \"$OPENCLAW_CONFIG_PATH\" \"$OCM_ACTIVE_ENV\" \"${OPENCLAW_PROFILE:-unset}\"",
+        ],
+    );
+    assert!(run_output.status.success(), "{}", stderr(&run_output));
+
+    let test_root = clean_path(&root.child("ocm-home/envs/test"));
+    assert_eq!(
+        stdout(&run_output),
+        format!(
+            "{}|{}|{}|{}|{}",
+            test_root.display(),
+            test_root.join(".openclaw").display(),
+            test_root.join(".openclaw/openclaw.json").display(),
+            "test",
+            "unset"
+        )
+    );
+}
