@@ -188,6 +188,7 @@ fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
 }
 
 pub fn service_status(summary: &ServiceSummary) -> Vec<String> {
+    let global_state = global_relation(summary);
     let mut lines = vec![
         format!("envName: {}", summary.env_name),
         format!("serviceKind: {}", summary.service_kind),
@@ -201,11 +202,7 @@ pub fn service_status(summary: &ServiceSummary) -> Vec<String> {
         ),
         format!(
             "globalState: {}",
-            daemon_state(
-                summary.global_installed,
-                summary.global_loaded,
-                summary.global_running
-            )
+            global_state
         ),
         format!("globalMatchesEnv: {}", summary.global_matches_env),
         format!("backupAvailable: {}", summary.backup_available),
@@ -457,7 +454,7 @@ pub fn service_action(summary: &ServiceActionSummary) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderProfile, service_list};
+    use super::{RenderProfile, service_list, service_status};
     use crate::service::{ServiceSummary, ServiceSummaryList};
 
     #[test]
@@ -509,5 +506,42 @@ mod tests {
         assert!(lines[3].contains("Env"));
         assert!(lines[5].contains("demo"));
         assert!(lines[6].starts_with('└'));
+    }
+
+    #[test]
+    fn service_status_uses_relation_style_global_state() {
+        let lines = service_status(&ServiceSummary {
+            env_name: "demo".to_string(),
+            service_kind: "gateway".to_string(),
+            managed_label: "ai.openclaw.gateway.ocm.demo".to_string(),
+            managed_plist_path: "/tmp/demo.plist".to_string(),
+            global_label: "ai.openclaw.gateway".to_string(),
+            binding_kind: Some("launcher".to_string()),
+            binding_name: Some("stable".to_string()),
+            command: Some("openclaw gateway run".to_string()),
+            binary_path: None,
+            args: Vec::new(),
+            run_dir: "/tmp/demo".to_string(),
+            gateway_port: 18789,
+            installed: true,
+            loaded: true,
+            running: false,
+            pid: None,
+            state: Some("loaded".to_string()),
+            global_installed: true,
+            global_loaded: true,
+            global_running: false,
+            global_pid: None,
+            global_matches_env: false,
+            global_config_path: Some("/tmp/other/.openclaw/openclaw.json".to_string()),
+            latest_backup_plist_path: None,
+            backup_available: false,
+            can_adopt_global: false,
+            can_restore_global: false,
+            issue: None,
+        });
+
+        assert!(lines.contains(&"globalState: loaded-other".to_string()));
+        assert!(lines.contains(&"globalMatchesEnv: false".to_string()));
     }
 }
