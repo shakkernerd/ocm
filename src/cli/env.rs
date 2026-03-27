@@ -4,14 +4,13 @@ use std::path::Path;
 use super::Cli;
 use crate::env::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
-    ExportEnvironmentOptions, ImportEnvironmentOptions, RemoveEnvSnapshotOptions,
-    RestoreEnvSnapshotOptions,
+    EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
 };
 use crate::infra::process::{run_direct, run_shell};
 use crate::infra::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::store::{derive_env_paths, validate_name};
 use crate::store::summarize_env;
-use crate::types::EnvSummary;
 
 impl Cli {
     pub(super) fn handle_env_protect(&self, args: Vec<String>) -> Result<i32, String> {

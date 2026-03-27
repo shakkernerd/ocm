@@ -4,7 +4,7 @@ use ocm::env::{ExecutionBinding, resolve_execution_binding, resolve_runtime_run_
 use ocm::launcher::{
     LauncherMeta, build_launcher_command, resolve_launcher_name, resolve_launcher_run_dir,
 };
-use ocm::types::EnvMeta;
+use ocm::env::EnvMeta;
 use time::OffsetDateTime;
 
 fn sample_env(default_runtime: Option<&str>, default_launcher: Option<&str>) -> EnvMeta {
