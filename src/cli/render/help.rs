@@ -598,10 +598,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} env run demo -- status"),
                 format!("{cmd} env run demo --launcher dev -- gateway run"),
             ],
-            &[
-                "The target environment is isolated through OPENCLAW_HOME.",
-                "`--` is required before OpenClaw arguments.",
-            ],
+            &["`--` is required before OpenClaw arguments."],
         ),
         "set-runtime" => render_leaf(
             "Bind or clear a runtime",

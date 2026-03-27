@@ -90,7 +90,7 @@ fn env_run_help_is_available_through_help_keyword_and_flag() {
     assert!(output.contains(
         "ocm env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>"
     ));
-    assert!(output.contains("The target environment is isolated through OPENCLAW_HOME."));
+    assert!(output.contains("`--` is required before OpenClaw arguments."));
 }
 
 #[test]
