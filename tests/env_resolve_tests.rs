@@ -88,7 +88,7 @@ fn env_resolve_reports_the_bound_runtime_and_forwarded_args() {
     assert!(resolved.contains("bindingKind: runtime"));
     assert!(resolved.contains("bindingName: stable"));
     assert!(resolved.contains(&format!("binaryPath: {}", expected_binary_path.display())));
-    assert!(resolved.contains("forwardedArgs: onboard status"));
+    assert!(resolved.contains("forwardedArgs: onboard status --no-install-daemon"));
     assert!(resolved.contains(&format!("runDir: {}", expected_cwd.display())));
 }
 
@@ -135,7 +135,10 @@ fn env_resolve_json_reports_runtime_resolution_shape() {
     );
     assert_eq!(
         resolved["forwardedArgs"],
-        Value::Array(vec![Value::String("onboard".to_string())])
+        Value::Array(vec![
+            Value::String("onboard".to_string()),
+            Value::String("--no-install-daemon".to_string()),
+        ])
     );
     assert_eq!(
         resolved["runDir"],

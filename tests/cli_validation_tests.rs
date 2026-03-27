@@ -478,6 +478,45 @@ fn env_run_rejects_conflicting_runtime_and_launcher_overrides() {
 }
 
 #[test]
+fn env_run_rejects_global_daemon_install_during_onboarding() {
+    let root = TestDir::new("cli-run-onboard-daemon-validation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "sh"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let run = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "run",
+            "demo",
+            "--",
+            "onboard",
+            "--install-daemon",
+        ],
+    );
+    assert_eq!(run.status.code(), Some(1));
+    assert!(stderr(&run).contains(
+        "env onboarding cannot install the OpenClaw daemon because the daemon service is global",
+    ));
+}
+
+#[test]
 fn env_run_rejects_empty_and_unknown_runtime_overrides() {
     let root = TestDir::new("cli-run-runtime-validation");
     let cwd = root.child("workspace");

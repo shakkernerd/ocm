@@ -62,6 +62,29 @@ pub fn resolve_runtime_run_dir(fallback_cwd: &Path) -> PathBuf {
     fallback_cwd.to_path_buf()
 }
 
+fn normalize_openclaw_args_for_env(args: &[String]) -> Result<Vec<String>, String> {
+    if !matches!(args.first().map(String::as_str), Some("onboard")) {
+        return Ok(args.to_vec());
+    }
+
+    if args.iter().any(|arg| arg == "--install-daemon") {
+        return Err(
+            "env onboarding cannot install the OpenClaw daemon because the daemon service is global; rerun with --no-install-daemon or --skip-daemon, or run onboard outside OCM".to_string(),
+        );
+    }
+
+    if args
+        .iter()
+        .any(|arg| arg == "--no-install-daemon" || arg == "--skip-daemon")
+    {
+        return Ok(args.to_vec());
+    }
+
+    let mut normalized = args.to_vec();
+    normalized.push("--no-install-daemon".to_string());
+    Ok(normalized)
+}
+
 pub enum ResolvedExecution {
     Launcher {
         env: EnvMeta,
@@ -108,12 +131,13 @@ impl<'a> EnvironmentService<'a> {
         launcher_override: Option<String>,
         args: &[String],
     ) -> Result<ResolvedExecution, String> {
+        let args = normalize_openclaw_args_for_env(args)?;
         match resolve_execution_binding(&env, runtime_override, launcher_override)? {
             ExecutionBinding::Launcher(launcher_name) => {
                 let launcher = get_launcher(&launcher_name, self.env, self.cwd)?;
                 Ok(ResolvedExecution::Launcher {
                     launcher_name,
-                    command: build_launcher_command(&launcher, args),
+                    command: build_launcher_command(&launcher, &args),
                     run_dir: resolve_launcher_run_dir(&launcher, self.cwd),
                     env,
                 })
@@ -123,7 +147,7 @@ impl<'a> EnvironmentService<'a> {
                 Ok(ResolvedExecution::Runtime {
                     runtime_name,
                     binary_path: runtime.binary_path,
-                    args: args.to_vec(),
+                    args,
                     run_dir: resolve_runtime_run_dir(self.cwd),
                     env,
                 })
