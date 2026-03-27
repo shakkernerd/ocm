@@ -4,6 +4,7 @@ use super::{
     EnvironmentService, ExecutionBinding, resolve_execution_binding, resolve_runtime_run_dir,
 };
 use crate::launcher::resolve_launcher_run_dir;
+use crate::service::ServiceService;
 use crate::store::{get_launcher, runtime_integrity_issue};
 
 #[derive(Clone, Debug, Serialize)]
@@ -11,6 +12,8 @@ use crate::store::{get_launcher, runtime_integrity_issue};
 pub struct EnvStatusSummary {
     pub env_name: String,
     pub root: String,
+    pub gateway_port: Option<u32>,
+    pub gateway_port_source: Option<String>,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub resolved_kind: Option<String>,
@@ -22,15 +25,20 @@ pub struct EnvStatusSummary {
     pub runtime_release_version: Option<String>,
     pub runtime_release_channel: Option<String>,
     pub runtime_health: Option<String>,
+    pub managed_service_state: Option<String>,
+    pub global_service_state: Option<String>,
     pub issue: Option<String>,
 }
 
 impl<'a> EnvironmentService<'a> {
     pub fn status(&self, name: &str) -> Result<EnvStatusSummary, String> {
         let env = self.get(name)?;
+        let (gateway_port, gateway_port_source) = self.resolve_effective_gateway_port(&env)?;
         let mut summary = EnvStatusSummary {
             env_name: env.name.clone(),
             root: env.root.clone(),
+            gateway_port: Some(gateway_port),
+            gateway_port_source: Some(gateway_port_source.to_string()),
             default_runtime: env.default_runtime.clone(),
             default_launcher: env.default_launcher.clone(),
             resolved_kind: None,
@@ -42,8 +50,15 @@ impl<'a> EnvironmentService<'a> {
             runtime_release_version: None,
             runtime_release_channel: None,
             runtime_health: None,
+            managed_service_state: None,
+            global_service_state: None,
             issue: None,
         };
+
+        if let Ok(service) = ServiceService::new(self.env, self.cwd).status(name) {
+            summary.managed_service_state = Some(service_managed_state(&service));
+            summary.global_service_state = Some(service_global_state(&service));
+        }
 
         match resolve_execution_binding(&env, None, None) {
             Ok(ExecutionBinding::Runtime(runtime_name)) => {
@@ -92,5 +107,31 @@ impl<'a> EnvironmentService<'a> {
         }
 
         Ok(summary)
+    }
+}
+
+fn service_managed_state(summary: &crate::service::ServiceSummary) -> String {
+    if summary.running {
+        "running".to_string()
+    } else if summary.loaded {
+        "loaded".to_string()
+    } else if summary.installed {
+        "installed".to_string()
+    } else {
+        "absent".to_string()
+    }
+}
+
+fn service_global_state(summary: &crate::service::ServiceSummary) -> String {
+    if summary.global_matches_env {
+        "match".to_string()
+    } else if summary.global_running {
+        "running-other".to_string()
+    } else if summary.global_loaded {
+        "loaded-other".to_string()
+    } else if summary.global_installed {
+        "installed-other".to_string()
+    } else {
+        "absent".to_string()
     }
 }

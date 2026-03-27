@@ -2,6 +2,8 @@ mod support;
 
 use std::fs;
 
+use serde_json::Value;
+
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
 
 #[test]
@@ -18,7 +20,26 @@ fn env_list_accepts_raw_output_mode() {
     assert!(list.status.success(), "{}", stderr(&list));
     let output = stdout(&list);
     assert!(output.contains("demo"));
+    assert!(output.contains("port=18789"));
     assert!(!output.contains("┌"));
+}
+
+#[test]
+fn env_list_json_reports_effective_ports_for_fresh_envs() {
+    let root = TestDir::new("env-list-effective-port-json");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let list = run_ocm(&cwd, &env, &["env", "list", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let value: Value = serde_json::from_str(&stdout(&list)).unwrap();
+    assert_eq!(value.as_array().unwrap().len(), 1);
+    assert_eq!(value[0]["name"], "demo");
+    assert_eq!(value[0]["gatewayPort"], 18789);
 }
 
 #[test]

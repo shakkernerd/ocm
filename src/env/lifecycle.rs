@@ -126,7 +126,7 @@ pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<En
 
 impl<'a> EnvironmentService<'a> {
     pub fn apply_effective_gateway_port(&self, mut meta: EnvMeta) -> Result<EnvMeta, String> {
-        meta.gateway_port = Some(self.resolve_effective_gateway_port(&meta)?);
+        meta.gateway_port = Some(self.resolve_effective_gateway_port(&meta)?.0);
         Ok(meta)
     }
 
@@ -190,13 +190,16 @@ impl<'a> EnvironmentService<'a> {
         Ok(removed)
     }
 
-    fn resolve_effective_gateway_port(&self, target: &EnvMeta) -> Result<u32, String> {
+    pub(crate) fn resolve_effective_gateway_port(
+        &self,
+        target: &EnvMeta,
+    ) -> Result<(u32, &'static str), String> {
         if let Some(port) = target.gateway_port {
-            return Ok(port);
+            return Ok((port, "metadata"));
         }
 
         if let Some(port) = read_config_gateway_port(target) {
-            return Ok(port);
+            return Ok((port, "config"));
         }
 
         let mut envs = list_environments(self.env, self.cwd)?;
@@ -229,6 +232,7 @@ impl<'a> EnvironmentService<'a> {
         effective_ports
             .get(&target.name)
             .copied()
+            .map(|port| (port, "computed"))
             .ok_or_else(|| format!("failed to resolve gateway port for env \"{}\"", target.name))
     }
 }

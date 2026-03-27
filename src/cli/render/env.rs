@@ -342,6 +342,12 @@ pub fn env_status(status: &EnvStatusSummary) -> Vec<String> {
         format!("envName: {}", status.env_name),
         format!("root: {}", status.root),
     ];
+    if let Some(port) = status.gateway_port {
+        lines.push(format!("gatewayPort: {port}"));
+    }
+    if let Some(source) = status.gateway_port_source.as_deref() {
+        lines.push(format!("gatewayPortSource: {source}"));
+    }
     if let Some(runtime) = status.default_runtime.as_deref() {
         lines.push(format!("defaultRuntime: {runtime}"));
     }
@@ -374,6 +380,12 @@ pub fn env_status(status: &EnvStatusSummary) -> Vec<String> {
     }
     if let Some(runtime_health) = status.runtime_health.as_deref() {
         lines.push(format!("runtimeHealth: {runtime_health}"));
+    }
+    if let Some(state) = status.managed_service_state.as_deref() {
+        lines.push(format!("managedServiceState: {state}"));
+    }
+    if let Some(state) = status.global_service_state.as_deref() {
+        lines.push(format!("globalServiceState: {state}"));
     }
     if let Some(issue) = status.issue.as_deref() {
         lines.push(format!("issue: {issue}"));

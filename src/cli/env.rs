@@ -308,7 +308,13 @@ impl Cli {
         Self::assert_no_extra_args(&args)?;
 
         let envs = self.environment_service().list()?;
-        let summaries = envs.iter().map(summarize_env).collect::<Vec<_>>();
+        let summaries = envs
+            .into_iter()
+            .map(|meta| self.environment_service().apply_effective_gateway_port(meta))
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .map(summarize_env)
+            .collect::<Vec<_>>();
         if json_flag {
             self.print_json(&summaries)?;
             return Ok(0);

@@ -39,9 +39,13 @@ fn env_status_reports_the_resolved_launcher() {
     let status = run_ocm(&cwd, &env, &["env", "status", "demo"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let output = stdout(&status);
+    assert!(output.contains("gatewayPort: 18789"));
+    assert!(output.contains("gatewayPortSource: computed"));
     assert!(output.contains("resolvedKind: launcher"));
     assert!(output.contains("resolvedName: fallback"));
     assert!(output.contains("command: printf launcher"));
+    assert!(output.contains("managedServiceState: absent"));
+    assert!(output.contains("globalServiceState: absent"));
 }
 
 #[test]
@@ -93,6 +97,10 @@ fn env_status_reports_when_an_environment_has_no_binding() {
     assert!(status.status.success(), "{}", stderr(&status));
     let output = stdout(&status);
     assert!(output.contains("envName: demo"));
+    assert!(output.contains("gatewayPort: 18789"));
+    assert!(output.contains("gatewayPortSource: computed"));
+    assert!(output.contains("managedServiceState: absent"));
+    assert!(output.contains("globalServiceState: absent"));
     assert!(output.contains("issue: environment \"demo\" has no default runtime or launcher"));
 }
 
@@ -124,10 +132,14 @@ fn env_status_json_reports_runtime_health_and_binding_shape() {
     assert!(status.status.success(), "{}", stderr(&status));
     let value: Value = serde_json::from_str(&stdout(&status)).unwrap();
     assert_eq!(value["envName"], "demo");
+    assert_eq!(value["gatewayPort"], 18789);
+    assert_eq!(value["gatewayPortSource"], "computed");
     assert_eq!(value["resolvedKind"], "runtime");
     assert_eq!(value["resolvedName"], "stable");
     assert_eq!(value["runtimeHealth"], "ok");
     assert_eq!(value["runtimeSourceKind"], "registered");
+    assert_eq!(value["managedServiceState"], "absent");
+    assert_eq!(value["globalServiceState"], "absent");
     assert!(value["issue"].is_null());
 }
 
@@ -190,4 +202,44 @@ fn env_status_reports_release_backed_runtime_details() {
     assert_eq!(value["runtimeReleaseVersion"], "0.2.0");
     assert_eq!(value["runtimeReleaseChannel"], "stable");
     assert_eq!(value["runtimeHealth"], "ok");
+    assert_eq!(value["gatewayPort"], 18789);
+    assert_eq!(value["gatewayPortSource"], "computed");
+}
+
+#[test]
+fn env_status_reports_the_config_derived_gateway_port_after_onboarding_writes_it() {
+    let root = TestDir::new("env-status-config-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "fallback",
+            "--command",
+            "printf launcher",
+        ],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "fallback"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let env_root = root.child("ocm-home/envs/demo");
+    let config_path = env_root.join(".openclaw/openclaw.json");
+    fs::write(&config_path, "{\"gateway\":{\"port\":18888}}").unwrap();
+
+    let status = run_ocm(&cwd, &env, &["env", "status", "demo"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let output = stdout(&status);
+    assert!(output.contains("gatewayPort: 18888"));
+    assert!(output.contains("gatewayPortSource: config"));
 }
