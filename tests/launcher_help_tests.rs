@@ -167,6 +167,28 @@ fn nested_snapshot_help_is_available() {
     let output = stdout(&leaf);
     assert!(output.contains("Create an environment snapshot"));
     assert!(output.contains("ocm env snapshot create <name> [--label <label>] [--json]"));
+
+    let show = run_ocm(&cwd, &env, &["help", "env", "snapshot", "show"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let output = stdout(&show);
+    assert!(output.contains("ocm env snapshot show <name> <snapshot> [--raw] [--json]"));
+    assert!(output.contains("TTY output uses grouped cards by default."));
+
+    let list = run_ocm(&cwd, &env, &["help", "env", "snapshot", "list"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let output = stdout(&list);
+    assert!(output.contains("ocm env snapshot list <name> [--raw] [--json]"));
+    assert!(output.contains("TTY output renders a table by default."));
+
+    let prune = run_ocm(&cwd, &env, &["help", "env", "snapshot", "prune"]);
+    assert!(prune.status.success(), "{}", stderr(&prune));
+    let output = stdout(&prune);
+    assert!(output.contains(
+        "ocm env snapshot prune (<name> | --all) [--keep <count>] [--older-than <days>] [--raw] [--yes] [--json]"
+    ));
+    assert!(
+        output.contains("TTY output renders tables for preview and applied removals by default.")
+    );
 }
 
 #[test]

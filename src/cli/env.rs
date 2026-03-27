@@ -407,7 +407,8 @@ impl Cli {
     }
 
     fn handle_env_snapshot_show(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "env snapshot show")?;
         let Some(name) = args.first() else {
             return Err("environment name is required".to_string());
         };
@@ -422,12 +423,13 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::env::env_snapshot_show(&snapshot)?);
+        self.stdout_lines(render::env::env_snapshot_show(&snapshot, profile)?);
         Ok(0)
     }
 
     fn handle_env_snapshot_list(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "env snapshot list")?;
         let (args, all) = Self::consume_flag(args, "--all");
         let env_name = if all {
             if !args.is_empty() {
@@ -447,7 +449,7 @@ impl Cli {
             self.print_json(&snapshots)?;
             return Ok(0);
         }
-        self.stdout_lines(render::env::env_snapshot_list(&snapshots));
+        self.stdout_lines(render::env::env_snapshot_list(&snapshots, profile)?);
         Ok(0)
     }
 
@@ -508,7 +510,8 @@ impl Cli {
     }
 
     fn handle_env_snapshot_prune(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "env snapshot prune")?;
         let (args, yes) = Self::consume_flag(args, "--yes");
         let (args, all) = Self::consume_flag(args, "--all");
         let (args, keep_raw) = Self::consume_option(args, "--keep")?;
@@ -561,7 +564,8 @@ impl Cli {
             self.stdout_lines(render::env::env_snapshot_prune_preview(
                 scope_label,
                 &candidates,
-            ));
+                profile,
+            )?);
             return Ok(0);
         }
 
@@ -581,7 +585,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::env::env_snapshot_pruned(&removed));
+        self.stdout_lines(render::env::env_snapshot_pruned(&removed, profile));
         Ok(0)
     }
 

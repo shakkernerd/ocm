@@ -728,25 +728,41 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
             "Show one environment snapshot",
             "Print metadata for a single snapshot.",
             vec![format!(
-                "{cmd} env snapshot show <name> <snapshot> [--json]"
+                "{cmd} env snapshot show <name> <snapshot> [--raw] [--json]"
             )],
-            &[("--json", "Print the snapshot summary as JSON")],
-            vec![format!("{cmd} env snapshot show demo 1742922000-123456789")],
-            &[],
+            &[
+                (
+                    "--raw",
+                    "Force plain key/value output instead of TTY card rendering",
+                ),
+                ("--json", "Print the snapshot summary as JSON"),
+            ],
+            vec![
+                format!("{cmd} env snapshot show demo 1742922000-123456789"),
+                format!("{cmd} env snapshot show demo 1742922000-123456789 --raw"),
+            ],
+            &["TTY output uses grouped cards by default. Piped output stays plain."],
         ),
         "list" => render_leaf(
             "List environment snapshots",
             "List snapshots for one environment or for all environments.",
             vec![
-                format!("{cmd} env snapshot list <name> [--json]"),
-                format!("{cmd} env snapshot list --all [--json]"),
+                format!("{cmd} env snapshot list <name> [--raw] [--json]"),
+                format!("{cmd} env snapshot list --all [--raw] [--json]"),
             ],
-            &[("--json", "Print snapshot summaries as JSON")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY table rendering",
+                ),
+                ("--json", "Print snapshot summaries as JSON"),
+            ],
             vec![
                 format!("{cmd} env snapshot list demo"),
+                format!("{cmd} env snapshot list demo --raw"),
                 format!("{cmd} env snapshot list --all --json"),
             ],
-            &[],
+            &["TTY output renders a table by default. Piped output stays plain."],
         ),
         "restore" => render_leaf(
             "Restore an environment snapshot",
@@ -776,7 +792,7 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
             "Prune environment snapshots",
             "Preview or remove older snapshots for one environment or all environments.",
             vec![format!(
-                "{cmd} env snapshot prune (<name> | --all) [--keep <count>] [--older-than <days>] [--yes] [--json]"
+                "{cmd} env snapshot prune (<name> | --all) [--keep <count>] [--older-than <days>] [--raw] [--yes] [--json]"
             )],
             &[
                 ("--all", "Operate on snapshots across all environments"),
@@ -788,14 +804,19 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
                     "--older-than <days>",
                     "Only consider snapshots older than this many days",
                 ),
+                (
+                    "--raw",
+                    "Force plain preview and result output instead of TTY table rendering",
+                ),
                 ("--yes", "Apply removals instead of showing a preview"),
                 ("--json", "Print prune summaries as JSON"),
             ],
             vec![
+                format!("{cmd} env snapshot prune demo --keep 5"),
                 format!("{cmd} env snapshot prune demo --keep 5 --yes"),
                 format!("{cmd} env snapshot prune --all --older-than 30 --json"),
             ],
-            &[],
+            &["TTY output renders tables for preview and applied removals by default."],
         ),
         _ => return None,
     })

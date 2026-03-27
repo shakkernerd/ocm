@@ -140,6 +140,92 @@ fn env_and_service_detail_commands_accept_raw_output_mode() {
 }
 
 #[test]
+fn env_snapshot_commands_accept_raw_output_mode() {
+    let root = TestDir::new("snapshot-raw");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            "18799",
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let snapshot = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "create",
+            "demo",
+            "--label",
+            "before-upgrade",
+        ],
+    );
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+
+    let snapshot_2 = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "create",
+            "demo",
+            "--label",
+            "after-upgrade",
+        ],
+    );
+    assert!(snapshot_2.status.success(), "{}", stderr(&snapshot_2));
+
+    let list_json = run_ocm(&cwd, &env, &["env", "snapshot", "list", "demo", "--json"]);
+    assert!(list_json.status.success(), "{}", stderr(&list_json));
+    let value: Value = serde_json::from_str(&stdout(&list_json)).unwrap();
+    let snapshot_id = value[0]["id"].as_str().unwrap().to_string();
+
+    let show = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "show", "demo", &snapshot_id, "--raw"],
+    );
+    assert!(show.status.success(), "{}", stderr(&show));
+    assert!(stdout(&show).contains("snapshotId:"));
+    assert!(!stdout(&show).contains("┌"));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "demo", "--raw"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert!(stdout(&list).contains("label=before-upgrade"));
+    assert!(!stdout(&list).contains("┌"));
+
+    let prune = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "prune", "demo", "--keep", "1", "--raw"],
+    );
+    assert!(prune.status.success(), "{}", stderr(&prune));
+    assert!(stdout(&prune).contains("Snapshot prune preview"));
+    assert!(!stdout(&prune).contains("┌"));
+}
+
+#[test]
 fn list_output_flags_reject_mixed_json_and_raw() {
     let root = TestDir::new("list-output-flags-validation");
     let cwd = root.child("workspace");
@@ -181,4 +267,38 @@ fn list_output_flags_reject_mixed_json_and_raw() {
     );
     assert_eq!(service_status.status.code(), Some(1));
     assert!(stderr(&service_status).contains("service status accepts only one of --json or --raw"));
+
+    let snapshot_show = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env", "snapshot", "show", "demo", "snap-1", "--json", "--raw",
+        ],
+    );
+    assert_eq!(snapshot_show.status.code(), Some(1));
+    assert!(
+        stderr(&snapshot_show).contains("env snapshot show accepts only one of --json or --raw")
+    );
+
+    let snapshot_list = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "list", "demo", "--json", "--raw"],
+    );
+    assert_eq!(snapshot_list.status.code(), Some(1));
+    assert!(
+        stderr(&snapshot_list).contains("env snapshot list accepts only one of --json or --raw")
+    );
+
+    let snapshot_prune = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env", "snapshot", "prune", "demo", "--keep", "1", "--json", "--raw",
+        ],
+    );
+    assert_eq!(snapshot_prune.status.code(), Some(1));
+    assert!(
+        stderr(&snapshot_prune).contains("env snapshot prune accepts only one of --json or --raw")
+    );
 }

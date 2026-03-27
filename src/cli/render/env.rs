@@ -514,8 +514,13 @@ fn state_tone(state: &str) -> Tone {
 mod tests {
     use time::OffsetDateTime;
 
-    use super::{RenderProfile, env_doctor, env_list, env_resolved, env_show, env_status};
-    use crate::env::{EnvDoctorSummary, EnvStatusSummary, EnvSummary, ExecutionSummary};
+    use super::{
+        RenderProfile, env_doctor, env_list, env_resolved, env_show, env_snapshot_list,
+        env_snapshot_prune_preview, env_snapshot_show, env_status,
+    };
+    use crate::env::{
+        EnvDoctorSummary, EnvSnapshotSummary, EnvStatusSummary, EnvSummary, ExecutionSummary,
+    };
 
     #[test]
     fn env_list_pretty_uses_a_table() {
@@ -650,6 +655,69 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("Summary")));
         assert!(lines.iter().any(|line| line.contains("Checks")));
         assert!(lines.iter().any(|line| line.contains("Issues")));
+    }
+
+    #[test]
+    fn env_snapshot_show_pretty_uses_cards() {
+        let lines = env_snapshot_show(
+            &sample_snapshot("demo", "before-upgrade"),
+            RenderProfile::pretty(false),
+        )
+        .unwrap();
+
+        assert_eq!(lines[0], "Snapshot snap-001");
+        assert!(lines[1].contains("[env:demo]"));
+        assert!(lines[1].contains("[label:before-upgrade]"));
+        assert!(lines.iter().any(|line| line.contains("Snapshot")));
+        assert!(lines.iter().any(|line| line.contains("Paths")));
+        assert!(lines.iter().any(|line| line.contains("Bindings")));
+    }
+
+    #[test]
+    fn env_snapshot_list_pretty_uses_a_table() {
+        let lines = env_snapshot_list(
+            &[sample_snapshot("demo", "before-upgrade")],
+            RenderProfile::pretty(false),
+        )
+        .unwrap();
+
+        assert!(lines[0].starts_with('┌'));
+        assert!(lines[1].contains("Snapshot"));
+        assert!(lines[3].contains("snap-001"));
+        assert!(lines[3].contains("launcher:stable"));
+        assert!(lines[4].starts_with('└'));
+    }
+
+    #[test]
+    fn env_snapshot_prune_preview_pretty_uses_a_table() {
+        let lines = env_snapshot_prune_preview(
+            "all",
+            &[sample_snapshot("demo", "before-upgrade")],
+            RenderProfile::pretty(false),
+        )
+        .unwrap();
+
+        assert_eq!(lines[0], "Snapshot prune preview");
+        assert!(lines[1].contains("[scope:all]"));
+        assert!(lines[1].contains("[1 candidate(s)]"));
+        assert!(lines.iter().any(|line| line.starts_with('┌')));
+        assert!(lines.iter().any(|line| line.contains("Archive")));
+        assert_eq!(lines.last().unwrap(), "Re-run with --yes to remove them.");
+    }
+
+    fn sample_snapshot(env_name: &str, label: &str) -> EnvSnapshotSummary {
+        EnvSnapshotSummary {
+            id: "snap-001".to_string(),
+            env_name: env_name.to_string(),
+            label: Some(label.to_string()),
+            archive_path: "/tmp/demo-snapshot.tar".to_string(),
+            source_root: "/tmp/demo".to_string(),
+            gateway_port: Some(18789),
+            default_runtime: None,
+            default_launcher: Some("stable".to_string()),
+            protected: true,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+        }
     }
 }
 
@@ -883,7 +951,64 @@ pub fn env_snapshot_created(snapshot: &EnvSnapshotSummary) -> Vec<String> {
     lines
 }
 
-pub fn env_snapshot_show(snapshot: &EnvSnapshotSummary) -> Result<Vec<String>, String> {
+pub fn env_snapshot_show(
+    snapshot: &EnvSnapshotSummary,
+    profile: RenderProfile,
+) -> Result<Vec<String>, String> {
+    if !profile.pretty {
+        return env_snapshot_show_raw(snapshot);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Snapshot {}", snapshot.id),
+        Tone::Strong,
+        profile.color,
+    )];
+    let tags = env_snapshot_tags(snapshot);
+    if !tags.is_empty() {
+        lines.push(render_tags(&tags, profile.color));
+    }
+
+    push_card(
+        &mut lines,
+        "Snapshot",
+        vec![
+            KeyValueRow::accent("Env", snapshot.env_name.clone()),
+            KeyValueRow::plain("Created", format_rfc3339(snapshot.created_at)?),
+            optional_value_row("Label", snapshot.label.clone()),
+            bool_row("Protected", snapshot.protected),
+        ],
+        profile.color,
+    );
+
+    push_card(
+        &mut lines,
+        "Paths",
+        vec![
+            KeyValueRow::plain("Archive", snapshot.archive_path.clone()),
+            KeyValueRow::plain("Source root", snapshot.source_root.clone()),
+        ],
+        profile.color,
+    );
+
+    push_card(
+        &mut lines,
+        "Bindings",
+        vec![
+            optional_value_row(
+                "Gateway port",
+                snapshot.gateway_port.map(|value| value.to_string()),
+            ),
+            optional_value_row("Runtime", snapshot.default_runtime.clone()),
+            optional_value_row("Launcher", snapshot.default_launcher.clone()),
+        ],
+        profile.color,
+    );
+
+    Ok(lines)
+}
+
+fn env_snapshot_show_raw(snapshot: &EnvSnapshotSummary) -> Result<Vec<String>, String> {
     let mut lines = vec![
         format!("snapshotId: {}", snapshot.id),
         format!("envName: {}", snapshot.env_name),
@@ -912,10 +1037,38 @@ pub fn env_snapshot_show(snapshot: &EnvSnapshotSummary) -> Result<Vec<String>, S
     Ok(lines)
 }
 
-pub fn env_snapshot_list(snapshots: &[EnvSnapshotSummary]) -> Vec<String> {
+pub fn env_snapshot_list(
+    snapshots: &[EnvSnapshotSummary],
+    profile: RenderProfile,
+) -> Result<Vec<String>, String> {
     if snapshots.is_empty() {
-        return vec!["No snapshots.".to_string()];
+        return Ok(vec!["No snapshots.".to_string()]);
     }
+    if !profile.pretty {
+        return Ok(env_snapshot_list_raw(snapshots));
+    }
+
+    let rows = snapshots
+        .iter()
+        .map(|snapshot| {
+            Ok(vec![
+                Cell::accent(snapshot.id.clone()),
+                Cell::plain(snapshot.env_name.clone()),
+                optional_cell(snapshot.label.as_deref(), Tone::Accent),
+                optional_number_cell(snapshot.gateway_port),
+                snapshot_binding_cell(snapshot),
+                Cell::muted(format_rfc3339(snapshot.created_at)?),
+            ])
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(render_table(
+        &["Snapshot", "Env", "Label", "Port", "Binding", "Created"],
+        &rows,
+        profile.color,
+    ))
+}
+
+fn env_snapshot_list_raw(snapshots: &[EnvSnapshotSummary]) -> Vec<String> {
     let mut lines = Vec::with_capacity(snapshots.len());
     for snapshot in snapshots {
         let mut bits = vec![snapshot.id.clone(), snapshot.env_name.clone()];
@@ -969,6 +1122,61 @@ pub fn env_snapshot_removed(removed: &EnvSnapshotRemoveSummary) -> Vec<String> {
 pub fn env_snapshot_prune_preview(
     scope_label: &str,
     candidates: &[EnvSnapshotSummary],
+    profile: RenderProfile,
+) -> Result<Vec<String>, String> {
+    if !profile.pretty {
+        return Ok(env_snapshot_prune_preview_raw(scope_label, candidates));
+    }
+
+    let mut lines = vec![paint("Snapshot prune preview", Tone::Strong, profile.color)];
+    lines.push(render_tags(
+        &[
+            Cell::accent(format!("scope:{scope_label}")),
+            Cell::warning(format!("{} candidate(s)", candidates.len())),
+        ],
+        profile.color,
+    ));
+
+    if candidates.is_empty() {
+        lines.push(String::new());
+        lines.push(paint(
+            "Nothing would be removed.",
+            Tone::Muted,
+            profile.color,
+        ));
+        return Ok(lines);
+    }
+
+    lines.push(String::new());
+    let rows = candidates
+        .iter()
+        .map(|candidate| {
+            Ok(vec![
+                Cell::accent(candidate.id.clone()),
+                Cell::plain(candidate.env_name.clone()),
+                optional_cell(candidate.label.as_deref(), Tone::Accent),
+                Cell::muted(format_rfc3339(candidate.created_at)?),
+                Cell::muted(candidate.archive_path.clone()),
+            ])
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    lines.extend(render_table(
+        &["Snapshot", "Env", "Label", "Created", "Archive"],
+        &rows,
+        profile.color,
+    ));
+    lines.push(String::new());
+    lines.push(paint(
+        "Re-run with --yes to remove them.",
+        Tone::Muted,
+        profile.color,
+    ));
+    Ok(lines)
+}
+
+fn env_snapshot_prune_preview_raw(
+    scope_label: &str,
+    candidates: &[EnvSnapshotSummary],
 ) -> Vec<String> {
     let mut lines = vec![format!(
         "Snapshot prune preview ({scope_label}): {} candidate(s)",
@@ -986,7 +1194,47 @@ pub fn env_snapshot_prune_preview(
     lines
 }
 
-pub fn env_snapshot_pruned(removed: &[EnvSnapshotRemoveSummary]) -> Vec<String> {
+pub fn env_snapshot_pruned(
+    removed: &[EnvSnapshotRemoveSummary],
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return env_snapshot_pruned_raw(removed);
+    }
+
+    let mut lines = vec![paint("Snapshot prune applied", Tone::Strong, profile.color)];
+    lines.push(render_tags(
+        &[Cell::warning(format!("{} removed", removed.len()))],
+        profile.color,
+    ));
+
+    if removed.is_empty() {
+        lines.push(String::new());
+        lines.push(paint("Nothing was removed.", Tone::Muted, profile.color));
+        return lines;
+    }
+
+    lines.push(String::new());
+    let rows = removed
+        .iter()
+        .map(|snapshot| {
+            vec![
+                Cell::accent(snapshot.snapshot_id.clone()),
+                Cell::plain(snapshot.env_name.clone()),
+                optional_cell(snapshot.label.as_deref(), Tone::Accent),
+                Cell::muted(snapshot.archive_path.clone()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    lines.extend(render_table(
+        &["Snapshot", "Env", "Label", "Archive"],
+        &rows,
+        profile.color,
+    ));
+    lines
+}
+
+fn env_snapshot_pruned_raw(removed: &[EnvSnapshotRemoveSummary]) -> Vec<String> {
     let mut lines = vec![format!("Pruned {} snapshot(s).", removed.len())];
     for snapshot in removed {
         let mut bits = vec![snapshot.snapshot_id.clone(), snapshot.env_name.clone()];
@@ -997,6 +1245,30 @@ pub fn env_snapshot_pruned(removed: &[EnvSnapshotRemoveSummary]) -> Vec<String> 
         lines.push(format!("  {}", bits.join("  ")));
     }
     lines
+}
+
+fn env_snapshot_tags(snapshot: &EnvSnapshotSummary) -> Vec<Cell> {
+    let mut tags = vec![Cell::accent(format!("env:{}", snapshot.env_name))];
+    if let Some(label) = snapshot.label.as_deref() {
+        tags.push(Cell::accent(format!("label:{label}")));
+    }
+    if let Some(port) = snapshot.gateway_port {
+        tags.push(Cell::accent(format!("port {port}")));
+    }
+    if snapshot.protected {
+        tags.push(Cell::warning("protected"));
+    }
+    tags
+}
+
+fn snapshot_binding_cell(snapshot: &EnvSnapshotSummary) -> Cell {
+    if let Some(runtime) = snapshot.default_runtime.as_deref() {
+        return Cell::accent(format!("runtime:{runtime}"));
+    }
+    if let Some(launcher) = snapshot.default_launcher.as_deref() {
+        return Cell::accent(format!("launcher:{launcher}"));
+    }
+    Cell::muted("—")
 }
 
 pub fn env_resolved(summary: &ExecutionSummary, profile: RenderProfile) -> Vec<String> {
