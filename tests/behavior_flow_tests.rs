@@ -187,6 +187,52 @@ fn env_run_overrides_parent_openclaw_environment_state() {
 }
 
 #[test]
+fn root_double_dash_runs_openclaw_in_the_active_environment() {
+    let root = TestDir::new("behavior-root-double-dash");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "inspect", "--command", "sh"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "inspect"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    env.insert("OCM_ACTIVE_ENV".to_string(), "demo".to_string());
+    env.insert(
+        "OPENCLAW_HOME".to_string(),
+        "/tmp/legacy-openclaw-home".to_string(),
+    );
+    env.insert("OPENCLAW_PROFILE".to_string(), "legacy".to_string());
+
+    let run_output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "--",
+            "-lc",
+            "printf '%s|%s|%s' \"$OCM_ACTIVE_ENV\" \"$OPENCLAW_HOME\" \"${OPENCLAW_PROFILE:-unset}\"",
+        ],
+    );
+    assert!(run_output.status.success(), "{}", stderr(&run_output));
+
+    let env_root = clean_path(&root.child("ocm-home/envs/demo"));
+    assert_eq!(
+        stdout(&run_output),
+        format!("demo|{}|unset", env_root.display())
+    );
+}
+
+#[test]
 fn env_use_auto_assigns_distinct_gateway_ports_for_fresh_envs() {
     let root = TestDir::new("behavior-env-use-auto-port");
     let cwd = root.child("workspace");

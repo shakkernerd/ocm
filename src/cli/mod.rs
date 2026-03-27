@@ -204,6 +204,26 @@ impl Cli {
         Ok(())
     }
 
+    fn active_env_name(&self) -> Result<String, String> {
+        self.env
+            .get("OCM_ACTIVE_ENV")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .ok_or_else(|| {
+                let command = self.command_example();
+                format!(
+                    "no active environment; run eval \"$({command} env use <name>)\" or use \"{command} env run <name> -- ...\""
+                )
+            })
+    }
+
+    fn handle_active_env_run_shorthand(&self, openclaw_args: Vec<String>) -> Result<i32, String> {
+        let mut args = vec![self.active_env_name()?, "--".to_string()];
+        args.extend(openclaw_args);
+        self.handle_env_run(args)
+    }
+
     pub fn run(&self, args: Vec<String>) -> i32 {
         if let Some(result) = self.help_result_for_invocation(&args) {
             return match result {
@@ -231,6 +251,20 @@ impl Cli {
                 self.command_example()
             ));
             return 1;
+        }
+
+        if args[0] == "--" {
+            return match self.handle_active_env_run_shorthand(args[1..].to_vec()) {
+                Ok(code) => code,
+                Err(error) => {
+                    self.stderr_line(format!("ocm: {error}"));
+                    self.stderr_line(format!(
+                        "Run \"{} help\" for usage.",
+                        self.command_example()
+                    ));
+                    1
+                }
+            };
         }
 
         let group = args.first().cloned().unwrap_or_default();

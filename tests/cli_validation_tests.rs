@@ -220,6 +220,20 @@ fn env_snapshot_remove_requires_both_name_and_snapshot_id() {
 }
 
 #[test]
+fn root_double_dash_requires_an_active_environment() {
+    let root = TestDir::new("cli-root-double-dash-active-env");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let run = run_ocm(&cwd, &env, &["--", "status"]);
+    assert_eq!(run.status.code(), Some(1));
+    assert!(stderr(&run).contains(
+        "no active environment; run eval \"$(ocm env use <name>)\" or use \"ocm env run <name> -- ...\""
+    ));
+}
+
+#[test]
 fn env_snapshot_show_requires_both_name_and_snapshot_id() {
     let root = TestDir::new("cli-snapshot-show-validation");
     let cwd = root.child("workspace");
