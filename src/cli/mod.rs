@@ -224,6 +224,29 @@ impl Cli {
         self.handle_env_run(args)
     }
 
+    fn explicit_env_name_from_shorthand(token: &str) -> Option<Result<String, String>> {
+        let name = token.strip_prefix('@')?;
+        if name.trim().is_empty() {
+            Some(Err("env shorthand requires a target like @demo".to_string()))
+        } else {
+            Some(Ok(name.to_string()))
+        }
+    }
+
+    fn handle_named_env_run_shorthand(
+        &self,
+        name: String,
+        args: Vec<String>,
+    ) -> Result<i32, String> {
+        if !args.iter().any(|arg| arg == "--") {
+            return Err("env shorthand requires -- before OpenClaw arguments".to_string());
+        }
+
+        let mut run_args = vec![name];
+        run_args.extend(args);
+        self.handle_env_run(run_args)
+    }
+
     pub fn run(&self, args: Vec<String>) -> i32 {
         if let Some(result) = self.help_result_for_invocation(&args) {
             return match result {
@@ -255,6 +278,22 @@ impl Cli {
 
         if args[0] == "--" {
             return match self.handle_active_env_run_shorthand(args[1..].to_vec()) {
+                Ok(code) => code,
+                Err(error) => {
+                    self.stderr_line(format!("ocm: {error}"));
+                    self.stderr_line(format!(
+                        "Run \"{} help\" for usage.",
+                        self.command_example()
+                    ));
+                    1
+                }
+            };
+        }
+
+        if let Some(target) = Self::explicit_env_name_from_shorthand(&args[0]) {
+            return match target
+                .and_then(|name| self.handle_named_env_run_shorthand(name, args[1..].to_vec()))
+            {
                 Ok(code) => code,
                 Err(error) => {
                     self.stderr_line(format!("ocm: {error}"));

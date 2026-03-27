@@ -23,6 +23,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
     assert!(output.contains("launcher add stable --command openclaw"));
     assert!(output.contains("ocm -- status"));
+    assert!(output.contains("ocm @demo -- status"));
     assert!(output.contains("ocm help env"));
     assert!(output.contains("ocm help runtime install"));
     assert!(!output.contains("env snapshot restore <name> <snapshot>"));
@@ -92,11 +93,15 @@ fn env_run_help_is_available_through_help_keyword_and_flag() {
         "ocm env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>"
     ));
     assert!(output.contains("ocm -- status"));
+    assert!(output.contains("ocm @demo -- status"));
     assert!(output.contains("`--` is required before OpenClaw arguments."));
     assert!(
         output.contains(
             "If an environment is active, you can also use the root-level `--` shortcut."
         )
+    );
+    assert!(
+        output.contains("For one-shot explicit env runs, use the root-level `@<env>` shortcut.")
     );
 }
 

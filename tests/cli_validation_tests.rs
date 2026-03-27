@@ -234,6 +234,30 @@ fn root_double_dash_requires_an_active_environment() {
 }
 
 #[test]
+fn root_at_env_requires_a_target_name() {
+    let root = TestDir::new("cli-root-at-env-name");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let run = run_ocm(&cwd, &env, &["@", "--", "status"]);
+    assert_eq!(run.status.code(), Some(1));
+    assert!(stderr(&run).contains("env shorthand requires a target like @demo"));
+}
+
+#[test]
+fn root_at_env_requires_double_dash_before_openclaw_arguments() {
+    let root = TestDir::new("cli-root-at-env-separator");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let run = run_ocm(&cwd, &env, &["@demo", "status"]);
+    assert_eq!(run.status.code(), Some(1));
+    assert!(stderr(&run).contains("env shorthand requires -- before OpenClaw arguments"));
+}
+
+#[test]
 fn env_snapshot_show_requires_both_name_and_snapshot_id() {
     let root = TestDir::new("cli-snapshot-show-validation");
     let cwd = root.child("workspace");

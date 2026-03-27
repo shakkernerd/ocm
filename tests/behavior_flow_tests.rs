@@ -233,6 +233,58 @@ fn root_double_dash_runs_openclaw_in_the_active_environment() {
 }
 
 #[test]
+fn root_at_env_runs_openclaw_in_the_named_environment() {
+    let root = TestDir::new("behavior-root-at-env");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "inspect", "--command", "sh"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create_demo = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "inspect"],
+    );
+    assert!(create_demo.status.success(), "{}", stderr(&create_demo));
+
+    let create_test = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "test", "--launcher", "inspect"],
+    );
+    assert!(create_test.status.success(), "{}", stderr(&create_test));
+
+    let demo_root = clean_path(&root.child("ocm-home/envs/demo"));
+    env.insert("OCM_ACTIVE_ENV".to_string(), "demo".to_string());
+    env.insert("OPENCLAW_HOME".to_string(), demo_root.display().to_string());
+    env.insert("OPENCLAW_PROFILE".to_string(), "legacy".to_string());
+
+    let run_output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "@test",
+            "--",
+            "-lc",
+            "printf '%s|%s|%s' \"$OCM_ACTIVE_ENV\" \"$OPENCLAW_HOME\" \"${OPENCLAW_PROFILE:-unset}\"",
+        ],
+    );
+    assert!(run_output.status.success(), "{}", stderr(&run_output));
+
+    let test_root = clean_path(&root.child("ocm-home/envs/test"));
+    assert_eq!(
+        stdout(&run_output),
+        format!("test|{}|unset", test_root.display())
+    );
+}
+
+#[test]
 fn env_use_auto_assigns_distinct_gateway_ports_for_fresh_envs() {
     let root = TestDir::new("behavior-env-use-auto-port");
     let cwd = root.child("workspace");

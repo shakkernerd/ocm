@@ -113,6 +113,7 @@ pub fn root_help(cmd: &str) -> String {
             format!("{cmd} env create demo --launcher stable"),
             format!("eval \"$({cmd} env use demo)\""),
             format!("{cmd} -- status"),
+            format!("{cmd} @demo -- status"),
             format!("{cmd} env run demo -- onboard"),
         ]),
     );
@@ -598,11 +599,13 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} env run demo -- onboard"),
                 format!("{cmd} env run demo -- status"),
                 format!("{cmd} -- status"),
+                format!("{cmd} @demo -- status"),
                 format!("{cmd} env run demo --launcher dev -- gateway run"),
             ],
             &[
                 "`--` is required before OpenClaw arguments.",
                 "If an environment is active, you can also use the root-level `--` shortcut.",
+                "For one-shot explicit env runs, use the root-level `@<env>` shortcut.",
             ],
         ),
         "set-runtime" => render_leaf(
