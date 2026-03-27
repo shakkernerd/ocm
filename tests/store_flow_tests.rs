@@ -4,7 +4,7 @@ use std::fs;
 
 use ocm::env::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
-    ExportEnvironmentOptions, ImportEnvironmentOptions, EnvironmentService,
+    EnvironmentService, ExportEnvironmentOptions, ImportEnvironmentOptions,
     RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
 };
 use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive};
@@ -13,10 +13,10 @@ use ocm::runtime::{AddRuntimeOptions, InstallRuntimeOptions, RuntimeSourceKind};
 use ocm::store::{
     add_launcher, add_runtime, clone_environment, create_env_snapshot, create_environment,
     env_meta_path, export_environment, get_env_snapshot, get_environment, get_launcher,
-    get_runtime, import_environment, install_runtime, launcher_meta_path,
-    list_all_env_snapshots, list_env_snapshots, list_environments, list_launchers,
-    list_runtimes, remove_env_snapshot, remove_environment, remove_launcher, remove_runtime,
-    repair_environment_marker, restore_env_snapshot, runtime_install_root, runtime_meta_path,
+    get_runtime, import_environment, install_runtime, launcher_meta_path, list_all_env_snapshots,
+    list_env_snapshots, list_environments, list_launchers, list_runtimes, remove_env_snapshot,
+    remove_environment, remove_launcher, remove_runtime, repair_environment_marker,
+    restore_env_snapshot, runtime_install_root, runtime_meta_path,
 };
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
@@ -719,7 +719,9 @@ fn environment_snapshot_prune_keeps_the_newest_snapshot_in_scope() {
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].id, old_snapshot.id);
 
-    let removed = service.prune_snapshots(Some("source"), Some(1), None).unwrap();
+    let removed = service
+        .prune_snapshots(Some("source"), Some(1), None)
+        .unwrap();
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].snapshot_id, old_snapshot.id);
 

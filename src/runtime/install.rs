@@ -1,11 +1,9 @@
-use super::{
-    RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService,
-};
-use serde::Serialize;
+use super::{RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService};
 use crate::store::{
     get_runtime, install_runtime, install_runtime_from_release, install_runtime_from_url,
     list_runtimes,
 };
+use serde::Serialize;
 
 #[derive(Clone, Debug)]
 pub struct InstallRuntimeOptions {

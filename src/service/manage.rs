@@ -9,14 +9,13 @@ use std::process::Command;
 use serde::Serialize;
 
 use super::inspect::{
-    ServiceLaunchSpec, current_uid, global_plist_path, managed_plist_path,
-    managed_service_label, resolve_service_launch, service_status, GLOBAL_GATEWAY_LABEL,
+    GLOBAL_GATEWAY_LABEL, ServiceLaunchSpec, current_uid, global_plist_path, managed_plist_path,
+    managed_service_label, resolve_service_launch, service_status,
 };
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::infra::shell::build_openclaw_env;
 use crate::store::{
-    derive_env_paths, display_path, list_environments, now_utc, resolve_ocm_home,
-    save_environment,
+    derive_env_paths, display_path, list_environments, now_utc, resolve_ocm_home, save_environment,
 };
 
 const DEFAULT_SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
@@ -453,13 +452,8 @@ fn prepare_service_with_allowed_busy_port(
     allowed_busy_port: Option<u32>,
     persist_gateway_port: bool,
 ) -> Result<PreparedService, String> {
-    let port_assignment = persist_service_gateway_port(
-        name,
-        env,
-        cwd,
-        allowed_busy_port,
-        persist_gateway_port,
-    )?;
+    let port_assignment =
+        persist_service_gateway_port(name, env, cwd, allowed_busy_port, persist_gateway_port)?;
     let env_meta = port_assignment.env_meta;
     let launch = resolve_service_launch(&env_meta, env, cwd)?;
     let managed_label = managed_service_label(&env_meta.name);
@@ -671,7 +665,9 @@ fn tail_text(raw: &str, tail_lines: usize) -> String {
 }
 
 fn service_log_dir(env_meta: &EnvMeta) -> PathBuf {
-    derive_env_paths(Path::new(&env_meta.root)).state_dir.join("logs")
+    derive_env_paths(Path::new(&env_meta.root))
+        .state_dir
+        .join("logs")
 }
 
 fn service_stdout_log_path(env_meta: &EnvMeta) -> PathBuf {
@@ -701,11 +697,7 @@ fn write_plist_file(
         &prepared.run_dir,
         &prepared.stdout_path,
         &prepared.stderr_path,
-        &build_service_environment(
-            &prepared.env_meta,
-            &prepared.managed_label,
-            env,
-        ),
+        &build_service_environment(&prepared.env_meta, &prepared.managed_label, env),
     );
     fs::write(&prepared.managed_plist_path, plist).map_err(|error| error.to_string())?;
     set_mode(&prepared.managed_plist_path, LAUNCH_AGENT_PLIST_MODE)?;
@@ -754,7 +746,10 @@ fn prepare_global_restore(
     let env_meta = service.apply_effective_gateway_port(service.get(name)?)?;
     let global_plist_path = global_plist_path(env);
     if global_plist_path.exists() {
-        return Err("global OpenClaw service is already installed; remove it before restoring from backup".to_string());
+        return Err(
+            "global OpenClaw service is already installed; remove it before restoring from backup"
+                .to_string(),
+        );
     }
 
     let backup = latest_matching_global_plist_backup(&env_meta, env, cwd)?;
@@ -788,10 +783,16 @@ fn build_service_environment(
     process_env: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut base_env = BTreeMap::new();
-    if let Some(home) = process_env.get("HOME").filter(|value| !value.trim().is_empty()) {
+    if let Some(home) = process_env
+        .get("HOME")
+        .filter(|value| !value.trim().is_empty())
+    {
         base_env.insert("HOME".to_string(), home.trim().to_string());
     }
-    if let Some(path) = process_env.get("PATH").filter(|value| !value.trim().is_empty()) {
+    if let Some(path) = process_env
+        .get("PATH")
+        .filter(|value| !value.trim().is_empty())
+    {
         base_env.insert("PATH".to_string(), path.trim().to_string());
     } else {
         base_env.insert("PATH".to_string(), DEFAULT_SERVICE_PATH.to_string());
@@ -803,12 +804,18 @@ fn build_service_environment(
         base_env.insert("TMPDIR".to_string(), tmpdir.trim().to_string());
     }
     for key in SERVICE_PROXY_ENV_KEYS {
-        if let Some(value) = process_env.get(key).filter(|value| !value.trim().is_empty()) {
+        if let Some(value) = process_env
+            .get(key)
+            .filter(|value| !value.trim().is_empty())
+        {
             base_env.insert(key.to_string(), value.trim().to_string());
         }
     }
     for key in SERVICE_EXTRA_ENV_KEYS {
-        if let Some(value) = process_env.get(key).filter(|value| !value.trim().is_empty()) {
+        if let Some(value) = process_env
+            .get(key)
+            .filter(|value| !value.trim().is_empty())
+        {
             base_env.insert(key.to_string(), value.trim().to_string());
         }
     }
@@ -925,7 +932,9 @@ fn backup_global_plist(source_path: &Path, backup_path: &Path) -> Result<(), Str
 
 fn restore_global_plist(backup_path: &Path, global_path: &Path) -> Result<(), String> {
     let Some(parent) = global_path.parent() else {
-        return Err("failed to resolve LaunchAgents directory for global service restore".to_string());
+        return Err(
+            "failed to resolve LaunchAgents directory for global service restore".to_string(),
+        );
     };
     ensure_secure_dir(parent)?;
     fs::copy(backup_path, global_path).map_err(|error| error.to_string())?;
@@ -933,7 +942,9 @@ fn restore_global_plist(backup_path: &Path, global_path: &Path) -> Result<(), St
     Ok(())
 }
 
-fn read_global_service_binding(env: &BTreeMap<String, String>) -> Result<GlobalServiceBinding, String> {
+fn read_global_service_binding(
+    env: &BTreeMap<String, String>,
+) -> Result<GlobalServiceBinding, String> {
     let plist_path = global_plist_path(env);
     if !plist_path.exists() {
         return Err("global OpenClaw service is not installed".to_string());
@@ -942,21 +953,13 @@ fn read_global_service_binding(env: &BTreeMap<String, String>) -> Result<GlobalS
     read_service_binding(&plist_path)
 }
 
-fn global_plist_backup_path(
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<PathBuf, String> {
+fn global_plist_backup_path(env: &BTreeMap<String, String>, cwd: &Path) -> Result<PathBuf, String> {
     let backup_root = global_plist_backup_dir(env, cwd)?;
     let timestamp = now_utc().unix_timestamp_nanos();
-    Ok(backup_root.join(format!(
-        "{GLOBAL_GATEWAY_LABEL}.{timestamp}.plist"
-    )))
+    Ok(backup_root.join(format!("{GLOBAL_GATEWAY_LABEL}.{timestamp}.plist")))
 }
 
-fn global_plist_backup_dir(
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<PathBuf, String> {
+fn global_plist_backup_dir(env: &BTreeMap<String, String>, cwd: &Path) -> Result<PathBuf, String> {
     Ok(resolve_ocm_home(env, cwd)?.join("services").join("backups"))
 }
 
@@ -981,7 +984,9 @@ fn latest_matching_global_plist_backup(
         let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        if !file_name.starts_with(&format!("{GLOBAL_GATEWAY_LABEL}.")) || !file_name.ends_with(".plist") {
+        if !file_name.starts_with(&format!("{GLOBAL_GATEWAY_LABEL}."))
+            || !file_name.ends_with(".plist")
+        {
             continue;
         }
         let binding = read_service_binding(&path)?;
@@ -995,12 +1000,9 @@ fn latest_matching_global_plist_backup(
             .file_name()
             .cmp(&right.plist_path.file_name())
     });
-    bindings.pop().ok_or_else(|| {
-        format!(
-            "no global service backup matches env \"{}\"",
-            env_meta.name
-        )
-    })
+    bindings
+        .pop()
+        .ok_or_else(|| format!("no global service backup matches env \"{}\"", env_meta.name))
 }
 
 fn read_service_binding(plist_path: &Path) -> Result<GlobalServiceBinding, String> {
@@ -1108,8 +1110,8 @@ fn launchctl_not_loaded(output: &std::process::Output) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_launch_agent_plist, plist_escape, plist_unescape, read_launch_agent_environment_value,
-        service_install_warnings, tail_text,
+        build_launch_agent_plist, plist_escape, plist_unescape,
+        read_launch_agent_environment_value, service_install_warnings, tail_text,
     };
     use std::collections::BTreeMap;
     use std::fs;
@@ -1147,7 +1149,11 @@ mod tests {
         let plist = build_launch_agent_plist(
             "ai.openclaw.gateway.ocm.test",
             "test",
-            &["/bin/sh".to_string(), "-lc".to_string(), "openclaw gateway run".to_string()],
+            &[
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "openclaw gateway run".to_string(),
+            ],
             Path::new("/tmp/work"),
             Path::new("/tmp/stdout.log"),
             Path::new("/tmp/stderr.log"),

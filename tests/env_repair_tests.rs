@@ -49,7 +49,10 @@ fn env_repair_marker_json_reports_the_rewritten_marker_path() {
     assert!(repair.status.success(), "{}", stderr(&repair));
     let value: Value = serde_json::from_str(&stdout(&repair)).unwrap();
     assert_eq!(value["envName"], "demo");
-    assert_eq!(value["root"], root.child("ocm-home/envs/demo").display().to_string());
+    assert_eq!(
+        value["root"],
+        root.child("ocm-home/envs/demo").display().to_string()
+    );
     assert_eq!(
         value["markerPath"],
         root.child("ocm-home/envs/demo/.ocm-env.json")

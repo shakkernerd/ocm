@@ -139,10 +139,7 @@ fn env_run_overrides_parent_openclaw_environment_state() {
     assert!(create_test.status.success(), "{}", stderr(&create_test));
 
     let demo_root = clean_path(&root.child("ocm-home/envs/demo"));
-    env.insert(
-        "OPENCLAW_HOME".to_string(),
-        demo_root.display().to_string(),
-    );
+    env.insert("OPENCLAW_HOME".to_string(), demo_root.display().to_string());
     env.insert(
         "OPENCLAW_STATE_DIR".to_string(),
         demo_root.join(".openclaw").display().to_string(),

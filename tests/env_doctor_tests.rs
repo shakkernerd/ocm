@@ -16,13 +16,7 @@ fn env_doctor_reports_a_healthy_launcher_bound_environment() {
     let add = run_ocm(
         &cwd,
         &env,
-        &[
-            "launcher",
-            "add",
-            "shell",
-            "--command",
-            "printf launcher",
-        ],
+        &["launcher", "add", "shell", "--command", "printf launcher"],
     );
     assert!(add.status.success(), "{}", stderr(&add));
 
@@ -89,6 +83,16 @@ fn env_doctor_json_reports_marker_and_runtime_health_issues() {
     assert_eq!(value["resolvedName"], "stable");
     let issues = value["issues"].as_array().unwrap();
     assert_eq!(issues.len(), 2);
-    assert!(issues[0].as_str().unwrap().contains("environment marker name mismatch"));
-    assert!(issues[1].as_str().unwrap().contains("runtime \"stable\" binary path does not exist"));
+    assert!(
+        issues[0]
+            .as_str()
+            .unwrap()
+            .contains("environment marker name mismatch")
+    );
+    assert!(
+        issues[1]
+            .as_str()
+            .unwrap()
+            .contains("runtime \"stable\" binary path does not exist")
+    );
 }

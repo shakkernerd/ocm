@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::store::derive_env_paths;
 use crate::env::EnvMeta;
+use crate::store::derive_env_paths;
 
 pub fn quote_posix(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))

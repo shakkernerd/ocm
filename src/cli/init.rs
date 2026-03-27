@@ -3,7 +3,11 @@ use crate::infra::shell::{render_init_script, resolve_shell_name};
 use super::Cli;
 
 impl Cli {
-    pub(super) fn handle_init_command(&self, shell: &str, args: Vec<String>) -> Result<i32, String> {
+    pub(super) fn handle_init_command(
+        &self,
+        shell: &str,
+        args: Vec<String>,
+    ) -> Result<i32, String> {
         let shell = if shell.is_empty() {
             resolve_shell_name(None, &self.env)
         } else {

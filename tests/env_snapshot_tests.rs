@@ -421,7 +421,11 @@ fn env_snapshot_prune_previews_candidates_without_removing_them() {
     );
     assert!(new.status.success(), "{}", stderr(&new));
 
-    let prune = run_ocm(&cwd, &env, &["env", "snapshot", "prune", "source", "--keep", "1"]);
+    let prune = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "prune", "source", "--keep", "1"],
+    );
     assert!(prune.status.success(), "{}", stderr(&prune));
     let output = stdout(&prune);
     assert!(output.contains("Snapshot prune preview (source): 1 candidate(s)"));
@@ -502,15 +506,7 @@ fn env_snapshot_prune_json_supports_the_global_view() {
     let prune = run_ocm(
         &cwd,
         &env,
-        &[
-            "env",
-            "snapshot",
-            "prune",
-            "--all",
-            "--keep",
-            "1",
-            "--json",
-        ],
+        &["env", "snapshot", "prune", "--all", "--keep", "1", "--json"],
     );
     assert!(prune.status.success(), "{}", stderr(&prune));
     let output = stdout(&prune);

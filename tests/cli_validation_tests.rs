@@ -176,9 +176,7 @@ fn env_snapshot_list_requires_a_name_or_all_and_rejects_conflicts() {
 
     let conflicting = run_ocm(&cwd, &env, &["env", "snapshot", "list", "demo", "--all"]);
     assert_eq!(conflicting.status.code(), Some(1));
-    assert!(
-        stderr(&conflicting).contains("env snapshot list accepts either <name> or --all")
-    );
+    assert!(stderr(&conflicting).contains("env snapshot list accepts either <name> or --all"));
 }
 
 #[test]
@@ -285,11 +283,7 @@ fn env_snapshot_prune_validates_scope_and_numeric_values() {
     assert_eq!(conflicting.status.code(), Some(1));
     assert!(stderr(&conflicting).contains("env snapshot prune accepts either <name> or --all"));
 
-    let empty_keep = run_ocm(
-        &cwd,
-        &env,
-        &["env", "snapshot", "prune", "demo", "--keep="],
-    );
+    let empty_keep = run_ocm(&cwd, &env, &["env", "snapshot", "prune", "demo", "--keep="]);
     assert_eq!(empty_keep.status.code(), Some(1));
     assert!(stderr(&empty_keep).contains("--keep requires a value"));
 
@@ -373,7 +367,8 @@ fn runtime_releases_requires_manifest_url_and_non_conflicting_selectors() {
     );
     assert_eq!(conflicting.status.code(), Some(1));
     assert!(
-        stderr(&conflicting).contains("runtime releases accepts only one of --version or --channel")
+        stderr(&conflicting)
+            .contains("runtime releases accepts only one of --version or --channel")
     );
 }
 
@@ -501,14 +496,7 @@ fn env_run_rejects_global_daemon_install_during_onboarding() {
     let run = run_ocm(
         &cwd,
         &env,
-        &[
-            "env",
-            "run",
-            "demo",
-            "--",
-            "onboard",
-            "--install-daemon",
-        ],
+        &["env", "run", "demo", "--", "onboard", "--install-daemon"],
     );
     assert_eq!(run.status.code(), Some(1));
     assert!(stderr(&run).contains(

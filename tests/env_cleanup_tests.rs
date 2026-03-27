@@ -32,8 +32,13 @@ fn env_cleanup_preview_reports_safe_repairs_without_applying_them() {
     assert!(output.contains("Cleanup preview for env demo"));
     assert!(output.contains("safe fixes: 3"));
     assert!(output.contains("repair-marker: rewrite the environment marker file"));
-    assert!(output.contains("clear-missing-runtime: clear missing runtime binding \"ghost-runtime\""));
-    assert!(output.contains("clear-missing-launcher: clear missing launcher binding \"ghost-launcher\""));
+    assert!(
+        output.contains("clear-missing-runtime: clear missing runtime binding \"ghost-runtime\"")
+    );
+    assert!(
+        output
+            .contains("clear-missing-launcher: clear missing launcher binding \"ghost-launcher\"")
+    );
     assert!(output.contains("re-run with --yes to apply them"));
 
     let persisted = fs::read_to_string(meta_path).unwrap();
@@ -75,7 +80,10 @@ fn env_cleanup_preview_json_reports_actions_and_current_issues() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|issue| issue.as_str().unwrap().contains("environment marker is missing"))
+            .any(|issue| issue
+                .as_str()
+                .unwrap()
+                .contains("environment marker is missing"))
     );
 }
 
@@ -109,7 +117,10 @@ fn env_cleanup_yes_applies_safe_repairs() {
     assert!(output.contains("Applied cleanup for env demo"));
     assert!(output.contains("applied fixes: 2"));
     assert!(output.contains("repair-marker: rewrite the environment marker file"));
-    assert!(output.contains("clear-missing-launcher: clear missing launcher binding \"ghost-launcher\""));
+    assert!(
+        output
+            .contains("clear-missing-launcher: clear missing launcher binding \"ghost-launcher\"")
+    );
 
     let persisted = fs::read_to_string(meta_path).unwrap();
     assert!(persisted.contains("\"defaultLauncher\": null"));
