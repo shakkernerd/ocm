@@ -12,6 +12,10 @@ use std::path::Path;
 pub use execution::{
     ExecutionBinding, ResolvedExecution, resolve_execution_binding, resolve_runtime_run_dir,
 };
+pub use lifecycle::{
+    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
+    ExportEnvironmentOptions, ImportEnvironmentOptions,
+};
 pub use types::{
     EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary, EnvMarker,
     EnvMarkerRepairSummary, EnvMeta, EnvStatusSummary, EnvSummary, ExecutionSummary,

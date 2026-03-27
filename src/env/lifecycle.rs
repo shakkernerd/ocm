@@ -1,13 +1,64 @@
+use serde::Serialize;
+
 use super::{EnvMeta, EnvironmentService};
 use crate::store::{
     clone_environment, create_environment, export_environment, get_environment, get_launcher,
     get_runtime_verified, import_environment, list_environments, now_utc, remove_environment,
     save_environment, select_prune_candidates,
 };
-use crate::types::{
-    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
-    ExportEnvironmentOptions, ImportEnvironmentOptions,
-};
+
+#[derive(Clone, Debug)]
+pub struct CreateEnvironmentOptions {
+    pub name: String,
+    pub root: Option<String>,
+    pub gateway_port: Option<u32>,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub protected: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct CloneEnvironmentOptions {
+    pub source_name: String,
+    pub name: String,
+    pub root: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExportEnvironmentOptions {
+    pub name: String,
+    pub output: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvExportSummary {
+    pub name: String,
+    pub root: String,
+    pub archive_path: String,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub protected: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImportEnvironmentOptions {
+    pub archive: String,
+    pub name: Option<String>,
+    pub root: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvImportSummary {
+    pub name: String,
+    pub source_name: String,
+    pub root: String,
+    pub archive_path: String,
+    pub default_runtime: Option<String>,
+    pub default_launcher: Option<String>,
+    pub protected: bool,
+}
 
 impl<'a> EnvironmentService<'a> {
     pub fn create(&self, options: CreateEnvironmentOptions) -> Result<EnvMeta, String> {
