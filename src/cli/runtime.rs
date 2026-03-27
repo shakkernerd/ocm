@@ -1,11 +1,9 @@
-use std::collections::BTreeMap;
-
 use crate::runtime::{
     AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
     InstallRuntimeOptions, UpdateRuntimeFromReleaseOptions,
 };
 
-use super::Cli;
+use super::{Cli, render};
 
 impl Cli {
     pub(super) fn handle_runtime_add(&self, args: Vec<String>) -> Result<i32, String> {
@@ -29,8 +27,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("Added runtime {}", meta.name));
-        self.stdout_line(format!("  binary path: {}", meta.binary_path));
+        self.stdout_lines(render::runtime::runtime_added(&meta));
         Ok(0)
     }
 
@@ -43,24 +40,7 @@ impl Cli {
             self.print_json(&runtimes)?;
             return Ok(0);
         }
-        if runtimes.is_empty() {
-            self.stdout_line("No runtimes.");
-            return Ok(0);
-        }
-        for meta in runtimes {
-            let mut bits = vec![
-                meta.name,
-                meta.binary_path,
-                format!("source={}", meta.source_kind.as_str()),
-            ];
-            if let Some(release_version) = meta.release_version {
-                bits.push(format!("release={release_version}"));
-            }
-            if let Some(release_channel) = meta.release_channel {
-                bits.push(format!("channel={release_channel}"));
-            }
-            self.stdout_line(bits.join("  "));
-        }
+        self.stdout_lines(render::runtime::runtime_list(&runtimes));
         Ok(0)
     }
 
@@ -77,62 +57,7 @@ impl Cli {
             return Ok(0);
         }
 
-        let mut lines = BTreeMap::new();
-        lines.insert("kind".to_string(), meta.kind.clone());
-        lines.insert("name".to_string(), meta.name.clone());
-        lines.insert("binaryPath".to_string(), meta.binary_path.clone());
-        lines.insert(
-            "sourceKind".to_string(),
-            meta.source_kind.as_str().to_string(),
-        );
-        lines.insert(
-            "createdAt".to_string(),
-            meta.created_at
-                .format(&time::format_description::well_known::Rfc3339)
-                .map_err(|error| error.to_string())?,
-        );
-        lines.insert(
-            "updatedAt".to_string(),
-            meta.updated_at
-                .format(&time::format_description::well_known::Rfc3339)
-                .map_err(|error| error.to_string())?,
-        );
-        if let Some(description) = meta.description {
-            lines.insert("description".to_string(), description);
-        }
-        if let Some(source_path) = meta.source_path {
-            lines.insert("sourcePath".to_string(), source_path);
-        }
-        if let Some(source_url) = meta.source_url {
-            lines.insert("sourceUrl".to_string(), source_url);
-        }
-        if let Some(source_manifest_url) = meta.source_manifest_url {
-            lines.insert("sourceManifestUrl".to_string(), source_manifest_url);
-        }
-        if let Some(source_sha256) = meta.source_sha256 {
-            lines.insert("sourceSha256".to_string(), source_sha256);
-        }
-        if let Some(release_version) = meta.release_version {
-            lines.insert("releaseVersion".to_string(), release_version);
-        }
-        if let Some(release_channel) = meta.release_channel {
-            lines.insert("releaseChannel".to_string(), release_channel);
-        }
-        if let Some(release_selector_kind) = meta.release_selector_kind {
-            lines.insert(
-                "releaseSelectorKind".to_string(),
-                release_selector_kind.as_str().to_string(),
-            );
-        }
-        if let Some(release_selector_value) = meta.release_selector_value {
-            lines.insert("releaseSelectorValue".to_string(), release_selector_value);
-        }
-        if let Some(install_root) = meta.install_root {
-            lines.insert("installRoot".to_string(), install_root);
-        }
-        for (key, value) in lines {
-            self.stdout_line(format!("{key}: {value}"));
-        }
+        self.stdout_lines(render::runtime::runtime_show(&meta)?);
         Ok(0)
     }
 
@@ -148,7 +73,7 @@ impl Cli {
             self.print_json(&summary)?;
             return Ok(0);
         }
-        self.stdout_line(summary.binary_path);
+        self.stdout_lines(render::runtime::runtime_which(&summary));
         Ok(0)
     }
 
@@ -159,7 +84,7 @@ impl Cli {
         Self::assert_no_extra_args(&args[1..])?;
 
         let meta = self.runtime_service().remove(name)?;
-        self.stdout_line(format!("Removed runtime {}", meta.name));
+        self.stdout_lines(render::runtime::runtime_removed(&meta.name));
         Ok(0)
     }
 
@@ -253,11 +178,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("Installed runtime {}", meta.name));
-        self.stdout_line(format!("  binary path: {}", meta.binary_path));
-        if let Some(install_root) = meta.install_root.as_deref() {
-            self.stdout_line(format!("  install root: {install_root}"));
-        }
+        self.stdout_lines(render::runtime::runtime_installed(&meta));
         Ok(0)
     }
 
@@ -275,36 +196,19 @@ impl Cli {
             return Err("runtime releases requires --manifest-url".to_string());
         }
         if version.is_some() && channel.is_some() {
-            return Err(
-                "runtime releases accepts only one of --version or --channel".to_string(),
-            );
+            return Err("runtime releases accepts only one of --version or --channel".to_string());
         }
 
-        let releases = self
-            .runtime_service()
-            .releases_from_manifest(
-                manifest_url.as_deref().unwrap_or_default(),
-                version.as_deref(),
-                channel.as_deref(),
-            )?;
+        let releases = self.runtime_service().releases_from_manifest(
+            manifest_url.as_deref().unwrap_or_default(),
+            version.as_deref(),
+            channel.as_deref(),
+        )?;
         if json_flag {
             self.print_json(&releases)?;
             return Ok(0);
         }
-        if releases.is_empty() {
-            self.stdout_line("No runtime releases.");
-            return Ok(0);
-        }
-        for release in releases {
-            let mut bits = vec![release.version, release.url];
-            if let Some(channel) = release.channel {
-                bits.push(format!("channel={channel}"));
-            }
-            if let Some(sha256) = release.sha256 {
-                bits.push(format!("sha256={sha256}"));
-            }
-            self.stdout_line(bits.join("  "));
-        }
+        self.stdout_lines(render::runtime::runtime_releases(&releases));
         Ok(0)
     }
 
@@ -327,35 +231,7 @@ impl Cli {
                 return Ok(code);
             }
 
-            if batch.results.is_empty() {
-                self.stdout_line("No runtimes.");
-                return Ok(code);
-            }
-
-            self.stdout_line(format!(
-                "Runtime update summary: total={} updated={} skipped={} failed={}",
-                batch.count, batch.updated, batch.skipped, batch.failed
-            ));
-            for summary in batch.results {
-                let mut bits = vec![
-                    summary.name,
-                    format!("outcome={}", summary.outcome),
-                    format!("source={}", summary.source_kind),
-                ];
-                if let Some(binary_path) = summary.binary_path {
-                    bits.push(binary_path);
-                }
-                if let Some(release_version) = summary.release_version {
-                    bits.push(format!("release={release_version}"));
-                }
-                if let Some(release_channel) = summary.release_channel {
-                    bits.push(format!("channel={release_channel}"));
-                }
-                if let Some(issue) = summary.issue {
-                    bits.push(format!("issue={issue}"));
-                }
-                self.stdout_line(bits.join("  "));
-            }
+            self.stdout_lines(render::runtime::runtime_update_batch(&batch));
             return Ok(code);
         }
         let Some(name) = args.first() else {
@@ -376,11 +252,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("Updated runtime {}", meta.name));
-        self.stdout_line(format!("  binary path: {}", meta.binary_path));
-        if let Some(install_root) = meta.install_root.as_deref() {
-            self.stdout_line(format!("  install root: {install_root}"));
-        }
+        self.stdout_lines(render::runtime::runtime_updated(&meta));
         Ok(0)
     }
 
@@ -401,23 +273,7 @@ impl Cli {
                 return Ok(code);
             }
 
-            if summaries.is_empty() {
-                self.stdout_line("No runtimes.");
-                return Ok(code);
-            }
-
-            for summary in summaries {
-                let mut bits = vec![
-                    summary.name,
-                    summary.binary_path,
-                    format!("source={}", summary.source_kind),
-                    format!("healthy={}", summary.healthy),
-                ];
-                if let Some(issue) = summary.issue {
-                    bits.push(format!("issue={issue}"));
-                }
-                self.stdout_line(bits.join("  "));
-            }
+            self.stdout_lines(render::runtime::runtime_verify_all(&summaries));
             return Ok(code);
         }
 
@@ -434,34 +290,7 @@ impl Cli {
             return Ok(code);
         }
 
-        self.stdout_line(format!("name: {}", summary.name));
-        self.stdout_line(format!("binaryPath: {}", summary.binary_path));
-        self.stdout_line(format!("sourceKind: {}", summary.source_kind));
-        self.stdout_line(format!("healthy: {}", summary.healthy));
-        if let Some(source_path) = summary.source_path {
-            self.stdout_line(format!("sourcePath: {source_path}"));
-        }
-        if let Some(source_url) = summary.source_url {
-            self.stdout_line(format!("sourceUrl: {source_url}"));
-        }
-        if let Some(source_manifest_url) = summary.source_manifest_url {
-            self.stdout_line(format!("sourceManifestUrl: {source_manifest_url}"));
-        }
-        if let Some(source_sha256) = summary.source_sha256 {
-            self.stdout_line(format!("sourceSha256: {source_sha256}"));
-        }
-        if let Some(release_version) = summary.release_version {
-            self.stdout_line(format!("releaseVersion: {release_version}"));
-        }
-        if let Some(release_channel) = summary.release_channel {
-            self.stdout_line(format!("releaseChannel: {release_channel}"));
-        }
-        if let Some(install_root) = summary.install_root {
-            self.stdout_line(format!("installRoot: {install_root}"));
-        }
-        if let Some(issue) = summary.issue {
-            self.stdout_line(format!("issue: {issue}"));
-        }
+        self.stdout_lines(render::runtime::runtime_verify(&summary));
         Ok(code)
     }
 

@@ -1,8 +1,6 @@
-use std::collections::BTreeMap;
-
 use crate::launcher::AddLauncherOptions;
 
-use super::Cli;
+use super::{Cli, render};
 
 impl Cli {
     pub(super) fn handle_launcher_add(&self, args: Vec<String>) -> Result<i32, String> {
@@ -28,11 +26,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_line(format!("Added launcher {}", meta.name));
-        self.stdout_line(format!("  command: {}", meta.command));
-        if let Some(cwd) = meta.cwd.as_deref() {
-            self.stdout_line(format!("  cwd: {cwd}"));
-        }
+        self.stdout_lines(render::launcher::launcher_added(&meta));
         Ok(0)
     }
 
@@ -45,17 +39,7 @@ impl Cli {
             self.print_json(&launchers)?;
             return Ok(0);
         }
-        if launchers.is_empty() {
-            self.stdout_line("No launchers.");
-            return Ok(0);
-        }
-        for meta in launchers {
-            let mut bits = vec![meta.name, meta.command];
-            if let Some(cwd) = meta.cwd {
-                bits.push(format!("cwd={cwd}"));
-            }
-            self.stdout_line(bits.join("  "));
-        }
+        self.stdout_lines(render::launcher::launcher_list(&launchers));
         Ok(0)
     }
 
@@ -72,31 +56,7 @@ impl Cli {
             return Ok(0);
         }
 
-        let mut lines = BTreeMap::new();
-        lines.insert("kind".to_string(), meta.kind.clone());
-        lines.insert("name".to_string(), meta.name.clone());
-        lines.insert("command".to_string(), meta.command.clone());
-        lines.insert(
-            "createdAt".to_string(),
-            meta.created_at
-                .format(&time::format_description::well_known::Rfc3339)
-                .map_err(|error| error.to_string())?,
-        );
-        lines.insert(
-            "updatedAt".to_string(),
-            meta.updated_at
-                .format(&time::format_description::well_known::Rfc3339)
-                .map_err(|error| error.to_string())?,
-        );
-        if let Some(cwd) = meta.cwd {
-            lines.insert("cwd".to_string(), cwd);
-        }
-        if let Some(description) = meta.description {
-            lines.insert("description".to_string(), description);
-        }
-        for (key, value) in lines {
-            self.stdout_line(format!("{key}: {value}"));
-        }
+        self.stdout_lines(render::launcher::launcher_show(&meta)?);
         Ok(0)
     }
 
@@ -107,7 +67,7 @@ impl Cli {
         Self::assert_no_extra_args(&args[1..])?;
 
         let meta = self.launcher_service().remove(name)?;
-        self.stdout_line(format!("Removed launcher {}", meta.name));
+        self.stdout_lines(render::launcher::launcher_removed(&meta.name));
         Ok(0)
     }
 
