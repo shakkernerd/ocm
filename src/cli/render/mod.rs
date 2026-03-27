@@ -1,4 +1,5 @@
 pub mod env;
+pub mod help;
 pub mod launcher;
 pub mod runtime;
 pub mod service;
