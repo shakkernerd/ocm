@@ -323,22 +323,26 @@ pub fn uninstall_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
-    let prepared = prepare_existing_service(name, env, cwd)?;
-    uninstall_managed_service(&prepared, env)?;
-    let plist_path = display_path(&prepared.managed_plist_path);
-    if prepared.managed_plist_path.exists() {
-        fs::remove_file(&prepared.managed_plist_path).map_err(|error| error.to_string())?;
+    let service = EnvironmentService::new(env, cwd);
+    let env_meta = service.apply_effective_gateway_port(service.get(name)?)?;
+    let managed_label = managed_service_label(&env_meta.name);
+    let managed_plist_path = managed_plist_path(&env_meta.name, env);
+
+    uninstall_managed_service_by_label(&managed_label, &managed_plist_path, env)?;
+    let plist_path = display_path(&managed_plist_path);
+    if managed_plist_path.exists() {
+        fs::remove_file(&managed_plist_path).map_err(|error| error.to_string())?;
     }
 
     Ok(ServiceActionSummary {
-        env_name: prepared.env_meta.name,
+        env_name: env_meta.name,
         service_kind: "gateway".to_string(),
         action: "uninstall".to_string(),
-        managed_label: prepared.managed_label,
+        managed_label,
         managed_plist_path: plist_path,
         installed: false,
-        gateway_port: prepared.env_meta.gateway_port,
-        warnings: prepared.warnings,
+        gateway_port: env_meta.gateway_port,
+        warnings: Vec::new(),
     })
 }
 
@@ -1241,29 +1245,27 @@ fn restart_managed_service(
     }
 }
 
-fn uninstall_managed_service(
-    prepared: &PreparedService,
+fn uninstall_managed_service_by_label(
+    label: &str,
+    service_path: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => {
-            let target = format!("{}/{}", gui_domain(), prepared.managed_label);
+            let target = format!("{}/{}", gui_domain(), label);
             let _ = run_launchctl(["bootout", target.as_str()]);
             Ok(())
         }
         ServiceManagerKind::SystemdUser => {
-            let _ = run_systemctl([
-                "--user",
-                "disable",
-                "--now",
-                prepared.managed_label.as_str(),
-            ]);
-            let reload = run_systemctl(["--user", "daemon-reload"])?;
-            if !reload.status.success() {
-                return Err(format!(
-                    "systemctl --user daemon-reload failed: {}",
-                    systemctl_detail(&reload)
-                ));
+            if service_path.exists() {
+                let _ = run_systemctl(["--user", "disable", "--now", label]);
+                let reload = run_systemctl(["--user", "daemon-reload"])?;
+                if !reload.status.success() {
+                    return Err(format!(
+                        "systemctl --user daemon-reload failed: {}",
+                        systemctl_detail(&reload)
+                    ));
+                }
             }
             Ok(())
         }

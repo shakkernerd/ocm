@@ -896,6 +896,48 @@ fn service_lifecycle_commands_use_the_env_scoped_launch_agent_label() {
 }
 
 #[test]
+fn service_uninstall_does_not_require_a_still_valid_binding() {
+    let root = TestDir::new("service-uninstall-stale-binding");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let remove_launcher = run_ocm(&cwd, &env, &["launcher", "remove", "stable"]);
+    assert!(
+        remove_launcher.status.success(),
+        "{}",
+        stderr(&remove_launcher)
+    );
+
+    let uninstall = run_ocm(&cwd, &env, &["service", "uninstall", "demo"]);
+    assert!(uninstall.status.success(), "{}", stderr(&uninstall));
+    assert!(stdout(&uninstall).contains("Uninstalled service demo"));
+    assert!(
+        !root
+            .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
+            .exists()
+    );
+}
+
+#[test]
 fn service_logs_reads_stdout_and_stderr_logs() {
     let root = TestDir::new("service-logs");
     let cwd = root.child("workspace");
@@ -1473,9 +1515,12 @@ fn systemd_service_install_writes_unit_and_enables_it() {
     assert_eq!(summary["managedPlistPath"], path_string(&unit_path));
     assert!(unit_path.exists());
     let unit = fs::read_to_string(&unit_path).unwrap();
+    let gateway_port = summary["gatewayPort"].as_u64().unwrap();
     assert!(unit.contains("ExecStart=/bin/sh -lc"));
     assert!(unit.contains("/bin/true"));
-    assert!(unit.contains("Environment=\"OPENCLAW_GATEWAY_PORT=18789\""));
+    assert!(unit.contains(&format!(
+        "Environment=\"OPENCLAW_GATEWAY_PORT={gateway_port}\""
+    )));
 
     let systemctl_log = fs::read_to_string(root.child("systemctl.log")).unwrap();
     assert!(systemctl_log.contains("--user daemon-reload"));
