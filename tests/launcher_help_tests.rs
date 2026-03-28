@@ -17,16 +17,21 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains(&format!("OpenClaw Manager v{}", env!("CARGO_PKG_VERSION"))));
     assert!(
         output
-            .contains("Manage isolated OpenClaw environments, runtimes, launchers, and services.")
+            .contains(
+                "Manage isolated OpenClaw environments, releases, runtimes, launchers, and services."
+            )
     );
     assert!(output.contains("ocm [--color <mode>] <command> [args]"));
     assert!(output.contains("--color <mode>"));
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
-    assert!(output.contains("launcher add stable --command openclaw"));
+    assert!(output.contains("release list --channel stable"));
+    assert!(output.contains("runtime install stable --channel stable"));
+    assert!(output.contains("env create demo --runtime stable"));
     assert!(output.contains("ocm -- status"));
     assert!(output.contains("ocm @demo -- status"));
     assert!(output.contains("ocm help env"));
+    assert!(output.contains("ocm help release"));
     assert!(output.contains("ocm help runtime install"));
     assert!(output.contains("ocm --color always env list"));
     assert!(!output.contains("env snapshot restore <name> <snapshot>"));
@@ -75,6 +80,25 @@ fn env_group_help_is_available_from_help_and_bare_group() {
     assert!(output.contains("Portability:"));
     assert!(output.contains("ocm help env create"));
     assert!(output.contains("ocm help env snapshot"));
+}
+
+#[test]
+fn release_group_help_is_available_from_help_and_bare_group() {
+    let root = TestDir::new("help-release-group");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "release"]);
+    let bare = run_ocm(&cwd, &env, &["release"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(bare.status.success(), "{}", stderr(&bare));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&bare));
+    assert!(output.contains("Release commands"));
+    assert!(output.contains("List published OpenClaw releases"));
+    assert!(output.contains("ocm release show 2026.3.24"));
 }
 
 #[test]

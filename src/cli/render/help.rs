@@ -75,7 +75,8 @@ pub fn root_help(cmd: &str) -> String {
     let lines = vec![
         format!("OpenClaw Manager v{}", env!("CARGO_PKG_VERSION")),
         String::new(),
-        "Manage isolated OpenClaw environments, runtimes, launchers, and services.".to_string(),
+        "Manage isolated OpenClaw environments, releases, runtimes, launchers, and services."
+            .to_string(),
     ];
     let mut lines = lines;
     push_section(
@@ -102,6 +103,7 @@ pub fn root_help(cmd: &str) -> String {
                 "env",
                 "Environment lifecycle, binding, execution, snapshots, and repair",
             ),
+            ("release", "Published OpenClaw releases and release details"),
             ("launcher", "Named command recipes for running OpenClaw"),
             (
                 "runtime",
@@ -117,12 +119,13 @@ pub fn root_help(cmd: &str) -> String {
         &mut lines,
         "Get started",
         format_examples(&[
-            format!("{cmd} launcher add stable --command openclaw"),
-            format!("{cmd} env create demo --launcher stable"),
+            format!("{cmd} release list --channel stable"),
+            format!("{cmd} runtime install stable --channel stable"),
+            format!("{cmd} env create demo --runtime stable"),
             format!("eval \"$({cmd} env use demo)\""),
             format!("{cmd} -- status"),
             format!("{cmd} @demo -- status"),
-            format!("{cmd} env run demo -- onboard"),
+            format!("{cmd} env run demo -- status"),
         ]),
     );
     push_section(
@@ -130,6 +133,7 @@ pub fn root_help(cmd: &str) -> String {
         "More",
         format_examples(&[
             format!("{cmd} help env"),
+            format!("{cmd} help release"),
             format!("{cmd} help service"),
             format!("{cmd} help runtime install"),
             format!("{cmd} --color always env list"),
@@ -300,6 +304,33 @@ pub fn launcher_help(cmd: &str) -> String {
     )
 }
 
+pub fn release_help(cmd: &str) -> String {
+    render_group(
+        "Release commands",
+        "Inspect published OpenClaw releases before installing them as local runtimes.",
+        vec![
+            format!("{cmd} release <command> [args]"),
+            format!("{cmd} help release <command>"),
+        ],
+        &[(
+            "Commands",
+            &[
+                ("list", "List published OpenClaw releases"),
+                ("show", "Show one published OpenClaw release"),
+            ],
+        )],
+        vec![
+            format!("{cmd} release list"),
+            format!("{cmd} release list --channel stable"),
+            format!("{cmd} release show 2026.3.24"),
+        ],
+        vec![
+            format!("{cmd} help release list"),
+            format!("{cmd} help release show"),
+        ],
+    )
+}
+
 pub fn runtime_help(cmd: &str) -> String {
     render_group(
         "Runtime commands",
@@ -322,9 +353,12 @@ pub fn runtime_help(cmd: &str) -> String {
             (
                 "Install and update",
                 &[
-                    ("install", "Install a managed runtime"),
+                    (
+                        "install",
+                        "Install a managed runtime from OpenClaw releases or a custom source",
+                    ),
                     ("update", "Update one runtime or all runtimes"),
-                    ("releases", "Inspect release entries from a manifest"),
+                    ("releases", "Inspect release entries from the official source or a manifest"),
                 ],
             ),
             (
@@ -334,10 +368,11 @@ pub fn runtime_help(cmd: &str) -> String {
         ],
         vec![
             format!("{cmd} runtime add stable --path /path/to/openclaw"),
-            format!("{cmd} runtime install nightly --url https://example.test/openclaw-nightly"),
+            format!("{cmd} runtime install stable --channel stable"),
             format!("{cmd} runtime update --all"),
         ],
         vec![
+            format!("{cmd} help release"),
             format!("{cmd} help runtime install"),
             format!("{cmd} help runtime verify"),
         ],
@@ -712,6 +747,45 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             &[],
         ),
         "snapshot" => env_snapshot_help(cmd),
+        _ => return None,
+    })
+}
+
+pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
+    Some(match action {
+        "list" => render_leaf(
+            "List published OpenClaw releases",
+            "Show the published OpenClaw releases available from the official release source.",
+            vec![format!(
+                "{cmd} release list [--version <version> | --channel <channel>] [--raw] [--json]"
+            )],
+            &[
+                ("--version <version>", "Filter to one exact published version"),
+                (
+                    "--channel <channel>",
+                    "Filter to the release currently tagged for one channel",
+                ),
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY table rendering",
+                ),
+                ("--json", "Print releases as JSON"),
+            ],
+            vec![
+                format!("{cmd} release list"),
+                format!("{cmd} release list --channel stable"),
+                format!("{cmd} release list --version 2026.3.24"),
+            ],
+            &["TTY output renders a table by default. Piped output stays plain."],
+        ),
+        "show" => render_leaf(
+            "Show a published OpenClaw release",
+            "Print metadata for one exact published OpenClaw release.",
+            vec![format!("{cmd} release show <version> [--json]")],
+            &[("--json", "Print the release metadata as JSON")],
+            vec![format!("{cmd} release show 2026.3.24")],
+            &[],
+        ),
         _ => return None,
     })
 }

@@ -21,9 +21,12 @@ impl Cli {
             ["help"] | ["--help"] | ["-h"] => Ok(render::help::root_help(&cmd)),
             ["init"] => Ok(render::help::init_help(&cmd)),
             ["env"] => Ok(render::help::env_help(&cmd)),
+            ["release"] => Ok(render::help::release_help(&cmd)),
             ["env", "snapshot"] => Ok(render::help::env_snapshot_help(&cmd)),
             ["env", action] => render::help::env_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown env command: {action}")),
+            ["release", action] => render::help::release_command_help(&cmd, action)
+                .ok_or_else(|| format!("unknown release command: {action}")),
             ["env", "snapshot", action] => render::help::env_snapshot_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown env snapshot command: {action}")),
             ["launcher"] => Ok(render::help::launcher_help(&cmd)),
@@ -36,7 +39,10 @@ impl Cli {
             ["service", action] => render::help::service_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown service command: {action}")),
             [group, ..]
-                if matches!(*group, "env" | "launcher" | "runtime" | "service" | "init") =>
+                if matches!(
+                    *group,
+                    "env" | "release" | "launcher" | "runtime" | "service" | "init"
+                ) =>
             {
                 Err(format!("unknown help topic: {}", path.join(" ")))
             }
@@ -54,12 +60,20 @@ impl Cli {
             [help, rest @ ..] if help == "help" => {
                 Some(rest.iter().map(String::as_str).collect::<Vec<_>>())
             }
-            [group] if matches!(group.as_str(), "env" | "launcher" | "runtime" | "service") => {
+            [group]
+                if matches!(
+                    group.as_str(),
+                    "env" | "release" | "launcher" | "runtime" | "service"
+                ) =>
+            {
                 Some(vec![group.as_str()])
             }
             [group, next] if group == "init" && Self::is_help_token(next) => Some(vec!["init"]),
             [group, next, rest @ ..]
-                if matches!(group.as_str(), "env" | "launcher" | "runtime" | "service")
+                if matches!(
+                    group.as_str(),
+                    "env" | "release" | "launcher" | "runtime" | "service"
+                )
                     && Self::is_help_token(next) =>
             {
                 let mut topic = vec![group.as_str()];
@@ -67,7 +81,10 @@ impl Cli {
                 Some(topic)
             }
             [group, action, flag]
-                if matches!(group.as_str(), "env" | "launcher" | "runtime" | "service")
+                if matches!(
+                    group.as_str(),
+                    "env" | "release" | "launcher" | "runtime" | "service"
+                )
                     && Self::is_help_flag(flag) =>
             {
                 Some(vec![group.as_str(), action.as_str()])

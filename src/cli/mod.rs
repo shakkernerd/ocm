@@ -2,6 +2,7 @@ mod env;
 mod help;
 mod init;
 mod launcher;
+mod release;
 mod render;
 mod runtime;
 mod service;
@@ -461,6 +462,7 @@ impl Cli {
             "help" => cli.dispatch_help_command(rest),
             "init" => cli.handle_init_command(&action, rest),
             "env" => cli.dispatch_env_command(action.as_str(), rest),
+            "release" => cli.dispatch_release_command(action.as_str(), rest),
             "launcher" => cli.dispatch_launcher_command(action.as_str(), rest),
             "runtime" => cli.dispatch_runtime_command(action.as_str(), rest),
             "service" => cli.dispatch_service_command(action.as_str(), rest),
