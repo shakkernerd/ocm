@@ -12,3 +12,4 @@ time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 ureq = "2.12"
 indicatif = "0.18"
 unicode-width = "0.2"
+terminal_size = "0.4"
