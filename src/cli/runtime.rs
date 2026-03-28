@@ -1,7 +1,7 @@
 use crate::runtime::{
     AddRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
-    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeService,
-    UpdateRuntimeFromReleaseOptions,
+    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, OfficialRuntimePrepareAction,
+    RuntimeService, UpdateRuntimeFromReleaseOptions,
 };
 
 use super::{Cli, render};
@@ -203,9 +203,9 @@ impl Cli {
                     );
                 }
                 let name = resolve_official_name()?;
-                self.with_progress(format!("Installing runtime {name}"), || {
-                    self.runtime_service()
-                        .install_from_official_openclaw_release(
+                let (meta, action) =
+                    self.with_progress(format!("Installing runtime {name}"), || {
+                        self.runtime_service().prepare_official_openclaw_runtime(
                             InstallRuntimeFromOfficialReleaseOptions {
                                 name: name.clone(),
                                 version,
@@ -214,7 +214,23 @@ impl Cli {
                                 force,
                             },
                         )
-                })?
+                    })?;
+
+                if json_flag {
+                    self.print_json(&meta)?;
+                    return Ok(0);
+                }
+
+                self.stdout_lines(match action {
+                    OfficialRuntimePrepareAction::Installed => {
+                        render::runtime::runtime_installed(&meta)
+                    }
+                    OfficialRuntimePrepareAction::Reused => render::runtime::runtime_reused(&meta),
+                    OfficialRuntimePrepareAction::Updated => {
+                        render::runtime::runtime_updated(&meta)
+                    }
+                });
+                return Ok(0);
             }
             (None, None, None) => {
                 return Err(

@@ -1,4 +1,6 @@
-use crate::runtime::{InstallRuntimeFromOfficialReleaseOptions, RuntimeService};
+use crate::runtime::{
+    InstallRuntimeFromOfficialReleaseOptions, OfficialRuntimePrepareAction, RuntimeService,
+};
 
 use super::{Cli, render};
 
@@ -80,23 +82,29 @@ impl Cli {
             }
         }
 
-        let meta = self.with_progress(format!("Installing runtime {runtime_name}"), || {
-            self.runtime_service()
-                .install_from_official_openclaw_release(InstallRuntimeFromOfficialReleaseOptions {
-                    name: runtime_name.clone(),
-                    version,
-                    channel,
-                    description,
-                    force,
-                })
-        })?;
+        let (meta, action) =
+            self.with_progress(format!("Installing runtime {runtime_name}"), || {
+                self.runtime_service().prepare_official_openclaw_runtime(
+                    InstallRuntimeFromOfficialReleaseOptions {
+                        name: runtime_name.clone(),
+                        version,
+                        channel,
+                        description,
+                        force,
+                    },
+                )
+            })?;
 
         if json_flag {
             self.print_json(&meta)?;
             return Ok(0);
         }
 
-        self.stdout_lines(render::runtime::runtime_installed(&meta));
+        self.stdout_lines(match action {
+            OfficialRuntimePrepareAction::Installed => render::runtime::runtime_installed(&meta),
+            OfficialRuntimePrepareAction::Reused => render::runtime::runtime_reused(&meta),
+            OfficialRuntimePrepareAction::Updated => render::runtime::runtime_updated(&meta),
+        });
         Ok(0)
     }
 

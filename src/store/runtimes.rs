@@ -12,12 +12,12 @@ use crate::infra::download::{
 use crate::runtime::releases::{
     load_official_openclaw_releases, load_release_manifest, normalize_openclaw_channel_selector,
     official_openclaw_releases_url, select_official_openclaw_release_by_channel,
-    select_official_openclaw_release_by_version, select_release,
+    select_official_openclaw_release_by_version, select_release, OpenClawRelease,
 };
 use crate::runtime::{
     AddRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
-    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeMeta,
-    RuntimeReleaseSelectorKind, RuntimeSourceKind,
+    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind,
+    RuntimeSourceKind,
 };
 
 use super::common::{ensure_dir, load_json_files, path_exists, read_json, write_json};
@@ -491,7 +491,6 @@ pub fn install_runtime_from_official_openclaw_release(
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
     let name = validate_name(&options.name, "Runtime name")?;
-    let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
     let channel = options
         .channel
         .as_deref()
@@ -516,9 +515,7 @@ pub fn install_runtime_from_official_openclaw_release(
         (Some(version), None) => select_official_openclaw_release_by_version(&releases, version)?,
         (None, Some(channel)) => select_official_openclaw_release_by_channel(&releases, channel)?,
         (Some(_), Some(_)) => {
-            return Err(
-                "runtime install accepts only one of --version or --channel".to_string(),
-            );
+            return Err("runtime install accepts only one of --version or --channel".to_string());
         }
         (None, None) => {
             return Err("runtime install requires --version or --channel".to_string());
@@ -526,6 +523,34 @@ pub fn install_runtime_from_official_openclaw_release(
     };
     let description = trim_description(options.description)
         .or_else(|| Some(format!("Official OpenClaw release {}", release.version)));
+
+    install_runtime_from_selected_official_openclaw_release(
+        name,
+        options.force,
+        releases_url,
+        release,
+        release_selector_kind,
+        release_selector_value,
+        description,
+        env,
+        cwd,
+    )
+}
+
+pub fn install_runtime_from_selected_official_openclaw_release(
+    name: String,
+    force: bool,
+    releases_url: String,
+    release: OpenClawRelease,
+    release_selector_kind: Option<RuntimeReleaseSelectorKind>,
+    release_selector_value: Option<String>,
+    description: Option<String>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<RuntimeMeta, String> {
+    let meta_path = prepare_runtime_meta_path(&name, force, env, cwd)?;
+    let description =
+        trim_description(description).or_else(|| Some(format!("Official OpenClaw release {}", release.version)));
 
     let install_root = runtime_install_root(&name, env, cwd)?;
     let install_files = runtime_install_files_dir(&name, env, cwd)?;

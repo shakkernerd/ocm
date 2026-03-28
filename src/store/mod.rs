@@ -26,7 +26,8 @@ pub use layout::{
 };
 pub use runtimes::{
     add_runtime, get_runtime, get_runtime_verified, install_runtime,
-    install_runtime_from_official_openclaw_release, install_runtime_from_release,
+    install_runtime_from_official_openclaw_release,
+    install_runtime_from_selected_official_openclaw_release, install_runtime_from_release,
     install_runtime_from_url, list_runtimes, remove_runtime, runtime_integrity_issue,
 };
 pub use snapshots::{

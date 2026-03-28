@@ -179,6 +179,17 @@ pub fn runtime_installed(meta: &RuntimeMeta) -> Vec<String> {
     lines
 }
 
+pub fn runtime_reused(meta: &RuntimeMeta) -> Vec<String> {
+    let mut lines = vec![
+        format!("Using installed runtime {}", meta.name),
+        format!("  binary path: {}", meta.binary_path),
+    ];
+    if let Some(install_root) = meta.install_root.as_deref() {
+        lines.push(format!("  install root: {install_root}"));
+    }
+    lines
+}
+
 pub fn runtime_releases(releases: &[RuntimeRelease]) -> Vec<String> {
     if releases.is_empty() {
         return vec!["No runtime releases.".to_string()];

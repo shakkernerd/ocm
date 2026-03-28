@@ -377,6 +377,102 @@ fn runtime_install_rejects_non_canonical_names_for_official_releases() {
 }
 
 #[test]
+fn runtime_install_reuses_a_matching_official_runtime() {
+    let root = TestDir::new("runtime-install-official-reuse");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+        2,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let first = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    assert!(stdout(&first).contains("Installed runtime stable"));
+
+    let second = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(second.status.success(), "{}", stderr(&second));
+    assert!(stdout(&second).contains("Using installed runtime stable"));
+}
+
+#[test]
+fn runtime_install_refreshes_a_channel_runtime_when_the_published_release_moves() {
+    let root = TestDir::new("runtime-install-official-refresh");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let stable_tar = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable-1');\n");
+    let stable_integrity = sha512_integrity(&stable_tar);
+    let next_tar = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable-2');\n");
+    let next_integrity = sha512_integrity(&next_tar);
+    let first_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &stable_tar,
+        2,
+    );
+    let next_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.25.tgz",
+        "application/octet-stream",
+        &next_tar,
+        2,
+    );
+    let first_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        first_tarball_server.url(),
+        stable_integrity
+    );
+    let second_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.25\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25\":{{\"version\":\"2026.3.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\",\"2026.3.25\":\"2026-03-26T10:00:00.000Z\"}}}}",
+        first_tarball_server.url(),
+        stable_integrity,
+        next_tarball_server.url(),
+        next_integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![first_packument.into_bytes(), second_packument.into_bytes()],
+    );
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let first = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    assert!(stdout(&first).contains("Installed runtime stable"));
+
+    let second = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(second.status.success(), "{}", stderr(&second));
+    assert!(stdout(&second).contains("Updated runtime stable"));
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_stdout = stdout(&show);
+    assert!(show_stdout.contains("\"releaseVersion\": \"2026.3.25\""));
+    assert!(show_stdout.contains("\"releaseSelectorValue\": \"stable\""));
+}
+
+#[test]
 fn runtime_releases_without_manifest_url_use_the_official_openclaw_source() {
     let root = TestDir::new("runtime-releases-official");
     let cwd = root.child("workspace");

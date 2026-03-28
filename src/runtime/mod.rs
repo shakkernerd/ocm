@@ -5,8 +5,8 @@ mod verify;
 
 pub use install::{
     InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
-    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeUpdateBatchSummary,
-    RuntimeUpdateSummary, UpdateRuntimeFromReleaseOptions,
+    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, OfficialRuntimePrepareAction,
+    RuntimeUpdateBatchSummary, RuntimeUpdateSummary, UpdateRuntimeFromReleaseOptions,
 };
 pub use registry::{
     AddRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService, RuntimeSourceKind,

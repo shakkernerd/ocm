@@ -248,6 +248,42 @@ fn release_install_rejects_non_canonical_runtime_names() {
 }
 
 #[test]
+fn release_install_reuses_a_matching_installed_runtime() {
+    let root = TestDir::new("release-install-reuse");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+        2,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        server.url(),
+    );
+
+    let first = run_ocm(&cwd, &env, &["release", "install", "--channel", "stable"]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    assert!(stdout(&first).contains("Installed runtime stable"));
+
+    let second = run_ocm(&cwd, &env, &["release", "install", "--channel", "stable"]);
+    assert!(second.status.success(), "{}", stderr(&second));
+    assert!(stdout(&second).contains("Using installed runtime stable"));
+}
+
+#[test]
 fn release_list_and_show_surface_installed_runtime_names() {
     let root = TestDir::new("release-installed-runtime-names");
     let cwd = root.child("workspace");
