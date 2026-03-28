@@ -36,10 +36,11 @@ fn global_relation(summary: &ServiceSummary) -> &'static str {
 fn state_tone(state: &str) -> Tone {
     match state {
         "running" | "match" | "healthy" => Tone::Success,
+        "auth-required" => Tone::Warning,
         "loaded" | "installed" | "loaded-other" | "installed-other" | "running-other" => {
             Tone::Warning
         }
-        "unreachable" => Tone::Danger,
+        "responding-but-invalid" | "wrong-service" | "unreachable" => Tone::Danger,
         "stopped" | "unknown" => Tone::Muted,
         "absent" => Tone::Muted,
         _ => Tone::Plain,
@@ -243,29 +244,28 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
         profile.color,
     )];
 
-    push_card(
-        &mut lines,
-        "Status",
-        vec![
-            KeyValueRow::plain("Type", summary.service_kind.clone()),
-            KeyValueRow::accent("Port", summary.gateway_port.to_string()),
-            KeyValueRow::new("Service", managed_state, state_tone(managed_state)),
-            KeyValueRow::new(
-                "OpenClaw",
-                summary.openclaw_state.clone(),
-                state_tone(&summary.openclaw_state),
-            ),
-            optional_value_row(
-                "Binding",
-                summary
-                    .binding_kind
-                    .as_deref()
-                    .zip(summary.binding_name.as_deref())
-                    .map(|(kind, name)| format!("{kind}:{name}")),
-            ),
-        ],
-        profile.color,
-    );
+    let mut status_rows = vec![
+        KeyValueRow::plain("Type", summary.service_kind.clone()),
+        KeyValueRow::accent("Port", summary.gateway_port.to_string()),
+        KeyValueRow::new("Service", managed_state, state_tone(managed_state)),
+        KeyValueRow::new(
+            "OpenClaw",
+            summary.openclaw_state.clone(),
+            state_tone(&summary.openclaw_state),
+        ),
+        optional_value_row(
+            "Binding",
+            summary
+                .binding_kind
+                .as_deref()
+                .zip(summary.binding_name.as_deref())
+                .map(|(kind, name)| format!("{kind}:{name}")),
+        ),
+    ];
+    if let Some(detail) = summary.openclaw_detail.as_ref() {
+        status_rows.push(KeyValueRow::muted("Detail", detail.clone()));
+    }
+    push_card(&mut lines, "Status", status_rows, profile.color);
 
     push_card(
         &mut lines,
@@ -382,6 +382,9 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
     }
     if let Some(global_config_path) = summary.global_config_path.as_deref() {
         lines.push(format!("globalConfigPath: {global_config_path}"));
+    }
+    if let Some(openclaw_detail) = summary.openclaw_detail.as_deref() {
+        lines.push(format!("openclawDetail: {openclaw_detail}"));
     }
     if let Some(latest_backup_plist_path) = summary.latest_backup_plist_path.as_deref() {
         lines.push(format!("latestBackupPlistPath: {latest_backup_plist_path}"));
@@ -717,6 +720,7 @@ mod tests {
                     run_dir: "/tmp/demo".to_string(),
                     gateway_port: 18789,
                     openclaw_state: "healthy".to_string(),
+                    openclaw_detail: None,
                     installed: true,
                     loaded: true,
                     running: true,
@@ -856,6 +860,7 @@ mod tests {
             run_dir: "/tmp/demo".to_string(),
             gateway_port: 18789,
             openclaw_state: "stopped".to_string(),
+            openclaw_detail: None,
             installed: true,
             loaded: true,
             running: false,

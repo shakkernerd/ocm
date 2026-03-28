@@ -29,6 +29,10 @@ impl<'a> ServiceService<'a> {
         inspect::service_status(name, self.env, self.cwd)
     }
 
+    pub fn status_fast(&self, name: &str) -> Result<ServiceSummary, String> {
+        inspect::service_status_fast(name, self.env, self.cwd)
+    }
+
     pub fn discover(&self) -> Result<DiscoveredServiceList, String> {
         inspect::discover_services(self.env, self.cwd)
     }

@@ -7,7 +7,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::support::{
-    TestDir, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script, write_text,
+    TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout,
+    write_executable_script, write_text,
 };
 
 fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<String, String>) {
@@ -35,6 +36,15 @@ fn allocate_free_port() -> u16 {
         .local_addr()
         .unwrap()
         .port()
+}
+
+fn port_from_http_url(url: &str) -> u16 {
+    url.trim_start_matches("http://127.0.0.1:")
+        .split('/')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
 }
 
 fn write_launch_agent_plist(
@@ -211,6 +221,167 @@ fn service_status_reports_missing_binding_issue() {
         summary["issue"],
         "environment \"bare\" has no default runtime or launcher; use env set-runtime, env set-launcher, or pass --runtime/--launcher"
     );
+}
+
+#[test]
+fn service_status_reports_wrong_service_when_gateway_probe_is_not_openclaw() {
+    let root = TestDir::new("service-status-wrong-service");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let server = TestHttpServer::serve_bytes_times("/not-healthz", "text/plain", b"ok", 2);
+    let port = port_from_http_url(&server.url());
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["openclawState"], "wrong-service");
+    assert!(
+        summary["openclawDetail"]
+            .as_str()
+            .unwrap()
+            .contains("/healthz returned HTTP 404")
+    );
+}
+
+#[test]
+fn service_status_reports_auth_required_when_gateway_health_probe_is_rejected() {
+    let root = TestDir::new("service-status-auth-required");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let server = TestHttpServer::serve_bytes_times(
+        "/healthz",
+        "application/json",
+        br#"{"ok":true,"status":"live"}"#,
+        2,
+    );
+    let port = port_from_http_url(&server.url());
+
+    let fake_openclaw = root.child("bin/openclaw-health");
+    write_executable_script(
+        &fake_openclaw,
+        "#!/bin/sh\nif [ \"$1\" = \"health\" ]; then\n  echo 'Health check failed: unauthorized: gateway token mismatch' >&2\n  exit 1\nfi\nexit 0\n",
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "stable",
+            "--command",
+            &path_string(&fake_openclaw),
+        ],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["openclawState"], "auth-required");
+    assert!(
+        summary["openclawDetail"]
+            .as_str()
+            .unwrap()
+            .contains("gateway token mismatch")
+    );
+}
+
+#[test]
+fn service_status_reports_responding_but_invalid_when_gateway_health_probe_fails() {
+    let root = TestDir::new("service-status-responding-invalid");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let server = TestHttpServer::serve_bytes_times(
+        "/healthz",
+        "application/json",
+        br#"{"ok":true,"status":"live"}"#,
+        2,
+    );
+    let port = port_from_http_url(&server.url());
+
+    let fake_openclaw = root.child("bin/openclaw-health");
+    write_executable_script(
+        &fake_openclaw,
+        "#!/bin/sh\nif [ \"$1\" = \"health\" ]; then\n  echo 'Health check failed: invalid hello payload' >&2\n  exit 1\nfi\nexit 0\n",
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "stable",
+            "--command",
+            &path_string(&fake_openclaw),
+        ],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["openclawState"], "responding-but-invalid");
+    assert_eq!(summary["openclawDetail"], "invalid hello payload");
 }
 
 #[test]

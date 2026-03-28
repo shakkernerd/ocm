@@ -2,12 +2,17 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::env::{EnvMeta, EnvironmentService, resolve_execution_binding};
+use crate::env::{
+    EnvMeta, EnvironmentService, ExecutionBinding, resolve_execution_binding,
+    resolve_runtime_run_dir,
+};
+use crate::infra::shell::build_openclaw_env;
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
 use crate::store::{
     derive_env_paths, display_path, get_environment, get_launcher, get_runtime_verified,
@@ -34,6 +39,7 @@ pub struct ServiceSummary {
     pub run_dir: String,
     pub gateway_port: u32,
     pub openclaw_state: String,
+    pub openclaw_detail: Option<String>,
     pub installed: bool,
     pub loaded: bool,
     pub running: bool,
@@ -122,6 +128,49 @@ pub(crate) struct LaunchdJobStatus {
 }
 
 const GATEWAY_PROBE_TIMEOUT_MS: u64 = 120;
+const GATEWAY_HTTP_PROBE_TIMEOUT_MS: u64 = 350;
+const GATEWAY_HEALTH_COMMAND_TIMEOUT_MS: u64 = 1500;
+const GATEWAY_HEALTH_PROCESS_TIMEOUT_MS: u64 = 8000;
+const GATEWAY_HEALTH_PROCESS_POLL_MS: u64 = 25;
+
+#[derive(Clone, Copy, Debug)]
+enum ServiceProbeDepth {
+    Fast,
+    Deep,
+}
+
+#[derive(Clone, Debug)]
+struct OpenClawProbeResult {
+    state: String,
+    detail: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+enum OpenClawProbeSpec {
+    Shell {
+        command: String,
+        run_dir: PathBuf,
+    },
+    Direct {
+        command: String,
+        args: Vec<String>,
+        run_dir: PathBuf,
+    },
+}
+
+#[derive(Clone, Debug)]
+enum HealthzProbeResult {
+    Gateway,
+    Unavailable(String),
+    WrongService(String),
+}
+
+#[derive(Clone, Debug)]
+enum OpenClawHealthCommandProbe {
+    Healthy,
+    AuthRequired(String),
+    RespondingButInvalid(String),
+}
 
 pub fn list_services(
     env: &BTreeMap<String, String>,
@@ -138,6 +187,7 @@ pub fn list_services(
             global_env_name.as_deref(),
             env,
             cwd,
+            ServiceProbeDepth::Fast,
         )?);
     }
     services.sort_by(|left, right| left.env_name.cmp(&right.env_name));
@@ -159,11 +209,28 @@ pub fn service_status(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceSummary, String> {
+    service_status_with_depth(name, env, cwd, ServiceProbeDepth::Deep)
+}
+
+pub fn service_status_fast(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ServiceSummary, String> {
+    service_status_with_depth(name, env, cwd, ServiceProbeDepth::Fast)
+}
+
+fn service_status_with_depth(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    depth: ServiceProbeDepth,
+) -> Result<ServiceSummary, String> {
     let meta = get_environment(name, env, cwd)?;
     let envs = list_environments(env, cwd)?;
     let global = inspect_job(GLOBAL_GATEWAY_LABEL, &global_plist_path(env));
     let global_env_name = matched_env_name_in(&envs, global.config_path.as_deref());
-    build_service_summary(meta, &global, global_env_name.as_deref(), env, cwd)
+    build_service_summary(meta, &global, global_env_name.as_deref(), env, cwd, depth)
 }
 
 pub fn discover_services(
@@ -250,12 +317,13 @@ pub fn discover_services(
             state_dir,
             openclaw_home,
             gateway_port,
-            openclaw_state: detect_openclaw_state(
+            openclaw_state: detect_openclaw_state_fast(
                 gateway_port,
                 status.installed,
                 status.loaded,
                 status.running,
-            ),
+            )
+            .state,
             program,
             program_arguments,
             working_directory,
@@ -280,6 +348,7 @@ fn build_service_summary(
     global_env_name: Option<&str>,
     process_env: &BTreeMap<String, String>,
     cwd: &Path,
+    depth: ServiceProbeDepth,
 ) -> Result<ServiceSummary, String> {
     let service = EnvironmentService::new(process_env, cwd);
     let env_meta = service.apply_effective_gateway_port(meta)?;
@@ -287,6 +356,7 @@ fn build_service_summary(
     let managed_plist_path = managed_plist_path(&env_meta.name, process_env);
     let managed = inspect_job(&managed_label, &managed_plist_path);
     let launch = resolve_service_launch(&env_meta, process_env, cwd);
+    let probe_spec = resolve_openclaw_probe_spec(&env_meta, process_env, cwd).ok();
     let env_config_path = display_path(&derive_env_paths(Path::new(&env_meta.root)).config_path);
     let global_matches_env = global
         .config_path
@@ -338,6 +408,24 @@ fn build_service_summary(
         ),
     };
 
+    let openclaw_probe = match depth {
+        ServiceProbeDepth::Fast => detect_openclaw_state_fast(
+            env_meta.gateway_port,
+            managed.installed,
+            managed.loaded,
+            managed.running,
+        ),
+        ServiceProbeDepth::Deep => detect_openclaw_state_detailed(
+            &env_meta,
+            env_meta.gateway_port,
+            managed.installed,
+            managed.loaded,
+            managed.running,
+            probe_spec.as_ref(),
+            process_env,
+        ),
+    };
+
     Ok(ServiceSummary {
         env_name: env_meta.name,
         service_kind: "gateway".to_string(),
@@ -352,12 +440,8 @@ fn build_service_summary(
         args,
         run_dir,
         gateway_port: env_meta.gateway_port.unwrap_or_default(),
-        openclaw_state: detect_openclaw_state(
-            env_meta.gateway_port,
-            managed.installed,
-            managed.loaded,
-            managed.running,
-        ),
+        openclaw_state: openclaw_probe.state,
+        openclaw_detail: openclaw_probe.detail,
         installed: managed.installed,
         loaded: managed.loaded,
         running: managed.running,
@@ -379,25 +463,94 @@ fn build_service_summary(
     })
 }
 
-fn detect_openclaw_state(
+fn detect_openclaw_state_fast(
     gateway_port: Option<u32>,
     installed: bool,
     loaded: bool,
     running: bool,
-) -> String {
+) -> OpenClawProbeResult {
     if let Some(port) = gateway_port {
         if gateway_port_reachable(port) {
-            return "healthy".to_string();
+            return OpenClawProbeResult {
+                state: "healthy".to_string(),
+                detail: None,
+            };
         }
     }
 
     if running || loaded {
-        return "unreachable".to_string();
+        return OpenClawProbeResult {
+            state: "unreachable".to_string(),
+            detail: None,
+        };
     }
     if installed || gateway_port.is_some() {
-        return "stopped".to_string();
+        return OpenClawProbeResult {
+            state: "stopped".to_string(),
+            detail: None,
+        };
     }
-    "unknown".to_string()
+    OpenClawProbeResult {
+        state: "unknown".to_string(),
+        detail: None,
+    }
+}
+
+fn detect_openclaw_state_detailed(
+    env_meta: &EnvMeta,
+    gateway_port: Option<u32>,
+    installed: bool,
+    loaded: bool,
+    running: bool,
+    probe_spec: Option<&OpenClawProbeSpec>,
+    process_env: &BTreeMap<String, String>,
+) -> OpenClawProbeResult {
+    let fast = detect_openclaw_state_fast(gateway_port, installed, loaded, running);
+    let Some(port) = gateway_port else {
+        return fast;
+    };
+
+    match probe_gateway_healthz(port) {
+        HealthzProbeResult::Gateway => match probe_spec {
+            Some(spec) => match probe_openclaw_health_command(spec, env_meta, process_env) {
+                OpenClawHealthCommandProbe::Healthy => OpenClawProbeResult {
+                    state: "healthy".to_string(),
+                    detail: None,
+                },
+                OpenClawHealthCommandProbe::AuthRequired(detail) => OpenClawProbeResult {
+                    state: "auth-required".to_string(),
+                    detail: Some(detail),
+                },
+                OpenClawHealthCommandProbe::RespondingButInvalid(detail) => OpenClawProbeResult {
+                    state: "responding-but-invalid".to_string(),
+                    detail: Some(detail),
+                },
+            },
+            None => OpenClawProbeResult {
+                state: "healthy".to_string(),
+                detail: None,
+            },
+        },
+        HealthzProbeResult::WrongService(detail) => OpenClawProbeResult {
+            state: "wrong-service".to_string(),
+            detail: Some(detail),
+        },
+        HealthzProbeResult::Unavailable(detail) => {
+            if fast.state == "healthy" {
+                OpenClawProbeResult {
+                    state: "wrong-service".to_string(),
+                    detail: Some(detail),
+                }
+            } else if fast.state == "unreachable" {
+                OpenClawProbeResult {
+                    state: fast.state,
+                    detail: Some(detail),
+                }
+            } else {
+                fast
+            }
+        }
+    }
 }
 
 fn gateway_port_reachable(port: u32) -> bool {
@@ -410,6 +563,182 @@ fn gateway_port_reachable(port: u32) -> bool {
         Duration::from_millis(GATEWAY_PROBE_TIMEOUT_MS),
     )
     .is_ok()
+}
+
+fn probe_gateway_healthz(port: u32) -> HealthzProbeResult {
+    let url = format!("http://127.0.0.1:{port}/healthz");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_millis(GATEWAY_HTTP_PROBE_TIMEOUT_MS))
+        .timeout_read(Duration::from_millis(GATEWAY_HTTP_PROBE_TIMEOUT_MS))
+        .timeout_write(Duration::from_millis(GATEWAY_HTTP_PROBE_TIMEOUT_MS))
+        .build();
+
+    match agent.get(&url).call() {
+        Ok(response) => {
+            let status = response.status();
+            if status != 200 {
+                return HealthzProbeResult::WrongService(format!(
+                    "gateway /healthz returned HTTP {status}"
+                ));
+            }
+
+            let body = response.into_string().unwrap_or_default();
+            match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(value)
+                    if value["ok"].as_bool() == Some(true)
+                        && value["status"].as_str() == Some("live") =>
+                {
+                    HealthzProbeResult::Gateway
+                }
+                Ok(value) => HealthzProbeResult::WrongService(format!(
+                    "gateway /healthz returned unexpected payload: {value}"
+                )),
+                Err(_) => {
+                    let detail = body.trim();
+                    if detail.is_empty() {
+                        HealthzProbeResult::WrongService(
+                            "gateway /healthz returned an empty response".to_string(),
+                        )
+                    } else {
+                        HealthzProbeResult::WrongService(format!(
+                            "gateway /healthz returned unexpected payload: {detail}"
+                        ))
+                    }
+                }
+            }
+        }
+        Err(ureq::Error::Status(status, _)) => {
+            HealthzProbeResult::WrongService(format!("gateway /healthz returned HTTP {status}"))
+        }
+        Err(ureq::Error::Transport(error)) => {
+            HealthzProbeResult::Unavailable(format!("gateway /healthz probe failed: {error}"))
+        }
+    }
+}
+
+fn probe_openclaw_health_command(
+    probe_spec: &OpenClawProbeSpec,
+    env_meta: &EnvMeta,
+    process_env: &BTreeMap<String, String>,
+) -> OpenClawHealthCommandProbe {
+    let probe_env = build_openclaw_env(env_meta, process_env);
+    let mut command = match probe_spec {
+        OpenClawProbeSpec::Shell { command, run_dir } => {
+            let mut probe = if cfg!(windows) {
+                let mut probe = Command::new("cmd");
+                probe.args(["/C", command.as_str()]);
+                probe
+            } else {
+                let mut probe = Command::new("sh");
+                probe.args(["-lc", command.as_str()]);
+                probe
+            };
+            probe.current_dir(run_dir);
+            probe
+        }
+        OpenClawProbeSpec::Direct {
+            command,
+            args,
+            run_dir,
+        } => {
+            let mut probe = Command::new(command);
+            probe.args(args).current_dir(run_dir);
+            probe
+        }
+    };
+    command.env_clear().envs(&probe_env);
+
+    let output = match run_probe_command(&mut command) {
+        Ok(output) => output,
+        Err(error) => {
+            return OpenClawHealthCommandProbe::RespondingButInvalid(error);
+        }
+    };
+
+    if output.status.success() {
+        return OpenClawHealthCommandProbe::Healthy;
+    }
+
+    let detail = summarize_probe_output(&output.stdout, &output.stderr).unwrap_or_else(|| {
+        format!(
+            "OpenClaw health probe exited with code {}",
+            output.status.code().unwrap_or(1)
+        )
+    });
+
+    if detail_requires_auth(&detail) {
+        OpenClawHealthCommandProbe::AuthRequired(detail)
+    } else {
+        OpenClawHealthCommandProbe::RespondingButInvalid(detail)
+    }
+}
+
+fn run_probe_command(command: &mut Command) -> Result<std::process::Output, String> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to run OpenClaw health probe: {error}"))?;
+    let deadline = Instant::now() + Duration::from_millis(GATEWAY_HEALTH_PROCESS_TIMEOUT_MS);
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child.wait_with_output().map_err(|error| {
+                    format!("failed to read OpenClaw health probe output: {error}")
+                });
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "OpenClaw health probe timed out after {}ms",
+                        GATEWAY_HEALTH_PROCESS_TIMEOUT_MS
+                    ));
+                }
+                sleep(Duration::from_millis(GATEWAY_HEALTH_PROCESS_POLL_MS));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("failed to wait for OpenClaw health probe: {error}"));
+            }
+        }
+    }
+}
+
+fn summarize_probe_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    for bytes in [stderr, stdout] {
+        let text = String::from_utf8_lossy(bytes);
+        if let Some(line) = text.lines().find_map(|line| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        }) {
+            let detail = line
+                .strip_prefix("Health check failed: ")
+                .unwrap_or(line)
+                .trim();
+            return Some(detail.to_string());
+        }
+    }
+    None
+}
+
+fn detail_requires_auth(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    lower.contains("unauthorized")
+        || lower.contains("pairing required")
+        || lower.contains("auth required")
+        || lower.contains("auth_token")
+        || lower.contains("auth_password")
+        || lower.contains("gateway token")
+        || lower.contains("gateway password")
+        || lower.contains("token mismatch")
+        || lower.contains("token missing")
+        || lower.contains("password mismatch")
+        || lower.contains("password missing")
+        || lower.contains("device identity required")
 }
 
 fn matched_env_name_in(envs: &[EnvMeta], config_path: Option<&str>) -> Option<String> {
@@ -451,6 +780,37 @@ pub(crate) fn resolve_service_launch(
                 binary_path: runtime.binary_path,
                 args: gateway_args,
                 run_dir: Path::new(&env.root).to_path_buf(),
+            })
+        }
+    }
+}
+
+fn resolve_openclaw_probe_spec(
+    env: &EnvMeta,
+    process_env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<OpenClawProbeSpec, String> {
+    let health_args = vec![
+        "health".to_string(),
+        "--json".to_string(),
+        "--timeout".to_string(),
+        GATEWAY_HEALTH_COMMAND_TIMEOUT_MS.to_string(),
+    ];
+
+    match resolve_execution_binding(env, None, None)? {
+        ExecutionBinding::Launcher(name) => {
+            let launcher = get_launcher(&name, process_env, cwd)?;
+            Ok(OpenClawProbeSpec::Shell {
+                command: build_launcher_command(&launcher, &health_args),
+                run_dir: resolve_launcher_run_dir(&launcher, cwd),
+            })
+        }
+        ExecutionBinding::Runtime(name) => {
+            let runtime = get_runtime_verified(&name, process_env, cwd)?;
+            Ok(OpenClawProbeSpec::Direct {
+                command: runtime.binary_path,
+                args: health_args,
+                run_dir: resolve_runtime_run_dir(cwd),
             })
         }
     }
