@@ -99,6 +99,26 @@ fn env_create_help_mentions_release_selectors() {
 }
 
 #[test]
+fn env_set_runtime_help_mentions_release_selectors() {
+    let root = TestDir::new("help-env-set-runtime-release-selectors");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let help = run_ocm(&cwd, &env, &["help", "env", "set-runtime"]);
+    assert!(help.status.success(), "{}", stderr(&help));
+    let output = stdout(&help);
+    assert!(output.contains("ocm env set-runtime <name> <runtime|none>"));
+    assert!(output.contains(
+        "ocm env set-runtime <name> (--version <version> | --channel <channel>)"
+    ));
+    assert!(output.contains("--version <version>"));
+    assert!(output.contains("--channel <channel>"));
+    assert!(output.contains("ocm env set-runtime demo --channel stable"));
+    assert!(output.contains("ocm env set-runtime demo --version 2026.3.24"));
+}
+
+#[test]
 fn release_group_help_is_available_from_help_and_bare_group() {
     let root = TestDir::new("help-release-group");
     let cwd = root.child("workspace");

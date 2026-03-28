@@ -708,14 +708,30 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "set-runtime" => render_leaf(
             "Bind or clear a runtime",
-            "Set the default runtime for an environment, or clear it with `none`.",
-            vec![format!("{cmd} env set-runtime <name> <runtime|none>")],
-            &[],
+            "Set the default runtime for an environment, clear it with `none`, or bind an official OpenClaw release directly.",
+            vec![
+                format!("{cmd} env set-runtime <name> <runtime|none>"),
+                format!(
+                    "{cmd} env set-runtime <name> (--version <version> | --channel <channel>)"
+                ),
+            ],
+            &[
+                (
+                    "--version <version>",
+                    "Install or reuse one exact published OpenClaw release and bind it",
+                ),
+                (
+                    "--channel <channel>",
+                    "Install or reuse the published release currently tagged for one channel",
+                ),
+            ],
             vec![
                 format!("{cmd} env set-runtime demo stable"),
+                format!("{cmd} env set-runtime demo --channel stable"),
+                format!("{cmd} env set-runtime demo --version 2026.3.24"),
                 format!("{cmd} env set-runtime demo none"),
             ],
-            &[],
+            &["Use only one of a runtime name, `--version`, or `--channel`."],
         ),
         "set-launcher" => render_leaf(
             "Bind or clear a launcher",

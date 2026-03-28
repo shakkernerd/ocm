@@ -126,20 +126,22 @@ pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<En
 }
 
 impl<'a> EnvironmentService<'a> {
-    pub fn resolve_create_runtime_binding(
+    pub fn resolve_runtime_binding_request(
         &self,
         runtime_name: Option<String>,
         version: Option<String>,
         channel: Option<String>,
+        command: &str,
     ) -> Result<Option<String>, String> {
         if runtime_name.is_some() && (version.is_some() || channel.is_some()) {
             return Err(
-                "env create accepts only one runtime source: --runtime, --version, or --channel"
-                    .to_string(),
+                format!(
+                    "{command} accepts only one runtime source: --runtime, --version, or --channel"
+                ),
             );
         }
         if version.is_some() && channel.is_some() {
-            return Err("env create accepts only one of --version or --channel".to_string());
+            return Err(format!("{command} accepts only one of --version or --channel"));
         }
 
         if let Some(runtime_name) = runtime_name {

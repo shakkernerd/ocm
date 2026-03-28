@@ -94,6 +94,54 @@ fn env_set_runtime_updates_and_clears_the_default_runtime() {
 }
 
 #[test]
+fn env_set_runtime_with_channel_installs_and_binds_the_official_runtime() {
+    let root = TestDir::new("runtime-binding-set-channel");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/bin/sh\nprintf 'official-rebind'\n", "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let bind = run_ocm(
+        &cwd,
+        &env,
+        &["env", "set-runtime", "demo", "--channel", "stable"],
+    );
+    assert!(bind.status.success(), "{}", stderr(&bind));
+    assert!(stdout(&bind).contains("Updated env demo: defaultRuntime=stable"));
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let runtime_stdout = stdout(&runtime);
+    assert!(runtime_stdout.contains("\"releaseSelectorKind\": \"channel\""));
+    assert!(runtime_stdout.contains("\"releaseSelectorValue\": \"stable\""));
+
+    let run = run_ocm(&cwd, &env, &["env", "run", "demo", "--"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert_eq!(stdout(&run), "official-rebind");
+}
+
+#[test]
 fn env_run_uses_the_registered_runtime_binary() {
     let root = TestDir::new("runtime-binding-run");
     let cwd = root.child("workspace");
@@ -381,4 +429,55 @@ fn env_create_rejects_conflicting_version_and_channel_flags() {
     );
     assert!(!create.status.success());
     assert!(stderr(&create).contains("env create accepts only one of --version or --channel"));
+}
+
+#[test]
+fn env_set_runtime_rejects_conflicting_runtime_and_release_selector_flags() {
+    let root = TestDir::new("runtime-binding-set-conflict-runtime-selector");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let bind = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "set-runtime",
+            "demo",
+            "stable",
+            "--channel",
+            "stable",
+        ],
+    );
+    assert!(!bind.status.success());
+    assert!(stderr(&bind).contains(
+        "env set-runtime accepts only one runtime source: --runtime, --version, or --channel"
+    ));
+}
+
+#[test]
+fn env_set_runtime_rejects_conflicting_version_and_channel_flags() {
+    let root = TestDir::new("runtime-binding-set-conflict-version-channel");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let bind = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "set-runtime",
+            "demo",
+            "--version",
+            "2026.3.24",
+            "--channel",
+            "stable",
+        ],
+    );
+    assert!(!bind.status.success());
+    assert!(stderr(&bind).contains(
+        "env set-runtime accepts only one of --version or --channel"
+    ));
 }

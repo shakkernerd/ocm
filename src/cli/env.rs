@@ -129,17 +129,19 @@ impl Cli {
         let uses_release_selector = version.is_some() || channel.is_some();
         let runtime_name = if uses_release_selector {
             self.with_progress(format!("Preparing OpenClaw runtime for {name}"), || {
-                self.environment_service().resolve_create_runtime_binding(
+                self.environment_service().resolve_runtime_binding_request(
                     runtime_name,
                     version,
                     channel,
+                    "env create",
                 )
             })?
         } else {
-            self.environment_service().resolve_create_runtime_binding(
+            self.environment_service().resolve_runtime_binding_request(
                 runtime_name,
                 version,
                 channel,
+                "env create",
             )?
         };
         let meta = self
@@ -760,20 +762,67 @@ impl Cli {
     }
 
     pub(super) fn handle_env_set_runtime(&self, args: Vec<String>) -> Result<i32, String> {
-        if args.len() < 2 {
+        let (args, version) = Self::consume_option(args, "--version")?;
+        let version = Self::require_option_value(version, "--version")?;
+        let (args, channel) = Self::consume_option(args, "--channel")?;
+        let channel = Self::require_option_value(channel, "--channel")?;
+
+        if args.is_empty() {
             return Err(format!(
-                "usage: {} env set-runtime <env> <runtime|none>",
+                "usage: {} env set-runtime <env> <runtime|none>\n       {} env set-runtime <env> (--version <version> | --channel <channel>)",
+                self.command_example(),
                 self.command_example()
             ));
         }
         let name = &args[0];
-        let runtime_name = &args[1];
-        Self::assert_no_extra_args(&args[2..])?;
-
-        let validated = if runtime_name.eq_ignore_ascii_case("none") {
-            runtime_name.to_string()
+        let runtime_name = args.get(1).cloned();
+        let extra_args = if runtime_name.is_some() {
+            &args[2..]
         } else {
-            validate_name(runtime_name, "Runtime name")?
+            &args[1..]
+        };
+        Self::assert_no_extra_args(extra_args)?;
+        if matches!(runtime_name.as_deref(), Some(name) if name.eq_ignore_ascii_case("none"))
+            && (version.is_some() || channel.is_some())
+        {
+            return Err(
+                "env set-runtime accepts only one runtime source: --runtime, --version, or --channel"
+                    .to_string(),
+            );
+        }
+
+        let validated = match runtime_name {
+            Some(runtime_name) if runtime_name.eq_ignore_ascii_case("none") => runtime_name,
+            Some(runtime_name) => self
+                .environment_service()
+                .resolve_runtime_binding_request(
+                    Some(validate_name(&runtime_name, "Runtime name")?),
+                    version,
+                    channel,
+                    "env set-runtime",
+                )?
+                .unwrap_or(runtime_name),
+            None if version.is_some() || channel.is_some() => self.with_progress(
+                format!("Preparing OpenClaw runtime for {name}"),
+                || {
+                    self.environment_service().resolve_runtime_binding_request(
+                        None,
+                        version,
+                        channel,
+                        "env set-runtime",
+                    )
+                },
+            )?
+            .ok_or_else(|| {
+                "env set-runtime requires a runtime, none, --version, or --channel".to_string()
+            })?,
+            None => {
+                return Err(format!(
+                    "usage: {} env set-runtime <env> <runtime|none>\n       {} env set-runtime <env> (--version <version> | --channel <channel>)",
+                    self.command_example(),
+                    self.command_example()
+                ));
+            }
         };
         let meta = self.environment_service().set_runtime(name, &validated)?;
         let default_runtime = meta.default_runtime.unwrap_or_else(|| "none".to_string());
