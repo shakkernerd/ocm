@@ -1,5 +1,6 @@
 mod support;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
@@ -30,10 +31,7 @@ fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<S
     env.insert("PATH".to_string(), combined_path);
 }
 
-fn install_fake_systemd_tools(
-    root: &TestDir,
-    env: &mut std::collections::BTreeMap<String, String>,
-) {
+fn install_fake_systemd_tools(root: &TestDir, env: &mut BTreeMap<String, String>) {
     let bin_dir = root.child("fake-bin");
     fs::create_dir_all(&bin_dir).unwrap();
     let log_path = root.child("systemctl.log");
@@ -60,6 +58,15 @@ fn install_fake_systemd_tools(
         "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
         "systemd-user".to_string(),
     );
+}
+
+fn ocm_launchd_env(root: &TestDir) -> BTreeMap<String, String> {
+    let mut env = ocm_env(root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    env
 }
 
 fn write_systemd_unit(
@@ -148,7 +155,7 @@ fn service_list_reports_launcher_and_runtime_bindings_in_json() {
     let root = TestDir::new("service-list");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let launcher = run_ocm(
         &cwd,
@@ -254,7 +261,7 @@ fn service_status_reports_missing_binding_issue() {
     let root = TestDir::new("service-status-unbound");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let created = run_ocm(&cwd, &env, &["env", "create", "bare"]);
     assert!(created.status.success(), "{}", stderr(&created));
@@ -282,7 +289,7 @@ fn service_status_reports_wrong_service_when_gateway_probe_is_not_openclaw() {
     let root = TestDir::new("service-status-wrong-service");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
     let server = TestHttpServer::serve_bytes_times("/not-healthz", "text/plain", b"ok", 2);
     let port = port_from_http_url(&server.url());
 
@@ -326,7 +333,7 @@ fn service_status_reports_auth_required_when_gateway_health_probe_is_rejected() 
     let root = TestDir::new("service-status-auth-required");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
     let server = TestHttpServer::serve_bytes_times(
         "/healthz",
         "application/json",
@@ -387,7 +394,7 @@ fn service_status_reports_responding_but_invalid_when_gateway_health_probe_fails
     let root = TestDir::new("service-status-responding-invalid");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
     let server = TestHttpServer::serve_bytes_times(
         "/healthz",
         "application/json",
@@ -443,7 +450,7 @@ fn service_status_reports_adoption_and_restore_readiness() {
     let root = TestDir::new("service-status-readiness");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let mut env = ocm_env(&root);
+    let mut env = ocm_launchd_env(&root);
     install_fake_launchctl(&root, &mut env);
 
     let launcher = run_ocm(
@@ -511,7 +518,7 @@ fn service_status_requires_target_or_all() {
     let root = TestDir::new("service-status-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let output = run_ocm(&cwd, &env, &["service", "status"]);
     assert_eq!(output.status.code(), Some(1));
@@ -523,7 +530,7 @@ fn service_discover_lists_ocm_global_and_foreign_services_in_json() {
     let root = TestDir::new("service-discover");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let launcher = run_ocm(
         &cwd,
@@ -658,7 +665,7 @@ fn service_discover_ignores_unrelated_launch_agents() {
     let root = TestDir::new("service-discover-unrelated");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     write_launch_agent_plist(
         &root.child("home/Library/LaunchAgents/com.example.other.plist"),
@@ -679,7 +686,7 @@ fn service_discover_finds_openclaw_programs_without_openclaw_env_vars() {
     let root = TestDir::new("service-discover-program-only");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     write_launch_agent_plist(
         &root.child("home/Library/LaunchAgents/com.example.gateway.plist"),
@@ -724,7 +731,7 @@ fn service_discover_requires_no_extra_args() {
     let root = TestDir::new("service-discover-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let output = run_ocm(&cwd, &env, &["service", "discover", "demo"]);
     assert_eq!(output.status.code(), Some(1));
@@ -736,7 +743,7 @@ fn service_install_persists_a_gateway_port_and_writes_a_launch_agent() {
     let root = TestDir::new("service-install");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let mut env = ocm_env(&root);
+    let mut env = ocm_launchd_env(&root);
     install_fake_launchctl(&root, &mut env);
 
     let launcher = run_ocm(
@@ -796,7 +803,7 @@ fn service_install_auto_provisions_the_next_free_port_when_needed() {
     let root = TestDir::new("service-install-port-reassign");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let mut env = ocm_env(&root);
+    let mut env = ocm_launchd_env(&root);
     install_fake_launchctl(&root, &mut env);
 
     let launcher = run_ocm(
@@ -843,7 +850,7 @@ fn service_lifecycle_commands_use_the_env_scoped_launch_agent_label() {
     let root = TestDir::new("service-lifecycle");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let mut env = ocm_env(&root);
+    let mut env = ocm_launchd_env(&root);
     install_fake_launchctl(&root, &mut env);
 
     let launcher = run_ocm(
@@ -887,7 +894,7 @@ fn service_logs_reads_stdout_and_stderr_logs() {
     let root = TestDir::new("service-logs");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
     assert!(created.status.success(), "{}", stderr(&created));
@@ -915,7 +922,7 @@ fn service_logs_supports_tail_and_json_output() {
     let root = TestDir::new("service-logs-tail");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
     assert!(created.status.success(), "{}", stderr(&created));
@@ -951,7 +958,7 @@ fn service_logs_validate_arguments_and_missing_files() {
     let root = TestDir::new("service-logs-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let missing_name = run_ocm(&cwd, &env, &["service", "logs"]);
     assert_eq!(missing_name.status.code(), Some(1));
@@ -981,7 +988,7 @@ fn service_adopt_global_migrates_a_matching_global_launch_agent() {
     let root = TestDir::new("service-adopt-global");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let mut env = ocm_env(&root);
+    let mut env = ocm_launchd_env(&root);
     install_fake_launchctl(&root, &mut env);
 
     let launcher = run_ocm(
@@ -1058,7 +1065,7 @@ fn service_adopt_global_rejects_mismatched_global_plists() {
     let root = TestDir::new("service-adopt-global-mismatch");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let mut env = ocm_env(&root);
+    let mut env = ocm_launchd_env(&root);
     install_fake_launchctl(&root, &mut env);
 
     let launcher = run_ocm(
@@ -1108,7 +1115,7 @@ fn service_adopt_global_dry_run_reports_the_plan_without_mutating_state() {
     let root = TestDir::new("service-adopt-global-dry-run");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let mut env = ocm_env(&root);
+    let mut env = ocm_launchd_env(&root);
     install_fake_launchctl(&root, &mut env);
 
     let launcher = run_ocm(
@@ -1189,7 +1196,7 @@ fn service_restore_global_restores_the_latest_matching_backup() {
     let root = TestDir::new("service-restore-global");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let mut env = ocm_env(&root);
+    let mut env = ocm_launchd_env(&root);
     install_fake_launchctl(&root, &mut env);
 
     let launcher = run_ocm(
@@ -1272,7 +1279,7 @@ fn service_restore_global_dry_run_reports_the_latest_matching_backup_without_mut
     let root = TestDir::new("service-restore-global-dry-run");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let mut env = ocm_env(&root);
+    let mut env = ocm_launchd_env(&root);
     install_fake_launchctl(&root, &mut env);
 
     let launcher = run_ocm(
@@ -1354,7 +1361,7 @@ fn service_restore_global_rejects_missing_backups() {
     let root = TestDir::new("service-restore-global-missing-backup");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
     assert!(created.status.success(), "{}", stderr(&created));
@@ -1369,7 +1376,7 @@ fn service_restore_global_requires_a_target_env() {
     let root = TestDir::new("service-restore-global-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let output = run_ocm(&cwd, &env, &["service", "restore-global"]);
     assert_eq!(output.status.code(), Some(1));
@@ -1381,7 +1388,7 @@ fn service_adopt_global_requires_a_target_env() {
     let root = TestDir::new("service-adopt-global-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let output = run_ocm(&cwd, &env, &["service", "adopt-global"]);
     assert_eq!(output.status.code(), Some(1));
@@ -1393,7 +1400,7 @@ fn service_install_requires_a_target_env() {
     let root = TestDir::new("service-install-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let output = run_ocm(&cwd, &env, &["service", "install"]);
     assert_eq!(output.status.code(), Some(1));
@@ -1405,7 +1412,7 @@ fn service_lifecycle_commands_require_a_target_env() {
     let root = TestDir::new("service-lifecycle-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     for action in ["start", "stop", "restart", "uninstall"] {
         let output = run_ocm(&cwd, &env, &["service", action]);
@@ -1423,7 +1430,7 @@ fn unknown_service_commands_use_service_specific_errors() {
     let root = TestDir::new("service-unknown-command");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let env = ocm_launchd_env(&root);
 
     let output = run_ocm(&cwd, &env, &["service", "reload"]);
     assert_eq!(output.status.code(), Some(1));
