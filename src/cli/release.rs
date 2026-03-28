@@ -39,7 +39,10 @@ impl Cli {
             Self::assert_no_extra_args(&args[1..])?;
         }
         if args.first().is_some() && (version_flag.is_some() || channel.is_some()) {
-            return Err("release show accepts either a version argument, --version, or --channel".to_string());
+            return Err(
+                "release show accepts either a version argument, --version, or --channel"
+                    .to_string(),
+            );
         }
         if version_flag.is_some() && channel.is_some() {
             return Err("release show accepts only one of --version or --channel".to_string());

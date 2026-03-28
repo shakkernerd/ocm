@@ -84,8 +84,7 @@ impl Cli {
                 if matches!(
                     group.as_str(),
                     "env" | "release" | "launcher" | "runtime" | "service"
-                )
-                    && Self::is_help_token(next) =>
+                ) && Self::is_help_token(next) =>
             {
                 let mut topic = vec![group.as_str()];
                 topic.extend(rest.iter().map(String::as_str));
@@ -95,8 +94,7 @@ impl Cli {
                 if matches!(
                     group.as_str(),
                     "env" | "release" | "launcher" | "runtime" | "service"
-                )
-                    && Self::is_help_flag(flag) =>
+                ) && Self::is_help_flag(flag) =>
             {
                 Some(vec![group.as_str(), action.as_str()])
             }

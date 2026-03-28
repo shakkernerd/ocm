@@ -4,7 +4,7 @@ use std::fs;
 
 use serde_json::Value;
 
-use crate::support::{ocm_env, run_ocm, stderr, stdout, write_executable_script, TestDir};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
 
 #[test]
 fn env_list_accepts_raw_output_mode() {

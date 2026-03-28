@@ -120,7 +120,11 @@ pub fn verify_file_integrity(path: &Path, expected: &str) -> Result<(), String> 
     }
 }
 
-fn verify_file_sha512_base64(path: &Path, expected_base64: &str, raw_expected: &str) -> Result<(), String> {
+fn verify_file_sha512_base64(
+    path: &Path,
+    expected_base64: &str,
+    raw_expected: &str,
+) -> Result<(), String> {
     let expected = base64::engine::general_purpose::STANDARD
         .decode(expected_base64)
         .map_err(|_| format!("runtime artifact integrity is invalid: {raw_expected}"))?;

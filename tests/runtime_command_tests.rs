@@ -375,11 +375,8 @@ fn official_runtime_install_produces_a_runnable_env_binding() {
         tarball_server.url(),
         integrity
     );
-    let packument_server = TestHttpServer::serve_bytes(
-        "/openclaw",
-        "application/json",
-        packument.as_bytes(),
-    );
+    let packument_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
@@ -389,7 +386,11 @@ fn official_runtime_install_produces_a_runnable_env_binding() {
     let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
     assert!(install.status.success(), "{}", stderr(&install));
 
-    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--runtime", "stable"]);
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
     assert!(create.status.success(), "{}", stderr(&create));
 
     let run = run_ocm(&cwd, &env, &["env", "run", "demo", "--", "status"]);

@@ -4,7 +4,7 @@ use crate::runtime::{
     RuntimeService, UpdateRuntimeFromReleaseOptions,
 };
 
-use super::{render, Cli};
+use super::{Cli, render};
 
 impl Cli {
     pub(super) fn handle_runtime_add(&self, args: Vec<String>) -> Result<i32, String> {

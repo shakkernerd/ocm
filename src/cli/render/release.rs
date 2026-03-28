@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
 use crate::infra::terminal::{
-    paint, render_key_value_card, render_table, terminal_width, Cell, KeyValueRow, Tone,
+    Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, terminal_width,
 };
 use crate::runtime::OpenClawReleaseCatalogEntry;
 
-use super::{format_key_value_lines, format_rfc3339, RenderProfile};
+use super::{RenderProfile, format_key_value_lines, format_rfc3339};
 
 pub fn release_list(
     releases: &[OpenClawReleaseCatalogEntry],
@@ -288,7 +288,7 @@ fn optional_value_row(label: &str, value: Option<String>) -> KeyValueRow {
 mod tests {
     use time::OffsetDateTime;
 
-    use super::{release_list_raw, release_list_with_width, release_show, RenderProfile};
+    use super::{RenderProfile, release_list_raw, release_list_with_width, release_show};
     use crate::runtime::{OpenClawRelease, OpenClawReleaseCatalogEntry};
 
     #[test]
@@ -323,9 +323,11 @@ mod tests {
 
         assert_eq!(lines[0], "Release 2026.3.24");
         assert!(lines.iter().any(|line| line.contains("Published release")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Local runtime mapping")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Local runtime mapping"))
+        );
         assert!(lines.iter().any(|line| line.contains("Install name")));
         assert!(lines.iter().any(|line| line.contains("stable")));
         assert!(lines.iter().any(|line| line.contains("Package")));
@@ -337,12 +339,16 @@ mod tests {
             release_show(&sample_catalog_entry(), RenderProfile::pretty(false), "ocm").unwrap();
 
         assert!(lines.iter().any(|line| line.contains("Next")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("ocm release install --channel stable")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("ocm runtime show stable")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm release install --channel stable"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm runtime show stable"))
+        );
     }
 
     #[test]

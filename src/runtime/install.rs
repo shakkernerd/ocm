@@ -208,9 +208,11 @@ impl<'a> RuntimeService<'a> {
             existing_meta = Some(existing);
         }
 
-        let description = options
-            .description
-            .or_else(|| existing_meta.as_ref().and_then(|meta| meta.description.clone()));
+        let description = options.description.or_else(|| {
+            existing_meta
+                .as_ref()
+                .and_then(|meta| meta.description.clone())
+        });
         let meta = install_runtime_from_selected_official_openclaw_release(
             runtime_name.clone(),
             options.force || existing_meta.is_some(),

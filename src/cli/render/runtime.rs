@@ -1,20 +1,23 @@
 use std::collections::BTreeMap;
 
 use crate::infra::terminal::{
-    paint, render_key_value_card, render_table, terminal_width, Cell, KeyValueRow, Tone,
+    Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, terminal_width,
 };
 use crate::runtime::{
     RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeReleaseSelectorKind,
     RuntimeSourceKind, RuntimeUpdateBatchSummary, RuntimeVerifySummary,
 };
 
-use super::{format_key_value_lines, format_rfc3339, RenderProfile};
+use super::{RenderProfile, format_key_value_lines, format_rfc3339};
 
 pub fn runtime_added(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
     vec![
         format!("Added runtime {}", meta.name),
         format!("  binary path: {}", meta.binary_path),
-        format!("  use in env: {command_example} env create demo --runtime {}", meta.name),
+        format!(
+            "  use in env: {command_example} env create demo --runtime {}",
+            meta.name
+        ),
     ]
 }
 
@@ -638,7 +641,7 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{
-        runtime_list_with_width, runtime_show, runtime_verify, runtime_verify_all, RenderProfile,
+        RenderProfile, runtime_list_with_width, runtime_show, runtime_verify, runtime_verify_all,
     };
     use crate::runtime::{
         RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind, RuntimeVerifySummary,
@@ -652,9 +655,11 @@ mod tests {
         assert!(lines[1].contains("Target"));
         assert!(!lines[1].contains("Current"));
         assert!(!lines[1].contains("Binary"));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("channel stable -> 2026.3.24")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("channel stable -> 2026.3.24"))
+        );
         assert_eq!(
             lines.last().unwrap(),
             "Use --raw for full runtime path and release details."
@@ -691,15 +696,21 @@ mod tests {
         let lines = runtime_show(&sample_runtime(), RenderProfile::pretty(false), "ocm").unwrap();
 
         assert!(lines.iter().any(|line| line.contains("Next")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("ocm env create demo --runtime stable")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("ocm runtime verify stable")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("ocm runtime update stable")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm env create demo --runtime stable"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm runtime verify stable"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm runtime update stable"))
+        );
     }
 
     #[test]
@@ -709,9 +720,11 @@ mod tests {
         assert!(lines.iter().any(|line| line == "kind: ocm-runtime"));
         assert!(lines.iter().any(|line| line == "name: stable"));
         assert!(lines.iter().any(|line| line == "sourceKind: installed"));
-        assert!(lines
-            .iter()
-            .any(|line| line == "releaseSelectorKind: channel"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "releaseSelectorKind: channel")
+        );
         assert!(!lines.iter().any(|line| line.contains('┌')));
     }
 
@@ -742,9 +755,11 @@ mod tests {
 
         assert!(lines.iter().any(|line| line == "name: stable"));
         assert!(lines.iter().any(|line| line == "healthy: true"));
-        assert!(lines
-            .iter()
-            .any(|line| line == "releaseSelectorKind: channel"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "releaseSelectorKind: channel")
+        );
         assert!(!lines.iter().any(|line| line.contains('┌')));
     }
 

@@ -18,7 +18,11 @@ fn env_create_prints_the_effective_gateway_port_for_fresh_envs() {
     );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
 
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
     let output = stdout(&created);
     assert!(output.contains("Created env demo"));
@@ -41,7 +45,11 @@ fn env_clone_prints_the_effective_gateway_port_for_the_cloned_env() {
     );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
 
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
 
     let cloned = run_ocm(&cwd, &env, &["env", "clone", "demo", "copy"]);

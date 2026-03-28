@@ -10,9 +10,10 @@ use crate::infra::download::{
     verify_file_integrity, verify_file_sha256,
 };
 use crate::runtime::releases::{
-    load_official_openclaw_releases, load_release_manifest, normalize_openclaw_channel_selector,
-    official_openclaw_releases_url, select_official_openclaw_release_by_channel,
-    select_official_openclaw_release_by_version, select_release, OpenClawRelease,
+    OpenClawRelease, load_official_openclaw_releases, load_release_manifest,
+    normalize_openclaw_channel_selector, official_openclaw_releases_url,
+    select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
+    select_release,
 };
 use crate::runtime::{
     AddRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
@@ -81,17 +82,19 @@ fn install_openclaw_package_with_npm(
         .stderr(Stdio::piped())
         .output()
         .map_err(|error| {
-            format!(
-                "failed to run {npm_bin} while installing the OpenClaw package: {error}"
-            )
+            format!("failed to run {npm_bin} while installing the OpenClaw package: {error}")
         })?;
 
     if output.status.success() {
         return Ok(());
     }
 
-    let detail = summarize_command_output(&output.stdout, &output.stderr)
-        .unwrap_or_else(|| format!("{npm_bin} exited with code {}", output.status.code().unwrap_or(1)));
+    let detail = summarize_command_output(&output.stdout, &output.stderr).unwrap_or_else(|| {
+        format!(
+            "{npm_bin} exited with code {}",
+            output.status.code().unwrap_or(1)
+        )
+    });
     Err(format!(
         "failed to install OpenClaw package dependencies with {npm_bin}: {detail}"
     ))
@@ -614,8 +617,8 @@ pub fn install_runtime_from_selected_official_openclaw_release(
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
     let meta_path = prepare_runtime_meta_path(&name, force, env, cwd)?;
-    let description =
-        trim_description(description).or_else(|| Some(format!("Official OpenClaw release {}", release.version)));
+    let description = trim_description(description)
+        .or_else(|| Some(format!("Official OpenClaw release {}", release.version)));
 
     let install_root = runtime_install_root(&name, env, cwd)?;
     let install_files = runtime_install_files_dir(&name, env, cwd)?;

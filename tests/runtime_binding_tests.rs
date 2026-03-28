@@ -338,10 +338,7 @@ fn env_create_with_latest_channel_alias_binds_the_stable_runtime_name() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
 
-    let tarball = openclaw_package_tarball(
-        "#!/bin/sh\nprintf 'official-latest'\n",
-        "2026.3.24",
-    );
+    let tarball = openclaw_package_tarball("#!/bin/sh\nprintf 'official-latest'\n", "2026.3.24");
     let integrity = sha512_integrity(&tarball);
     let tarball_server = TestHttpServer::serve_bytes(
         "/openclaw-2026.3.24.tgz",
@@ -524,7 +521,5 @@ fn env_set_runtime_rejects_conflicting_version_and_channel_flags() {
         ],
     );
     assert!(!bind.status.success());
-    assert!(stderr(&bind).contains(
-        "env set-runtime accepts only one of --version or --channel"
-    ));
+    assert!(stderr(&bind).contains("env set-runtime accepts only one of --version or --channel"));
 }

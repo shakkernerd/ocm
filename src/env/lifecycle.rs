@@ -134,14 +134,14 @@ impl<'a> EnvironmentService<'a> {
         command: &str,
     ) -> Result<Option<String>, String> {
         if runtime_name.is_some() && (version.is_some() || channel.is_some()) {
-            return Err(
-                format!(
-                    "{command} accepts only one runtime source: --runtime, --version, or --channel"
-                ),
-            );
+            return Err(format!(
+                "{command} accepts only one runtime source: --runtime, --version, or --channel"
+            ));
         }
         if version.is_some() && channel.is_some() {
-            return Err(format!("{command} accepts only one of --version or --channel"));
+            return Err(format!(
+                "{command} accepts only one of --version or --channel"
+            ));
         }
 
         if let Some(runtime_name) = runtime_name {
