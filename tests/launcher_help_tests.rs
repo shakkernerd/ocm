@@ -216,6 +216,18 @@ fn runtime_and_service_leaf_help_are_command_specific() {
 }
 
 #[test]
+fn version_flag_uses_the_package_version() {
+    let root = TestDir::new("version-flag");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let version = run_ocm(&cwd, &env, &["--version"]);
+    assert!(version.status.success(), "{}", stderr(&version));
+    assert_eq!(stdout(&version), concat!(env!("CARGO_PKG_VERSION"), "\n"));
+}
+
+#[test]
 fn unknown_launcher_commands_use_launcher_specific_errors() {
     let root = TestDir::new("launcher-unknown-command");
     let cwd = root.child("workspace");

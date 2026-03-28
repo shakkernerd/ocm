@@ -20,7 +20,7 @@ use crate::runtime::RuntimeService;
 use crate::service::ServiceService;
 use crate::store::ensure_store;
 
-const VERSION: &str = "0.1.0";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const INTERNAL_COLOR_MODE_ENV: &str = "OCM_INTERNAL_COLOR_MODE";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
