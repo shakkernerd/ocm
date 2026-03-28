@@ -390,10 +390,66 @@ pub fn runtime_updated(meta: &RuntimeMeta) -> Vec<String> {
     lines
 }
 
-pub fn runtime_verify_all(summaries: &[RuntimeVerifySummary]) -> Vec<String> {
+pub fn runtime_verify_all(
+    summaries: &[RuntimeVerifySummary],
+    profile: RenderProfile,
+) -> Vec<String> {
     if summaries.is_empty() {
         return vec!["No runtimes.".to_string()];
     }
+    if !profile.pretty {
+        return runtime_verify_all_raw(summaries);
+    }
+
+    let show_full = terminal_width().map(|width| width >= 110).unwrap_or(true);
+    let rows = summaries
+        .iter()
+        .map(|summary| {
+            let health = if summary.healthy {
+                Cell::success("healthy")
+            } else {
+                Cell::danger("broken")
+            };
+            if show_full {
+                vec![
+                    Cell::accent(summary.name.clone()),
+                    Cell::plain(summary.source_kind.clone()),
+                    health,
+                    optional_cell(verify_selector_summary(summary).as_deref()),
+                    optional_cell(summary.release_version.as_deref()),
+                    optional_cell(summary.issue.as_deref()),
+                ]
+            } else {
+                vec![
+                    Cell::accent(summary.name.clone()),
+                    health,
+                    optional_cell(summary.issue.as_deref()),
+                ]
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut lines = render_table(
+        if show_full {
+            &["Name", "Source", "Health", "Tracks", "Current", "Issue"]
+        } else {
+            &["Name", "Health", "Issue"]
+        },
+        &rows,
+        profile.color,
+    );
+    if !show_full {
+        lines.push(String::new());
+        lines.push(paint(
+            "Use runtime verify <name>, --raw, or --json for full runtime details.",
+            Tone::Muted,
+            profile.color,
+        ));
+    }
+    lines
+}
+
+fn runtime_verify_all_raw(summaries: &[RuntimeVerifySummary]) -> Vec<String> {
     let mut lines = Vec::with_capacity(summaries.len());
     for summary in summaries {
         let mut bits = vec![
@@ -402,6 +458,9 @@ pub fn runtime_verify_all(summaries: &[RuntimeVerifySummary]) -> Vec<String> {
             format!("source={}", summary.source_kind),
             format!("healthy={}", summary.healthy),
         ];
+        if let Some(tracks) = verify_selector_summary(summary) {
+            bits.push(format!("tracks={tracks}"));
+        }
         if let Some(issue) = summary.issue.as_deref() {
             bits.push(format!("issue={issue}"));
         }
@@ -410,7 +469,67 @@ pub fn runtime_verify_all(summaries: &[RuntimeVerifySummary]) -> Vec<String> {
     lines
 }
 
-pub fn runtime_verify(summary: &RuntimeVerifySummary) -> Vec<String> {
+pub fn runtime_verify(summary: &RuntimeVerifySummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return runtime_verify_raw(summary);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Runtime {}", summary.name),
+        Tone::Strong,
+        profile.color,
+    )];
+
+    let mut status_rows = vec![
+        KeyValueRow::new(
+            "Health",
+            if summary.healthy { "healthy" } else { "broken" },
+            if summary.healthy {
+                Tone::Success
+            } else {
+                Tone::Danger
+            },
+        ),
+        KeyValueRow::new(
+            "Source",
+            summary.source_kind.clone(),
+            verify_source_tone(summary),
+        ),
+        KeyValueRow::accent("Binary", summary.binary_path.clone()),
+    ];
+    if let Some(tracks) = verify_selector_summary(summary) {
+        status_rows.push(KeyValueRow::plain("Tracks", tracks));
+    }
+    if let Some(release_version) = summary.release_version.as_deref() {
+        status_rows.push(KeyValueRow::plain("Current", release_version));
+    }
+    if let Some(issue) = summary.issue.as_deref() {
+        status_rows.push(KeyValueRow::danger("Issue", issue));
+    }
+    push_card(&mut lines, "Verification", status_rows, profile.color);
+
+    let mut source_rows = Vec::new();
+    if let Some(install_root) = summary.install_root.as_deref() {
+        source_rows.push(KeyValueRow::plain("Install root", install_root));
+    }
+    if let Some(source_path) = summary.source_path.as_deref() {
+        source_rows.push(KeyValueRow::plain("Source path", source_path));
+    }
+    if let Some(source_url) = summary.source_url.as_deref() {
+        source_rows.push(KeyValueRow::plain("Source URL", source_url));
+    }
+    if let Some(source_manifest_url) = summary.source_manifest_url.as_deref() {
+        source_rows.push(KeyValueRow::plain("Manifest URL", source_manifest_url));
+    }
+    if let Some(source_sha256) = summary.source_sha256.as_deref() {
+        source_rows.push(KeyValueRow::plain("SHA-256", source_sha256));
+    }
+    push_card(&mut lines, "Source details", source_rows, profile.color);
+
+    lines
+}
+
+fn runtime_verify_raw(summary: &RuntimeVerifySummary) -> Vec<String> {
     let mut lines = vec![
         format!("name: {}", summary.name),
         format!("binaryPath: {}", summary.binary_path),
@@ -435,6 +554,15 @@ pub fn runtime_verify(summary: &RuntimeVerifySummary) -> Vec<String> {
     if let Some(release_channel) = summary.release_channel.as_deref() {
         lines.push(format!("releaseChannel: {release_channel}"));
     }
+    if let Some(release_selector_kind) = summary.release_selector_kind.as_ref() {
+        lines.push(format!(
+            "releaseSelectorKind: {}",
+            release_selector_kind.as_str()
+        ));
+    }
+    if let Some(release_selector_value) = summary.release_selector_value.as_deref() {
+        lines.push(format!("releaseSelectorValue: {release_selector_value}"));
+    }
     if let Some(install_root) = summary.install_root.as_deref() {
         lines.push(format!("installRoot: {install_root}"));
     }
@@ -444,12 +572,35 @@ pub fn runtime_verify(summary: &RuntimeVerifySummary) -> Vec<String> {
     lines
 }
 
+fn verify_selector_summary(summary: &RuntimeVerifySummary) -> Option<String> {
+    match (
+        summary.release_selector_kind.as_ref(),
+        summary.release_selector_value.as_deref(),
+    ) {
+        (Some(kind), value) => Some(selector_label(kind, value)),
+        (None, None) => None,
+        (None, Some(value)) => Some(value.to_string()),
+    }
+}
+
+fn verify_source_tone(summary: &RuntimeVerifySummary) -> Tone {
+    match summary.source_kind.as_str() {
+        "installed" => Tone::Success,
+        "registered" => Tone::Accent,
+        _ => Tone::Plain,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use time::OffsetDateTime;
 
-    use super::{runtime_list_with_width, runtime_show, RenderProfile};
-    use crate::runtime::{RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind};
+    use super::{
+        runtime_list_with_width, runtime_show, runtime_verify, runtime_verify_all, RenderProfile,
+    };
+    use crate::runtime::{
+        RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind, RuntimeVerifySummary,
+    };
 
     #[test]
     fn runtime_list_pretty_compacts_on_narrow_terminals() {
@@ -506,6 +657,39 @@ mod tests {
         assert!(!lines.iter().any(|line| line.contains('┌')));
     }
 
+    #[test]
+    fn runtime_verify_pretty_uses_cards() {
+        let lines = runtime_verify(&sample_verify_summary(), RenderProfile::pretty(false));
+
+        assert_eq!(lines[0], "Runtime stable");
+        assert!(lines.iter().any(|line| line.contains("Verification")));
+        assert!(lines.iter().any(|line| line.contains("Health")));
+        assert!(lines.iter().any(|line| line.contains("Tracks")));
+        assert!(lines.iter().any(|line| line.contains("Source details")));
+    }
+
+    #[test]
+    fn runtime_verify_all_pretty_uses_a_table() {
+        let lines = runtime_verify_all(&[sample_verify_summary()], RenderProfile::pretty(false));
+
+        assert!(lines[0].contains("┌"));
+        assert!(lines[1].contains("Health"));
+        assert!(lines[1].contains("Tracks"));
+        assert!(lines.iter().any(|line| line.contains("stable")));
+    }
+
+    #[test]
+    fn runtime_verify_raw_keeps_key_value_lines() {
+        let lines = runtime_verify(&sample_verify_summary(), RenderProfile::raw());
+
+        assert!(lines.iter().any(|line| line == "name: stable"));
+        assert!(lines.iter().any(|line| line == "healthy: true"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "releaseSelectorKind: channel"));
+        assert!(!lines.iter().any(|line| line.contains('┌')));
+    }
+
     fn sample_runtime() -> RuntimeMeta {
         RuntimeMeta {
             kind: "ocm-runtime".to_string(),
@@ -524,6 +708,27 @@ mod tests {
             description: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn sample_verify_summary() -> RuntimeVerifySummary {
+        RuntimeVerifySummary {
+            name: "stable".to_string(),
+            binary_path: "/tmp/openclaw".to_string(),
+            source_kind: "installed".to_string(),
+            source_path: None,
+            source_url: Some(
+                "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz".to_string(),
+            ),
+            source_manifest_url: Some("https://registry.npmjs.org/openclaw".to_string()),
+            source_sha256: Some("abc123".to_string()),
+            release_version: Some("2026.3.24".to_string()),
+            release_channel: Some("stable".to_string()),
+            release_selector_kind: Some(RuntimeReleaseSelectorKind::Channel),
+            release_selector_value: Some("stable".to_string()),
+            install_root: Some("/tmp/ocm/runtimes/stable".to_string()),
+            healthy: true,
+            issue: None,
         }
     }
 }

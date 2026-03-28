@@ -258,6 +258,33 @@ fn release_and_runtime_show_reject_json_and_raw_together() {
 }
 
 #[test]
+fn runtime_verify_accepts_raw_output_mode() {
+    let root = TestDir::new("runtime-verify-raw");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let binary_path = cwd.join("bin/openclaw");
+    write_executable_script(&binary_path, "#!/bin/sh\nexit 0\n");
+    let runtime = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/openclaw"],
+    );
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+
+    let verify = run_ocm(&cwd, &env, &["runtime", "verify", "stable", "--raw"]);
+    assert!(verify.status.success(), "{}", stderr(&verify));
+    assert!(stdout(&verify).contains("name: stable"));
+    assert!(!stdout(&verify).contains("┌"));
+
+    let verify_all = run_ocm(&cwd, &env, &["runtime", "verify", "--all", "--raw"]);
+    assert!(verify_all.status.success(), "{}", stderr(&verify_all));
+    assert!(stdout(&verify_all).contains("healthy=true"));
+    assert!(!stdout(&verify_all).contains("┌"));
+}
+
+#[test]
 fn env_snapshot_commands_accept_raw_output_mode() {
     let root = TestDir::new("snapshot-raw");
     let cwd = root.child("workspace");

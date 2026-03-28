@@ -1,4 +1,4 @@
-use super::{RuntimeMeta, RuntimeService};
+use super::{RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService};
 use crate::store::{get_runtime, get_runtime_verified, list_runtimes, runtime_integrity_issue};
 use serde::Serialize;
 
@@ -14,6 +14,8 @@ pub struct RuntimeVerifySummary {
     pub source_sha256: Option<String>,
     pub release_version: Option<String>,
     pub release_channel: Option<String>,
+    pub release_selector_kind: Option<RuntimeReleaseSelectorKind>,
+    pub release_selector_value: Option<String>,
     pub install_root: Option<String>,
     pub healthy: bool,
     pub issue: Option<String>,
@@ -64,6 +66,8 @@ fn build_verify_summary(meta: RuntimeMeta) -> RuntimeVerifySummary {
         source_sha256: meta.source_sha256,
         release_version: meta.release_version,
         release_channel: meta.release_channel,
+        release_selector_kind: meta.release_selector_kind,
+        release_selector_value: meta.release_selector_value,
         install_root: meta.install_root,
         healthy: issue.is_none(),
         issue,

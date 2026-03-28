@@ -1197,16 +1197,20 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
         "verify" => render_leaf(
             "Verify runtimes",
             "Check runtime health for one runtime or every runtime.",
-            vec![format!("{cmd} runtime verify (<name> | --all) [--json]")],
+            vec![format!("{cmd} runtime verify (<name> | --all) [--raw] [--json]")],
             &[
                 ("--all", "Verify every runtime"),
+                (
+                    "--raw",
+                    "Force plain verification output instead of TTY cards or tables",
+                ),
                 ("--json", "Print verification summaries as JSON"),
             ],
             vec![
                 format!("{cmd} runtime verify stable"),
                 format!("{cmd} runtime verify --all"),
             ],
-            &[],
+            &["TTY output uses cards for one runtime and a table for `--all` by default."],
         ),
         "which" => render_leaf(
             "Print a runtime binary path",

@@ -338,7 +338,7 @@ impl Cli {
     }
 
     pub(super) fn handle_runtime_verify(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "runtime verify")?;
         let (args, all_flag) = Self::consume_flag(args, "--all");
         if all_flag {
             Self::assert_no_extra_args(&args)?;
@@ -354,7 +354,7 @@ impl Cli {
                 return Ok(code);
             }
 
-            self.stdout_lines(render::runtime::runtime_verify_all(&summaries));
+            self.stdout_lines(render::runtime::runtime_verify_all(&summaries, profile));
             return Ok(code);
         }
 
@@ -371,7 +371,7 @@ impl Cli {
             return Ok(code);
         }
 
-        self.stdout_lines(render::runtime::runtime_verify(&summary));
+        self.stdout_lines(render::runtime::runtime_verify(&summary, profile));
         Ok(code)
     }
 

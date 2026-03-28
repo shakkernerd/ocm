@@ -296,6 +296,21 @@ fn release_and_runtime_show_help_mentions_raw_mode() {
 }
 
 #[test]
+fn runtime_verify_help_mentions_raw_mode() {
+    let root = TestDir::new("help-runtime-verify");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let verify = run_ocm(&cwd, &env, &["help", "runtime", "verify"]);
+    assert!(verify.status.success(), "{}", stderr(&verify));
+    let output = stdout(&verify);
+    assert!(output.contains("ocm runtime verify (<name> | --all) [--raw] [--json]"));
+    assert!(output
+        .contains("TTY output uses cards for one runtime and a table for `--all` by default."));
+}
+
+#[test]
 fn version_flag_uses_the_package_version() {
     let root = TestDir::new("version-flag");
     let cwd = root.child("workspace");
