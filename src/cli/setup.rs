@@ -3,16 +3,16 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use dialoguer::{
-    console::{style, Style},
-    theme::ColorfulTheme,
     Input, Select,
+    console::{Style, style},
+    theme::ColorfulTheme,
 };
 use serde_json::Value;
 use time::OffsetDateTime;
 
-use super::{start::StartOnboardingMode, Cli};
+use super::{Cli, start::StartOnboardingMode};
 use crate::cli::start::StartRequest;
-use crate::infra::terminal::{paint, render_key_value_card, KeyValueRow, Tone};
+use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
 use crate::store::validate_name;
 
 impl Cli {
@@ -70,7 +70,7 @@ impl Cli {
             root: None,
             gateway_port: None,
             protect: false,
-            service_requested: self.prompt_yes_no("Install a persistent service?", false)?,
+            service_requested: self.prompt_yes_no("Install a persistent service?", true)?,
             onboarding_mode: if self.prompt_yes_no("Run onboarding now?", true)? {
                 StartOnboardingMode::Always
             } else {

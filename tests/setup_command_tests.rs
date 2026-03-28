@@ -9,8 +9,28 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, ocm_env, run_ocm, run_ocm_with_stdin, stderr, stdout,
+    TestDir, TestHttpServer, ocm_env, path_string, run_ocm, run_ocm_with_stdin, stderr, stdout,
+    write_executable_script,
 };
+
+fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<String, String>) {
+    let bin_dir = root.child("fake-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let log_path = root.child("launchctl.log");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  print)\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
+        path_string(&log_path)
+    );
+    write_executable_script(&bin_dir.join("launchctl"), &script);
+
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let combined_path = if existing_path.is_empty() {
+        path_string(&bin_dir)
+    } else {
+        format!("{}:{existing_path}", path_string(&bin_dir))
+    };
+    env.insert("PATH".to_string(), combined_path);
+}
 
 fn append_tar_file(
     builder: &mut Builder<&mut GzEncoder<Vec<u8>>>,
@@ -145,4 +165,28 @@ fn setup_detects_a_local_openclaw_checkout_and_uses_default_local_values() {
         show_json["cwd"],
         fs::canonicalize(&repo).unwrap().display().to_string()
     );
+}
+
+#[test]
+fn setup_defaults_service_install_to_yes_in_raw_mode() {
+    let root = TestDir::new("setup-default-service-yes");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    install_fake_launchctl(&root, &mut env);
+
+    let input = format!("4\nquick\n/bin/echo\n{}\n\nn\n", cwd.display());
+    let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], &input);
+    assert!(setup.status.success(), "{}", stderr(&setup));
+    let output = stdout(&setup);
+    assert!(output.contains("Started env quick"));
+    assert!(output.contains("service: running"));
+
+    let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
+    assert!(launchctl_log.contains("bootstrap gui/"));
+    assert!(launchctl_log.contains("kickstart -k gui/"));
 }
