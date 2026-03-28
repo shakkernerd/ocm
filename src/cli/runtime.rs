@@ -61,7 +61,11 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::runtime::runtime_show(&meta, profile)?);
+        self.stdout_lines(render::runtime::runtime_show(
+            &meta,
+            profile,
+            &self.command_example(),
+        )?);
         Ok(0)
     }
 

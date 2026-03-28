@@ -382,7 +382,11 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::env::env_show(&summary, profile)?);
+        self.stdout_lines(render::env::env_show(
+            &summary,
+            profile,
+            &self.command_example(),
+        )?);
         Ok(0)
     }
 

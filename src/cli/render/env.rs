@@ -503,12 +503,39 @@ mod tests {
                 last_used_at: None,
             },
             RenderProfile::pretty(false),
+            "ocm",
         )
         .unwrap();
 
         assert_eq!(lines[0], "Environment demo");
         assert!(lines.iter().any(|line| line.contains("Paths")));
         assert!(lines.iter().any(|line| line.contains("Metadata")));
+    }
+
+    #[test]
+    fn env_show_pretty_suggests_start_for_unbound_env() {
+        let lines = env_show(
+            &EnvSummary {
+                name: "bare".to_string(),
+                root: "/tmp/bare".to_string(),
+                openclaw_home: "/tmp/bare".to_string(),
+                state_dir: "/tmp/bare/.openclaw".to_string(),
+                config_path: "/tmp/bare/.openclaw/openclaw.json".to_string(),
+                workspace_dir: "/tmp/bare/.openclaw/workspace".to_string(),
+                gateway_port: Some(18789),
+                default_runtime: None,
+                default_launcher: None,
+                protected: false,
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                last_used_at: None,
+            },
+            RenderProfile::pretty(false),
+            "ocm",
+        )
+        .unwrap();
+
+        assert!(lines.iter().any(|line| line.contains("Next")));
+        assert!(lines.iter().any(|line| line.contains("ocm start bare")));
     }
 
     #[test]
@@ -722,7 +749,11 @@ mod tests {
     }
 }
 
-pub fn env_show(summary: &EnvSummary, profile: RenderProfile) -> Result<Vec<String>, String> {
+pub fn env_show(
+    summary: &EnvSummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Result<Vec<String>, String> {
     if !profile.pretty {
         return env_show_raw(summary);
     }
@@ -764,7 +795,33 @@ pub fn env_show(summary: &EnvSummary, profile: RenderProfile) -> Result<Vec<Stri
     }
     push_card(&mut lines, "Metadata", metadata, profile.color);
 
+    let next_steps = env_show_next_steps(summary, command_example);
+    if !next_steps.is_empty() {
+        push_card(&mut lines, "Next", next_steps, profile.color);
+    }
+
     Ok(lines)
+}
+
+fn env_show_next_steps(summary: &EnvSummary, command_example: &str) -> Vec<KeyValueRow> {
+    if summary.default_runtime.is_none() && summary.default_launcher.is_none() {
+        return vec![KeyValueRow::accent(
+            "Start",
+            format!("{command_example} start {}", summary.name),
+        )];
+    }
+
+    vec![
+        KeyValueRow::accent(
+            "Activate",
+            format!("{command_example} env use {}", summary.name),
+        ),
+        KeyValueRow::accent(
+            "Status",
+            format!("{command_example} env status {}", summary.name),
+        ),
+        KeyValueRow::warning("Run", format!("{command_example} @{} -- status", summary.name)),
+    ]
 }
 
 fn env_show_raw(summary: &EnvSummary) -> Result<Vec<String>, String> {

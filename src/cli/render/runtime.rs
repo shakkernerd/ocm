@@ -141,7 +141,11 @@ fn selector_summary(meta: &RuntimeMeta) -> Option<String> {
     }
 }
 
-pub fn runtime_show(meta: &RuntimeMeta, profile: RenderProfile) -> Result<Vec<String>, String> {
+pub fn runtime_show(
+    meta: &RuntimeMeta,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Result<Vec<String>, String> {
     if !profile.pretty {
         return runtime_show_raw(meta);
     }
@@ -212,7 +216,32 @@ pub fn runtime_show(meta: &RuntimeMeta, profile: RenderProfile) -> Result<Vec<St
         profile.color,
     );
 
+    let next_steps = runtime_show_next_steps(meta, command_example);
+    if !next_steps.is_empty() {
+        push_card(&mut lines, "Next", next_steps, profile.color);
+    }
+
     Ok(lines)
+}
+
+fn runtime_show_next_steps(meta: &RuntimeMeta, command_example: &str) -> Vec<KeyValueRow> {
+    let mut rows = vec![
+        KeyValueRow::accent(
+            "Use in env",
+            format!("{command_example} env create demo --runtime {}", meta.name),
+        ),
+        KeyValueRow::accent(
+            "Verify",
+            format!("{command_example} runtime verify {}", meta.name),
+        ),
+    ];
+    if meta.release_selector_kind.is_some() {
+        rows.push(KeyValueRow::warning(
+            "Update",
+            format!("{command_example} runtime update {}", meta.name),
+        ));
+    }
+    rows
 }
 
 fn runtime_show_raw(meta: &RuntimeMeta) -> Result<Vec<String>, String> {
@@ -646,7 +675,7 @@ mod tests {
 
     #[test]
     fn runtime_show_pretty_uses_cards() {
-        let lines = runtime_show(&sample_runtime(), RenderProfile::pretty(false)).unwrap();
+        let lines = runtime_show(&sample_runtime(), RenderProfile::pretty(false), "ocm").unwrap();
 
         assert_eq!(lines[0], "Runtime stable");
         assert!(lines.iter().any(|line| line.contains("Runtime")));
@@ -658,8 +687,24 @@ mod tests {
     }
 
     #[test]
+    fn runtime_show_pretty_includes_next_steps() {
+        let lines = runtime_show(&sample_runtime(), RenderProfile::pretty(false), "ocm").unwrap();
+
+        assert!(lines.iter().any(|line| line.contains("Next")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("ocm env create demo --runtime stable")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("ocm runtime verify stable")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("ocm runtime update stable")));
+    }
+
+    #[test]
     fn runtime_show_raw_keeps_key_value_lines() {
-        let lines = runtime_show(&sample_runtime(), RenderProfile::raw()).unwrap();
+        let lines = runtime_show(&sample_runtime(), RenderProfile::raw(), "ocm").unwrap();
 
         assert!(lines.iter().any(|line| line == "kind: ocm-runtime"));
         assert!(lines.iter().any(|line| line == "name: stable"));

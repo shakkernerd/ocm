@@ -69,7 +69,11 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::release::release_show(&release, profile)?);
+        self.stdout_lines(render::release::release_show(
+            &release,
+            profile,
+            &self.command_example(),
+        )?);
         Ok(0)
     }
 
