@@ -139,7 +139,6 @@ pub fn env_doctor(doctor: &EnvDoctorSummary, profile: RenderProfile) -> Vec<Stri
         Tone::Strong,
         profile.color,
     )];
-    lines.push(render_tags(&env_doctor_tags(doctor), profile.color));
 
     push_card(
         &mut lines,
@@ -402,79 +401,6 @@ fn resolution_row(status: &EnvStatusSummary) -> KeyValueRow {
     }
 }
 
-fn env_show_tags(summary: &EnvSummary) -> Vec<Cell> {
-    let mut tags = Vec::new();
-    if let Some(runtime) = summary.default_runtime.as_deref() {
-        tags.push(Cell::accent(format!("runtime:{runtime}")));
-    }
-    if let Some(launcher) = summary.default_launcher.as_deref() {
-        tags.push(Cell::accent(format!("launcher:{launcher}")));
-    }
-    if let Some(port) = summary.gateway_port {
-        tags.push(Cell::accent(format!("port {port}")));
-    }
-    if summary.protected {
-        tags.push(Cell::warning("protected"));
-    }
-    tags
-}
-
-fn env_status_tags(status: &EnvStatusSummary) -> Vec<Cell> {
-    let mut tags = Vec::new();
-    if let (Some(kind), Some(name)) = (
-        status.resolved_kind.as_deref(),
-        status.resolved_name.as_deref(),
-    ) {
-        tags.push(Cell::accent(format!("{kind}:{name}")));
-    }
-    if let Some(port) = status.gateway_port {
-        tags.push(Cell::accent(format!("port {port}")));
-    }
-    if let Some(runtime_health) = status.runtime_health.as_deref() {
-        tags.push(Cell::new(
-            format!("runtime {runtime_health}"),
-            crate::infra::terminal::Align::Left,
-            state_tone(runtime_health),
-        ));
-    }
-    if let Some(state) = status.managed_service_state.as_deref() {
-        tags.push(Cell::new(
-            format!("managed {state}"),
-            crate::infra::terminal::Align::Left,
-            state_tone(state),
-        ));
-    }
-    if let Some(state) = status.global_service_state.as_deref() {
-        tags.push(Cell::new(
-            format!("global {state}"),
-            crate::infra::terminal::Align::Left,
-            state_tone(state),
-        ));
-    }
-    if status.issue.is_some() {
-        tags.push(Cell::danger("needs attention"));
-    }
-    tags
-}
-
-fn env_doctor_tags(doctor: &EnvDoctorSummary) -> Vec<Cell> {
-    let mut tags = vec![if doctor.healthy {
-        Cell::success("healthy")
-    } else {
-        Cell::danger("needs attention")
-    }];
-    if let (Some(kind), Some(name)) = (
-        doctor.resolved_kind.as_deref(),
-        doctor.resolved_name.as_deref(),
-    ) {
-        tags.push(Cell::accent(format!("{kind}:{name}")));
-    }
-    if !doctor.issues.is_empty() {
-        tags.push(Cell::warning(format!("{} issue(s)", doctor.issues.len())));
-    }
-    tags
-}
-
 fn doctor_resolution_row(doctor: &EnvDoctorSummary) -> KeyValueRow {
     match (
         doctor.resolved_kind.as_deref(),
@@ -569,14 +495,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(lines[0], "Environment demo");
-        assert!(lines[1].contains("[launcher:stable]"));
-        assert!(lines[1].contains("[port 18789]"));
         assert!(lines.iter().any(|line| line.contains("Paths")));
         assert!(lines.iter().any(|line| line.contains("Metadata")));
     }
 
     #[test]
-    fn env_status_pretty_uses_cards_and_tags() {
+    fn env_status_pretty_uses_cards() {
         let lines = env_status(
             &EnvStatusSummary {
                 env_name: "demo".to_string(),
@@ -602,8 +526,6 @@ mod tests {
         );
 
         assert_eq!(lines[0], "Environment status demo");
-        assert!(lines[1].contains("[launcher:stable]"));
-        assert!(lines[1].contains("[managed running]"));
         assert!(lines.iter().any(|line| line.contains("Binding")));
         assert!(lines.iter().any(|line| line.contains("Gateway")));
     }
@@ -624,7 +546,6 @@ mod tests {
         );
 
         assert_eq!(lines[0], "Execution plan demo");
-        assert!(lines[1].contains("[launcher:stable]"));
         assert!(lines.iter().any(|line| line.contains("Resolution")));
         assert!(lines.iter().any(|line| line.contains("Forwarded args")));
     }
@@ -651,7 +572,6 @@ mod tests {
         );
 
         assert_eq!(lines[0], "Environment doctor demo");
-        assert!(lines[1].contains("[needs attention]"));
         assert!(lines.iter().any(|line| line.contains("Summary")));
         assert!(lines.iter().any(|line| line.contains("Checks")));
         assert!(lines.iter().any(|line| line.contains("Issues")));
@@ -666,8 +586,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(lines[0], "Snapshot snap-001");
-        assert!(lines[1].contains("[env:demo]"));
-        assert!(lines[1].contains("[label:before-upgrade]"));
         assert!(lines.iter().any(|line| line.contains("Snapshot")));
         assert!(lines.iter().any(|line| line.contains("Paths")));
         assert!(lines.iter().any(|line| line.contains("Bindings")));
@@ -731,10 +649,6 @@ pub fn env_show(summary: &EnvSummary, profile: RenderProfile) -> Result<Vec<Stri
         Tone::Strong,
         profile.color,
     )];
-    let tags = env_show_tags(summary);
-    if !tags.is_empty() {
-        lines.push(render_tags(&tags, profile.color));
-    }
 
     push_card(
         &mut lines,
@@ -805,10 +719,6 @@ pub fn env_status(status: &EnvStatusSummary, profile: RenderProfile) -> Vec<Stri
         Tone::Strong,
         profile.color,
     )];
-    let tags = env_status_tags(status);
-    if !tags.is_empty() {
-        lines.push(render_tags(&tags, profile.color));
-    }
 
     push_card(
         &mut lines,
@@ -964,10 +874,6 @@ pub fn env_snapshot_show(
         Tone::Strong,
         profile.color,
     )];
-    let tags = env_snapshot_tags(snapshot);
-    if !tags.is_empty() {
-        lines.push(render_tags(&tags, profile.color));
-    }
 
     push_card(
         &mut lines,
@@ -1247,20 +1153,6 @@ fn env_snapshot_pruned_raw(removed: &[EnvSnapshotRemoveSummary]) -> Vec<String> 
     lines
 }
 
-fn env_snapshot_tags(snapshot: &EnvSnapshotSummary) -> Vec<Cell> {
-    let mut tags = vec![Cell::accent(format!("env:{}", snapshot.env_name))];
-    if let Some(label) = snapshot.label.as_deref() {
-        tags.push(Cell::accent(format!("label:{label}")));
-    }
-    if let Some(port) = snapshot.gateway_port {
-        tags.push(Cell::accent(format!("port {port}")));
-    }
-    if snapshot.protected {
-        tags.push(Cell::warning("protected"));
-    }
-    tags
-}
-
 fn snapshot_binding_cell(snapshot: &EnvSnapshotSummary) -> Cell {
     if let Some(runtime) = snapshot.default_runtime.as_deref() {
         return Cell::accent(format!("runtime:{runtime}"));
@@ -1281,13 +1173,6 @@ pub fn env_resolved(summary: &ExecutionSummary, profile: RenderProfile) -> Vec<S
         Tone::Strong,
         profile.color,
     )];
-    lines.push(render_tags(
-        &[Cell::accent(format!(
-            "{}:{}",
-            summary.binding_kind, summary.binding_name
-        ))],
-        profile.color,
-    ));
 
     let mut resolution = vec![
         KeyValueRow::accent(

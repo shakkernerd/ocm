@@ -1,7 +1,6 @@
 use super::RenderProfile;
 use crate::infra::terminal::{
-    Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, render_tags,
-    terminal_width,
+    Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, terminal_width,
 };
 use crate::service::{
     DiscoveredServiceList, ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary,
@@ -226,7 +225,6 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
         Tone::Strong,
         profile.color,
     )];
-    lines.push(render_tags(&service_status_tags(summary), profile.color));
 
     push_card(
         &mut lines,
@@ -610,34 +608,6 @@ fn bool_row(label: &str, value: bool) -> KeyValueRow {
     }
 }
 
-fn service_status_tags(summary: &ServiceSummary) -> Vec<Cell> {
-    let managed_state = daemon_state(summary.installed, summary.loaded, summary.running);
-    let global_state = global_relation(summary);
-    let mut tags = vec![
-        Cell::accent(format!("port {}", summary.gateway_port)),
-        Cell::new(
-            format!("managed {managed_state}"),
-            crate::infra::terminal::Align::Left,
-            state_tone(managed_state),
-        ),
-        Cell::new(
-            format!("global {global_state}"),
-            crate::infra::terminal::Align::Left,
-            state_tone(global_state),
-        ),
-    ];
-    if let (Some(kind), Some(name)) = (
-        summary.binding_kind.as_deref(),
-        summary.binding_name.as_deref(),
-    ) {
-        tags.push(Cell::accent(format!("{kind}:{name}")));
-    }
-    if summary.issue.is_some() {
-        tags.push(Cell::danger("needs attention"));
-    }
-    tags
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -708,12 +678,10 @@ mod tests {
     }
 
     #[test]
-    fn service_status_pretty_uses_cards_and_tags() {
+    fn service_status_pretty_uses_cards() {
         let lines = service_status(&sample_service_summary(), RenderProfile::pretty(false));
 
         assert_eq!(lines[0], "Service demo");
-        assert!(lines[1].contains("[port 18789]"));
-        assert!(lines[1].contains("[managed loaded]"));
         assert!(lines.iter().any(|line| line.contains("Managed service")));
         assert!(lines.iter().any(|line| line.contains("Global service")));
     }
