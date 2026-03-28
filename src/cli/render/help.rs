@@ -102,7 +102,11 @@ pub fn root_help(cmd: &str) -> String {
             ("setup", "Guided setup for release and local-dev flows"),
             (
                 "start",
-                "Fast path: create or reuse an env and get it ready",
+                "Fast path: create or reuse an env and keep it running",
+            ),
+            (
+                "upgrade",
+                "Update one env or all envs and restart services when needed",
             ),
             ("self", "Update the installed ocm binary"),
             (
@@ -126,10 +130,13 @@ pub fn root_help(cmd: &str) -> String {
         "Get started",
         format_examples(&[
             format!("{cmd} start mybot"),
-            format!("eval \"$({cmd} env use mybot)\""),
-            format!("{cmd} -- status"),
+            format!("{cmd} @mybot -- onboard"),
+            format!("{cmd} @mybot -- status"),
+            format!("{cmd} upgrade mybot"),
             format!("{cmd} start mybot --channel beta"),
-            format!("{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw"),
+            format!(
+                "{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service"
+            ),
         ]),
     );
     push_section(
@@ -138,6 +145,7 @@ pub fn root_help(cmd: &str) -> String {
         format_examples(&[
             format!("{cmd} help setup"),
             format!("{cmd} help start"),
+            format!("{cmd} help upgrade"),
             format!("{cmd} help self"),
             format!("{cmd} help env"),
             format!("{cmd} help release"),
@@ -167,9 +175,9 @@ pub fn setup_help(cmd: &str) -> String {
 pub fn start_help(cmd: &str) -> String {
     render_leaf(
         "Start an environment",
-        "Fast path: create or reuse an environment, prepare the selected OpenClaw source, and optionally run onboarding.",
+        "Fast path: create or reuse an environment, prepare the selected OpenClaw source, start its background service, and optionally run onboarding.",
         vec![format!(
-            "{cmd} start [name] [--runtime <name> | --launcher <name> | --version <version> | --channel <channel> | --command <command>] [--cwd <path>] [--root <path>] [--port <port>] [--protect] [--service] [--onboard | --no-onboard] [--json]"
+            "{cmd} start [name] [--runtime <name> | --launcher <name> | --version <version> | --channel <channel> | --command <command>] [--cwd <path>] [--root <path>] [--port <port>] [--protect] [--service | --no-service] [--onboard | --no-onboard] [--json]"
         )],
         &[
             (
@@ -202,7 +210,11 @@ pub fn start_help(cmd: &str) -> String {
             ("--protect", "Mark the environment as protected"),
             (
                 "--service",
-                "Install and start a persistent env-scoped service",
+                "Keep the default background-service behavior explicit",
+            ),
+            (
+                "--no-service",
+                "Skip installing and starting a background service",
             ),
             (
                 "--onboard",
@@ -217,14 +229,55 @@ pub fn start_help(cmd: &str) -> String {
         vec![
             format!("{cmd} start"),
             format!("{cmd} start demo --channel stable"),
-            format!("{cmd} start demo --version 2026.3.24 --service"),
+            format!("{cmd} start demo --version 2026.3.24"),
             format!(
                 "{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
+            ),
+            format!(
+                "{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service --no-onboard"
             ),
         ],
         &[
             "If an environment already exists, start reuses it and only adjusts binding/protection when you asked for it.",
+            "Start installs and starts the env service by default. Use `--no-service` when you do not want a background process.",
             "`--json` requires `--no-onboard` because onboarding is interactive.",
+        ],
+    )
+}
+
+pub fn upgrade_help(cmd: &str) -> String {
+    render_leaf(
+        "Upgrade environments",
+        "Update OpenClaw for one environment or every environment, and refresh running services when needed.",
+        vec![
+            format!(
+                "{cmd} upgrade <env> [--version <version> | --channel <channel>] [--raw] [--json]"
+            ),
+            format!("{cmd} upgrade --all [--raw] [--json]"),
+        ],
+        &[
+            (
+                "--version <version>",
+                "Move one env to one exact published release",
+            ),
+            (
+                "--channel <channel>",
+                "Move one env to the release for one channel",
+            ),
+            ("--all", "Upgrade every env that can be updated safely"),
+            ("--raw", "Force plain output instead of TTY cards or tables"),
+            ("--json", "Print upgrade summaries as JSON"),
+        ],
+        vec![
+            format!("{cmd} upgrade mybot"),
+            format!("{cmd} upgrade mybot --channel beta"),
+            format!("{cmd} upgrade mybot --version 2026.3.24"),
+            format!("{cmd} upgrade --all"),
+        ],
+        &[
+            "Channel-tracked runtimes move forward automatically.",
+            "Pinned runtimes stay pinned unless you pass --version or --channel explicitly.",
+            "Local-command environments are reported clearly instead of being changed behind your back.",
         ],
     )
 }

@@ -70,7 +70,8 @@ impl Cli {
             root: None,
             gateway_port: None,
             protect: false,
-            service_requested: self.prompt_yes_no("Install a persistent service?", true)?,
+            service_requested: self
+                .prompt_yes_no("Keep OpenClaw running in the background?", true)?,
             onboarding_mode: if self.prompt_yes_no("Run onboarding now?", true)? {
                 StartOnboardingMode::Always
             } else {
@@ -285,19 +286,6 @@ impl Cli {
         mode: SetupMode,
         local_defaults: Option<&LocalSetupDefaults>,
     ) -> String {
-        if !self.use_pretty_setup_prompts() {
-            return match mode {
-                SetupMode::Stable | SetupMode::Beta | SetupMode::Version => "default".to_string(),
-                SetupMode::LocalCommand => {
-                    if local_defaults.is_some() {
-                        "dev".to_string()
-                    } else {
-                        "local".to_string()
-                    }
-                }
-            };
-        }
-
         match mode {
             SetupMode::Stable | SetupMode::Beta | SetupMode::Version => {
                 self.suggest_generated_env_name()

@@ -61,7 +61,8 @@ impl Cli {
         let (args, protect) = Self::consume_flag(args, "--protect");
         let (args, no_onboard) = Self::consume_flag(args, "--no-onboard");
         let (args, onboard) = Self::consume_flag(args, "--onboard");
-        let (args, service_requested) = Self::consume_flag(args, "--service");
+        let (args, service_flag) = Self::consume_flag(args, "--service");
+        let (args, no_service) = Self::consume_flag(args, "--no-service");
         let (args, root) = Self::consume_option(args, "--root")?;
         let root = Self::require_option_value(root, "--root")?;
         let (args, port_raw) = Self::consume_option(args, "--port")?;
@@ -84,6 +85,9 @@ impl Cli {
 
         if onboard && no_onboard {
             return Err("start accepts only one of --onboard or --no-onboard".to_string());
+        }
+        if service_flag && no_service {
+            return Err("start accepts only one of --service or --no-service".to_string());
         }
         if cwd.is_some() && command.is_none() {
             return Err("start accepts --cwd only with --command".to_string());
@@ -117,7 +121,7 @@ impl Cli {
             root,
             gateway_port,
             protect,
-            service_requested,
+            service_requested: !no_service,
             onboarding_mode: if onboard {
                 StartOnboardingMode::Always
             } else if no_onboard {

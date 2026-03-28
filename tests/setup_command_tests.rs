@@ -9,28 +9,9 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, ocm_env, path_string, run_ocm, run_ocm_with_stdin, stderr, stdout,
-    write_executable_script,
+    TestDir, TestHttpServer, install_fake_launchctl, ocm_env, run_ocm, run_ocm_with_stdin, stderr,
+    stdout,
 };
-
-fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<String, String>) {
-    let bin_dir = root.child("fake-bin");
-    fs::create_dir_all(&bin_dir).unwrap();
-    let log_path = root.child("launchctl.log");
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  print)\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
-        path_string(&log_path)
-    );
-    write_executable_script(&bin_dir.join("launchctl"), &script);
-
-    let existing_path = env.get("PATH").cloned().unwrap_or_default();
-    let combined_path = if existing_path.is_empty() {
-        path_string(&bin_dir)
-    } else {
-        format!("{}:{existing_path}", path_string(&bin_dir))
-    };
-    env.insert("PATH".to_string(), combined_path);
-}
 
 fn append_tar_file(
     builder: &mut Builder<&mut GzEncoder<Vec<u8>>>,
@@ -104,9 +85,12 @@ fn setup_can_prepare_latest_stable_without_onboarding() {
     assert!(setup.status.success(), "{}", stderr(&setup));
     let output = stdout(&setup);
     assert!(output.contains("OpenClaw setup"));
-    assert!(output.contains("Started env default"));
+    let env_name = output
+        .lines()
+        .find_map(|line| line.strip_prefix("Started env "))
+        .expect("setup output should name the created environment");
 
-    let show = run_ocm(&cwd, &env, &["env", "show", "default", "--json"]);
+    let show = run_ocm(&cwd, &env, &["env", "show", env_name, "--json"]);
     assert!(show.status.success(), "{}", stderr(&show));
     let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
     assert_eq!(show_json["defaultRuntime"], "stable");

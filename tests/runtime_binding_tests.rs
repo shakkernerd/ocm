@@ -94,6 +94,38 @@ fn env_set_runtime_updates_and_clears_the_default_runtime() {
 }
 
 #[test]
+fn env_set_runtime_clears_an_existing_launcher_binding() {
+    let root = TestDir::new("runtime-binding-clears-launcher");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_executable_script(&bin_dir.join("stable"), "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add_runtime = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add_runtime.status.success(), "{}", stderr(&add_runtime));
+
+    let add_launcher = run_ocm(&cwd, &env, &["launcher", "add", "dev", "--command", "sh"]);
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let bind = run_ocm(&cwd, &env, &["env", "set-runtime", "demo", "stable"]);
+    assert!(bind.status.success(), "{}", stderr(&bind));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let output = stdout(&show);
+    assert!(output.contains("defaultRuntime: stable"));
+    assert!(!output.contains("defaultLauncher:"));
+}
+
+#[test]
 fn env_set_runtime_with_channel_installs_and_binds_the_official_runtime() {
     let root = TestDir::new("runtime-binding-set-channel");
     let cwd = root.child("workspace");

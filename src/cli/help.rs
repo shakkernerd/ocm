@@ -21,6 +21,7 @@ impl Cli {
             ["help"] | ["--help"] | ["-h"] => Ok(render::help::root_help(&cmd)),
             ["setup"] => Ok(render::help::setup_help(&cmd)),
             ["start"] => Ok(render::help::start_help(&cmd)),
+            ["upgrade"] => Ok(render::help::upgrade_help(&cmd)),
             ["init"] => Ok(render::help::init_help(&cmd)),
             ["self"] => Ok(render::help::self_help(&cmd)),
             ["env"] => Ok(render::help::env_help(&cmd)),
@@ -48,6 +49,7 @@ impl Cli {
                     *group,
                     "setup"
                         | "start"
+                        | "upgrade"
                         | "self"
                         | "env"
                         | "release"
@@ -83,6 +85,9 @@ impl Cli {
             }
             [group, flag] if group == "setup" && Self::is_help_flag(flag) => Some(vec!["setup"]),
             [group, flag] if group == "start" && Self::is_help_flag(flag) => Some(vec!["start"]),
+            [group, flag] if group == "upgrade" && Self::is_help_flag(flag) => {
+                Some(vec!["upgrade"])
+            }
             [group, next] if group == "init" && Self::is_help_token(next) => Some(vec!["init"]),
             [group, next, rest @ ..]
                 if matches!(

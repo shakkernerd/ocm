@@ -9,7 +9,8 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
+    TestDir, TestHttpServer, install_fake_launchctl, ocm_env, path_string, run_ocm, stderr, stdout,
+    write_executable_script,
 };
 
 fn append_tar_file(
@@ -76,6 +77,11 @@ fn start_generates_an_env_name_and_uses_latest_stable_runtime() {
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
     env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    install_fake_launchctl(&root, &mut env);
+    env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
     );
@@ -90,6 +96,7 @@ fn start_generates_an_env_name_and_uses_latest_stable_runtime() {
     assert_ne!(env_name, "default");
     assert!(output.contains("runtime: stable"));
     assert!(output.contains(&format!("onboard: ocm @{env_name} -- onboard")));
+    assert!(output.contains("service: running"));
 
     let show = run_ocm(&cwd, &env, &["env", "show", env_name, "--json"]);
     assert!(show.status.success(), "{}", stderr(&show));
@@ -131,7 +138,7 @@ fn start_without_a_name_generates_a_new_env_each_time() {
         packument_server.url(),
     );
 
-    let first = run_ocm(&cwd, &env, &["start", "--no-onboard"]);
+    let first = run_ocm(&cwd, &env, &["start", "--no-service", "--no-onboard"]);
     assert!(first.status.success(), "{}", stderr(&first));
     let first_name = stdout(&first)
         .lines()
@@ -139,7 +146,7 @@ fn start_without_a_name_generates_a_new_env_each_time() {
         .expect("first start output should name the created environment")
         .to_string();
 
-    let second = run_ocm(&cwd, &env, &["start", "--no-onboard"]);
+    let second = run_ocm(&cwd, &env, &["start", "--no-service", "--no-onboard"]);
     assert!(second.status.success(), "{}", stderr(&second));
     let second_name = stdout(&second)
         .lines()
@@ -168,6 +175,7 @@ fn start_can_create_a_local_command_launcher() {
             "pnpm openclaw",
             "--cwd",
             &project_dir.to_string_lossy(),
+            "--no-service",
             "--no-onboard",
         ],
     );
@@ -212,7 +220,11 @@ fn start_reuses_existing_env_without_forcing_onboarding() {
     );
     assert!(create.status.success(), "{}", stderr(&create));
 
-    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-onboard"]);
+    let start = run_ocm(
+        &cwd,
+        &env,
+        &["start", "demo", "--no-service", "--no-onboard"],
+    );
     assert!(start.status.success(), "{}", stderr(&start));
     let output = stdout(&start);
     assert!(output.contains("Using env demo"));
@@ -228,7 +240,7 @@ fn start_rejects_json_when_onboarding_would_run() {
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let output = run_ocm(&cwd, &env, &["start", "--json"]);
+    let output = run_ocm(&cwd, &env, &["start", "--json", "--no-service"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("start cannot combine --json with interactive onboarding"));
 }
@@ -251,6 +263,7 @@ fn start_reports_recovery_steps_when_onboarding_fails() {
             "demo",
             "--command",
             &path_string(&failing_openclaw),
+            "--no-service",
         ],
     );
     assert_eq!(start.status.code(), Some(1));

@@ -197,6 +197,25 @@ pub fn write_executable_script(path: &Path, contents: &str) {
     }
 }
 
+pub fn install_fake_launchctl(root: &TestDir, env: &mut BTreeMap<String, String>) {
+    let bin_dir = root.child("fake-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let log_path = root.child("launchctl.log");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  print)\n    printf 'state = running\\npid = 23613\\n'\n    exit 0\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
+        path_string(&log_path)
+    );
+    write_executable_script(&bin_dir.join("launchctl"), &script);
+
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let combined_path = if existing_path.is_empty() {
+        path_string(&bin_dir)
+    } else {
+        format!("{}:{existing_path}", path_string(&bin_dir))
+    };
+    env.insert("PATH".to_string(), combined_path);
+}
+
 pub fn run_ocm(cwd: &Path, env: &BTreeMap<String, String>, args: &[&str]) -> Output {
     run_ocm_binary(Path::new(env!("CARGO_BIN_EXE_ocm")), cwd, env, args)
 }

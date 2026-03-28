@@ -9,6 +9,7 @@ impl<'a> EnvironmentService<'a> {
         } else {
             get_launcher(launcher_name, self.env, self.cwd)?;
             meta.default_launcher = Some(launcher_name.to_string());
+            meta.default_runtime = None;
         }
         save_environment(meta, self.env, self.cwd)
     }
@@ -20,6 +21,7 @@ impl<'a> EnvironmentService<'a> {
         } else {
             get_runtime_verified(runtime_name, self.env, self.cwd)?;
             meta.default_runtime = Some(runtime_name.to_string());
+            meta.default_launcher = None;
         }
         save_environment(meta, self.env, self.cwd)
     }

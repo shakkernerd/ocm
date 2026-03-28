@@ -9,6 +9,7 @@ mod self_cmd;
 mod service;
 mod setup;
 mod start;
+mod upgrade;
 
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
@@ -481,6 +482,7 @@ impl Cli {
             "init" => cli.handle_init_command(&action, rest),
             "setup" => cli.handle_setup_command(args[1..].to_vec()),
             "start" => cli.handle_start_command(args[1..].to_vec()),
+            "upgrade" => cli.handle_upgrade_command(args[1..].to_vec()),
             "env" => cli.dispatch_env_command(action.as_str(), rest),
             "release" => cli.dispatch_release_command(action.as_str(), rest),
             "launcher" => cli.dispatch_launcher_command(action.as_str(), rest),
