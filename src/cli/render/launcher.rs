@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::infra::terminal::{Cell, render_table};
+use crate::infra::terminal::{Cell, render_table, terminal_width};
 use crate::launcher::LauncherMeta;
 
 use super::{RenderProfile, format_key_value_lines, format_rfc3339};
@@ -17,6 +17,14 @@ pub fn launcher_added(meta: &LauncherMeta) -> Vec<String> {
 }
 
 pub fn launcher_list(launchers: &[LauncherMeta], profile: RenderProfile) -> Vec<String> {
+    launcher_list_with_width(launchers, profile, terminal_width())
+}
+
+fn launcher_list_with_width(
+    launchers: &[LauncherMeta],
+    profile: RenderProfile,
+    width: Option<usize>,
+) -> Vec<String> {
     if launchers.is_empty() {
         return vec!["No launchers.".to_string()];
     }
@@ -24,20 +32,39 @@ pub fn launcher_list(launchers: &[LauncherMeta], profile: RenderProfile) -> Vec<
         return launcher_list_raw(launchers);
     }
 
+    let show_cwd = width.map(|width| width >= 100).unwrap_or(true);
     let rows = launchers
         .iter()
         .map(|meta| {
-            vec![
+            let mut row = vec![
                 Cell::accent(meta.name.clone()),
                 Cell::plain(meta.command.clone()),
-                meta.cwd
-                    .as_deref()
-                    .map(Cell::muted)
-                    .unwrap_or_else(|| Cell::muted("—")),
-            ]
+            ];
+            if show_cwd {
+                row.push(
+                    meta.cwd
+                        .as_deref()
+                        .map(Cell::muted)
+                        .unwrap_or_else(|| Cell::muted("—")),
+                );
+            }
+            row
         })
         .collect::<Vec<_>>();
-    render_table(&["Name", "Command", "Cwd"], &rows, profile.color)
+    let mut lines = render_table(
+        if show_cwd {
+            &["Name", "Command", "Cwd"]
+        } else {
+            &["Name", "Command"]
+        },
+        &rows,
+        profile.color,
+    );
+    if !show_cwd {
+        lines.push(String::new());
+        lines.push("Use --raw for full cwd details.".to_string());
+    }
+    lines
 }
 
 fn launcher_list_raw(launchers: &[LauncherMeta]) -> Vec<String> {
@@ -70,4 +97,46 @@ pub fn launcher_show(meta: &LauncherMeta) -> Result<Vec<String>, String> {
 
 pub fn launcher_removed(name: &str) -> Vec<String> {
     vec![format!("Removed launcher {name}")]
+}
+
+#[cfg(test)]
+mod tests {
+    use time::OffsetDateTime;
+
+    use super::{RenderProfile, launcher_list_with_width};
+    use crate::launcher::LauncherMeta;
+
+    #[test]
+    fn launcher_list_pretty_compacts_on_narrow_terminals() {
+        let lines =
+            launcher_list_with_width(&[sample_launcher()], RenderProfile::pretty(false), Some(80));
+
+        assert!(lines[1].contains("Command"));
+        assert!(!lines[1].contains("Cwd"));
+        assert_eq!(lines.last().unwrap(), "Use --raw for full cwd details.");
+    }
+
+    #[test]
+    fn launcher_list_pretty_keeps_cwd_on_wide_terminals() {
+        let lines = launcher_list_with_width(
+            &[sample_launcher()],
+            RenderProfile::pretty(false),
+            Some(140),
+        );
+
+        assert!(lines[1].contains("Cwd"));
+        assert!(lines.iter().any(|line| line.contains("/tmp/openclaw")));
+    }
+
+    fn sample_launcher() -> LauncherMeta {
+        LauncherMeta {
+            kind: "ocm-launcher".to_string(),
+            name: "dev".to_string(),
+            command: "pnpm openclaw".to_string(),
+            cwd: Some("/tmp/openclaw".to_string()),
+            description: None,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
 }

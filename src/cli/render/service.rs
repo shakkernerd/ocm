@@ -1,6 +1,7 @@
 use super::RenderProfile;
 use crate::infra::terminal::{
     Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, render_tags,
+    terminal_width,
 };
 use crate::service::{
     DiscoveredServiceList, ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary,
@@ -334,6 +335,14 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
 }
 
 pub fn service_discover(summary: &DiscoveredServiceList, profile: RenderProfile) -> Vec<String> {
+    service_discover_with_width(summary, profile, terminal_width())
+}
+
+fn service_discover_with_width(
+    summary: &DiscoveredServiceList,
+    profile: RenderProfile,
+    width: Option<usize>,
+) -> Vec<String> {
     if summary.services.is_empty() {
         return vec!["No OpenClaw services discovered.".to_string()];
     }
@@ -341,28 +350,16 @@ pub fn service_discover(summary: &DiscoveredServiceList, profile: RenderProfile)
         return service_discover_raw(summary);
     }
 
+    let show_command = width.map(|width| width >= 110).unwrap_or(true);
     let rows = summary
         .services
         .iter()
         .map(|service| {
             let state = daemon_state(service.installed, service.loaded, service.running);
-            let adopt = if service.adoptable {
-                service
-                    .matched_env_name
-                    .as_deref()
-                    .map(|env_name| format!("ready:{env_name}"))
-                    .unwrap_or_else(|| "ready".to_string())
-            } else {
-                "—".to_string()
-            };
-            let command = if !service.program_arguments.is_empty() {
-                service.program_arguments.join(" ")
-            } else {
-                service.program.clone().unwrap_or_else(|| "—".to_string())
-            };
-            vec![
+            let adopt = if service.adoptable { "ready" } else { "—" };
+            let mut row = vec![
                 Cell::accent(service.label.clone()),
-                Cell::plain(service.source_kind.clone()),
+                Cell::plain(pretty_source_kind(&service.source_kind)),
                 Cell::new(
                     state,
                     crate::infra::terminal::Align::Left,
@@ -382,21 +379,48 @@ pub fn service_discover(summary: &DiscoveredServiceList, profile: RenderProfile)
                 } else {
                     Cell::warning(adopt)
                 },
-                if command == "—" {
+            ];
+            if show_command {
+                let command = if !service.program_arguments.is_empty() {
+                    service.program_arguments.join(" ")
+                } else {
+                    service.program.clone().unwrap_or_else(|| "—".to_string())
+                };
+                row.push(if command == "—" {
                     Cell::muted(command)
                 } else {
                     Cell::plain(command)
-                },
-            ]
+                });
+            }
+            row
         })
         .collect::<Vec<_>>();
-    render_table(
-        &[
-            "Label", "Source", "State", "Port", "Env", "Adopt", "Command",
-        ],
+    let mut lines = render_table(
+        if show_command {
+            &["Label", "Kind", "State", "Port", "Env", "Adopt", "Command"]
+        } else {
+            &["Label", "Kind", "State", "Port", "Env", "Adopt"]
+        },
         &rows,
         profile.color,
-    )
+    );
+    if !show_command {
+        lines.push(String::new());
+        lines.push(paint(
+            "Use --raw or --json for full command details.",
+            Tone::Muted,
+            profile.color,
+        ));
+    }
+    lines
+}
+
+fn pretty_source_kind(source_kind: &str) -> String {
+    match source_kind {
+        "openclaw-global" => "global".to_string(),
+        "ocm-managed" => "managed".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn service_discover_raw(summary: &DiscoveredServiceList) -> Vec<String> {
@@ -592,8 +616,10 @@ fn service_status_tags(summary: &ServiceSummary) -> Vec<Cell> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderProfile, service_list, service_status};
-    use crate::service::{ServiceSummary, ServiceSummaryList};
+    use super::{RenderProfile, service_discover_with_width, service_list, service_status};
+    use crate::service::{
+        DiscoveredServiceList, DiscoveredServiceSummary, ServiceSummary, ServiceSummaryList,
+    };
 
     #[test]
     fn service_list_pretty_uses_a_table() {
@@ -665,6 +691,34 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("Global service")));
     }
 
+    #[test]
+    fn service_discover_pretty_compacts_on_narrow_terminals() {
+        let lines = service_discover_with_width(
+            &sample_discovered_service_list(),
+            RenderProfile::pretty(false),
+            Some(80),
+        );
+
+        assert!(lines[1].contains("Kind"));
+        assert!(!lines[1].contains("Command"));
+        assert_eq!(
+            lines.last().unwrap(),
+            "Use --raw or --json for full command details."
+        );
+    }
+
+    #[test]
+    fn service_discover_pretty_keeps_command_on_wide_terminals() {
+        let lines = service_discover_with_width(
+            &sample_discovered_service_list(),
+            RenderProfile::pretty(false),
+            Some(140),
+        );
+
+        assert!(lines[1].contains("Command"));
+        assert!(lines.iter().any(|line| line.contains("/bin/sh -lc")));
+    }
+
     fn sample_service_summary() -> ServiceSummary {
         ServiceSummary {
             env_name: "demo".to_string(),
@@ -695,6 +749,35 @@ mod tests {
             can_adopt_global: false,
             can_restore_global: false,
             issue: None,
+        }
+    }
+
+    fn sample_discovered_service_list() -> DiscoveredServiceList {
+        DiscoveredServiceList {
+            services: vec![DiscoveredServiceSummary {
+                label: "ai.openclaw.gateway.ocm.demo".to_string(),
+                plist_path: "/tmp/demo.plist".to_string(),
+                source_kind: "ocm-managed".to_string(),
+                installed: true,
+                loaded: true,
+                running: false,
+                pid: None,
+                state: Some("loaded".to_string()),
+                config_path: Some("/tmp/demo/.openclaw/openclaw.json".to_string()),
+                state_dir: Some("/tmp/demo/.openclaw".to_string()),
+                openclaw_home: Some("/tmp/demo".to_string()),
+                gateway_port: Some(18789),
+                program: Some("/bin/sh".to_string()),
+                program_arguments: vec![
+                    "/bin/sh".to_string(),
+                    "-lc".to_string(),
+                    "pnpm openclaw gateway run --port 18789".to_string(),
+                ],
+                working_directory: Some("/tmp/demo".to_string()),
+                matched_env_name: Some("demo".to_string()),
+                adoptable: false,
+                adopt_reason: None,
+            }],
         }
     }
 }
