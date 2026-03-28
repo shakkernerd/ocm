@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::infra::terminal::{Cell, render_table};
+use crate::infra::terminal::{Cell, Tone, paint, render_table, terminal_width};
 use crate::runtime::{
     RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeUpdateBatchSummary,
     RuntimeVerifySummary,
@@ -16,6 +16,14 @@ pub fn runtime_added(meta: &RuntimeMeta) -> Vec<String> {
 }
 
 pub fn runtime_list(runtimes: &[RuntimeMeta], profile: RenderProfile) -> Vec<String> {
+    runtime_list_with_width(runtimes, profile, terminal_width())
+}
+
+fn runtime_list_with_width(
+    runtimes: &[RuntimeMeta],
+    profile: RenderProfile,
+    width: Option<usize>,
+) -> Vec<String> {
     if runtimes.is_empty() {
         return vec!["No runtimes.".to_string()];
     }
@@ -23,23 +31,45 @@ pub fn runtime_list(runtimes: &[RuntimeMeta], profile: RenderProfile) -> Vec<Str
         return runtime_list_raw(runtimes);
     }
 
+    let show_full = width.map(|width| width >= 110).unwrap_or(true);
     let rows = runtimes
         .iter()
         .map(|meta| {
-            vec![
-                Cell::accent(meta.name.clone()),
-                Cell::plain(meta.source_kind.as_str()),
-                optional_cell(meta.release_version.as_deref()),
-                optional_cell(meta.release_channel.as_deref()),
-                Cell::muted(meta.binary_path.clone()),
-            ]
+            if show_full {
+                vec![
+                    Cell::accent(meta.name.clone()),
+                    Cell::plain(meta.source_kind.as_str()),
+                    optional_cell(meta.release_version.as_deref()),
+                    optional_cell(meta.release_channel.as_deref()),
+                    Cell::muted(meta.binary_path.clone()),
+                ]
+            } else {
+                vec![
+                    Cell::accent(meta.name.clone()),
+                    Cell::plain(meta.source_kind.as_str()),
+                    Cell::muted(runtime_target(meta)),
+                ]
+            }
         })
         .collect::<Vec<_>>();
-    render_table(
-        &["Name", "Source", "Release", "Channel", "Binary"],
+    let mut lines = render_table(
+        if show_full {
+            &["Name", "Source", "Release", "Channel", "Binary"]
+        } else {
+            &["Name", "Source", "Target"]
+        },
         &rows,
         profile.color,
-    )
+    );
+    if !show_full {
+        lines.push(String::new());
+        lines.push(paint(
+            "Use --raw for full runtime path and release details.",
+            Tone::Muted,
+            profile.color,
+        ));
+    }
+    lines
 }
 
 fn runtime_list_raw(runtimes: &[RuntimeMeta]) -> Vec<String> {
@@ -63,6 +93,18 @@ fn runtime_list_raw(runtimes: &[RuntimeMeta]) -> Vec<String> {
 
 fn optional_cell(value: Option<&str>) -> Cell {
     value.map(Cell::plain).unwrap_or_else(|| Cell::muted("—"))
+}
+
+fn runtime_target(meta: &RuntimeMeta) -> String {
+    match (
+        meta.release_version.as_deref(),
+        meta.release_channel.as_deref(),
+    ) {
+        (Some(version), Some(channel)) => format!("{version} ({channel})"),
+        (Some(version), None) => version.to_string(),
+        (None, Some(channel)) => format!("channel:{channel}"),
+        (None, None) => meta.binary_path.clone(),
+    }
 }
 
 pub fn runtime_show(meta: &RuntimeMeta) -> Result<Vec<String>, String> {
@@ -249,4 +291,58 @@ pub fn runtime_verify(summary: &RuntimeVerifySummary) -> Vec<String> {
         lines.push(format!("issue: {issue}"));
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use time::OffsetDateTime;
+
+    use super::{RenderProfile, runtime_list_with_width};
+    use crate::runtime::{RuntimeMeta, RuntimeSourceKind};
+
+    #[test]
+    fn runtime_list_pretty_compacts_on_narrow_terminals() {
+        let lines =
+            runtime_list_with_width(&[sample_runtime()], RenderProfile::pretty(false), Some(80));
+
+        assert!(lines[1].contains("Target"));
+        assert!(!lines[1].contains("Channel"));
+        assert!(!lines[1].contains("Binary"));
+        assert!(lines.iter().any(|line| line.contains("2026.3.24 (stable)")));
+        assert_eq!(
+            lines.last().unwrap(),
+            "Use --raw for full runtime path and release details."
+        );
+    }
+
+    #[test]
+    fn runtime_list_pretty_keeps_all_columns_on_wide_terminals() {
+        let lines =
+            runtime_list_with_width(&[sample_runtime()], RenderProfile::pretty(false), Some(140));
+
+        assert!(lines[1].contains("Channel"));
+        assert!(lines[1].contains("Binary"));
+        assert!(lines.iter().any(|line| line.contains("/tmp/openclaw")));
+    }
+
+    fn sample_runtime() -> RuntimeMeta {
+        RuntimeMeta {
+            kind: "ocm-runtime".to_string(),
+            name: "stable".to_string(),
+            binary_path: "/tmp/openclaw".to_string(),
+            source_kind: RuntimeSourceKind::Installed,
+            source_path: None,
+            source_url: None,
+            source_manifest_url: None,
+            source_sha256: None,
+            release_version: Some("2026.3.24".to_string()),
+            release_channel: Some("stable".to_string()),
+            release_selector_kind: None,
+            release_selector_value: None,
+            install_root: None,
+            description: None,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
 }
