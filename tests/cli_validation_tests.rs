@@ -4,7 +4,7 @@ use std::fs;
 
 use ocm::store::ensure_store;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr};
+use crate::support::{TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout};
 
 #[test]
 fn env_create_rejects_invalid_names() {
@@ -379,15 +379,24 @@ fn env_cleanup_rejects_mixed_name_and_all_scope() {
 }
 
 #[test]
-fn runtime_releases_requires_manifest_url_and_non_conflicting_selectors() {
+fn runtime_releases_use_the_official_source_and_reject_conflicting_selectors() {
     let root = TestDir::new("cli-runtime-releases-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let server = TestHttpServer::serve_bytes(
+        "/openclaw",
+        "application/json",
+        br#"{"dist-tags":{"latest":"2026.3.24"},"versions":{"2026.3.24":{"version":"2026.3.24","dist":{"tarball":"https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"}}}}"#,
+    );
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        server.url(),
+    );
 
-    let missing_manifest = run_ocm(&cwd, &env, &["runtime", "releases"]);
-    assert_eq!(missing_manifest.status.code(), Some(1));
-    assert!(stderr(&missing_manifest).contains("runtime releases requires --manifest-url"));
+    let official = run_ocm(&cwd, &env, &["runtime", "releases"]);
+    assert_eq!(official.status.code(), Some(0));
+    assert!(stdout(&official).contains("2026.3.24"));
 
     let conflicting = run_ocm(
         &cwd,
@@ -616,7 +625,9 @@ fn runtime_install_rejects_empty_and_conflicting_urls() {
 
     let missing = run_ocm(&cwd, &env, &["runtime", "install", "stable"]);
     assert_eq!(missing.status.code(), Some(1));
-    assert!(stderr(&missing).contains("runtime install requires --path, --url, or --manifest-url"));
+    assert!(stderr(&missing).contains(
+        "runtime install requires --path, --url, --manifest-url, or --version/--channel"
+    ));
 
     let conflicting = run_ocm(
         &cwd,

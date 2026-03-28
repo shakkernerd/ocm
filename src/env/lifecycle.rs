@@ -8,6 +8,7 @@ use time::Duration;
 use time::OffsetDateTime;
 
 use super::EnvironmentService;
+use crate::runtime::RuntimeService;
 use crate::store::{
     clone_environment, create_environment, export_environment, get_environment, get_launcher,
     get_runtime_verified, import_environment, list_environments, now_utc, remove_environment,
@@ -125,6 +126,43 @@ pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<En
 }
 
 impl<'a> EnvironmentService<'a> {
+    pub fn resolve_create_runtime_binding(
+        &self,
+        runtime_name: Option<String>,
+        version: Option<String>,
+        channel: Option<String>,
+    ) -> Result<Option<String>, String> {
+        if runtime_name.is_some() && (version.is_some() || channel.is_some()) {
+            return Err(
+                "env create accepts only one runtime source: --runtime, --version, or --channel"
+                    .to_string(),
+            );
+        }
+        if version.is_some() && channel.is_some() {
+            return Err("env create accepts only one of --version or --channel".to_string());
+        }
+
+        if let Some(runtime_name) = runtime_name {
+            get_runtime_verified(&runtime_name, self.env, self.cwd)?;
+            return Ok(Some(runtime_name));
+        }
+
+        match (version, channel) {
+            (Some(version), None) => Ok(Some(
+                RuntimeService::new(self.env, self.cwd)
+                    .ensure_official_openclaw_runtime(Some(version), None)?
+                    .name,
+            )),
+            (None, Some(channel)) => Ok(Some(
+                RuntimeService::new(self.env, self.cwd)
+                    .ensure_official_openclaw_runtime(None, Some(channel))?
+                    .name,
+            )),
+            (None, None) => Ok(None),
+            _ => unreachable!("conflicting selectors are rejected above"),
+        }
+    }
+
     pub fn apply_effective_gateway_port(&self, mut meta: EnvMeta) -> Result<EnvMeta, String> {
         meta.gateway_port = Some(self.resolve_effective_gateway_port(&meta)?.0);
         Ok(meta)

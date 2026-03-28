@@ -112,6 +112,10 @@ impl Cli {
             Some(raw) => Some(Self::parse_positive_u32(raw, "--port")?),
             _ => None,
         };
+        let (args, version) = Self::consume_option(args, "--version")?;
+        let version = Self::require_option_value(version, "--version")?;
+        let (args, channel) = Self::consume_option(args, "--channel")?;
+        let channel = Self::require_option_value(channel, "--channel")?;
         let (args, runtime_name) = Self::consume_option(args, "--runtime")?;
         let runtime_name = Self::require_option_value(runtime_name, "--runtime")?;
         let (args, launcher_name) = Self::consume_option(args, "--launcher")?;
@@ -122,6 +126,22 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
+        let uses_release_selector = version.is_some() || channel.is_some();
+        let runtime_name = if uses_release_selector {
+            self.with_progress(format!("Preparing OpenClaw runtime for {name}"), || {
+                self.environment_service().resolve_create_runtime_binding(
+                    runtime_name,
+                    version,
+                    channel,
+                )
+            })?
+        } else {
+            self.environment_service().resolve_create_runtime_binding(
+                runtime_name,
+                version,
+                channel,
+            )?
+        };
         let meta = self
             .environment_service()
             .create(CreateEnvironmentOptions {

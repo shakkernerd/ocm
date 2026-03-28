@@ -2,11 +2,60 @@ mod support;
 
 use std::fs;
 
+use base64::Engine;
+use flate2::{Compression, write::GzEncoder};
 use ocm::store::clean_path;
+use sha2::{Digest, Sha512};
+use tar::{Builder, Header};
 
 use crate::support::{
     TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout, write_executable_script,
 };
+
+fn append_tar_file(
+    builder: &mut Builder<&mut GzEncoder<Vec<u8>>>,
+    path: &str,
+    body: &[u8],
+    mode: u32,
+) {
+    let mut header = Header::new_gnu();
+    header.set_size(body.len() as u64);
+    header.set_mode(mode);
+    header.set_cksum();
+    builder.append_data(&mut header, path, body).unwrap();
+}
+
+fn openclaw_package_tarball(script_body: &str, version: &str) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    {
+        let mut builder = Builder::new(&mut encoder);
+        append_tar_file(
+            &mut builder,
+            "package/openclaw.mjs",
+            script_body.as_bytes(),
+            0o755,
+        );
+        append_tar_file(
+            &mut builder,
+            "package/package.json",
+            format!(
+                "{{\"name\":\"openclaw\",\"version\":\"{version}\",\"bin\":{{\"openclaw\":\"openclaw.mjs\"}}}}"
+            )
+            .as_bytes(),
+            0o644,
+        );
+        builder.finish().unwrap();
+    }
+    encoder.finish().unwrap()
+}
+
+fn sha512_integrity(body: &[u8]) -> String {
+    let digest = Sha512::digest(body);
+    format!(
+        "sha512-{}",
+        base64::engine::general_purpose::STANDARD.encode(digest)
+    )
+}
 
 #[test]
 fn env_set_runtime_updates_and_clears_the_default_runtime() {
@@ -169,4 +218,167 @@ fn env_run_uses_a_runtime_installed_from_url() {
             expected_cwd.display()
         )
     );
+}
+
+#[test]
+fn env_create_with_channel_installs_and_binds_the_official_runtime() {
+    let root = TestDir::new("runtime-binding-create-channel");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball(
+        "#!/bin/sh\nprintf 'official-stable|%s|%s' \"$OPENCLAW_HOME\" \"$PWD\"\n",
+        "2026.3.24",
+    );
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--channel", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_stdout = stdout(&show);
+    assert!(show_stdout.contains("\"defaultRuntime\": \"stable\""));
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let runtime_stdout = stdout(&runtime);
+    assert!(runtime_stdout.contains("\"releaseVersion\": \"2026.3.24\""));
+    assert!(runtime_stdout.contains("\"releaseChannel\": \"stable\""));
+    assert!(runtime_stdout.contains("\"releaseSelectorKind\": \"channel\""));
+    assert!(runtime_stdout.contains("\"releaseSelectorValue\": \"stable\""));
+
+    let run = run_ocm(&cwd, &env, &["env", "run", "demo", "--"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+
+    let env_root = clean_path(&root.child("ocm-home/envs/demo"));
+    let expected_cwd = fs::canonicalize(&cwd).unwrap();
+    assert_eq!(
+        stdout(&run),
+        format!(
+            "official-stable|{}|{}",
+            env_root.display(),
+            expected_cwd.display()
+        )
+    );
+}
+
+#[test]
+fn env_create_with_version_installs_and_binds_the_official_runtime() {
+    let root = TestDir::new("runtime-binding-create-version");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/bin/sh\nprintf 'official-version'\n", "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--version", "2026.3.24"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    assert!(stdout(&show).contains("\"defaultRuntime\": \"2026.3.24\""));
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "2026.3.24", "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let runtime_stdout = stdout(&runtime);
+    assert!(runtime_stdout.contains("\"releaseVersion\": \"2026.3.24\""));
+    assert!(runtime_stdout.contains("\"releaseSelectorKind\": \"version\""));
+    assert!(runtime_stdout.contains("\"releaseSelectorValue\": \"2026.3.24\""));
+
+    let run = run_ocm(&cwd, &env, &["env", "run", "demo", "--"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert_eq!(stdout(&run), "official-version");
+}
+
+#[test]
+fn env_create_rejects_conflicting_runtime_and_release_selector_flags() {
+    let root = TestDir::new("runtime-binding-create-conflict-runtime-selector");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--runtime",
+            "stable",
+            "--channel",
+            "stable",
+        ],
+    );
+    assert!(!create.status.success());
+    assert!(stderr(&create).contains(
+        "env create accepts only one runtime source: --runtime, --version, or --channel"
+    ));
+}
+
+#[test]
+fn env_create_rejects_conflicting_version_and_channel_flags() {
+    let root = TestDir::new("runtime-binding-create-conflict-version-channel");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--version",
+            "2026.3.24",
+            "--channel",
+            "stable",
+        ],
+    );
+    assert!(!create.status.success());
+    assert!(stderr(&create).contains("env create accepts only one of --version or --channel"));
 }

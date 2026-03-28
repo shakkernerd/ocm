@@ -15,12 +15,9 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
     assert!(output.contains(&format!("OpenClaw Manager v{}", env!("CARGO_PKG_VERSION"))));
-    assert!(
-        output
-            .contains(
-                "Manage isolated OpenClaw environments, releases, runtimes, launchers, and services."
-            )
-    );
+    assert!(output.contains(
+        "Manage isolated OpenClaw environments, releases, runtimes, launchers, and services."
+    ));
     assert!(output.contains("ocm [--color <mode>] <command> [args]"));
     assert!(output.contains("--color <mode>"));
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
@@ -80,6 +77,25 @@ fn env_group_help_is_available_from_help_and_bare_group() {
     assert!(output.contains("Portability:"));
     assert!(output.contains("ocm help env create"));
     assert!(output.contains("ocm help env snapshot"));
+}
+
+#[test]
+fn env_create_help_mentions_release_selectors() {
+    let root = TestDir::new("help-env-create-release-selectors");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let help = run_ocm(&cwd, &env, &["help", "env", "create"]);
+    assert!(help.status.success(), "{}", stderr(&help));
+    let output = stdout(&help);
+    assert!(output.contains(
+        "ocm env create <name> [--root <path>] [--port <port>] [--runtime <name> | --version <version> | --channel <channel>] [--launcher <name>] [--protect] [--json]"
+    ));
+    assert!(output.contains("--version <version>"));
+    assert!(output.contains("--channel <channel>"));
+    assert!(output.contains("ocm env create demo --channel stable"));
+    assert!(output.contains("ocm env create pinned --version 2026.3.24"));
 }
 
 #[test]

@@ -1,8 +1,12 @@
 use super::{RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService};
-use crate::runtime::releases::is_official_openclaw_releases_url;
+use crate::runtime::releases::{
+    is_official_openclaw_releases_url, load_official_openclaw_releases,
+    official_openclaw_releases_url, select_official_openclaw_release_by_channel,
+    select_official_openclaw_release_by_version,
+};
 use crate::store::{
     get_runtime, install_runtime, install_runtime_from_official_openclaw_release,
-    install_runtime_from_release, install_runtime_from_url, list_runtimes,
+    install_runtime_from_release, install_runtime_from_url, list_runtimes, runtime_integrity_issue,
 };
 use serde::Serialize;
 
@@ -71,6 +75,92 @@ pub struct RuntimeUpdateBatchSummary {
 }
 
 impl<'a> RuntimeService<'a> {
+    pub fn ensure_official_openclaw_runtime(
+        &self,
+        version: Option<String>,
+        channel: Option<String>,
+    ) -> Result<RuntimeMeta, String> {
+        let version = version
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let channel = channel
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        if version.is_some() && channel.is_some() {
+            return Err(
+                "official OpenClaw runtime selection accepts only one of --version or --channel"
+                    .to_string(),
+            );
+        }
+
+        let runtime_name = match (version.as_deref(), channel.as_deref()) {
+            (Some(version), None) => version.to_string(),
+            (None, Some(channel)) => channel.to_string(),
+            (None, None) => {
+                return Err(
+                    "official OpenClaw runtime selection requires --version or --channel"
+                        .to_string(),
+                );
+            }
+            _ => unreachable!("conflicting selectors are rejected above"),
+        };
+
+        let releases_url = official_openclaw_releases_url(self.env);
+        let releases = load_official_openclaw_releases(&releases_url)?;
+        let selected_release = match (version.as_deref(), channel.as_deref()) {
+            (Some(version), None) => {
+                select_official_openclaw_release_by_version(&releases, version)?
+            }
+            (None, Some(channel)) => {
+                select_official_openclaw_release_by_channel(&releases, channel)?
+            }
+            _ => unreachable!("validated above"),
+        };
+
+        let mut existing_description = None;
+        if let Ok(existing) = get_runtime(&runtime_name, self.env, self.cwd) {
+            if !is_official_openclaw_releases_url(existing.source_manifest_url.as_deref(), self.env)
+            {
+                return Err(format!(
+                    "runtime \"{runtime_name}\" already exists and is not an official OpenClaw runtime; use --runtime {runtime_name} instead"
+                ));
+            }
+
+            existing_description = existing.description.clone();
+            let healthy = runtime_integrity_issue(&existing).is_none();
+            let same_release = existing.release_version.as_deref()
+                == Some(selected_release.version.as_str())
+                && existing.source_url.as_deref() == Some(selected_release.tarball_url.as_str());
+            let matches_requested_selector = match (version.as_deref(), channel.as_deref()) {
+                (Some(requested_version), None) => {
+                    existing.release_version.as_deref() == Some(requested_version)
+                        || (existing.release_selector_kind
+                            == Some(RuntimeReleaseSelectorKind::Version)
+                            && existing.release_selector_value.as_deref()
+                                == Some(requested_version))
+                }
+                (None, Some(requested_channel)) => {
+                    existing.release_selector_kind == Some(RuntimeReleaseSelectorKind::Channel)
+                        && existing.release_selector_value.as_deref() == Some(requested_channel)
+                }
+                _ => false,
+            };
+
+            if healthy && same_release && matches_requested_selector {
+                return Ok(existing);
+            }
+        }
+
+        self.install_from_official_openclaw_release(InstallRuntimeFromOfficialReleaseOptions {
+            name: runtime_name,
+            version,
+            channel,
+            description: existing_description,
+            force: true,
+        })
+    }
+
     pub fn install(&self, options: InstallRuntimeOptions) -> Result<RuntimeMeta, String> {
         install_runtime(options, self.env, self.cwd)
     }

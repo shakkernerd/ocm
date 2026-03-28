@@ -315,7 +315,10 @@ pub fn release_help(cmd: &str) -> String {
         &[(
             "Commands",
             &[
-                ("install", "Install a published OpenClaw release as a runtime"),
+                (
+                    "install",
+                    "Install a published OpenClaw release as a runtime",
+                ),
                 ("list", "List published OpenClaw releases"),
                 ("show", "Show one published OpenClaw release"),
             ],
@@ -361,7 +364,10 @@ pub fn runtime_help(cmd: &str) -> String {
                         "Install a managed runtime from OpenClaw releases or a custom source",
                     ),
                     ("update", "Update one runtime or all runtimes"),
-                    ("releases", "Inspect release entries from the official source or a manifest"),
+                    (
+                        "releases",
+                        "Inspect release entries from the official source or a manifest",
+                    ),
                 ],
             ),
             (
@@ -437,9 +443,9 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
     Some(match action {
         "create" => render_leaf(
             "Create an environment",
-            "Create an isolated OpenClaw environment and optionally bind a runtime or launcher.",
+            "Create an isolated OpenClaw environment and optionally bind a runtime, install an official OpenClaw release, or bind a launcher.",
             vec![format!(
-                "{cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name>] [--launcher <name>] [--protect] [--json]"
+                "{cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name> | --version <version> | --channel <channel>] [--launcher <name>] [--protect] [--json]"
             )],
             &[
                 (
@@ -451,15 +457,27 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                     "Persist an explicit gateway port in environment metadata",
                 ),
                 ("--runtime <name>", "Bind a runtime at creation time"),
+                (
+                    "--version <version>",
+                    "Install or reuse one exact published OpenClaw release and bind it",
+                ),
+                (
+                    "--channel <channel>",
+                    "Install or reuse the published release currently tagged for one channel",
+                ),
                 ("--launcher <name>", "Bind a launcher at creation time"),
                 ("--protect", "Mark the environment as protected"),
                 ("--json", "Print the created environment summary as JSON"),
             ],
             vec![
                 format!("{cmd} env create demo --launcher stable"),
-                format!("{cmd} env create nightly --runtime latest --port 19789"),
+                format!("{cmd} env create demo --channel stable"),
+                format!("{cmd} env create pinned --version 2026.3.24"),
             ],
-            &["Environments are the main isolation unit in OCM."],
+            &[
+                "Environments are the main isolation unit in OCM.",
+                "Use exactly one of `--runtime`, `--version`, or `--channel`.",
+            ],
         ),
         "clone" => render_leaf(
             "Clone an environment",
@@ -792,7 +810,10 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
                 "{cmd} release list [--version <version> | --channel <channel>] [--raw] [--json]"
             )],
             &[
-                ("--version <version>", "Filter to one exact published version"),
+                (
+                    "--version <version>",
+                    "Filter to one exact published version",
+                ),
                 (
                     "--channel <channel>",
                     "Filter to the release currently tagged for one channel",
