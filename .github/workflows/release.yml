@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release --target "${{ matrix.target }}"
+      - name: Package release archive
+        run: |
+          ./scripts/package-release.sh \
+            --target "${{ matrix.target }}" \
+            --binary "./target/${{ matrix.target }}/release/ocm" \
+            --output-dir ./dist
+      - name: Upload release archive
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./dist/*.tar.gz
