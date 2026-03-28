@@ -3,11 +3,12 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use dialoguer::{
-    Confirm, Input, Select,
+    Input, Select,
     console::{Style, style},
     theme::ColorfulTheme,
 };
 use serde_json::Value;
+use time::OffsetDateTime;
 
 use super::{Cli, start::StartOnboardingMode};
 use crate::cli::start::StartRequest;
@@ -22,18 +23,9 @@ impl Cli {
         self.stdout_lines(self.setup_intro_lines(local_defaults.as_ref()));
 
         let mode = self.prompt_setup_mode()?;
-        let name_default = match mode {
-            SetupMode::Stable | SetupMode::Beta | SetupMode::Version => "default",
-            SetupMode::LocalCommand => {
-                if local_defaults.is_some() {
-                    "dev"
-                } else {
-                    "local"
-                }
-            }
-        };
+        let name_default = self.setup_name_default(mode, local_defaults.as_ref());
         let name = loop {
-            let raw = self.prompt_with_default("Environment name", name_default)?;
+            let raw = self.prompt_with_default("Environment name", &name_default)?;
             match validate_name(&raw, "Environment name") {
                 Ok(value) => break value,
                 Err(error) => self.stderr_line(format!("ocm: {error}")),
@@ -175,11 +167,14 @@ impl Cli {
 
     fn prompt_yes_no(&self, label: &str, default: bool) -> Result<bool, String> {
         if self.use_pretty_setup_prompts() {
-            return Confirm::with_theme(&Self::setup_theme())
+            let items = ["Yes", "No"];
+            let selection = Select::with_theme(&Self::setup_theme())
                 .with_prompt(label)
-                .default(default)
+                .default(if default { 0 } else { 1 })
+                .items(items)
                 .interact()
-                .map_err(|error| error.to_string());
+                .map_err(|error| error.to_string())?;
+            return Ok(selection == 0);
         }
 
         let suffix = if default { "[Y/n]" } else { "[y/N]" };
@@ -260,6 +255,7 @@ impl Cli {
                 "What happens",
                 "OCM creates one env, binds it, and can start onboarding for you",
             ),
+            KeyValueRow::muted("Controls", "Use arrows, type, and press Enter"),
         ];
         if let Some(defaults) = local_defaults {
             rows.push(KeyValueRow::muted(
@@ -283,8 +279,105 @@ impl Cli {
         theme.error_prefix = style("✗".to_string()).red();
         theme
     }
+
+    fn setup_name_default(
+        &self,
+        mode: SetupMode,
+        local_defaults: Option<&LocalSetupDefaults>,
+    ) -> String {
+        if !self.use_pretty_setup_prompts() {
+            return match mode {
+                SetupMode::Stable | SetupMode::Beta | SetupMode::Version => "default".to_string(),
+                SetupMode::LocalCommand => {
+                    if local_defaults.is_some() {
+                        "dev".to_string()
+                    } else {
+                        "local".to_string()
+                    }
+                }
+            };
+        }
+
+        match mode {
+            SetupMode::Stable => self.suggest_generated_env_name("stable"),
+            SetupMode::Beta => self.suggest_generated_env_name("beta"),
+            SetupMode::Version => self.suggest_generated_env_name("release"),
+            SetupMode::LocalCommand => local_defaults
+                .and_then(|defaults| self.preferred_checkout_env_name(defaults))
+                .unwrap_or_else(|| self.suggest_generated_env_name("dev")),
+        }
+    }
+
+    fn preferred_checkout_env_name(&self, defaults: &LocalSetupDefaults) -> Option<String> {
+        let file_name = defaults.cwd.file_name()?.to_string_lossy();
+        let fragment = sanitize_name_fragment(&file_name)?;
+        let preferred = if fragment == "openclaw" {
+            "dev".to_string()
+        } else {
+            format!("{fragment}-dev")
+        };
+        Some(self.ensure_available_env_name(&preferred))
+    }
+
+    fn suggest_generated_env_name(&self, prefix: &str) -> String {
+        const ADJECTIVES: &[&str] = &[
+            "amber", "bright", "calm", "cobalt", "ember", "quiet", "steady", "swift",
+        ];
+        const NOUNS: &[&str] = &[
+            "anchor", "comet", "forge", "harbor", "lantern", "otter", "signal", "trail",
+        ];
+
+        let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
+        let seed = (now as u128) ^ (u128::from(std::process::id()) << 16);
+        let total = ADJECTIVES.len() * NOUNS.len();
+
+        for attempt in 0..total {
+            let adjective = ADJECTIVES[((seed as usize) + attempt) % ADJECTIVES.len()];
+            let noun = NOUNS[(((seed >> 8) as usize) + attempt / ADJECTIVES.len()) % NOUNS.len()];
+            let candidate = format!("{prefix}-{adjective}-{noun}");
+            if self
+                .environment_service()
+                .find(&candidate)
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                return candidate;
+            }
+        }
+
+        self.ensure_available_env_name(&format!("{prefix}-env"))
+    }
+
+    fn ensure_available_env_name(&self, preferred: &str) -> String {
+        if self
+            .environment_service()
+            .find(preferred)
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            return preferred.to_string();
+        }
+
+        for suffix in 2..1000 {
+            let candidate = format!("{preferred}-{suffix}");
+            if self
+                .environment_service()
+                .find(&candidate)
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                return candidate;
+            }
+        }
+
+        preferred.to_string()
+    }
 }
 
+#[derive(Clone, Copy)]
 enum SetupMode {
     Stable,
     Beta,
@@ -295,6 +388,39 @@ enum SetupMode {
 struct LocalSetupDefaults {
     command: String,
     cwd: PathBuf,
+}
+
+fn sanitize_name_fragment(value: &str) -> Option<String> {
+    let mut out = String::new();
+    for ch in value.chars() {
+        let normalized = if ch.is_ascii_alphanumeric() {
+            Some(ch.to_ascii_lowercase())
+        } else if matches!(ch, '-' | '_' | '.') {
+            Some(ch)
+        } else {
+            None
+        };
+
+        match normalized {
+            Some(ch) => out.push(ch),
+            None if !out.ends_with('-') => out.push('-'),
+            None => {}
+        }
+    }
+
+    let trimmed = out.trim_matches(['-', '.', '_']).to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed
+        .chars()
+        .next()
+        .map(|ch| ch.is_ascii_alphanumeric())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    Some(trimmed)
 }
 
 fn detect_openclaw_checkout(path: &Path) -> Option<PathBuf> {
@@ -310,5 +436,27 @@ fn detect_openclaw_checkout(path: &Path) -> Option<PathBuf> {
         Some(path.to_path_buf())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_name_fragment;
+
+    #[test]
+    fn sanitize_name_fragment_normalizes_checkout_names() {
+        assert_eq!(
+            sanitize_name_fragment("OpenClaw Dev Repo").as_deref(),
+            Some("openclaw-dev-repo")
+        );
+        assert_eq!(
+            sanitize_name_fragment("demo_repo-1").as_deref(),
+            Some("demo_repo-1")
+        );
+    }
+
+    #[test]
+    fn sanitize_name_fragment_rejects_empty_results() {
+        assert_eq!(sanitize_name_fragment("!!!"), None);
     }
 }
