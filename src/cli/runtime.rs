@@ -1,6 +1,7 @@
 use crate::runtime::{
     AddRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
-    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, UpdateRuntimeFromReleaseOptions,
+    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeService,
+    UpdateRuntimeFromReleaseOptions,
 };
 
 use super::{Cli, render};
@@ -102,10 +103,10 @@ impl Cli {
         let (args, channel) = Self::consume_option(args, "--channel")?;
         let channel = Self::require_option_value(channel, "--channel")?;
         let (args, description) = Self::consume_option(args, "--description")?;
-        let Some(name) = args.first() else {
-            return Err("runtime name is required".to_string());
-        };
-        Self::assert_no_extra_args(&args[1..])?;
+        if args.len() > 1 {
+            Self::assert_no_extra_args(&args[1..])?;
+        }
+        let explicit_name = args.first().cloned();
 
         let source_count = usize::from(path.is_some())
             + usize::from(url.is_some())
@@ -125,8 +126,25 @@ impl Cli {
             }
         }
 
+        let resolve_official_name = || -> Result<String, String> {
+            let canonical = RuntimeService::canonical_official_openclaw_runtime_name(
+                version.as_deref(),
+                channel.as_deref(),
+            )?;
+            match explicit_name.as_deref() {
+                Some(name) if name == canonical.as_str() => Ok(canonical),
+                Some(_) => Err(format!(
+                    "official runtime installs use the canonical name \"{canonical}\" for this selector"
+                )),
+                None => Ok(canonical),
+            }
+        };
+
         let meta = match (path, url, manifest_url) {
             (Some(path), None, None) => {
+                let Some(name) = explicit_name.clone() else {
+                    return Err("runtime name is required".to_string());
+                };
                 self.with_progress(format!("Installing runtime {name}"), || {
                     self.runtime_service().install(InstallRuntimeOptions {
                         name: name.clone(),
@@ -137,6 +155,9 @@ impl Cli {
                 })?
             }
             (None, Some(url), None) => {
+                let Some(name) = explicit_name.clone() else {
+                    return Err("runtime name is required".to_string());
+                };
                 self.with_progress(format!("Downloading runtime {name}"), || {
                     self.runtime_service()
                         .install_from_url(InstallRuntimeFromUrlOptions {
@@ -148,6 +169,9 @@ impl Cli {
                 })?
             }
             (None, None, Some(manifest_url)) => {
+                let Some(name) = explicit_name.clone() else {
+                    return Err("runtime name is required".to_string());
+                };
                 if version.is_some() && channel.is_some() {
                     return Err(
                         "runtime install with --manifest-url accepts only one of --version or --channel"
@@ -175,19 +199,21 @@ impl Cli {
             (None, None, None) if version.is_some() || channel.is_some() => {
                 if version.is_some() && channel.is_some() {
                     return Err(
-                        "runtime install accepts only one of --version or --channel".to_string(),
+                        "runtime install accepts only one of --version or --channel".to_string()
                     );
                 }
+                let name = resolve_official_name()?;
                 self.with_progress(format!("Installing runtime {name}"), || {
-                    self.runtime_service().install_from_official_openclaw_release(
-                        InstallRuntimeFromOfficialReleaseOptions {
-                            name: name.clone(),
-                            version,
-                            channel,
-                            description,
-                            force,
-                        },
-                    )
+                    self.runtime_service()
+                        .install_from_official_openclaw_release(
+                            InstallRuntimeFromOfficialReleaseOptions {
+                                name: name.clone(),
+                                version,
+                                channel,
+                                description,
+                                force,
+                            },
+                        )
                 })?
             }
             (None, None, None) => {

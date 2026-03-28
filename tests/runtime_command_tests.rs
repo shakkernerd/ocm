@@ -14,14 +14,17 @@ use crate::support::{
     TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
 };
 
-fn append_tar_file(builder: &mut Builder<&mut GzEncoder<Vec<u8>>>, path: &str, body: &[u8], mode: u32) {
+fn append_tar_file(
+    builder: &mut Builder<&mut GzEncoder<Vec<u8>>>,
+    path: &str,
+    body: &[u8],
+    mode: u32,
+) {
     let mut header = Header::new_gnu();
     header.set_size(body.len() as u64);
     header.set_mode(mode);
     header.set_cksum();
-    builder
-        .append_data(&mut header, path, body)
-        .unwrap();
+    builder.append_data(&mut header, path, body).unwrap();
 }
 
 fn openclaw_package_tarball(script_body: &str) -> Vec<u8> {
@@ -320,11 +323,7 @@ fn runtime_install_from_official_release_downloads_and_extracts_the_openclaw_pac
         packument_server.url(),
     );
 
-    let install = run_ocm(
-        &cwd,
-        &env,
-        &["runtime", "install", "stable", "--channel", "stable"],
-    );
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
     assert!(install.status.success(), "{}", stderr(&install));
     assert!(stdout(&install).contains("Installed runtime stable"));
 
@@ -345,7 +344,36 @@ fn runtime_install_from_official_release_downloads_and_extracts_the_openclaw_pac
 
     let which = run_ocm(&cwd, &env, &["runtime", "which", "stable"]);
     assert!(which.status.success(), "{}", stderr(&which));
-    assert_eq!(stdout(&which), format!("{}\n", path_string(&expected_binary)));
+    assert_eq!(
+        stdout(&which),
+        format!("{}\n", path_string(&expected_binary))
+    );
+}
+
+#[test]
+fn runtime_install_rejects_non_canonical_names_for_official_releases() {
+    let root = TestDir::new("runtime-install-official-canonical-name");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let packument = br#"{"dist-tags":{"latest":"2026.3.24"},"versions":{"2026.3.24":{"version":"2026.3.24","dist":{"tarball":"https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"}}}}"#;
+    let server = TestHttpServer::serve_bytes("/openclaw", "application/json", packument);
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        server.url(),
+    );
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "install", "latest", "--channel", "stable"],
+    );
+    assert_eq!(install.status.code(), Some(1));
+    assert!(
+        stderr(&install).contains(
+            "official runtime installs use the canonical name \"stable\" for this selector"
+        )
+    );
 }
 
 #[test]
@@ -357,7 +385,10 @@ fn runtime_releases_without_manifest_url_use_the_official_openclaw_source() {
     let packument = br#"{"dist-tags":{"latest":"2026.3.24","beta":"2026.3.24-beta.2"},"versions":{"2026.3.24":{"version":"2026.3.24","dist":{"tarball":"https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"}},"2026.3.24-beta.2":{"version":"2026.3.24-beta.2","dist":{"tarball":"https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24-beta.2.tgz"}}}}"#;
     let server = TestHttpServer::serve_bytes("/openclaw", "application/json", packument);
     let mut env = ocm_env(&root);
-    env.insert("OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(), server.url());
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        server.url(),
+    );
 
     let output = run_ocm(&cwd, &env, &["runtime", "releases", "--channel", "stable"]);
     assert!(output.status.success(), "{}", stderr(&output));

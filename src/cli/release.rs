@@ -1,4 +1,4 @@
-use crate::runtime::InstallRuntimeFromOfficialReleaseOptions;
+use crate::runtime::{InstallRuntimeFromOfficialReleaseOptions, RuntimeService};
 
 use super::{Cli, render};
 
@@ -57,10 +57,9 @@ impl Cli {
         let (args, channel) = Self::consume_option(args, "--channel")?;
         let channel = Self::require_option_value(channel, "--channel")?;
         let (args, description) = Self::consume_option(args, "--description")?;
-        let Some(name) = args.first() else {
-            return Err("runtime name is required".to_string());
-        };
-        Self::assert_no_extra_args(&args[1..])?;
+        if args.len() > 1 {
+            Self::assert_no_extra_args(&args[1..])?;
+        }
 
         if version.is_some() && channel.is_some() {
             return Err("release install accepts only one of --version or --channel".to_string());
@@ -69,10 +68,22 @@ impl Cli {
             return Err("release install requires --version or --channel".to_string());
         }
 
-        let meta = self.with_progress(format!("Installing runtime {name}"), || {
+        let runtime_name = RuntimeService::canonical_official_openclaw_runtime_name(
+            version.as_deref(),
+            channel.as_deref(),
+        )?;
+        if let Some(name) = args.first() {
+            if name != runtime_name.as_str() {
+                return Err(format!(
+                    "release install uses the canonical runtime name \"{runtime_name}\" for this selector"
+                ));
+            }
+        }
+
+        let meta = self.with_progress(format!("Installing runtime {runtime_name}"), || {
             self.runtime_service()
                 .install_from_official_openclaw_release(InstallRuntimeFromOfficialReleaseOptions {
-                    name: name.clone(),
+                    name: runtime_name.clone(),
                     version,
                     channel,
                     description,

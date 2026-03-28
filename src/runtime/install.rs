@@ -75,6 +75,33 @@ pub struct RuntimeUpdateBatchSummary {
 }
 
 impl<'a> RuntimeService<'a> {
+    pub fn canonical_official_openclaw_runtime_name(
+        version: Option<&str>,
+        channel: Option<&str>,
+    ) -> Result<String, String> {
+        let version = version
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let channel = channel
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(normalize_openclaw_channel_selector)
+            .transpose()?;
+
+        match (version, channel) {
+            (Some(version), None) => Ok(version),
+            (None, Some(channel)) => Ok(channel),
+            (None, None) => Err(
+                "official OpenClaw runtime selection requires --version or --channel".to_string(),
+            ),
+            (Some(_), Some(_)) => Err(
+                "official OpenClaw runtime selection accepts only one of --version or --channel"
+                    .to_string(),
+            ),
+        }
+    }
+
     pub fn ensure_official_openclaw_runtime(
         &self,
         version: Option<String>,
@@ -98,17 +125,8 @@ impl<'a> RuntimeService<'a> {
             );
         }
 
-        let runtime_name = match (version.as_deref(), channel.as_deref()) {
-            (Some(version), None) => version.to_string(),
-            (None, Some(channel)) => channel.to_string(),
-            (None, None) => {
-                return Err(
-                    "official OpenClaw runtime selection requires --version or --channel"
-                        .to_string(),
-                );
-            }
-            _ => unreachable!("conflicting selectors are rejected above"),
-        };
+        let runtime_name =
+            Self::canonical_official_openclaw_runtime_name(version.as_deref(), channel.as_deref())?;
 
         let releases_url = official_openclaw_releases_url(self.env);
         let releases = load_official_openclaw_releases(&releases_url)?;

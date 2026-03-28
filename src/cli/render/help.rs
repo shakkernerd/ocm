@@ -120,8 +120,8 @@ pub fn root_help(cmd: &str) -> String {
         "Get started",
         format_examples(&[
             format!("{cmd} release list --channel stable"),
-            format!("{cmd} runtime install stable --channel stable"),
-            format!("{cmd} env create demo --runtime stable"),
+            format!("{cmd} release install --channel stable"),
+            format!("{cmd} env create demo --channel stable"),
             format!("eval \"$({cmd} env use demo)\""),
             format!("{cmd} -- status"),
             format!("{cmd} @demo -- status"),
@@ -326,7 +326,7 @@ pub fn release_help(cmd: &str) -> String {
         vec![
             format!("{cmd} release list"),
             format!("{cmd} release list --channel stable"),
-            format!("{cmd} release install stable --channel stable"),
+            format!("{cmd} release install --channel stable"),
             format!("{cmd} release show 2026.3.24"),
         ],
         vec![
@@ -377,7 +377,7 @@ pub fn runtime_help(cmd: &str) -> String {
         ],
         vec![
             format!("{cmd} runtime add stable --path /path/to/openclaw"),
-            format!("{cmd} runtime install stable --channel stable"),
+            format!("{cmd} runtime install --channel stable"),
             format!("{cmd} runtime update --all"),
         ],
         vec![
@@ -711,9 +711,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Set the default runtime for an environment, clear it with `none`, or bind an official OpenClaw release directly.",
             vec![
                 format!("{cmd} env set-runtime <name> <runtime|none>"),
-                format!(
-                    "{cmd} env set-runtime <name> (--version <version> | --channel <channel>)"
-                ),
+                format!("{cmd} env set-runtime <name> (--version <version> | --channel <channel>)"),
             ],
             &[
                 (
@@ -794,7 +792,7 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
             "Install a published OpenClaw release",
             "Install a published OpenClaw release as a local managed runtime.",
             vec![format!(
-                "{cmd} release install <name> (--version <version> | --channel <channel>) [--description <text>] [--force] [--json]"
+                "{cmd} release install [<name>] (--version <version> | --channel <channel>) [--description <text>] [--force] [--json]"
             )],
             &[
                 (
@@ -813,11 +811,11 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the installed runtime record as JSON"),
             ],
             vec![
-                format!("{cmd} release install stable --channel stable"),
-                format!("{cmd} release install beta --channel beta"),
-                format!("{cmd} release install 2026-3-24 --version 2026.3.24"),
+                format!("{cmd} release install --channel stable"),
+                format!("{cmd} release install --channel beta"),
+                format!("{cmd} release install --version 2026.3.24"),
             ],
-            &[],
+            &["Official installs use canonical runtime names derived from the selector."],
         ),
         "list" => render_leaf(
             "List published OpenClaw releases",
@@ -1054,7 +1052,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
             "Install a managed runtime",
             "Install a runtime from the official OpenClaw release source, a local binary, a direct URL, or a custom release manifest.",
             vec![format!(
-                "{cmd} runtime install <name> (--version <version> | --channel <channel> | --path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force] [--json]"
+                "{cmd} runtime install [<name>] (--version <version> | --channel <channel> | --path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force] [--json]"
             )],
             &[
                 (
@@ -1079,7 +1077,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the runtime record as JSON"),
             ],
             vec![
-                format!("{cmd} runtime install stable --channel stable"),
+                format!("{cmd} runtime install --channel stable"),
                 format!("{cmd} runtime install managed-stable --path ./target/debug/openclaw"),
                 format!(
                     "{cmd} runtime install nightly --url https://example.test/openclaw-nightly"
@@ -1088,7 +1086,10 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                     "{cmd} runtime install stable --manifest-url https://example.test/openclaw-releases.json --channel stable"
                 ),
             ],
-            &["Exactly one install source must be provided."],
+            &[
+                "Exactly one install source must be provided.",
+                "Official installs use canonical runtime names unless you reuse the same canonical name explicitly.",
+            ],
         ),
         "update" => render_leaf(
             "Update managed runtimes",

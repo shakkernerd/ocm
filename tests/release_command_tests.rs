@@ -215,15 +215,36 @@ fn release_install_uses_the_published_openclaw_source() {
         server.url(),
     );
 
-    let install = run_ocm(
-        &cwd,
-        &env,
-        &["release", "install", "stable", "--channel", "stable"],
-    );
+    let install = run_ocm(&cwd, &env, &["release", "install", "--channel", "stable"]);
     assert!(install.status.success(), "{}", stderr(&install));
     let output = stdout(&install);
     assert!(output.contains("Installed runtime stable"));
     assert!(output.contains("install root:"));
+}
+
+#[test]
+fn release_install_rejects_non_canonical_runtime_names() {
+    let root = TestDir::new("release-install-canonical-name");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let server = TestHttpServer::serve_bytes("/openclaw", "application/json", &packument_body());
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        server.url(),
+    );
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &["release", "install", "latest", "--channel", "stable"],
+    );
+    assert_eq!(install.status.code(), Some(1));
+    assert!(
+        stderr(&install).contains(
+            "release install uses the canonical runtime name \"stable\" for this selector"
+        )
+    );
 }
 
 #[test]
@@ -252,11 +273,7 @@ fn release_list_and_show_surface_installed_runtime_names() {
         server.url(),
     );
 
-    let install = run_ocm(
-        &cwd,
-        &env,
-        &["release", "install", "stable", "--channel", "stable"],
-    );
+    let install = run_ocm(&cwd, &env, &["release", "install", "--channel", "stable"]);
     assert!(install.status.success(), "{}", stderr(&install));
 
     let list = run_ocm(

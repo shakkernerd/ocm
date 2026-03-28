@@ -23,8 +23,8 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
     assert!(output.contains("release list --channel stable"));
-    assert!(output.contains("runtime install stable --channel stable"));
-    assert!(output.contains("env create demo --runtime stable"));
+    assert!(output.contains("release install --channel stable"));
+    assert!(output.contains("env create demo --channel stable"));
     assert!(output.contains("ocm -- status"));
     assert!(output.contains("ocm @demo -- status"));
     assert!(output.contains("ocm help env"));
@@ -109,9 +109,9 @@ fn env_set_runtime_help_mentions_release_selectors() {
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
     assert!(output.contains("ocm env set-runtime <name> <runtime|none>"));
-    assert!(output.contains(
-        "ocm env set-runtime <name> (--version <version> | --channel <channel>)"
-    ));
+    assert!(
+        output.contains("ocm env set-runtime <name> (--version <version> | --channel <channel>)")
+    );
     assert!(output.contains("--version <version>"));
     assert!(output.contains("--channel <channel>"));
     assert!(output.contains("ocm env set-runtime demo --channel stable"));
