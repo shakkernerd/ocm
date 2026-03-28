@@ -164,6 +164,15 @@ fn render_table_with_limit(
 }
 
 pub fn render_key_value_card(title: &str, rows: &[KeyValueRow], color: bool) -> Vec<String> {
+    render_key_value_card_with_limit(title, rows, color, terminal_width())
+}
+
+fn render_key_value_card_with_limit(
+    title: &str,
+    rows: &[KeyValueRow],
+    color: bool,
+    max_width: Option<usize>,
+) -> Vec<String> {
     let key_width = rows
         .iter()
         .map(|row| display_width(&row.key))
@@ -181,20 +190,37 @@ pub fn render_key_value_card(title: &str, rows: &[KeyValueRow], color: bool) -> 
     } else {
         key_width + 2 + value_width
     };
-    let inner_width = content_width.max(display_width(title));
+    let mut inner_width = content_width.max(display_width(title));
+    if let Some(max_width) = max_width {
+        inner_width = inner_width.min(max_width.saturating_sub(4));
+    }
+    let effective_key_width = if rows.is_empty() {
+        0
+    } else {
+        key_width.min(inner_width.saturating_sub(2))
+    };
     let border = "─".repeat(inner_width + 2);
 
     let mut lines = vec![
         format!("┌{border}┐"),
         format!(
             "│ {} │",
-            paint(&pad(title, inner_width, Align::Left), Tone::Strong, color)
+            paint(
+                &pad_and_truncate(title, inner_width, Align::Left),
+                Tone::Strong,
+                color
+            )
         ),
     ];
     if !rows.is_empty() {
         lines.push(format!("├{border}┤"));
         for row in rows {
-            lines.push(render_key_value_row(row, key_width, inner_width, color));
+            lines.push(render_key_value_row(
+                row,
+                effective_key_width,
+                inner_width,
+                color,
+            ));
         }
     }
     lines.push(format!("└{border}┘"));
@@ -248,11 +274,23 @@ fn render_key_value_row(
     color: bool,
 ) -> String {
     let content = if key_width == 0 {
-        paint(&pad(&row.value, inner_width, Align::Left), row.tone, color)
+        paint(
+            &pad_and_truncate(&row.value, inner_width, Align::Left),
+            row.tone,
+            color,
+        )
     } else {
-        let key = paint(&pad(&row.key, key_width, Align::Left), Tone::Muted, color);
+        let key = paint(
+            &pad_and_truncate(&row.key, key_width, Align::Left),
+            Tone::Muted,
+            color,
+        );
         let value_width = inner_width.saturating_sub(key_width + 2);
-        let value = paint(&pad(&row.value, value_width, Align::Left), row.tone, color);
+        let value = paint(
+            &pad_and_truncate(&row.value, value_width, Align::Left),
+            row.tone,
+            color,
+        );
         format!("{key}  {value}")
     };
     format!("│ {content} │")
@@ -370,8 +408,8 @@ fn display_width(value: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cell, KeyValueRow, Tone, display_width, paint, render_key_value_card, render_table,
-        render_table_with_limit, render_tags,
+        Cell, KeyValueRow, Tone, display_width, paint, render_key_value_card,
+        render_key_value_card_with_limit, render_table, render_table_with_limit, render_tags,
     };
 
     #[test]
@@ -415,6 +453,22 @@ mod tests {
         assert!(lines[4].contains("Managed"));
         assert!(lines[4].contains("loaded"));
         assert!(lines[5].starts_with('└'));
+    }
+
+    #[test]
+    fn render_key_value_card_truncates_wide_values_to_fit_the_available_width() {
+        let lines = render_key_value_card_with_limit(
+            "Managed service",
+            &[KeyValueRow::plain(
+                "Plist",
+                "/Users/shakker/Library/LaunchAgents/ai.openclaw.gateway.ocm.hacking.plist",
+            )],
+            false,
+            Some(60),
+        );
+
+        assert!(lines.iter().all(|line| display_width(line) <= 60));
+        assert!(lines[3].contains('…'));
     }
 
     #[test]
