@@ -319,7 +319,7 @@ impl Cli {
         Some(self.ensure_available_env_name(&preferred))
     }
 
-    fn suggest_generated_env_name(&self) -> String {
+    pub(super) fn suggest_generated_env_name(&self) -> String {
         const NAME_POOL: &[&str] = &[
             "atlas-harbor",
             "aurora-trail",

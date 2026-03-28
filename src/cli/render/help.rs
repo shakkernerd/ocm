@@ -125,11 +125,11 @@ pub fn root_help(cmd: &str) -> String {
         &mut lines,
         "Get started",
         format_examples(&[
-            format!("{cmd} start"),
+            format!("{cmd} start mybot"),
+            format!("eval \"$({cmd} env use mybot)\""),
+            format!("{cmd} -- status"),
             format!("{cmd} start mybot --channel beta"),
             format!("{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw"),
-            format!("eval \"$({cmd} env use default)\""),
-            format!("{cmd} -- status"),
         ]),
     );
     push_section(
@@ -172,7 +172,10 @@ pub fn start_help(cmd: &str) -> String {
             "{cmd} start [name] [--runtime <name> | --launcher <name> | --version <version> | --channel <channel> | --command <command>] [--cwd <path>] [--root <path>] [--port <port>] [--protect] [--service] [--onboard | --no-onboard] [--json]"
         )],
         &[
-            ("[name]", "Environment name. Defaults to `default`."),
+            (
+                "[name]",
+                "Optional environment name. If omitted, ocm generates a new one.",
+            ),
             ("--runtime <name>", "Use one installed runtime by name"),
             ("--launcher <name>", "Use one existing launcher by name"),
             (

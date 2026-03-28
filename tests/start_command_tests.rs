@@ -55,7 +55,7 @@ fn sha512_integrity(body: &[u8]) -> String {
 }
 
 #[test]
-fn start_defaults_to_default_env_and_latest_stable_runtime() {
+fn start_generates_an_env_name_and_uses_latest_stable_runtime() {
     let root = TestDir::new("start-default-stable");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -83,14 +83,18 @@ fn start_defaults_to_default_env_and_latest_stable_runtime() {
     let start = run_ocm(&cwd, &env, &["start", "--no-onboard"]);
     assert!(start.status.success(), "{}", stderr(&start));
     let output = stdout(&start);
-    assert!(output.contains("Started env default"));
+    let env_name = output
+        .lines()
+        .find_map(|line| line.strip_prefix("Started env "))
+        .expect("start output should name the created environment");
+    assert_ne!(env_name, "default");
     assert!(output.contains("runtime: stable"));
-    assert!(output.contains("onboard: ocm @default -- onboard"));
+    assert!(output.contains(&format!("onboard: ocm @{env_name} -- onboard")));
 
-    let show = run_ocm(&cwd, &env, &["env", "show", "default", "--json"]);
+    let show = run_ocm(&cwd, &env, &["env", "show", env_name, "--json"]);
     assert!(show.status.success(), "{}", stderr(&show));
     let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
-    assert_eq!(show_json["name"], "default");
+    assert_eq!(show_json["name"], env_name);
     assert_eq!(show_json["defaultRuntime"], "stable");
 
     let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
@@ -99,6 +103,51 @@ fn start_defaults_to_default_env_and_latest_stable_runtime() {
     assert_eq!(runtime_json["name"], "stable");
     assert_eq!(runtime_json["releaseSelectorKind"], "channel");
     assert_eq!(runtime_json["releaseSelectorValue"], "stable");
+}
+
+#[test]
+fn start_without_a_name_generates_a_new_env_each_time() {
+    let root = TestDir::new("start-generated-name-repeat");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 4);
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let first = run_ocm(&cwd, &env, &["start", "--no-onboard"]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    let first_name = stdout(&first)
+        .lines()
+        .find_map(|line| line.strip_prefix("Started env "))
+        .expect("first start output should name the created environment")
+        .to_string();
+
+    let second = run_ocm(&cwd, &env, &["start", "--no-onboard"]);
+    assert!(second.status.success(), "{}", stderr(&second));
+    let second_name = stdout(&second)
+        .lines()
+        .find_map(|line| line.strip_prefix("Started env "))
+        .expect("second start output should name the created environment")
+        .to_string();
+
+    assert_ne!(first_name, second_name);
 }
 
 #[test]

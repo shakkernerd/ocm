@@ -61,7 +61,7 @@ If you already know what you want:
 ocm start
 ```
 
-That creates or reuses an environment, prepares OpenClaw, and can start onboarding for you.
+That creates or reuses an environment, prepares OpenClaw, and can start onboarding for you. If you do not pass a name, `ocm` generates one for you.
 
 ## Common paths
 

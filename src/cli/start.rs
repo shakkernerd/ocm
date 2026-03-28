@@ -104,7 +104,7 @@ impl Cli {
         }
 
         let name = match args.as_slice() {
-            [] => "default".to_string(),
+            [] => self.suggest_generated_env_name(),
             [name] => validate_name(name, "Environment name")?,
             [name, extra @ ..] => {
                 Self::assert_no_extra_args(extra)?;

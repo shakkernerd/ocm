@@ -30,9 +30,10 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("ocm start"));
     assert!(output.contains("ocm help setup"));
     assert!(output.contains("ocm help self"));
+    assert!(output.contains("ocm start mybot"));
     assert!(output.contains("ocm start mybot --channel beta"));
     assert!(output.contains("ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw"));
-    assert!(output.contains("eval \"$(ocm env use default)\""));
+    assert!(output.contains("eval \"$(ocm env use mybot)\""));
     assert!(output.contains("ocm -- status"));
     assert!(output.contains("ocm help start"));
     assert!(output.contains("ocm help env"));
@@ -55,7 +56,7 @@ fn help_uses_ocm_self_for_root_and_leaf_examples() {
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
     assert!(output.contains("./bin/ocm [--color <mode>] <command> [args]"));
-    assert!(output.contains("eval \"$(./bin/ocm env use default)\""));
+    assert!(output.contains("eval \"$(./bin/ocm env use mybot)\""));
 
     let help = run_ocm(&cwd, &env, &["help", "env", "run"]);
     assert!(help.status.success(), "{}", stderr(&help));
@@ -82,6 +83,7 @@ fn start_help_is_available_from_help_and_flag() {
     assert_eq!(output, stdout(&via_flag));
     assert!(output.contains("Start an environment"));
     assert!(output.contains("ocm start [name]"));
+    assert!(output.contains("Optional environment name. If omitted, ocm generates a new one."));
     assert!(output.contains("--service"));
     assert!(output.contains("--onboard | --no-onboard"));
     assert!(output.contains("ocm start demo --channel stable"));
