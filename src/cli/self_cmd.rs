@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fs;
 use std::path::PathBuf;
 
@@ -119,7 +120,11 @@ impl Cli {
 
         Ok(SelfUpdateSummary {
             mode: SelfUpdateMode::Check,
-            status: if target_version == current_version {
+            status: if should_treat_target_as_current(
+                &current_version,
+                &target_version,
+                version.is_some(),
+            ) {
                 SelfUpdateStatus::UpToDate
             } else {
                 SelfUpdateStatus::UpdateAvailable
@@ -138,7 +143,7 @@ impl Cli {
         let release = self.fetch_self_release(version)?;
         let target_version = display_version_from_tag(&release.tag_name);
 
-        if target_version == current_version {
+        if should_treat_target_as_current(&current_version, &target_version, version.is_some()) {
             return Ok(SelfUpdateSummary {
                 mode: SelfUpdateMode::Update,
                 status: SelfUpdateStatus::UpToDate,
@@ -296,9 +301,59 @@ fn display_version_from_tag(tag: &str) -> String {
     tag.trim().trim_start_matches('v').to_string()
 }
 
+fn compare_semver_like(left: &str, right: &str) -> Ordering {
+    let left = left.trim().trim_start_matches('v');
+    let right = right.trim().trim_start_matches('v');
+
+    let (left_core, left_pre) = split_semver_like(left);
+    let (right_core, right_pre) = split_semver_like(right);
+
+    for index in 0..left_core.len().max(right_core.len()) {
+        let left_part = *left_core.get(index).unwrap_or(&0);
+        let right_part = *right_core.get(index).unwrap_or(&0);
+        match left_part.cmp(&right_part) {
+            Ordering::Equal => {}
+            other => return other,
+        }
+    }
+
+    match (left_pre, right_pre) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(left), Some(right)) => left.cmp(right),
+    }
+}
+
+fn should_treat_target_as_current(
+    current_version: &str,
+    target_version: &str,
+    explicit_version: bool,
+) -> bool {
+    target_version == current_version
+        || (!explicit_version
+            && compare_semver_like(current_version, target_version) != Ordering::Less)
+}
+
+fn split_semver_like(value: &str) -> (Vec<u64>, Option<&str>) {
+    let (core, pre) = value
+        .split_once('-')
+        .map_or((value, None), |(core, pre)| (core, Some(pre)));
+    let core = core
+        .split('.')
+        .map(|part| part.parse::<u64>().unwrap_or(0))
+        .collect::<Vec<_>>();
+    (core, pre)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{display_version_from_tag, normalize_release_tag};
+    use std::cmp::Ordering;
+
+    use super::{
+        compare_semver_like, display_version_from_tag, normalize_release_tag,
+        should_treat_target_as_current,
+    };
 
     #[test]
     fn normalize_release_tag_accepts_prefixed_and_bare_versions() {
@@ -310,5 +365,19 @@ mod tests {
     fn display_version_from_tag_strips_the_v_prefix() {
         assert_eq!(display_version_from_tag("v0.2.1"), "0.2.1");
         assert_eq!(display_version_from_tag("0.2.1"), "0.2.1");
+    }
+
+    #[test]
+    fn compare_semver_like_orders_versions_safely() {
+        assert_eq!(compare_semver_like("0.2.1", "0.2.0"), Ordering::Greater);
+        assert_eq!(compare_semver_like("0.2.1", "0.2.1"), Ordering::Equal);
+        assert_eq!(compare_semver_like("0.2.1-beta.1", "0.2.1"), Ordering::Less);
+    }
+
+    #[test]
+    fn should_treat_target_as_current_only_skips_implicit_downgrades() {
+        assert!(should_treat_target_as_current("0.2.1", "0.2.0", false));
+        assert!(!should_treat_target_as_current("0.2.1", "0.2.0", true));
+        assert!(should_treat_target_as_current("0.2.1", "0.2.1", true));
     }
 }

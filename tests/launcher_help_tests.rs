@@ -399,7 +399,7 @@ fn self_update_help_mentions_check_and_raw_modes() {
     assert!(output.contains("ocm self update [--version <version>] [--check] [--raw] [--json]"));
     assert!(output.contains("--check"));
     assert!(output.contains("--raw"));
-    assert!(output.contains("Exact versions accept either `0.2.1` or `v0.2.1`."));
+    assert!(output.contains("Exact versions accept either `1.2.3` or `v1.2.3`."));
 }
 
 #[test]

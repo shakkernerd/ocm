@@ -75,9 +75,32 @@ fn self_update_check_reports_when_a_newer_release_exists() {
     let text = stdout(&output);
     assert!(text.contains("mode: check"));
     assert!(text.contains("status: update_available"));
-    assert!(text.contains("currentVersion: 0.2.0"));
+    assert!(text.contains(&format!("currentVersion: {}", env!("CARGO_PKG_VERSION"))));
     assert!(text.contains("targetVersion: 9.9.9"));
     assert!(text.contains(&format!("assetName: {asset_name}")));
+}
+
+#[test]
+fn self_update_check_ignores_older_latest_release_when_current_is_newer() {
+    let root = TestDir::new("self-update-check-older-latest");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let asset_name = current_release_asset_name();
+    let metadata = format!(
+        "{{\"tag_name\":\"v0.2.0\",\"assets\":[{{\"name\":\"{asset_name}\",\"browser_download_url\":\"https://example.test/{asset_name}\"}}]}}"
+    );
+    let release =
+        TestHttpServer::serve_bytes("/release.json", "application/json", metadata.as_bytes());
+    let env = release_env(&root, &release.url());
+
+    let output = run_ocm(&cwd, &env, &["self", "update", "--check", "--raw"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("mode: check"));
+    assert!(text.contains("status: up_to_date"));
+    assert!(text.contains(&format!("currentVersion: {}", env!("CARGO_PKG_VERSION"))));
+    assert!(text.contains("targetVersion: 0.2.0"));
 }
 
 #[test]
@@ -94,7 +117,7 @@ fn self_update_replaces_a_copied_binary_in_place() {
     let archive_path = root.child(&asset_name);
     write_release_archive(
         &archive_path,
-        "#!/usr/bin/env bash\nif [[ \"$1\" == \"--version\" ]]; then\n  printf '0.2.1\\n'\nelse\n  printf 'updated ocm\\n'\nfi\n",
+        "#!/usr/bin/env bash\nif [[ \"$1\" == \"--version\" ]]; then\n  printf '0.2.2\\n'\nelse\n  printf 'updated ocm\\n'\nfi\n",
     );
     let asset = TestHttpServer::serve_bytes(
         "/download.tar.gz",
@@ -102,7 +125,7 @@ fn self_update_replaces_a_copied_binary_in_place() {
         &fs::read(&archive_path).unwrap(),
     );
     let metadata = format!(
-        "{{\"tag_name\":\"v0.2.1\",\"assets\":[{{\"name\":\"{asset_name}\",\"browser_download_url\":\"{}\"}}]}}",
+        "{{\"tag_name\":\"v0.2.2\",\"assets\":[{{\"name\":\"{asset_name}\",\"browser_download_url\":\"{}\"}}]}}",
         asset.url()
     );
     let release =
@@ -113,7 +136,7 @@ fn self_update_replaces_a_copied_binary_in_place() {
         &copied_binary,
         &cwd,
         &env,
-        &["self", "update", "--version", "0.2.1", "--raw"],
+        &["self", "update", "--version", "0.2.2", "--raw"],
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
@@ -127,5 +150,5 @@ fn self_update_replaces_a_copied_binary_in_place() {
         .output()
         .unwrap();
     assert!(updated.status.success());
-    assert_eq!(String::from_utf8(updated.stdout).unwrap(), "0.2.1\n");
+    assert_eq!(String::from_utf8(updated.stdout).unwrap(), "0.2.2\n");
 }
