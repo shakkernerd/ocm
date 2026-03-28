@@ -19,13 +19,16 @@ fn top_level_help_is_clean_and_points_to_topics() {
         output
             .contains("Manage isolated OpenClaw environments, runtimes, launchers, and services.")
     );
-    assert!(output.contains("ocm <command> [args]"));
+    assert!(output.contains("ocm [--color <mode>] <command> [args]"));
+    assert!(output.contains("--color <mode>"));
+    assert!(output.contains("Color policy for pretty output: auto, always, or never"));
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
     assert!(output.contains("launcher add stable --command openclaw"));
     assert!(output.contains("ocm -- status"));
     assert!(output.contains("ocm @demo -- status"));
     assert!(output.contains("ocm help env"));
     assert!(output.contains("ocm help runtime install"));
+    assert!(output.contains("ocm --color always env list"));
     assert!(!output.contains("env snapshot restore <name> <snapshot>"));
     assert!(!output.contains("service restore-global <env> [--dry-run] [--json]"));
 }
@@ -41,7 +44,7 @@ fn help_uses_ocm_self_for_root_and_leaf_examples() {
     let help = run_ocm(&cwd, &env, &["help"]);
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
-    assert!(output.contains("./bin/ocm <command> [args]"));
+    assert!(output.contains("./bin/ocm [--color <mode>] <command> [args]"));
     assert!(output.contains("eval \"$(./bin/ocm env use demo)\""));
 
     let help = run_ocm(&cwd, &env, &["help", "env", "run"]);

@@ -21,6 +21,41 @@ use crate::service::ServiceService;
 use crate::store::ensure_store;
 
 const VERSION: &str = "0.1.0";
+const INTERNAL_COLOR_MODE_ENV: &str = "OCM_INTERNAL_COLOR_MODE";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ColorMode {
+    Auto,
+    Always,
+    Never,
+}
+
+impl ColorMode {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "always" => Ok(Self::Always),
+            "never" => Ok(Self::Never),
+            _ => Err("--color must be one of auto, always, or never".to_string()),
+        }
+    }
+
+    fn from_env(env: &BTreeMap<String, String>) -> Self {
+        match env.get(INTERNAL_COLOR_MODE_ENV).map(String::as_str) {
+            Some("always") => Self::Always,
+            Some("never") => Self::Never,
+            _ => Self::Auto,
+        }
+    }
+
+    fn as_env_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Never => "never",
+        }
+    }
+}
 
 pub struct Cli {
     pub env: BTreeMap<String, String>,
@@ -28,6 +63,22 @@ pub struct Cli {
 }
 
 impl Cli {
+    fn with_color_mode(&self, mode: ColorMode) -> Self {
+        let mut env = self.env.clone();
+        env.insert(
+            INTERNAL_COLOR_MODE_ENV.to_string(),
+            mode.as_env_value().to_string(),
+        );
+        Self {
+            env,
+            cwd: self.cwd.clone(),
+        }
+    }
+
+    fn color_mode(&self) -> ColorMode {
+        ColorMode::from_env(&self.env)
+    }
+
     fn launcher_service(&self) -> LauncherService<'_> {
         LauncherService::new(&self.env, &self.cwd)
     }
@@ -93,14 +144,20 @@ impl Cli {
         io::stderr().is_terminal()
     }
 
-    fn color_output_enabled(&self) -> bool {
-        self.stdout_is_terminal()
-            && !self.env.contains_key("NO_COLOR")
-            && self
-                .env
-                .get("TERM")
-                .map(|value| value != "dumb")
-                .unwrap_or(true)
+    fn color_output_enabled_for(&self, is_terminal: bool, mode: ColorMode) -> bool {
+        match mode {
+            ColorMode::Always => true,
+            ColorMode::Never => false,
+            ColorMode::Auto => {
+                is_terminal
+                    && !self.env.contains_key("NO_COLOR")
+                    && self
+                        .env
+                        .get("TERM")
+                        .map(|value| value != "dumb")
+                        .unwrap_or(true)
+            }
+        }
     }
 
     fn progress_output_enabled(&self) -> bool {
@@ -112,6 +169,10 @@ impl Cli {
                 .unwrap_or(true)
     }
 
+    fn progress_color_enabled(&self) -> bool {
+        self.color_output_enabled_for(self.stderr_is_terminal(), self.color_mode())
+    }
+
     fn with_progress<T, F>(&self, message: impl Into<String>, work: F) -> Result<T, String>
     where
         F: FnOnce() -> Result<T, String>,
@@ -121,7 +182,12 @@ impl Cli {
         }
 
         let bar = ProgressBar::new_spinner();
-        let style = ProgressStyle::with_template("{spinner:.cyan} {msg}")
+        let template = if self.progress_color_enabled() {
+            "{spinner:.cyan} {msg}"
+        } else {
+            "{spinner} {msg}"
+        };
+        let style = ProgressStyle::with_template(template)
             .map_err(|error| error.to_string())?
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]);
         bar.set_style(style);
@@ -141,16 +207,54 @@ impl Cli {
     ) -> Result<(Vec<String>, bool, render::RenderProfile), String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, raw_flag) = Self::consume_flag(args, "--raw");
+        let (args, color_mode) = Self::consume_color_option(args)?;
         if json_flag && raw_flag {
             return Err(format!("{command} accepts only one of --json or --raw"));
         }
 
-        let profile = if raw_flag || !self.stdout_is_terminal() {
+        let color_mode = color_mode.unwrap_or_else(|| self.color_mode());
+        let pretty_enabled = self.stdout_is_terminal() || matches!(color_mode, ColorMode::Always);
+        let profile = if raw_flag || !pretty_enabled {
             render::RenderProfile::raw()
         } else {
-            render::RenderProfile::pretty(self.color_output_enabled())
+            render::RenderProfile::pretty(self.color_output_enabled_for(true, color_mode))
         };
         Ok((args, json_flag, profile))
+    }
+
+    fn consume_color_option(args: Vec<String>) -> Result<(Vec<String>, Option<ColorMode>), String> {
+        let (args, color_raw) = Self::consume_option(args, "--color")?;
+        let color_raw = Self::require_option_value(color_raw, "--color")?;
+        let color_mode = color_raw.as_deref().map(ColorMode::parse).transpose()?;
+        Ok((args, color_mode))
+    }
+
+    fn consume_leading_color_option(
+        args: Vec<String>,
+    ) -> Result<(Vec<String>, Option<ColorMode>), String> {
+        let Some(first) = args.first() else {
+            return Ok((args, None));
+        };
+
+        if let Some(value) = first.strip_prefix("--color=") {
+            if value.trim().is_empty() {
+                return Err("--color requires a value".to_string());
+            }
+            let color_mode = ColorMode::parse(value)?;
+            return Ok((args[1..].to_vec(), Some(color_mode)));
+        }
+
+        if first == "--color" {
+            let Some(value) = args.get(1) else {
+                return Err("--color requires a value".to_string());
+            };
+            let color_mode = ColorMode::parse(value)?;
+            let mut remaining = Vec::with_capacity(args.len().saturating_sub(2));
+            remaining.extend(args[2..].iter().cloned());
+            return Ok((remaining, Some(color_mode)));
+        }
+
+        Ok((args, None))
     }
 
     fn parse_positive_u32(raw: &str, label: &str) -> Result<u32, String> {
@@ -285,43 +389,48 @@ impl Cli {
     }
 
     pub fn run(&self, args: Vec<String>) -> i32 {
-        if let Some(result) = self.help_result_for_invocation(&args) {
+        let (args, color_mode) = match Self::consume_leading_color_option(args) {
+            Ok(result) => result,
+            Err(error) => {
+                self.stderr_line(format!("ocm: {error}"));
+                self.stderr_line(format!(
+                    "Run \"{} help\" for usage.",
+                    self.command_example()
+                ));
+                return 1;
+            }
+        };
+        let cli = color_mode.map(|mode| self.with_color_mode(mode));
+        let cli = cli.as_ref().unwrap_or(self);
+
+        if let Some(result) = cli.help_result_for_invocation(&args) {
             return match result {
                 Ok(code) => code,
                 Err(error) => {
-                    self.stderr_line(format!("ocm: {error}"));
-                    self.stderr_line(format!(
-                        "Run \"{} help\" for usage.",
-                        self.command_example()
-                    ));
+                    cli.stderr_line(format!("ocm: {error}"));
+                    cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
                     1
                 }
             };
         }
 
         if matches!(args[0].as_str(), "--version" | "-v") {
-            self.stdout_line(VERSION);
+            cli.stdout_line(VERSION);
             return 0;
         }
 
-        if let Err(error) = ensure_store(&self.env, &self.cwd) {
-            self.stderr_line(format!("ocm: {error}"));
-            self.stderr_line(format!(
-                "Run \"{} help\" for usage.",
-                self.command_example()
-            ));
+        if let Err(error) = ensure_store(&cli.env, &cli.cwd) {
+            cli.stderr_line(format!("ocm: {error}"));
+            cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
             return 1;
         }
 
         if args[0] == "--" {
-            return match self.handle_active_env_run_shorthand(args[1..].to_vec()) {
+            return match cli.handle_active_env_run_shorthand(args[1..].to_vec()) {
                 Ok(code) => code,
                 Err(error) => {
-                    self.stderr_line(format!("ocm: {error}"));
-                    self.stderr_line(format!(
-                        "Run \"{} help\" for usage.",
-                        self.command_example()
-                    ));
+                    cli.stderr_line(format!("ocm: {error}"));
+                    cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
                     1
                 }
             };
@@ -329,15 +438,12 @@ impl Cli {
 
         if let Some(target) = Self::explicit_env_name_from_shorthand(&args[0]) {
             return match target
-                .and_then(|name| self.handle_named_env_run_shorthand(name, args[1..].to_vec()))
+                .and_then(|name| cli.handle_named_env_run_shorthand(name, args[1..].to_vec()))
             {
                 Ok(code) => code,
                 Err(error) => {
-                    self.stderr_line(format!("ocm: {error}"));
-                    self.stderr_line(format!(
-                        "Run \"{} help\" for usage.",
-                        self.command_example()
-                    ));
+                    cli.stderr_line(format!("ocm: {error}"));
+                    cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
                     1
                 }
             };
@@ -352,23 +458,20 @@ impl Cli {
         };
 
         let result = match group.as_str() {
-            "help" => self.dispatch_help_command(rest),
-            "init" => self.handle_init_command(&action, rest),
-            "env" => self.dispatch_env_command(action.as_str(), rest),
-            "launcher" => self.dispatch_launcher_command(action.as_str(), rest),
-            "runtime" => self.dispatch_runtime_command(action.as_str(), rest),
-            "service" => self.dispatch_service_command(action.as_str(), rest),
+            "help" => cli.dispatch_help_command(rest),
+            "init" => cli.handle_init_command(&action, rest),
+            "env" => cli.dispatch_env_command(action.as_str(), rest),
+            "launcher" => cli.dispatch_launcher_command(action.as_str(), rest),
+            "runtime" => cli.dispatch_runtime_command(action.as_str(), rest),
+            "service" => cli.dispatch_service_command(action.as_str(), rest),
             _ => Err(format!("unknown command group: {group}")),
         };
 
         match result {
             Ok(code) => code,
             Err(error) => {
-                self.stderr_line(format!("ocm: {error}"));
-                self.stderr_line(format!(
-                    "Run \"{} help\" for usage.",
-                    self.command_example()
-                ));
+                cli.stderr_line(format!("ocm: {error}"));
+                cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
                 1
             }
         }

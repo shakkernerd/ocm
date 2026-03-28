@@ -82,9 +82,17 @@ pub fn root_help(cmd: &str) -> String {
         &mut lines,
         "Usage",
         format_usage(&[
-            format!("{cmd} <command> [args]"),
+            format!("{cmd} [--color <mode>] <command> [args]"),
             format!("{cmd} help <command>"),
         ]),
+    );
+    push_section(
+        &mut lines,
+        "Global options",
+        format_entries(&[(
+            "--color <mode>",
+            "Color policy for pretty output: auto, always, or never",
+        )]),
     );
     push_section(
         &mut lines,
@@ -124,6 +132,7 @@ pub fn root_help(cmd: &str) -> String {
             format!("{cmd} help env"),
             format!("{cmd} help service"),
             format!("{cmd} help runtime install"),
+            format!("{cmd} --color always env list"),
         ]),
     );
     finish(lines)

@@ -89,6 +89,68 @@ fn launcher_runtime_and_service_lists_accept_raw_output_mode() {
 }
 
 #[test]
+fn color_always_forces_pretty_colored_output_for_human_views() {
+    let root = TestDir::new("color-always-pretty");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let list = run_ocm(&cwd, &env, &["env", "list", "--color", "always"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let output = stdout(&list);
+    assert!(output.contains("┌"));
+    assert!(output.contains("\u{1b}["));
+}
+
+#[test]
+fn raw_output_ignores_explicit_color_requests() {
+    let root = TestDir::new("color-always-raw");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let list = run_ocm(&cwd, &env, &["env", "list", "--raw", "--color", "always"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let output = stdout(&list);
+    assert!(!output.contains("┌"));
+    assert!(!output.contains("\u{1b}["));
+}
+
+#[test]
+fn color_always_overrides_no_color_for_pretty_output() {
+    let root = TestDir::new("color-always-no-color");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert("NO_COLOR".to_string(), "1".to_string());
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let list = run_ocm(&cwd, &env, &["env", "list", "--color=always"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert!(stdout(&list).contains("\u{1b}["));
+}
+
+#[test]
+fn invalid_color_mode_uses_clear_error() {
+    let root = TestDir::new("color-invalid");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["--color", "rainbow", "help"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("--color must be one of auto, always, or never"));
+}
+
+#[test]
 fn env_and_service_detail_commands_accept_raw_output_mode() {
     let root = TestDir::new("detail-raw");
     let cwd = root.child("workspace");
