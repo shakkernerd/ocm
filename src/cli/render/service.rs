@@ -70,14 +70,14 @@ fn service_list_with_width(
     )];
     if let Some(env_name) = summary.global_env_name.as_deref() {
         lines.push(format!(
-            "{} {}",
+            "  {} {}",
             paint("env", Tone::Muted, profile.color),
             paint(env_name, Tone::Accent, profile.color)
         ));
     }
     if let Some(config_path) = summary.global_config_path.as_deref() {
         lines.push(format!(
-            "{} {}",
+            "  {} {}",
             paint("config", Tone::Muted, profile.color),
             paint(config_path, Tone::Muted, profile.color)
         ));
@@ -690,7 +690,9 @@ mod tests {
         );
 
         assert!(lines[0].contains("OpenClaw service"));
+        assert!(lines[1].starts_with("  "));
         assert!(lines[1].contains("demo"));
+        assert!(lines[2].starts_with("  "));
         assert!(lines[3].starts_with('┌'));
         assert!(lines[4].contains("Env"));
         assert!(lines[4].contains("OCM"));
