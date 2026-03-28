@@ -64,7 +64,7 @@ fn service_list_with_width(
     );
     let mut lines = vec![format!(
         "{}  {}  {}",
-        paint("Machine-wide OpenClaw", Tone::Strong, profile.color),
+        paint("OpenClaw service", Tone::Strong, profile.color),
         paint(&summary.global_label, Tone::Accent, profile.color),
         paint(global_state, state_tone(global_state), profile.color)
     )];
@@ -271,34 +271,36 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
     }
     push_card(&mut lines, "Launch", launch, profile.color);
 
-    push_card(
-        &mut lines,
-        "Machine-wide OpenClaw",
-        vec![
-            KeyValueRow::plain("Label", summary.global_label.clone()),
-            optional_value_row("Env", summary.global_env_name.clone()),
-            KeyValueRow::new(
-                "State",
-                daemon_state(
-                    summary.global_installed,
-                    summary.global_loaded,
-                    summary.global_running,
+    if summary.global_matches_env || summary.can_adopt_global || summary.can_restore_global {
+        push_card(
+            &mut lines,
+            "OpenClaw service",
+            vec![
+                KeyValueRow::plain("Label", summary.global_label.clone()),
+                optional_value_row("Env", summary.global_env_name.clone()),
+                KeyValueRow::new(
+                    "State",
+                    daemon_state(
+                        summary.global_installed,
+                        summary.global_loaded,
+                        summary.global_running,
+                    ),
+                    state_tone(daemon_state(
+                        summary.global_installed,
+                        summary.global_loaded,
+                        summary.global_running,
+                    )),
                 ),
-                state_tone(daemon_state(
-                    summary.global_installed,
-                    summary.global_loaded,
-                    summary.global_running,
-                )),
-            ),
-            optional_value_row("PID", summary.global_pid.map(|pid| pid.to_string())),
-            optional_value_row("Current config", summary.global_config_path.clone()),
-            bool_row("Backup available", summary.backup_available),
-            bool_row("Move to OCM", summary.can_adopt_global),
-            bool_row("Can restore", summary.can_restore_global),
-            optional_value_row("Latest backup", summary.latest_backup_plist_path.clone()),
-        ],
-        profile.color,
-    );
+                optional_value_row("PID", summary.global_pid.map(|pid| pid.to_string())),
+                optional_value_row("Current config", summary.global_config_path.clone()),
+                bool_row("Backup available", summary.backup_available),
+                bool_row("Move to OCM", summary.can_adopt_global),
+                bool_row("Can restore", summary.can_restore_global),
+                optional_value_row("Latest backup", summary.latest_backup_plist_path.clone()),
+            ],
+            profile.color,
+        );
+    }
 
     if let Some(issue) = summary.issue.as_ref() {
         push_card(
@@ -687,7 +689,7 @@ mod tests {
             RenderProfile::pretty(false),
         );
 
-        assert!(lines[0].contains("Machine-wide OpenClaw"));
+        assert!(lines[0].contains("OpenClaw service"));
         assert!(lines[1].contains("demo"));
         assert!(lines[3].starts_with('┌'));
         assert!(lines[4].contains("Env"));
@@ -711,11 +713,18 @@ mod tests {
         assert_eq!(lines[0], "Service demo");
         assert!(lines.iter().any(|line| line.contains("Managed by OCM")));
         assert!(lines.iter().any(|line| line.contains("OCM service")));
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Machine-wide OpenClaw"))
-        );
+        assert!(!lines.iter().any(|line| line.contains("OpenClaw service")));
+    }
+
+    #[test]
+    fn service_status_pretty_shows_openclaw_service_when_it_belongs_to_the_env() {
+        let mut summary = sample_service_summary();
+        summary.global_env_name = Some("demo".to_string());
+        summary.global_matches_env = true;
+
+        let lines = service_status(&summary, RenderProfile::pretty(false));
+
+        assert!(lines.iter().any(|line| line.contains("OpenClaw service")));
         assert!(lines.iter().any(|line| line.contains("Env")));
     }
 
