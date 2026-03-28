@@ -3,7 +3,9 @@ mod support;
 use serde_json::json;
 
 use ocm::runtime::releases::{
-    load_release_manifest, query_releases, select_release, select_release_by_channel,
+    load_official_openclaw_releases, load_release_manifest, query_official_openclaw_releases,
+    query_releases, select_official_openclaw_release_by_channel,
+    select_official_openclaw_release_by_version, select_release, select_release_by_channel,
     select_release_by_version,
 };
 
@@ -175,4 +177,113 @@ fn release_queries_reject_conflicting_selectors() {
     let manifest = load_release_manifest(&server.url()).unwrap();
     let error = query_releases(&manifest, Some("0.2.0"), Some("stable")).unwrap_err();
     assert!(error.contains("accepts only one of --version or --channel"));
+}
+
+#[test]
+fn official_openclaw_releases_load_from_published_package_metadata() {
+    let server = TestHttpServer::serve_bytes(
+        "/openclaw",
+        "application/json",
+        json!({
+            "dist-tags": {
+                "latest": "2026.3.24",
+                "beta": "2026.3.24-beta.2",
+                "dev": "2026.3.27-dev.1"
+            },
+            "versions": {
+                "2026.3.24": {
+                    "version": "2026.3.24",
+                    "dist": {
+                        "tarball": "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz",
+                        "shasum": "abc123",
+                        "integrity": "sha512-stable"
+                    }
+                },
+                "2026.3.24-beta.2": {
+                    "version": "2026.3.24-beta.2",
+                    "dist": {
+                        "tarball": "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24-beta.2.tgz",
+                        "shasum": "def456",
+                        "integrity": "sha512-beta"
+                    }
+                },
+                "2026.3.27-dev.1": {
+                    "version": "2026.3.27-dev.1",
+                    "dist": {
+                        "tarball": "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.27-dev.1.tgz"
+                    }
+                }
+            },
+            "time": {
+                "2026.3.24": "2026-03-25T16:35:52.000Z",
+                "2026.3.24-beta.2": "2026-03-25T14:11:48.000Z",
+                "2026.3.27-dev.1": "2026-03-27T09:00:00.000Z"
+            }
+        })
+        .to_string()
+        .as_bytes(),
+    );
+
+    let releases = load_official_openclaw_releases(&server.url()).unwrap();
+    assert_eq!(releases.len(), 3);
+    assert_eq!(releases[0].version, "2026.3.27-dev.1");
+    assert_eq!(releases[0].channel.as_deref(), Some("dev"));
+    assert_eq!(releases[1].version, "2026.3.24");
+    assert_eq!(releases[1].channel.as_deref(), Some("stable"));
+    assert_eq!(
+        releases[1].tarball_url,
+        "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"
+    );
+    assert_eq!(releases[1].integrity.as_deref(), Some("sha512-stable"));
+    assert_eq!(releases[2].channel.as_deref(), Some("beta"));
+}
+
+#[test]
+fn official_openclaw_release_queries_support_version_and_channel() {
+    let server = TestHttpServer::serve_bytes(
+        "/openclaw",
+        "application/json",
+        json!({
+            "dist-tags": {
+                "latest": "2026.3.24",
+                "beta": "2026.3.24-beta.2"
+            },
+            "versions": {
+                "2026.3.24": {
+                    "version": "2026.3.24",
+                    "dist": {
+                        "tarball": "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"
+                    }
+                },
+                "2026.3.24-beta.2": {
+                    "version": "2026.3.24-beta.2",
+                    "dist": {
+                        "tarball": "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24-beta.2.tgz"
+                    }
+                }
+            }
+        })
+        .to_string()
+        .as_bytes(),
+    );
+
+    let releases = load_official_openclaw_releases(&server.url()).unwrap();
+
+    let stable = select_official_openclaw_release_by_version(&releases, "2026.3.24").unwrap();
+    assert_eq!(stable.channel.as_deref(), Some("stable"));
+
+    let beta = select_official_openclaw_release_by_channel(&releases, "beta").unwrap();
+    assert_eq!(beta.version, "2026.3.24-beta.2");
+
+    let all = query_official_openclaw_releases(&releases, None, None).unwrap();
+    assert_eq!(all.len(), 2);
+
+    let by_channel = query_official_openclaw_releases(&releases, None, Some("stable")).unwrap();
+    assert_eq!(by_channel.len(), 1);
+    assert_eq!(by_channel[0].version, "2026.3.24");
+
+    let by_version =
+        query_official_openclaw_releases(&releases, Some("2026.3.24-beta.2"), None).unwrap();
+    assert_eq!(by_version.len(), 1);
+    assert_eq!(by_version[0].channel.as_deref(), Some("beta"));
 }
