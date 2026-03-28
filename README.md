@@ -2,15 +2,15 @@
 
 `ocm` is OpenClaw Manager.
 
-It helps you run OpenClaw in separate environments, switch between them safely, use published releases or local checkouts, and keep background services running without state collisions.
+It gives you a clean way to run OpenClaw in separate environments, use published releases or local checkouts, and keep background services running without state collisions.
 
-## Why use it
+## Why people use it
 
 Use `ocm` when you want:
 
 - one clean OpenClaw environment per project, task, or instance
 - published OpenClaw releases installed locally and updated safely
-- local checkout or custom command workflows without manual shell setup
+- local checkout workflows that feel just as normal as released builds
 - background services that are easy to inspect, start, stop, and remove
 - snapshots, export/import, and safer cleanup
 
@@ -47,9 +47,9 @@ Inside this repo, use the development wrapper:
 ./bin/ocm help
 ```
 
-## Get started
+## The easiest start
 
-If you want the easiest first run:
+If you want the guided path:
 
 ```bash
 ocm setup
@@ -61,136 +61,80 @@ If you already know what you want:
 ocm start
 ```
 
-That creates or reuses an environment, prepares OpenClaw, and can start onboarding for you. If you do not pass a name, `ocm` generates one for you.
+If you do not pass a name, `ocm` generates one for you.
 
 ## Common paths
 
-### Use the latest stable release
-
-```bash
-ocm start
-```
-
-Or choose the environment name yourself:
+### Simple: start one OpenClaw environment
 
 ```bash
 ocm start mybot
+ocm @mybot -- onboard
+ocm @mybot -- status
 ```
 
-### Use the beta release
+This is the shortest path for most people.
+
+### Keep it running in the background
 
 ```bash
-ocm start mybot --channel beta
+ocm service install mybot
+ocm service status mybot
+ocm service logs mybot --tail 50
 ```
 
-### Pin to a specific published release
-
-```bash
-ocm start mybot --version 2026.3.24
-```
+Use this when the environment should keep running after you close the terminal.
 
 ### Use a local checkout
 
 ```bash
 ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw
+ocm @hacking -- onboard
 ```
 
 If you are already inside an OpenClaw checkout, `ocm setup` can detect that and suggest the local-command path automatically.
 
-## Daily use
-
-Activate an environment in your shell:
+### Try beta or pin a specific release
 
 ```bash
-eval "$(ocm env use mybot)"
+ocm start preview --channel beta
+ocm start pinned --version 2026.3.24
 ```
 
-Run OpenClaw in the active environment:
+## What makes it useful
 
-```bash
-ocm -- status
-ocm -- onboard
-```
+`ocm` is built for both everyday use and heavier workflows.
 
-Run against a named environment without activating it first:
+It can:
 
-```bash
-ocm @mybot -- status
-ocm @mybot -- onboard
-```
+- keep stable, beta, pinned, and local-dev OpenClaw setups side by side
+- manage published releases as local runtimes
+- run local checkouts through launchers
+- inspect and manage background services per environment
+- snapshot, export, import, repair, and destroy environments safely
 
-Run any other command inside an environment:
-
-```bash
-ocm env exec mybot -- sh -lc 'echo "$OPENCLAW_HOME"'
-```
-
-## Background services
-
-Install a persistent service for an environment:
-
-```bash
-ocm service install mybot
-```
-
-Check it:
-
-```bash
-ocm service list
-ocm service status mybot
-ocm service logs mybot --tail 50
-```
-
-Stop or remove it:
-
-```bash
-ocm service stop mybot
-ocm service uninstall mybot
-```
-
-## Published releases, runtimes, and local commands
-
-`ocm` can work in three main ways:
-
-- `release`: browse published OpenClaw releases
-- `runtime`: use a local OpenClaw install managed by `ocm`
-- `launcher`: use a local checkout or custom command
-
-Examples:
-
-```bash
-ocm release list
-ocm release install --channel stable
-ocm runtime list
-ocm runtime verify stable
-ocm launcher add dev --command 'pnpm openclaw' --cwd /path/to/openclaw
-```
-
-## More than just setup
-
-`ocm` also supports:
-
-- environment status and health checks
-- snapshots
-- export and import
-- cleanup and marker repair
-- safe environment teardown with `env destroy`
-
-If you want the full guide, including scenarios and command details, see [docs/USAGE.md](docs/USAGE.md).
-
-## Help
-
-Start here:
+## A few commands worth knowing
 
 ```bash
 ocm help
+ocm release list
+ocm runtime list
+ocm service list
+ocm env status mybot
+ocm env snapshot create mybot --label before-upgrade
+ocm env destroy mybot
 ```
 
-Then go deeper:
+## Learn more
+
+For the full guide, including scenarios and command details, see [docs/USAGE.md](docs/USAGE.md).
+
+You can also use:
 
 ```bash
-ocm help setup
+ocm help
 ocm help start
+ocm help setup
 ocm help env
 ocm help release
 ocm help runtime
