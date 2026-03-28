@@ -25,7 +25,7 @@ fn runtime_list_with_width(
     width: Option<usize>,
 ) -> Vec<String> {
     if runtimes.is_empty() {
-        return vec!["No runtimes.".to_string()];
+        return vec![paint("No runtimes.", Tone::Muted, profile.color)];
     }
     if !profile.pretty {
         return runtime_list_raw(runtimes);

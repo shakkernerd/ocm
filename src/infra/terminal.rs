@@ -112,12 +112,12 @@ pub fn paint(text: &str, tone: Tone, color: bool) -> String {
 
     let code = match tone {
         Tone::Plain => return text.to_string(),
-        Tone::Strong => "1",
-        Tone::Accent => "36",
-        Tone::Success => "32",
-        Tone::Warning => "33",
-        Tone::Danger => "31",
-        Tone::Muted => "2",
+        Tone::Strong => "1;38;5;153",
+        Tone::Accent => "38;5;81",
+        Tone::Success => "38;5;78",
+        Tone::Warning => "38;5;221",
+        Tone::Danger => "38;5;203",
+        Tone::Muted => "38;5;244",
     };
     format!("\u{1b}[{code}m{text}\u{1b}[0m")
 }
@@ -153,13 +153,13 @@ fn render_table_with_limit(
     }
 
     let mut lines = Vec::with_capacity(rows.len() + 4);
-    lines.push(render_border('┌', '┬', '┐', &widths));
+    lines.push(render_border('┌', '┬', '┐', &widths, color));
     lines.push(render_header(headers, &widths, color));
-    lines.push(render_border('├', '┼', '┤', &widths));
+    lines.push(render_border('├', '┼', '┤', &widths, color));
     for row in rows {
         lines.push(render_row(row, &widths, color));
     }
-    lines.push(render_border('└', '┴', '┘', &widths));
+    lines.push(render_border('└', '┴', '┘', &widths, color));
     lines
 }
 
@@ -202,18 +202,20 @@ fn render_key_value_card_with_limit(
     let border = "─".repeat(inner_width + 2);
 
     let mut lines = vec![
-        format!("┌{border}┐"),
+        border_line('┌', &border, '┐', color),
         format!(
-            "│ {} │",
+            "{} {} {}",
+            border_text("│", color),
             paint(
                 &pad_and_truncate(title, inner_width, Align::Left),
                 Tone::Strong,
                 color
-            )
+            ),
+            border_text("│", color)
         ),
     ];
     if !rows.is_empty() {
-        lines.push(format!("├{border}┤"));
+        lines.push(border_line('├', &border, '┤', color));
         for row in rows {
             lines.push(render_key_value_row(
                 row,
@@ -223,7 +225,7 @@ fn render_key_value_card_with_limit(
             ));
         }
     }
-    lines.push(format!("└{border}┘"));
+    lines.push(border_line('└', &border, '┘', color));
     lines
 }
 
@@ -234,12 +236,15 @@ pub fn render_tags(tags: &[Cell], color: bool) -> String {
         .join(" ")
 }
 
-fn render_border(left: char, join: char, right: char, widths: &[usize]) -> String {
+fn render_border(left: char, join: char, right: char, widths: &[usize], color: bool) -> String {
     let segments = widths
         .iter()
         .map(|width| "─".repeat(width + 2))
         .collect::<Vec<_>>();
-    format!("{left}{}{right}", segments.join(&join.to_string()))
+    border_text(
+        &format!("{left}{}{right}", segments.join(&join.to_string())),
+        color,
+    )
 }
 
 fn render_header(headers: &[&str], widths: &[usize], color: bool) -> String {
@@ -251,7 +256,12 @@ fn render_header(headers: &[&str], widths: &[usize], color: bool) -> String {
             paint(&padded, Tone::Strong, color)
         })
         .collect::<Vec<_>>();
-    format!("│ {} │", cells.join(" │ "))
+    format!(
+        "{} {} {}",
+        border_text("│", color),
+        cells.join(&border_text(" │ ", color)),
+        border_text("│", color)
+    )
 }
 
 fn render_row(row: &[Cell], widths: &[usize], color: bool) -> String {
@@ -264,7 +274,12 @@ fn render_row(row: &[Cell], widths: &[usize], color: bool) -> String {
             paint(&padded, cell.tone, color)
         })
         .collect::<Vec<_>>();
-    format!("│ {} │", cells.join(" │ "))
+    format!(
+        "{} {} {}",
+        border_text("│", color),
+        cells.join(&border_text(" │ ", color)),
+        border_text("│", color)
+    )
 }
 
 fn render_key_value_row(
@@ -293,7 +308,20 @@ fn render_key_value_row(
         );
         format!("{key}  {value}")
     };
-    format!("│ {content} │")
+    format!(
+        "{} {} {}",
+        border_text("│", color),
+        content,
+        border_text("│", color)
+    )
+}
+
+fn border_text(text: &str, color: bool) -> String {
+    paint(text, Tone::Muted, color)
+}
+
+fn border_line(left: char, center: &str, right: char, color: bool) -> String {
+    border_text(&format!("{left}{center}{right}"), color)
 }
 
 fn pad(value: &str, width: usize, align: Align) -> String {
@@ -430,8 +458,21 @@ mod tests {
         assert_eq!(paint("running", Tone::Success, false), "running");
         assert_eq!(
             paint("running", Tone::Success, true),
-            "\u{1b}[32mrunning\u{1b}[0m"
+            "\u{1b}[38;5;78mrunning\u{1b}[0m"
         );
+    }
+
+    #[test]
+    fn render_table_colors_borders_and_headers_when_enabled() {
+        let table = render_table(
+            &["Name", "State"],
+            &[vec![Cell::plain("demo"), Cell::success("running")]],
+            true,
+        );
+
+        assert!(table[0].contains("\u{1b}[38;5;244m"));
+        assert!(table[1].contains("\u{1b}[1;38;5;153mName"));
+        assert!(table[3].contains("\u{1b}[38;5;78mrunning"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::infra::terminal::{Cell, render_table, terminal_width};
+use crate::infra::terminal::{Cell, Tone, paint, render_table, terminal_width};
 use crate::launcher::LauncherMeta;
 
 use super::{RenderProfile, format_key_value_lines, format_rfc3339};
@@ -62,7 +62,11 @@ fn launcher_list_with_width(
     );
     if !show_cwd {
         lines.push(String::new());
-        lines.push("Use --raw for full cwd details.".to_string());
+        lines.push(paint(
+            "Use --raw for full cwd details.",
+            Tone::Muted,
+            profile.color,
+        ));
     }
     lines
 }

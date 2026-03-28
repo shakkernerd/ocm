@@ -44,6 +44,15 @@ fn state_tone(state: &str) -> Tone {
     }
 }
 
+fn source_kind_tone(source_kind: &str) -> Tone {
+    match source_kind {
+        "ocm-managed" => Tone::Success,
+        "openclaw-global" => Tone::Warning,
+        "foreign" => Tone::Accent,
+        _ => Tone::Plain,
+    }
+}
+
 pub fn service_list(summary: &ServiceSummaryList, profile: RenderProfile) -> Vec<String> {
     service_list_with_width(summary, profile, terminal_width())
 }
@@ -232,7 +241,7 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
         vec![
             KeyValueRow::plain("Type", summary.service_kind.clone()),
             KeyValueRow::accent("Port", summary.gateway_port.to_string()),
-            bool_row("Managed by OCM", summary.installed),
+            enabled_row("Managed by OCM", summary.installed),
             KeyValueRow::new("OCM service", managed_state, state_tone(managed_state)),
             optional_value_row(
                 "Binding",
@@ -292,9 +301,9 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
                 ),
                 optional_value_row("PID", summary.global_pid.map(|pid| pid.to_string())),
                 optional_value_row("Current config", summary.global_config_path.clone()),
-                bool_row("Backup available", summary.backup_available),
-                bool_row("Move to OCM", summary.can_adopt_global),
-                bool_row("Can restore", summary.can_restore_global),
+                available_row("Backup available", summary.backup_available),
+                action_row("Move to OCM", summary.can_adopt_global),
+                action_row("Can restore", summary.can_restore_global),
                 optional_value_row("Latest backup", summary.latest_backup_plist_path.clone()),
             ],
             profile.color,
@@ -396,7 +405,11 @@ fn service_discover_with_width(
             let adopt = if service.adoptable { "ready" } else { "—" };
             let mut row = vec![
                 Cell::accent(service.label.clone()),
-                Cell::plain(pretty_source_kind(&service.source_kind)),
+                Cell::new(
+                    pretty_source_kind(&service.source_kind),
+                    crate::infra::terminal::Align::Left,
+                    source_kind_tone(&service.source_kind),
+                ),
                 Cell::new(
                     state,
                     crate::infra::terminal::Align::Left,
@@ -414,7 +427,7 @@ fn service_discover_with_width(
                 if adopt == "—" {
                     Cell::muted(adopt)
                 } else {
-                    Cell::warning("yes")
+                    Cell::warning("ready")
                 },
             ];
             if show_command {
@@ -624,7 +637,23 @@ fn optional_value_row(label: &str, value: Option<String>) -> KeyValueRow {
     }
 }
 
-fn bool_row(label: &str, value: bool) -> KeyValueRow {
+fn enabled_row(label: &str, value: bool) -> KeyValueRow {
+    if value {
+        KeyValueRow::success(label, "yes")
+    } else {
+        KeyValueRow::muted(label, "no")
+    }
+}
+
+fn available_row(label: &str, value: bool) -> KeyValueRow {
+    if value {
+        KeyValueRow::accent(label, "yes")
+    } else {
+        KeyValueRow::muted(label, "no")
+    }
+}
+
+fn action_row(label: &str, value: bool) -> KeyValueRow {
     if value {
         KeyValueRow::warning(label, "yes")
     } else {
