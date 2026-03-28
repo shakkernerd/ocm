@@ -57,34 +57,12 @@ fn service_list_with_width(
         return service_list_raw(summary);
     }
 
-    let global_state = daemon_state(
-        summary.global_installed,
-        summary.global_loaded,
-        summary.global_running,
-    );
-    let mut lines = vec![format!(
-        "{}  {}  {}",
-        paint("OpenClaw service", Tone::Strong, profile.color),
-        paint(&summary.global_label, Tone::Accent, profile.color),
-        paint(global_state, state_tone(global_state), profile.color)
-    )];
-    if let Some(env_name) = summary.global_env_name.as_deref() {
-        lines.push(format!(
-            "  {} {}",
-            paint("env", Tone::Muted, profile.color),
-            paint(env_name, Tone::Accent, profile.color)
-        ));
-    }
-    if let Some(config_path) = summary.global_config_path.as_deref() {
-        lines.push(format!(
-            "  {} {}",
-            paint("config", Tone::Muted, profile.color),
-            paint(config_path, Tone::Muted, profile.color)
-        ));
-    }
-
     if summary.services.is_empty() {
-        lines.push("No services.".to_string());
+        let mut lines = vec!["No OCM services.".to_string()];
+        if let Some(note) = service_list_openclaw_note(summary, profile) {
+            lines.push(String::new());
+            lines.push(note);
+        }
         return lines;
     }
 
@@ -140,7 +118,7 @@ fn service_list_with_width(
             row
         })
         .collect::<Vec<_>>();
-    lines.extend(render_table(
+    let mut lines = render_table(
         if show_notes {
             &["Env", "Binding", "Port", "OCM", "Notes"]
         } else {
@@ -148,7 +126,7 @@ fn service_list_with_width(
         },
         &rows,
         profile.color,
-    ));
+    );
     if !show_notes {
         lines.push(String::new());
         lines.push(paint(
@@ -157,7 +135,28 @@ fn service_list_with_width(
             profile.color,
         ));
     }
+    if let Some(note) = service_list_openclaw_note(summary, profile) {
+        lines.push(String::new());
+        lines.push(note);
+    }
     lines
+}
+
+fn service_list_openclaw_note(
+    summary: &ServiceSummaryList,
+    profile: RenderProfile,
+) -> Option<String> {
+    if !summary.global_installed {
+        return None;
+    }
+
+    let message = match summary.global_env_name.as_deref() {
+        Some(env_name) => format!(
+            "Separate OpenClaw service detected for env {env_name}; use service discover for details."
+        ),
+        None => "Separate OpenClaw service detected; use service discover for details.".to_string(),
+    };
+    Some(paint(&message, Tone::Muted, profile.color))
 }
 
 fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
@@ -689,15 +688,15 @@ mod tests {
             RenderProfile::pretty(false),
         );
 
-        assert!(lines[0].contains("OpenClaw service"));
-        assert!(lines[1].starts_with("  "));
-        assert!(lines[1].contains("demo"));
-        assert!(lines[2].starts_with("  "));
-        assert!(lines[3].starts_with('┌'));
-        assert!(lines[4].contains("Env"));
-        assert!(lines[4].contains("OCM"));
-        assert!(lines[6].contains("demo"));
-        assert!(lines[7].starts_with('└'));
+        assert!(lines[0].starts_with('┌'));
+        assert!(lines[1].contains("Env"));
+        assert!(lines[1].contains("OCM"));
+        assert!(lines[3].contains("demo"));
+        assert!(lines[4].starts_with('└'));
+        assert_eq!(
+            lines.last().unwrap(),
+            "Separate OpenClaw service detected for env demo; use service discover for details."
+        );
     }
 
     #[test]
@@ -747,13 +746,17 @@ mod tests {
             Some(90),
         );
 
-        assert!(lines[3].starts_with('┌'));
-        assert!(lines[4].contains("Binding"));
-        assert!(lines[4].contains("OCM"));
-        assert!(!lines[4].contains("Notes"));
+        assert!(lines[0].starts_with('┌'));
+        assert!(lines[1].contains("Binding"));
+        assert!(lines[1].contains("OCM"));
+        assert!(!lines[1].contains("Notes"));
+        assert_eq!(
+            lines[6],
+            "Use service status <env> or --raw for notes and readiness details."
+        );
         assert_eq!(
             lines.last().unwrap(),
-            "Use service status <env> or --raw for notes and readiness details."
+            "Separate OpenClaw service detected for env demo; use service discover for details."
         );
     }
 
