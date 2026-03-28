@@ -315,6 +315,7 @@ pub fn release_help(cmd: &str) -> String {
         &[(
             "Commands",
             &[
+                ("install", "Install a published OpenClaw release as a runtime"),
                 ("list", "List published OpenClaw releases"),
                 ("show", "Show one published OpenClaw release"),
             ],
@@ -322,9 +323,11 @@ pub fn release_help(cmd: &str) -> String {
         vec![
             format!("{cmd} release list"),
             format!("{cmd} release list --channel stable"),
+            format!("{cmd} release install stable --channel stable"),
             format!("{cmd} release show 2026.3.24"),
         ],
         vec![
+            format!("{cmd} help release install"),
             format!("{cmd} help release list"),
             format!("{cmd} help release show"),
         ],
@@ -753,6 +756,35 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
 
 pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
     Some(match action {
+        "install" => render_leaf(
+            "Install a published OpenClaw release",
+            "Install a published OpenClaw release as a local managed runtime.",
+            vec![format!(
+                "{cmd} release install <name> (--version <version> | --channel <channel>) [--description <text>] [--force] [--json]"
+            )],
+            &[
+                (
+                    "--version <version>",
+                    "Install one exact published OpenClaw version",
+                ),
+                (
+                    "--channel <channel>",
+                    "Install the published release currently tagged for one channel",
+                ),
+                ("--description <text>", "Optional human description"),
+                (
+                    "--force",
+                    "Replace an existing managed runtime of the same name",
+                ),
+                ("--json", "Print the installed runtime record as JSON"),
+            ],
+            vec![
+                format!("{cmd} release install stable --channel stable"),
+                format!("{cmd} release install beta --channel beta"),
+                format!("{cmd} release install 2026-3-24 --version 2026.3.24"),
+            ],
+            &[],
+        ),
         "list" => render_leaf(
             "List published OpenClaw releases",
             "Show the published OpenClaw releases available from the official release source.",
@@ -983,22 +1015,25 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "install" => render_leaf(
             "Install a managed runtime",
-            "Install a runtime from a local binary, a direct URL, or a release manifest.",
+            "Install a runtime from the official OpenClaw release source, a local binary, a direct URL, or a custom release manifest.",
             vec![format!(
-                "{cmd} runtime install <name> (--path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force] [--json]"
+                "{cmd} runtime install <name> (--version <version> | --channel <channel> | --path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force] [--json]"
             )],
             &[
+                (
+                    "--version <version>",
+                    "Install an exact published OpenClaw release",
+                ),
+                (
+                    "--channel <channel>",
+                    "Install the published release currently tagged for one channel",
+                ),
                 ("--path <binary>", "Install from a local binary path"),
                 ("--url <url>", "Install from a direct binary URL"),
                 (
                     "--manifest-url <url>",
                     "Use a release manifest as the install source",
                 ),
-                (
-                    "--version <version>",
-                    "Pick a manifest release by explicit version",
-                ),
-                ("--channel <channel>", "Pick a manifest release by channel"),
                 ("--description <text>", "Optional human description"),
                 (
                     "--force",
@@ -1007,6 +1042,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the runtime record as JSON"),
             ],
             vec![
+                format!("{cmd} runtime install stable --channel stable"),
                 format!("{cmd} runtime install managed-stable --path ./target/debug/openclaw"),
                 format!(
                     "{cmd} runtime install nightly --url https://example.test/openclaw-nightly"
@@ -1043,13 +1079,16 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
             &[],
         ),
         "releases" => render_leaf(
-            "Inspect release manifest entries",
-            "Show releases resolved from a remote manifest without installing them.",
+            "Inspect OpenClaw releases",
+            "Show releases from the official OpenClaw source or from a custom manifest without installing them.",
             vec![format!(
-                "{cmd} runtime releases --manifest-url <url> [--version <version> | --channel <channel>] [--json]"
+                "{cmd} runtime releases [--manifest-url <url>] [--version <version> | --channel <channel>] [--json]"
             )],
             &[
-                ("--manifest-url <url>", "Manifest URL to inspect"),
+                (
+                    "--manifest-url <url>",
+                    "Use a custom manifest instead of the official OpenClaw source",
+                ),
                 (
                     "--version <version>",
                     "Select one release by explicit version",
@@ -1058,6 +1097,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print releases as JSON"),
             ],
             vec![
+                format!("{cmd} runtime releases --channel stable"),
                 format!(
                     "{cmd} runtime releases --manifest-url https://example.test/openclaw-releases.json --channel stable"
                 ),

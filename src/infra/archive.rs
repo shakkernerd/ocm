@@ -2,6 +2,7 @@ use std::fs::{self, File};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
+use flate2::read::GzDecoder;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tar::{Archive, Builder, Header};
@@ -97,6 +98,17 @@ pub fn extract_env_archive<T: DeserializeOwned>(
     let manifest_raw = fs::read_to_string(&manifest_path).map_err(|error| error.to_string())?;
     let manifest = serde_json::from_str(&manifest_raw).map_err(|error| error.to_string())?;
     Ok(ExtractedEnvArchive { manifest, root_dir })
+}
+
+pub fn extract_tar_gz(archive_path: &Path, destination_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination_dir).map_err(|error| error.to_string())?;
+
+    let file = File::open(archive_path).map_err(|error| error.to_string())?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = Archive::new(decoder);
+    archive
+        .unpack(destination_dir)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

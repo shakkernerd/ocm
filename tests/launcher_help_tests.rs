@@ -98,6 +98,7 @@ fn release_group_help_is_available_from_help_and_bare_group() {
     assert_eq!(output, stdout(&bare));
     assert!(output.contains("Release commands"));
     assert!(output.contains("List published OpenClaw releases"));
+    assert!(output.contains("Install a published OpenClaw release as a runtime"));
     assert!(output.contains("ocm release show 2026.3.24"));
 }
 

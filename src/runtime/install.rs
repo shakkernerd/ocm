@@ -1,7 +1,8 @@
 use super::{RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService};
+use crate::runtime::releases::is_official_openclaw_releases_url;
 use crate::store::{
-    get_runtime, install_runtime, install_runtime_from_release, install_runtime_from_url,
-    list_runtimes,
+    get_runtime, install_runtime, install_runtime_from_official_openclaw_release,
+    install_runtime_from_release, install_runtime_from_url, list_runtimes,
 };
 use serde::Serialize;
 
@@ -25,6 +26,15 @@ pub struct InstallRuntimeFromUrlOptions {
 pub struct InstallRuntimeFromReleaseOptions {
     pub name: String,
     pub manifest_url: String,
+    pub version: Option<String>,
+    pub channel: Option<String>,
+    pub description: Option<String>,
+    pub force: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct InstallRuntimeFromOfficialReleaseOptions {
+    pub name: String,
     pub version: Option<String>,
     pub channel: Option<String>,
     pub description: Option<String>,
@@ -79,6 +89,13 @@ impl<'a> RuntimeService<'a> {
         install_runtime_from_release(options, self.env, self.cwd)
     }
 
+    pub fn install_from_official_openclaw_release(
+        &self,
+        options: InstallRuntimeFromOfficialReleaseOptions,
+    ) -> Result<RuntimeMeta, String> {
+        install_runtime_from_official_openclaw_release(options, self.env, self.cwd)
+    }
+
     pub fn update_from_release(
         &self,
         options: UpdateRuntimeFromReleaseOptions,
@@ -112,6 +129,20 @@ impl<'a> RuntimeService<'a> {
             },
             _ => unreachable!("conflicting selectors are rejected above"),
         };
+
+        if is_official_openclaw_releases_url(Some(manifest_url.as_str()), self.env) {
+            return install_runtime_from_official_openclaw_release(
+                InstallRuntimeFromOfficialReleaseOptions {
+                    name: existing.name,
+                    version,
+                    channel,
+                    description: existing.description,
+                    force: true,
+                },
+                self.env,
+                self.cwd,
+            );
+        }
 
         install_runtime_from_release(
             InstallRuntimeFromReleaseOptions {

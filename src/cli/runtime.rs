@@ -1,6 +1,6 @@
 use crate::runtime::{
-    AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
-    InstallRuntimeOptions, UpdateRuntimeFromReleaseOptions,
+    AddRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
+    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, UpdateRuntimeFromReleaseOptions,
 };
 
 use super::{Cli, render};
@@ -116,15 +116,12 @@ impl Cli {
             );
         }
         if manifest_url.is_none() {
-            if version.is_some() {
-                return Err(
-                    "runtime install only supports --version with --manifest-url".to_string(),
-                );
-            }
-            if channel.is_some() {
-                return Err(
-                    "runtime install only supports --channel with --manifest-url".to_string(),
-                );
+            if path.is_some() || url.is_some() {
+                if version.is_some() || channel.is_some() {
+                    return Err(
+                        "runtime install only supports --version or --channel with the official release source or --manifest-url".to_string(),
+                    );
+                }
             }
         }
 
@@ -175,8 +172,29 @@ impl Cli {
                         })
                 })?
             }
+            (None, None, None) if version.is_some() || channel.is_some() => {
+                if version.is_some() && channel.is_some() {
+                    return Err(
+                        "runtime install accepts only one of --version or --channel".to_string(),
+                    );
+                }
+                self.with_progress(format!("Installing runtime {name}"), || {
+                    self.runtime_service().install_from_official_openclaw_release(
+                        InstallRuntimeFromOfficialReleaseOptions {
+                            name: name.clone(),
+                            version,
+                            channel,
+                            description,
+                            force,
+                        },
+                    )
+                })?
+            }
             (None, None, None) => {
-                return Err("runtime install requires --path, --url, or --manifest-url".to_string());
+                return Err(
+                    "runtime install requires --path, --url, --manifest-url, or --version/--channel"
+                        .to_string(),
+                );
             }
             _ => unreachable!("source_count guards conflicting runtime install sources"),
         };
@@ -200,18 +218,29 @@ impl Cli {
         let manifest_url = Self::require_option_value(manifest_url, "--manifest-url")?;
         Self::assert_no_extra_args(&args)?;
 
-        if manifest_url.is_none() {
-            return Err("runtime releases requires --manifest-url".to_string());
-        }
         if version.is_some() && channel.is_some() {
             return Err("runtime releases accepts only one of --version or --channel".to_string());
         }
 
-        let releases = self.runtime_service().releases_from_manifest(
-            manifest_url.as_deref().unwrap_or_default(),
-            version.as_deref(),
-            channel.as_deref(),
-        )?;
+        let releases = if let Some(manifest_url) = manifest_url.as_deref() {
+            self.runtime_service().releases_from_manifest(
+                manifest_url,
+                version.as_deref(),
+                channel.as_deref(),
+            )?
+        } else {
+            self.runtime_service()
+                .official_openclaw_releases(version.as_deref(), channel.as_deref())?
+                .into_iter()
+                .map(|release| crate::runtime::RuntimeRelease {
+                    version: release.version,
+                    channel: release.channel,
+                    url: release.tarball_url,
+                    sha256: None,
+                    description: None,
+                })
+                .collect()
+        };
         if json_flag {
             self.print_json(&releases)?;
             return Ok(0);

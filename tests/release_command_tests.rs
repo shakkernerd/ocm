@@ -2,9 +2,50 @@ mod support;
 
 use std::fs;
 
+use base64::Engine;
+use flate2::{Compression, write::GzEncoder};
 use serde_json::json;
+use sha2::{Digest, Sha512};
+use tar::{Builder, Header};
 
 use crate::support::{TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout};
+
+fn append_tar_file(builder: &mut Builder<&mut GzEncoder<Vec<u8>>>, path: &str, body: &[u8], mode: u32) {
+    let mut header = Header::new_gnu();
+    header.set_size(body.len() as u64);
+    header.set_mode(mode);
+    header.set_cksum();
+    builder.append_data(&mut header, path, body).unwrap();
+}
+
+fn openclaw_package_tarball(script_body: &str) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    {
+        let mut builder = Builder::new(&mut encoder);
+        append_tar_file(
+            &mut builder,
+            "package/openclaw.mjs",
+            script_body.as_bytes(),
+            0o755,
+        );
+        append_tar_file(
+            &mut builder,
+            "package/package.json",
+            br#"{"name":"openclaw","version":"2026.3.24","bin":{"openclaw":"openclaw.mjs"}}"#,
+            0o644,
+        );
+        builder.finish().unwrap();
+    }
+    encoder.finish().unwrap()
+}
+
+fn sha512_integrity(body: &[u8]) -> String {
+    let digest = Sha512::digest(body);
+    format!(
+        "sha512-{}",
+        base64::engine::general_purpose::STANDARD.encode(digest)
+    )
+}
 
 fn packument_body() -> Vec<u8> {
     json!({
@@ -119,4 +160,40 @@ fn release_list_rejects_conflicting_selectors() {
     );
     assert!(!output.status.success());
     assert!(stderr(&output).contains("release list accepts only one of --version or --channel"));
+}
+
+#[test]
+fn release_install_uses_the_published_openclaw_source() {
+    let root = TestDir::new("release-install");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let server = TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        server.url(),
+    );
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &["release", "install", "stable", "--channel", "stable"],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+    let output = stdout(&install);
+    assert!(output.contains("Installed runtime stable"));
+    assert!(output.contains("install root:"));
 }

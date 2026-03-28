@@ -25,7 +25,8 @@ pub use layout::{
     runtime_meta_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path, validate_name,
 };
 pub use runtimes::{
-    add_runtime, get_runtime, get_runtime_verified, install_runtime, install_runtime_from_release,
+    add_runtime, get_runtime, get_runtime_verified, install_runtime,
+    install_runtime_from_official_openclaw_release, install_runtime_from_release,
     install_runtime_from_url, list_runtimes, remove_runtime, runtime_integrity_issue,
 };
 pub use snapshots::{

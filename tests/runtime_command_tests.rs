@@ -2,13 +2,56 @@ mod support;
 
 use std::fs;
 
+use base64::Engine;
+use flate2::{Compression, write::GzEncoder};
 use ocm::infra::download::file_sha256;
 use ocm::store::runtime_install_root;
 use serde_json::Value;
+use sha2::{Digest, Sha512};
+use tar::{Builder, Header};
 
 use crate::support::{
     TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
 };
+
+fn append_tar_file(builder: &mut Builder<&mut GzEncoder<Vec<u8>>>, path: &str, body: &[u8], mode: u32) {
+    let mut header = Header::new_gnu();
+    header.set_size(body.len() as u64);
+    header.set_mode(mode);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, path, body)
+        .unwrap();
+}
+
+fn openclaw_package_tarball(script_body: &str) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    {
+        let mut builder = Builder::new(&mut encoder);
+        append_tar_file(
+            &mut builder,
+            "package/openclaw.mjs",
+            script_body.as_bytes(),
+            0o755,
+        );
+        append_tar_file(
+            &mut builder,
+            "package/package.json",
+            br#"{"name":"openclaw","version":"2026.3.24","bin":{"openclaw":"openclaw.mjs"}}"#,
+            0o644,
+        );
+        builder.finish().unwrap();
+    }
+    encoder.finish().unwrap()
+}
+
+fn sha512_integrity(body: &[u8]) -> String {
+    let digest = Sha512::digest(body);
+    format!(
+        "sha512-{}",
+        base64::engine::general_purpose::STANDARD.encode(digest)
+    )
+}
 
 #[test]
 fn runtime_list_uses_runtime_wording_when_empty() {
@@ -249,6 +292,144 @@ fn runtime_install_from_manifest_version_downloads_and_records_release_metadata(
     assert!(show_stdout.contains("releaseSelectorKind: version"));
     assert!(show_stdout.contains("releaseSelectorValue: 0.2.0"));
     assert!(show_stdout.contains("description: stable manifest runtime"));
+}
+
+#[test]
+fn runtime_install_from_official_release_downloads_and_extracts_the_openclaw_package() {
+    let root = TestDir::new("runtime-install-official-release");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "install", "stable", "--channel", "stable"],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+    assert!(stdout(&install).contains("Installed runtime stable"));
+
+    let install_root = runtime_install_root("stable", &env, &cwd).unwrap();
+    let expected_binary = install_root.join("files/package/openclaw.mjs");
+    assert_eq!(
+        fs::read_to_string(&expected_binary).unwrap(),
+        "#!/usr/bin/env node\nconsole.log('stable');\n"
+    );
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_stdout = stdout(&show);
+    assert!(show_stdout.contains("releaseVersion: 2026.3.24"));
+    assert!(show_stdout.contains("releaseChannel: stable"));
+    assert!(show_stdout.contains("sourceManifestUrl:"));
+    assert!(show_stdout.contains("sourceKind: installed"));
+
+    let which = run_ocm(&cwd, &env, &["runtime", "which", "stable"]);
+    assert!(which.status.success(), "{}", stderr(&which));
+    assert_eq!(stdout(&which), format!("{}\n", path_string(&expected_binary)));
+}
+
+#[test]
+fn runtime_releases_without_manifest_url_use_the_official_openclaw_source() {
+    let root = TestDir::new("runtime-releases-official");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let packument = br#"{"dist-tags":{"latest":"2026.3.24","beta":"2026.3.24-beta.2"},"versions":{"2026.3.24":{"version":"2026.3.24","dist":{"tarball":"https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"}},"2026.3.24-beta.2":{"version":"2026.3.24-beta.2","dist":{"tarball":"https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24-beta.2.tgz"}}}}"#;
+    let server = TestHttpServer::serve_bytes("/openclaw", "application/json", packument);
+    let mut env = ocm_env(&root);
+    env.insert("OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(), server.url());
+
+    let output = run_ocm(&cwd, &env, &["runtime", "releases", "--channel", "stable"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let output = stdout(&output);
+    assert!(output.contains("2026.3.24"));
+    assert!(output.contains("channel=stable"));
+}
+
+#[test]
+fn runtime_update_reuses_the_official_release_selector() {
+    let root = TestDir::new("runtime-update-official-release");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let stable_tar = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let updated_tar = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('updated');\n");
+    let stable_integrity = sha512_integrity(&stable_tar);
+    let updated_integrity = sha512_integrity(&updated_tar);
+    let stable_tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &stable_tar,
+    );
+    let updated_tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.25.tgz",
+        "application/octet-stream",
+        &updated_tar,
+    );
+    let packument_v1 = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}}}}",
+        stable_tarball_server.url(),
+        stable_integrity
+    );
+    let packument_v2 = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.25\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25\":{{\"version\":\"2026.3.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.25\":\"2026-03-26T10:00:00.000Z\"}}}}",
+        stable_tarball_server.url(),
+        stable_integrity,
+        updated_tarball_server.url(),
+        updated_integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![packument_v1.into_bytes(), packument_v2.into_bytes()],
+    );
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "install", "stable", "--channel", "stable"],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let update = run_ocm(&cwd, &env, &["runtime", "update", "stable"]);
+    assert!(update.status.success(), "{}", stderr(&update));
+    assert!(stdout(&update).contains("Updated runtime stable"));
+
+    let install_root = runtime_install_root("stable", &env, &cwd).unwrap();
+    let expected_binary = install_root.join("files/package/openclaw.mjs");
+    assert_eq!(
+        fs::read_to_string(&expected_binary).unwrap(),
+        "#!/usr/bin/env node\nconsole.log('updated');\n"
+    );
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    assert!(stdout(&show).contains("releaseVersion: 2026.3.25"));
 }
 
 #[test]

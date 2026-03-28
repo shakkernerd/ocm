@@ -388,6 +388,8 @@ checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
 name = "ocm"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "flate2",
  "indicatif",
  "serde",
  "serde_json",

@@ -233,6 +233,17 @@ pub fn official_openclaw_releases_url(env: &BTreeMap<String, String>) -> String 
         .to_string()
 }
 
+pub fn is_official_openclaw_releases_url(
+    url: Option<&str>,
+    env: &BTreeMap<String, String>,
+) -> bool {
+    let Some(url) = url.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let official = official_openclaw_releases_url(env);
+    url == official || url == DEFAULT_OPENCLAW_RELEASES_URL
+}
+
 impl<'a> RuntimeService<'a> {
     pub fn releases_from_manifest(
         &self,

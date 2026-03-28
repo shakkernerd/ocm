@@ -3,8 +3,9 @@ use std::io;
 use std::io::Read;
 use std::path::Path;
 
+use base64::Engine;
 use serde::de::DeserializeOwned;
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 
 pub fn artifact_file_name_from_url(url: &str) -> Result<String, String> {
     let trimmed = url.trim();
@@ -96,4 +97,48 @@ pub fn verify_file_sha256(path: &Path, expected: &str) -> Result<String, String>
         ));
     }
     Ok(actual)
+}
+
+pub fn verify_file_integrity(path: &Path, expected: &str) -> Result<(), String> {
+    let expected = expected.trim();
+    if expected.is_empty() {
+        return Err("runtime artifact integrity is required".to_string());
+    }
+
+    let Some((algorithm, encoded)) = expected.split_once('-') else {
+        return Err(format!("runtime artifact integrity is invalid: {expected}"));
+    };
+    if encoded.trim().is_empty() {
+        return Err(format!("runtime artifact integrity is invalid: {expected}"));
+    }
+
+    match algorithm {
+        "sha512" => verify_file_sha512_base64(path, encoded.trim(), expected),
+        _ => Err(format!(
+            "runtime artifact integrity algorithm is unsupported: {algorithm}"
+        )),
+    }
+}
+
+fn verify_file_sha512_base64(path: &Path, expected_base64: &str, raw_expected: &str) -> Result<(), String> {
+    let expected = base64::engine::general_purpose::STANDARD
+        .decode(expected_base64)
+        .map_err(|_| format!("runtime artifact integrity is invalid: {raw_expected}"))?;
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha512::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    let actual = hasher.finalize();
+    if actual.as_slice() != expected.as_slice() {
+        return Err("runtime artifact integrity mismatch".to_string());
+    }
+    Ok(())
 }

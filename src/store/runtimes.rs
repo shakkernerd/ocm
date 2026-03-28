@@ -4,14 +4,20 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use crate::infra::archive::extract_tar_gz;
 use crate::infra::download::{
     artifact_file_name_from_url, download_to_file, file_sha256, normalize_sha256,
-    verify_file_sha256,
+    verify_file_integrity, verify_file_sha256,
 };
-use crate::runtime::releases::{load_release_manifest, select_release};
+use crate::runtime::releases::{
+    load_official_openclaw_releases, load_release_manifest, official_openclaw_releases_url,
+    select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
+    select_release,
+};
 use crate::runtime::{
-    AddRuntimeOptions, InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions,
-    InstallRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind,
+    AddRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
+    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeMeta,
+    RuntimeReleaseSelectorKind, RuntimeSourceKind,
 };
 
 use super::common::{ensure_dir, load_json_files, path_exists, read_json, write_json};
@@ -128,6 +134,81 @@ fn install_runtime_at_path(
             source_manifest_url,
             source_sha256,
             release_version,
+            release_channel,
+            release_selector_kind,
+            release_selector_value,
+            description,
+        );
+        write_json(&meta_path, &meta)?;
+        Ok(meta)
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&meta_path);
+        let _ = fs::remove_dir_all(&install_root);
+    }
+
+    result
+}
+
+fn install_runtime_from_openclaw_package(
+    name: String,
+    meta_path: PathBuf,
+    install_root: PathBuf,
+    install_files: PathBuf,
+    tarball_url: String,
+    source_manifest_url: String,
+    source_integrity: Option<String>,
+    release_version: String,
+    release_channel: Option<String>,
+    release_selector_kind: Option<RuntimeReleaseSelectorKind>,
+    release_selector_value: Option<String>,
+    description: Option<String>,
+) -> Result<RuntimeMeta, String> {
+    if path_exists(&install_root) {
+        return Err(format!(
+            "runtime install root already exists: {}",
+            display_path(&install_root)
+        ));
+    }
+
+    let result = (|| {
+        ensure_dir(&install_files)?;
+        let archive_name = artifact_file_name_from_url(&tarball_url)?;
+        let archive_path = install_files.join(&archive_name);
+        download_to_file(&tarball_url, &archive_path)?;
+        if let Some(source_integrity) = source_integrity.as_deref() {
+            verify_file_integrity(&archive_path, source_integrity)?;
+        }
+
+        extract_tar_gz(&archive_path, &install_files)?;
+        let _ = fs::remove_file(&archive_path);
+
+        let binary_path = install_files.join("package/openclaw.mjs");
+        if !path_exists(&binary_path) {
+            return Err(format!(
+                "OpenClaw release \"{release_version}\" is missing package/openclaw.mjs"
+            ));
+        }
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(&binary_path)
+                .map_err(|error| error.to_string())?
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&binary_path, permissions).map_err(|error| error.to_string())?;
+        }
+        let binary_sha256 = file_sha256(&binary_path)?;
+
+        let meta = build_installed_runtime_meta(
+            name,
+            &binary_path,
+            &install_root,
+            None,
+            Some(tarball_url),
+            Some(source_manifest_url),
+            Some(binary_sha256),
+            Some(release_version),
             release_channel,
             release_selector_kind,
             release_selector_value,
@@ -397,6 +478,61 @@ pub fn install_runtime_from_release(
         Some(options.manifest_url),
         release.sha256,
         Some(release.version),
+        release.channel,
+        release_selector_kind,
+        release_selector_value,
+        description,
+    )
+}
+
+pub fn install_runtime_from_official_openclaw_release(
+    options: InstallRuntimeFromOfficialReleaseOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<RuntimeMeta, String> {
+    let name = validate_name(&options.name, "Runtime name")?;
+    let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
+
+    let releases_url = official_openclaw_releases_url(env);
+    let releases = load_official_openclaw_releases(&releases_url)?;
+    let (release_selector_kind, release_selector_value) =
+        match (options.version.as_deref(), options.channel.as_deref()) {
+            (Some(version), None) => (
+                Some(RuntimeReleaseSelectorKind::Version),
+                Some(version.trim().to_string()),
+            ),
+            (None, Some(channel)) => (
+                Some(RuntimeReleaseSelectorKind::Channel),
+                Some(channel.trim().to_string()),
+            ),
+            _ => (None, None),
+        };
+    let release = match (options.version.as_deref(), options.channel.as_deref()) {
+        (Some(version), None) => select_official_openclaw_release_by_version(&releases, version)?,
+        (None, Some(channel)) => select_official_openclaw_release_by_channel(&releases, channel)?,
+        (Some(_), Some(_)) => {
+            return Err(
+                "runtime install accepts only one of --version or --channel".to_string(),
+            );
+        }
+        (None, None) => {
+            return Err("runtime install requires --version or --channel".to_string());
+        }
+    };
+    let description = trim_description(options.description)
+        .or_else(|| Some(format!("Official OpenClaw release {}", release.version)));
+
+    let install_root = runtime_install_root(&name, env, cwd)?;
+    let install_files = runtime_install_files_dir(&name, env, cwd)?;
+    install_runtime_from_openclaw_package(
+        name,
+        meta_path,
+        install_root,
+        install_files,
+        release.tarball_url,
+        releases_url,
+        release.integrity,
+        release.version,
         release.channel,
         release_selector_kind,
         release_selector_value,
