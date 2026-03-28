@@ -11,5 +11,7 @@ pub use install::{
 pub use registry::{
     AddRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService, RuntimeSourceKind,
 };
-pub use releases::{OpenClawRelease, RuntimeRelease, RuntimeReleaseManifest};
+pub use releases::{
+    OpenClawRelease, OpenClawReleaseCatalogEntry, RuntimeRelease, RuntimeReleaseManifest,
+};
 pub use verify::{RuntimeBinarySummary, RuntimeVerifySummary};

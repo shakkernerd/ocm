@@ -17,7 +17,7 @@ impl Cli {
 
         let releases = self
             .runtime_service()
-            .official_openclaw_releases(version.as_deref(), channel.as_deref())?;
+            .official_openclaw_release_catalog(version.as_deref(), channel.as_deref())?;
         if json_flag {
             self.print_json(&releases)?;
             return Ok(0);
@@ -36,7 +36,7 @@ impl Cli {
 
         let release = self
             .runtime_service()
-            .official_openclaw_releases(Some(version), None)?
+            .official_openclaw_release_catalog(Some(version), None)?
             .into_iter()
             .next()
             .ok_or_else(|| format!("OpenClaw release version \"{version}\" was not found"))?;

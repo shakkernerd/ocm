@@ -1,21 +1,28 @@
 use std::collections::BTreeMap;
 
 use crate::infra::terminal::{Cell, Tone, paint, render_table, terminal_width};
-use crate::runtime::OpenClawRelease;
+use crate::runtime::OpenClawReleaseCatalogEntry;
 
 use super::{RenderProfile, format_key_value_lines, format_rfc3339};
 
-pub fn release_list(releases: &[OpenClawRelease], profile: RenderProfile) -> Vec<String> {
+pub fn release_list(
+    releases: &[OpenClawReleaseCatalogEntry],
+    profile: RenderProfile,
+) -> Vec<String> {
     release_list_with_width(releases, profile, terminal_width())
 }
 
 fn release_list_with_width(
-    releases: &[OpenClawRelease],
+    releases: &[OpenClawReleaseCatalogEntry],
     profile: RenderProfile,
     width: Option<usize>,
 ) -> Vec<String> {
     if releases.is_empty() {
-        return vec![paint("No published OpenClaw releases.", Tone::Muted, profile.color)];
+        return vec![paint(
+            "No published OpenClaw releases.",
+            Tone::Muted,
+            profile.color,
+        )];
     }
     if !profile.pretty {
         return release_list_raw(releases);
@@ -26,23 +33,31 @@ fn release_list_with_width(
         .iter()
         .map(|release| {
             let published_at = release
+                .release
                 .published_at
                 .map(|value| format_rfc3339(value))
                 .transpose()
                 .unwrap_or_else(|_| Some("—".to_string()))
                 .unwrap_or_else(|| "—".to_string());
+            let installed = if release.installed_runtime_names.is_empty() {
+                "—".to_string()
+            } else {
+                release.installed_runtime_names.join(", ")
+            };
             if show_full {
                 vec![
-                    Cell::accent(release.version.clone()),
-                    optional_cell(release.channel.as_deref()),
+                    Cell::accent(release.release.version.clone()),
+                    optional_cell(release.release.channel.as_deref()),
                     Cell::muted(published_at),
-                    Cell::muted(release.tarball_url.clone()),
+                    Cell::plain(installed),
+                    Cell::muted(release.release.tarball_url.clone()),
                 ]
             } else {
                 vec![
-                    Cell::accent(release.version.clone()),
-                    optional_cell(release.channel.as_deref()),
+                    Cell::accent(release.release.version.clone()),
+                    optional_cell(release.release.channel.as_deref()),
                     Cell::muted(published_at),
+                    Cell::plain(installed),
                 ]
             }
         })
@@ -50,9 +65,9 @@ fn release_list_with_width(
 
     let mut lines = render_table(
         if show_full {
-            &["Version", "Channel", "Published", "Tarball"]
+            &["Version", "Channel", "Published", "Installed", "Tarball"]
         } else {
-            &["Version", "Channel", "Published"]
+            &["Version", "Channel", "Published", "Installed"]
         },
         &rows,
         profile.color,
@@ -68,23 +83,32 @@ fn release_list_with_width(
     lines
 }
 
-fn release_list_raw(releases: &[OpenClawRelease]) -> Vec<String> {
+fn release_list_raw(releases: &[OpenClawReleaseCatalogEntry]) -> Vec<String> {
     let mut lines = Vec::with_capacity(releases.len());
     for release in releases {
-        let mut bits = vec![release.version.clone(), release.tarball_url.clone()];
-        if let Some(channel) = release.channel.as_deref() {
+        let mut bits = vec![
+            release.release.version.clone(),
+            release.release.tarball_url.clone(),
+        ];
+        if let Some(channel) = release.release.channel.as_deref() {
             bits.push(format!("channel={channel}"));
         }
-        if let Some(published_at) = release.published_at {
+        if let Some(published_at) = release.release.published_at {
             if let Ok(published_at) = format_rfc3339(published_at) {
                 bits.push(format!("publishedAt={published_at}"));
             }
         }
-        if let Some(shasum) = release.shasum.as_deref() {
+        if let Some(shasum) = release.release.shasum.as_deref() {
             bits.push(format!("shasum={shasum}"));
         }
-        if let Some(integrity) = release.integrity.as_deref() {
+        if let Some(integrity) = release.release.integrity.as_deref() {
             bits.push(format!("integrity={integrity}"));
+        }
+        if !release.installed_runtime_names.is_empty() {
+            bits.push(format!(
+                "installed={}",
+                release.installed_runtime_names.join(",")
+            ));
         }
         lines.push(bits.join("  "));
     }
@@ -95,21 +119,32 @@ fn optional_cell(value: Option<&str>) -> Cell {
     value.map(Cell::plain).unwrap_or_else(|| Cell::muted("—"))
 }
 
-pub fn release_show(release: &OpenClawRelease) -> Result<Vec<String>, String> {
+pub fn release_show(release: &OpenClawReleaseCatalogEntry) -> Result<Vec<String>, String> {
     let mut lines = BTreeMap::new();
-    lines.insert("version".to_string(), release.version.clone());
-    if let Some(channel) = release.channel.as_deref() {
+    lines.insert("version".to_string(), release.release.version.clone());
+    if let Some(channel) = release.release.channel.as_deref() {
         lines.insert("channel".to_string(), channel.to_string());
     }
-    lines.insert("tarballUrl".to_string(), release.tarball_url.clone());
-    if let Some(published_at) = release.published_at {
+    lines.insert(
+        "tarballUrl".to_string(),
+        release.release.tarball_url.clone(),
+    );
+    if let Some(published_at) = release.release.published_at {
         lines.insert("publishedAt".to_string(), format_rfc3339(published_at)?);
     }
-    if let Some(shasum) = release.shasum.as_deref() {
+    if let Some(shasum) = release.release.shasum.as_deref() {
         lines.insert("shasum".to_string(), shasum.to_string());
     }
-    if let Some(integrity) = release.integrity.as_deref() {
+    if let Some(integrity) = release.release.integrity.as_deref() {
         lines.insert("integrity".to_string(), integrity.to_string());
+    }
+    if release.installed_runtime_names.is_empty() {
+        lines.insert("installedRuntimes".to_string(), "—".to_string());
+    } else {
+        lines.insert(
+            "installedRuntimes".to_string(),
+            release.installed_runtime_names.join(", "),
+        );
     }
     Ok(format_key_value_lines(lines))
 }
@@ -119,17 +154,18 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{RenderProfile, release_list_with_width};
-    use crate::runtime::OpenClawRelease;
+    use crate::runtime::{OpenClawRelease, OpenClawReleaseCatalogEntry};
 
     #[test]
     fn release_list_pretty_compacts_on_narrow_terminals() {
         let lines = release_list_with_width(
-            &[sample_release()],
+            &[sample_catalog_entry()],
             RenderProfile::pretty(false),
             Some(80),
         );
 
         assert!(lines[1].contains("Version"));
+        assert!(lines[1].contains("Installed"));
         assert!(!lines[1].contains("Tarball"));
         assert_eq!(
             lines.last().unwrap(),
@@ -141,11 +177,17 @@ mod tests {
         OpenClawRelease {
             version: "2026.3.24".to_string(),
             channel: Some("stable".to_string()),
-            tarball_url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"
-                .to_string(),
+            tarball_url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz".to_string(),
             shasum: Some("abc123".to_string()),
             integrity: Some("sha512-demo".to_string()),
             published_at: Some(OffsetDateTime::UNIX_EPOCH),
+        }
+    }
+
+    fn sample_catalog_entry() -> OpenClawReleaseCatalogEntry {
+        OpenClawReleaseCatalogEntry {
+            release: sample_release(),
+            installed_runtime_names: vec!["stable".to_string()],
         }
     }
 }

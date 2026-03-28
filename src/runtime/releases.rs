@@ -5,6 +5,7 @@ use time::OffsetDateTime;
 
 use super::RuntimeService;
 use crate::infra::download::fetch_json;
+use crate::store::list_runtimes;
 
 const DEFAULT_OPENCLAW_RELEASES_URL: &str = "https://registry.npmjs.org/openclaw";
 const INTERNAL_OPENCLAW_RELEASES_URL_ENV: &str = "OCM_INTERNAL_OPENCLAW_RELEASES_URL";
@@ -43,6 +44,15 @@ pub struct OpenClawRelease {
     pub integrity: Option<String>,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub published_at: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenClawReleaseCatalogEntry {
+    #[serde(flatten)]
+    pub release: OpenClawRelease,
+    #[serde(default)]
+    pub installed_runtime_names: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,8 +229,7 @@ pub fn query_official_openclaw_releases(
             releases, channel,
         )?]),
         (Some(_), Some(_)) => {
-            Err("OpenClaw release selection accepts only one of --version or --channel"
-                .to_string())
+            Err("OpenClaw release selection accepts only one of --version or --channel".to_string())
         }
     }
 }
@@ -262,6 +271,34 @@ impl<'a> RuntimeService<'a> {
     ) -> Result<Vec<OpenClawRelease>, String> {
         let releases = load_official_openclaw_releases(&official_openclaw_releases_url(self.env))?;
         query_official_openclaw_releases(&releases, version, channel)
+    }
+
+    pub fn official_openclaw_release_catalog(
+        &self,
+        version: Option<&str>,
+        channel: Option<&str>,
+    ) -> Result<Vec<OpenClawReleaseCatalogEntry>, String> {
+        let releases = self.official_openclaw_releases(version, channel)?;
+        let runtimes = list_runtimes(self.env, self.cwd)?;
+
+        Ok(releases
+            .into_iter()
+            .map(|release| {
+                let mut installed_runtime_names = runtimes
+                    .iter()
+                    .filter(|runtime| {
+                        runtime.release_version.as_deref() == Some(release.version.as_str())
+                    })
+                    .map(|runtime| runtime.name.clone())
+                    .collect::<Vec<_>>();
+                installed_runtime_names.sort();
+
+                OpenClawReleaseCatalogEntry {
+                    release,
+                    installed_runtime_names,
+                }
+            })
+            .collect())
     }
 }
 
@@ -306,7 +343,8 @@ fn validate_official_openclaw_releases(
             continue;
         };
         match channel_by_version.get(version.as_str()) {
-            Some(existing) if openclaw_channel_priority(existing) <= openclaw_channel_priority(channel) => {}
+            Some(existing)
+                if openclaw_channel_priority(existing) <= openclaw_channel_priority(channel) => {}
             _ => {
                 channel_by_version.insert(version, channel.to_string());
             }
@@ -327,13 +365,9 @@ fn validate_official_openclaw_releases(
             ));
         }
 
-        let published_at = manifest
-            .time
-            .get(version_key.as_str())
-            .and_then(|value| OffsetDateTime::parse(
-                value,
-                &time::format_description::well_known::Rfc3339,
-            ).ok());
+        let published_at = manifest.time.get(version_key.as_str()).and_then(|value| {
+            OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+        });
 
         releases.push(OpenClawRelease {
             version: version.to_string(),

@@ -10,7 +10,12 @@ use tar::{Builder, Header};
 
 use crate::support::{TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout};
 
-fn append_tar_file(builder: &mut Builder<&mut GzEncoder<Vec<u8>>>, path: &str, body: &[u8], mode: u32) {
+fn append_tar_file(
+    builder: &mut Builder<&mut GzEncoder<Vec<u8>>>,
+    path: &str,
+    body: &[u8],
+    mode: u32,
+) {
     let mut header = Header::new_gnu();
     header.set_size(body.len() as u64);
     header.set_mode(mode);
@@ -106,20 +111,26 @@ fn release_list_can_filter_by_channel_and_release_show_prints_one_version() {
     let root = TestDir::new("release-list-show");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let list_server = TestHttpServer::serve_bytes("/openclaw-list", "application/json", &packument_body());
+    let list_server =
+        TestHttpServer::serve_bytes("/openclaw-list", "application/json", &packument_body());
     let mut env = ocm_env(&root);
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         list_server.url(),
     );
 
-    let stable = run_ocm(&cwd, &env, &["release", "list", "--channel", "stable", "--json"]);
+    let stable = run_ocm(
+        &cwd,
+        &env,
+        &["release", "list", "--channel", "stable", "--json"],
+    );
     assert!(stable.status.success(), "{}", stderr(&stable));
     let stable_stdout = stdout(&stable);
     assert!(stable_stdout.contains("\"version\": \"2026.3.24\""));
     assert!(!stable_stdout.contains("2026.3.24-beta.2"));
 
-    let show_server = TestHttpServer::serve_bytes("/openclaw-show", "application/json", &packument_body());
+    let show_server =
+        TestHttpServer::serve_bytes("/openclaw-show", "application/json", &packument_body());
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         show_server.url(),
@@ -130,7 +141,8 @@ fn release_list_can_filter_by_channel_and_release_show_prints_one_version() {
     assert!(show_stdout.contains("version: 2026.3.24"));
     assert!(show_stdout.contains("channel: stable"));
     assert!(
-        show_stdout.contains("tarballUrl: https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz")
+        show_stdout
+            .contains("tarballUrl: https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz")
     );
 }
 
@@ -196,4 +208,52 @@ fn release_install_uses_the_published_openclaw_source() {
     let output = stdout(&install);
     assert!(output.contains("Installed runtime stable"));
     assert!(output.contains("install root:"));
+}
+
+#[test]
+fn release_list_and_show_surface_installed_runtime_names() {
+    let root = TestDir::new("release-installed-runtime-names");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 3);
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        server.url(),
+    );
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &["release", "install", "stable", "--channel", "stable"],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let list = run_ocm(
+        &cwd,
+        &env,
+        &["release", "list", "--version", "2026.3.24", "--json"],
+    );
+    assert!(list.status.success(), "{}", stderr(&list));
+    let list_stdout = stdout(&list);
+    assert!(list_stdout.contains("\"installedRuntimeNames\": ["));
+    assert!(list_stdout.contains("\"stable\""));
+
+    let show = run_ocm(&cwd, &env, &["release", "show", "2026.3.24"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    assert!(stdout(&show).contains("installedRuntimes: stable"));
 }
