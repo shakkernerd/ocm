@@ -265,10 +265,7 @@ pub fn self_help(cmd: &str) -> String {
         vec![
             format!("{cmd} self update --check"),
             format!("{cmd} self update"),
-            format!(
-                "{cmd} self update --version {}",
-                env!("CARGO_PKG_VERSION")
-            ),
+            format!("{cmd} self update --version {}", env!("CARGO_PKG_VERSION")),
         ],
         vec![format!("{cmd} help self update")],
     )
@@ -467,10 +464,7 @@ pub fn self_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![
                 format!("{cmd} self update --check"),
                 format!("{cmd} self update"),
-                format!(
-                    "{cmd} self update --version {}",
-                    env!("CARGO_PKG_VERSION")
-                ),
+                format!("{cmd} self update --version {}", env!("CARGO_PKG_VERSION")),
             ],
             &[
                 "The current binary is replaced in place on supported macOS and Linux installs.",
