@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use serde::Serialize;
+
 use super::{Cli, render};
 use crate::env::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvSummary,
@@ -8,8 +10,38 @@ use crate::env::{
 };
 use crate::infra::process::{run_direct, run_shell};
 use crate::infra::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
-use crate::store::summarize_env;
-use crate::store::{derive_env_paths, validate_name};
+use crate::store::{derive_env_paths, display_path, summarize_env, validate_name};
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EnvDestroyStepSummary {
+    pub kind: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EnvDestroySummary {
+    pub env_name: String,
+    pub root: String,
+    pub marker_path: String,
+    pub marker_present: bool,
+    pub protected: bool,
+    pub apply: bool,
+    pub force: bool,
+    pub snapshot_count: usize,
+    pub service_installed: bool,
+    pub service_loaded: bool,
+    pub service_running: bool,
+    pub service_label: String,
+    pub global_openclaw_env_name: Option<String>,
+    pub global_openclaw_blocks_destroy: bool,
+    pub blockers: Vec<String>,
+    pub steps: Vec<EnvDestroyStepSummary>,
+    pub snapshots_removed: usize,
+    pub service_uninstalled: bool,
+    pub removed: bool,
+}
 
 impl Cli {
     pub(super) fn handle_env_protect(&self, args: Vec<String>) -> Result<i32, String> {
@@ -46,6 +78,67 @@ impl Cli {
             .display()
             .to_string();
         self.stdout_lines(render::env::env_removed(&meta.name, &root));
+        Ok(0)
+    }
+
+    pub(super) fn handle_env_destroy(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, yes) = Self::consume_flag(args, "--yes");
+        let (args, force) = Self::consume_flag(args, "--force");
+        let Some(name) = args.first() else {
+            return Err("environment name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let mut summary = self.build_env_destroy_summary(name, yes, force)?;
+        if !yes {
+            if json_flag {
+                self.print_json(&summary)?;
+                return Ok(0);
+            }
+
+            self.stdout_lines(render::env::env_destroy_preview(&summary));
+            return Ok(0);
+        }
+
+        if !summary.blockers.is_empty() {
+            if json_flag {
+                self.print_json(&summary)?;
+            } else {
+                self.stdout_lines(render::env::env_destroy_preview(&summary));
+            }
+            return Ok(1);
+        }
+
+        let snapshot_ids = self
+            .environment_service()
+            .list_snapshots(Some(name))?
+            .into_iter()
+            .map(|snapshot| snapshot.id)
+            .collect::<Vec<_>>();
+        for snapshot_id in &snapshot_ids {
+            self.environment_service()
+                .remove_snapshot(RemoveEnvSnapshotOptions {
+                    env_name: name.clone(),
+                    snapshot_id: snapshot_id.clone(),
+                })?;
+        }
+        summary.snapshots_removed = snapshot_ids.len();
+
+        if summary.service_installed || summary.service_loaded || summary.service_running {
+            self.service_service().uninstall(name)?;
+            summary.service_uninstalled = true;
+        }
+
+        self.environment_service().remove(name, force)?;
+        summary.removed = true;
+
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::env::env_destroyed(&summary));
         Ok(0)
     }
 
@@ -659,6 +752,7 @@ impl Cli {
             "set-runtime" => self.handle_env_set_runtime(args),
             "set-launcher" => self.handle_env_set_launcher(args),
             "protect" => self.handle_env_protect(args),
+            "destroy" => self.handle_env_destroy(args),
             "remove" | "rm" => self.handle_env_remove(args),
             "prune" => self.handle_env_prune(args),
             _ => Err(format!("unknown env command: {action}")),
@@ -667,6 +761,76 @@ impl Cli {
 }
 
 impl Cli {
+    fn build_env_destroy_summary(
+        &self,
+        name: &str,
+        apply: bool,
+        force: bool,
+    ) -> Result<EnvDestroySummary, String> {
+        let env_meta = self.environment_service().get(name)?;
+        let service = self.service_service().status_fast(name)?;
+        let marker_path = derive_env_paths(Path::new(&env_meta.root)).marker_path;
+        let marker_present = marker_path.exists();
+        let snapshots = self.environment_service().list_snapshots(Some(name))?;
+        let mut blockers = Vec::new();
+
+        if env_meta.protected && !force {
+            blockers.push("env is protected; re-run with --force to destroy it".to_string());
+        }
+        if !marker_present && !force {
+            blockers.push(format!(
+                "marker file is missing at {}; re-run with --force if you still want to destroy it",
+                display_path(&marker_path)
+            ));
+        }
+        if service.global_matches_env {
+            blockers.push(
+                "the machine-wide OpenClaw service is using this env; move or remove that service first"
+                    .to_string(),
+            );
+        }
+
+        let mut steps = Vec::new();
+        if !snapshots.is_empty() {
+            steps.push(EnvDestroyStepSummary {
+                kind: "snapshots".to_string(),
+                description: format!("remove {} env snapshot(s)", snapshots.len()),
+            });
+        }
+        if service.installed || service.loaded || service.running {
+            steps.push(EnvDestroyStepSummary {
+                kind: "service".to_string(),
+                description: format!("remove OCM service {}", service.managed_label),
+            });
+        }
+        steps.push(EnvDestroyStepSummary {
+            kind: "env".to_string(),
+            description: "remove env root and metadata".to_string(),
+        });
+
+        Ok(EnvDestroySummary {
+            env_name: env_meta.name,
+            root: env_meta.root,
+            marker_path: display_path(&marker_path),
+            marker_present,
+            protected: env_meta.protected,
+            apply,
+            force,
+            snapshot_count: snapshots.len(),
+            service_installed: service.installed,
+            service_loaded: service.loaded,
+            service_running: service.running,
+            service_label: service.managed_label,
+            global_openclaw_env_name: service.global_env_name,
+            global_openclaw_blocks_destroy: service.global_matches_env,
+            blockers,
+            steps,
+            snapshots_removed: 0,
+            service_uninstalled: false,
+            removed: false,
+        })
+    }
+
     pub(super) fn handle_env_use(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, shell_name) = Self::consume_option(args, "--shell")?;
         let Some(name) = args.first() else {
@@ -810,20 +974,18 @@ impl Cli {
                     "env set-runtime",
                 )?
                 .unwrap_or(runtime_name),
-            None if version.is_some() || channel.is_some() => self.with_progress(
-                format!("Preparing OpenClaw runtime for {name}"),
-                || {
+            None if version.is_some() || channel.is_some() => self
+                .with_progress(format!("Preparing OpenClaw runtime for {name}"), || {
                     self.environment_service().resolve_runtime_binding_request(
                         None,
                         version,
                         channel,
                         "env set-runtime",
                     )
-                },
-            )?
-            .ok_or_else(|| {
-                "env set-runtime requires a runtime, none, --version, or --channel".to_string()
-            })?,
+                })?
+                .ok_or_else(|| {
+                    "env set-runtime requires a runtime, none, --version, or --channel".to_string()
+                })?,
             None => {
                 return Err(format!(
                     "usage: {} env set-runtime <env> <runtime|none>\n       {} env set-runtime <env> (--version <version> | --channel <channel>)",

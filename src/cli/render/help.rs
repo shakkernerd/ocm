@@ -100,7 +100,10 @@ pub fn root_help(cmd: &str) -> String {
         "Commands",
         format_entries(&[
             ("setup", "Guided setup for release and local-dev flows"),
-            ("start", "Fast path: create or reuse an env and get it ready"),
+            (
+                "start",
+                "Fast path: create or reuse an env and get it ready",
+            ),
             (
                 "env",
                 "Environment lifecycle, binding, execution, snapshots, and repair",
@@ -183,19 +186,36 @@ pub fn start_help(cmd: &str) -> String {
                 "Create or reuse an env-local launcher from a local command",
             ),
             ("--cwd <path>", "Working directory for `--command`"),
-            ("--root <path>", "Custom root for a newly created environment"),
-            ("--port <port>", "Persist an explicit gateway port for a new environment"),
+            (
+                "--root <path>",
+                "Custom root for a newly created environment",
+            ),
+            (
+                "--port <port>",
+                "Persist an explicit gateway port for a new environment",
+            ),
             ("--protect", "Mark the environment as protected"),
-            ("--service", "Install and start a persistent env-scoped service"),
-            ("--onboard", "Run onboarding even when the env already exists"),
-            ("--no-onboard", "Skip onboarding output and print next steps instead"),
+            (
+                "--service",
+                "Install and start a persistent env-scoped service",
+            ),
+            (
+                "--onboard",
+                "Run onboarding even when the env already exists",
+            ),
+            (
+                "--no-onboard",
+                "Skip onboarding output and print next steps instead",
+            ),
             ("--json", "Print a machine-readable start summary"),
         ],
         vec![
             format!("{cmd} start"),
             format!("{cmd} start demo --channel stable"),
             format!("{cmd} start demo --version 2026.3.24 --service"),
-            format!("{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"),
+            format!(
+                "{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
+            ),
         ],
         &[
             "If an environment already exists, start reuses it and only adjusts binding/protection when you asked for it.",
@@ -244,6 +264,7 @@ pub fn env_help(cmd: &str) -> String {
                     ("clone", "Clone an environment"),
                     ("list", "List environments"),
                     ("show", "Show environment metadata"),
+                    ("destroy", "Preview or remove an env and its OCM service"),
                     ("remove", "Remove an environment"),
                     ("prune", "Preview or remove old environments"),
                 ],
@@ -813,6 +834,31 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!("{cmd} env protect demo on")],
             &[],
         ),
+        "destroy" => render_leaf(
+            "Destroy an environment",
+            "Preview or remove an environment, its env snapshots, and its attached OCM-managed service.",
+            vec![format!(
+                "{cmd} env destroy <name> [--yes] [--force] [--json]"
+            )],
+            &[
+                ("--yes", "Apply destruction instead of showing a preview"),
+                (
+                    "--force",
+                    "Override protection and missing-marker safety rails",
+                ),
+                ("--json", "Print the destroy preview or result as JSON"),
+            ],
+            vec![
+                format!("{cmd} env destroy demo"),
+                format!("{cmd} env destroy demo --yes"),
+                format!("{cmd} env destroy demo --yes --force"),
+            ],
+            &[
+                "Destroy removes env snapshots for that env and uninstalls its OCM-managed service when present.",
+                "Destroy does not remove shared runtimes or launchers.",
+                "If the separate machine-wide OpenClaw service is using the env, destroy refuses to apply.",
+            ],
+        ),
         "remove" | "rm" => render_leaf(
             "Remove an environment",
             "Delete an environment root and metadata, subject to safety rails.",
@@ -1259,7 +1305,9 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
         "verify" => render_leaf(
             "Verify runtimes",
             "Check runtime health for one runtime or every runtime.",
-            vec![format!("{cmd} runtime verify (<name> | --all) [--raw] [--json]")],
+            vec![format!(
+                "{cmd} runtime verify (<name> | --all) [--raw] [--json]"
+            )],
             &[
                 ("--all", "Verify every runtime"),
                 (

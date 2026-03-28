@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::cli::env::EnvDestroySummary;
 use crate::env::{
     EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary, EnvExportSummary,
     EnvImportSummary, EnvMarkerRepairSummary, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
@@ -17,6 +18,47 @@ pub fn env_protected(name: &str, protected: bool) -> Vec<String> {
 
 pub fn env_removed(name: &str, root: &str) -> Vec<String> {
     vec![format!("Removed env {name}"), format!("  root: {root}")]
+}
+
+pub fn env_destroy_preview(summary: &EnvDestroySummary) -> Vec<String> {
+    let mut lines = vec![format!("Destroy preview for env {}", summary.env_name)];
+    lines.push(format!("  root: {}", summary.root));
+    if summary.snapshot_count > 0 {
+        lines.push(format!("  snapshots: {}", summary.snapshot_count));
+    }
+    if summary.service_installed || summary.service_loaded || summary.service_running {
+        lines.push(format!("  service: {}", summary.service_label));
+    }
+
+    for step in &summary.steps {
+        lines.push(format!("  {}: {}", step.kind, step.description));
+    }
+
+    if !summary.blockers.is_empty() {
+        lines.push("  blocked:".to_string());
+        for blocker in &summary.blockers {
+            lines.push(format!("    {blocker}"));
+        }
+    } else {
+        lines.push("  re-run with --yes to destroy it".to_string());
+    }
+
+    lines
+}
+
+pub fn env_destroyed(summary: &EnvDestroySummary) -> Vec<String> {
+    let mut lines = vec![format!("Destroyed env {}", summary.env_name)];
+    lines.push(format!("  root: {}", summary.root));
+    if summary.snapshots_removed > 0 {
+        lines.push(format!(
+            "  snapshots removed: {}",
+            summary.snapshots_removed
+        ));
+    }
+    if summary.service_uninstalled {
+        lines.push(format!("  service removed: {}", summary.service_label));
+    }
+    lines
 }
 
 pub fn env_prune_preview(older_than_days: i64, candidates: &[EnvSummary]) -> Vec<String> {
@@ -65,8 +107,14 @@ pub fn env_created(
         summary.name
     ));
     if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
-        lines.push(format!("  onboard: {command_example} @{} -- onboard", summary.name));
-        lines.push(format!("  run: {command_example} @{} -- status", summary.name));
+        lines.push(format!(
+            "  onboard: {command_example} @{} -- onboard",
+            summary.name
+        ));
+        lines.push(format!(
+            "  run: {command_example} @{} -- status",
+            summary.name
+        ));
     } else {
         lines.push("  next: bind a runtime or launcher before running OpenClaw".to_string());
     }
@@ -93,7 +141,10 @@ pub fn env_cloned(
         summary.name
     ));
     if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
-        lines.push(format!("  run: {command_example} @{} -- status", summary.name));
+        lines.push(format!(
+            "  run: {command_example} @{} -- status",
+            summary.name
+        ));
     }
     lines
 }
@@ -136,7 +187,10 @@ pub fn env_imported(summary: &EnvImportSummary, command_example: &str) -> Vec<St
         summary.name
     ));
     if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
-        lines.push(format!("  run: {command_example} @{} -- status", summary.name));
+        lines.push(format!(
+            "  run: {command_example} @{} -- status",
+            summary.name
+        ));
     }
     lines
 }
@@ -634,10 +688,16 @@ mod tests {
             "ocm",
         );
 
-        assert!(lines.iter().any(|line| line.contains("ocm service restart demo")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("ocm service logs demo --tail 50")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm service restart demo"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm service logs demo --tail 50"))
+        );
     }
 
     #[test]
@@ -820,7 +880,10 @@ fn env_show_next_steps(summary: &EnvSummary, command_example: &str) -> Vec<KeyVa
             "Status",
             format!("{command_example} env status {}", summary.name),
         ),
-        KeyValueRow::warning("Run", format!("{command_example} @{} -- status", summary.name)),
+        KeyValueRow::warning(
+            "Run",
+            format!("{command_example} @{} -- status", summary.name),
+        ),
     ]
 }
 
@@ -1032,7 +1095,10 @@ fn env_status_next_steps(status: &EnvStatusSummary, command_example: &str) -> Ve
                     ),
                     KeyValueRow::accent(
                         "Logs",
-                        format!("{command_example} service logs {} --tail 50", status.env_name),
+                        format!(
+                            "{command_example} service logs {} --tail 50",
+                            status.env_name
+                        ),
                     ),
                 ];
             }
@@ -1044,7 +1110,10 @@ fn env_status_next_steps(status: &EnvStatusSummary, command_example: &str) -> Ve
                     ),
                     KeyValueRow::accent(
                         "Logs",
-                        format!("{command_example} service logs {} --tail 50", status.env_name),
+                        format!(
+                            "{command_example} service logs {} --tail 50",
+                            status.env_name
+                        ),
                     ),
                 ];
             }

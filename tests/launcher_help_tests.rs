@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use crate::support::{ocm_env, run_ocm, stderr, stdout, TestDir};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
 #[test]
 fn top_level_help_is_clean_and_points_to_topics() {
@@ -83,7 +83,9 @@ fn start_help_is_available_from_help_and_flag() {
     assert!(output.contains("--service"));
     assert!(output.contains("--onboard | --no-onboard"));
     assert!(output.contains("ocm start demo --channel stable"));
-    assert!(output.contains("ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"));
+    assert!(output.contains(
+        "ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
+    ));
 }
 
 #[test]
@@ -120,10 +122,27 @@ fn env_group_help_is_available_from_help_and_bare_group() {
     let output = stdout(&via_help);
     assert_eq!(output, stdout(&bare));
     assert!(output.contains("Environment commands"));
+    assert!(output.contains("destroy"));
     assert!(output.contains("snapshot create"));
     assert!(output.contains("Portability:"));
     assert!(output.contains("ocm help env create"));
     assert!(output.contains("ocm help env snapshot"));
+}
+
+#[test]
+fn env_destroy_help_describes_preview_first_teardown() {
+    let root = TestDir::new("help-env-destroy");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let help = run_ocm(&cwd, &env, &["help", "env", "destroy"]);
+    assert!(help.status.success(), "{}", stderr(&help));
+    let output = stdout(&help);
+    assert!(output.contains("Destroy an environment"));
+    assert!(output.contains("ocm env destroy <name> [--yes] [--force] [--json]"));
+    assert!(output.contains("ocm env destroy demo --yes"));
+    assert!(output.contains("Destroy does not remove shared runtimes or launchers."));
 }
 
 #[test]
@@ -206,8 +225,11 @@ fn env_run_help_is_available_through_help_keyword_and_flag() {
     assert!(output.contains("ocm -- status"));
     assert!(output.contains("ocm @demo -- status"));
     assert!(output.contains("`--` is required before OpenClaw arguments."));
-    assert!(output
-        .contains("If an environment is active, you can also use the root-level `--` shortcut."));
+    assert!(
+        output.contains(
+            "If an environment is active, you can also use the root-level `--` shortcut."
+        )
+    );
     assert!(
         output.contains("For one-shot explicit env runs, use the root-level `@<env>` shortcut.")
     );
@@ -353,8 +375,10 @@ fn runtime_verify_help_mentions_raw_mode() {
     assert!(verify.status.success(), "{}", stderr(&verify));
     let output = stdout(&verify);
     assert!(output.contains("ocm runtime verify (<name> | --all) [--raw] [--json]"));
-    assert!(output
-        .contains("TTY output uses cards for one runtime and a table for `--all` by default."));
+    assert!(
+        output
+            .contains("TTY output uses cards for one runtime and a table for `--all` by default.")
+    );
 }
 
 #[test]
