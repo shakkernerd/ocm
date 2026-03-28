@@ -14,7 +14,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     let help = run_ocm(&cwd, &env, &["help"]);
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
-    assert!(output.contains("OpenClaw Manager"));
+    assert!(output.contains(&format!("OpenClaw Manager v{}", env!("CARGO_PKG_VERSION"))));
     assert!(
         output
             .contains("Manage isolated OpenClaw environments, runtimes, launchers, and services.")

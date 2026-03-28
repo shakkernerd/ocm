@@ -73,7 +73,7 @@ fn render_group(
 
 pub fn root_help(cmd: &str) -> String {
     let lines = vec![
-        "OpenClaw Manager".to_string(),
+        format!("OpenClaw Manager v{}", env!("CARGO_PKG_VERSION")),
         String::new(),
         "Manage isolated OpenClaw environments, runtimes, launchers, and services.".to_string(),
     ];
