@@ -54,6 +54,7 @@ ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw
 ```
 
 `start` creates or reuses the environment, prepares the chosen OpenClaw source, and can run onboarding for you.
+By default, it also installs and starts the environment service so OpenClaw keeps running in the background.
 
 ## Common scenarios
 
@@ -69,7 +70,7 @@ Or:
 ocm start mybot --channel stable
 ```
 
-Use this when you want the normal supported path without worrying about local checkout details.
+Use this when you want the normal supported path without worrying about local checkout details. `start` keeps the environment running in the background unless you pass `--no-service`.
 
 ### 2. Try the beta release
 
@@ -90,7 +91,7 @@ Use this when you need repeatability across machines or teams.
 ### 4. Run a local checkout
 
 ```bash
-ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw
+ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service
 ```
 
 Use this when you are developing OpenClaw locally or want a custom run command.
@@ -100,13 +101,28 @@ If you run `ocm setup` from inside an OpenClaw checkout, local mode can detect t
 ### 5. Keep an environment running in the background
 
 ```bash
-ocm service install mybot
+ocm start mybot
 ocm service status mybot
 ```
 
-Use this when the environment should keep running after you close the terminal.
+`start` and `setup` already do this by default. Use `service install` directly when you skipped the background service earlier with `--no-service`.
 
-### 6. Run OpenClaw without activating the shell first
+### 6. Update OpenClaw later
+
+```bash
+ocm upgrade mybot
+ocm upgrade --all
+```
+
+Use this when a newer OpenClaw release is available and you want your environments to move forward without manually updating runtimes and restarting services.
+
+`upgrade` is env-first:
+
+- channel-tracked runtimes move forward
+- pinned runtimes stay pinned unless you pass `--version` or `--channel`
+- local-command environments are reported clearly instead of being changed behind your back
+
+### 7. Run OpenClaw without activating the shell first
 
 ```bash
 ocm @mybot -- status
@@ -115,7 +131,7 @@ ocm @mybot -- onboard
 
 Use this for quick one-off runs.
 
-### 7. Activate an environment in your current shell
+### 8. Activate an environment in your current shell
 
 ```bash
 eval "$(ocm env use mybot)"
@@ -225,6 +241,8 @@ ocm service list
 ocm service status mybot
 ```
 
+Use `service install` when you want a background service for an environment that was created with `--no-service`, or when you want to bring an older env under background management later.
+
 ### Read logs
 
 ```bash
@@ -247,6 +265,40 @@ ocm service uninstall mybot
 ```
 
 This removes the background service. It does not remove the environment.
+
+## Upgrading OpenClaw and `ocm`
+
+### Upgrade one environment
+
+```bash
+ocm upgrade mybot
+```
+
+This is the normal command when `mybot` tracks a channel like `stable` or `beta`.
+
+### Upgrade every environment that can be updated safely
+
+```bash
+ocm upgrade --all
+```
+
+This updates channel-tracked environments and restarts their running services when needed.
+
+### Move a pinned or local env to a different published release
+
+```bash
+ocm upgrade mybot --channel beta
+ocm upgrade mybot --version 2026.3.24
+```
+
+Use this when you want to deliberately move one environment to a different published release.
+
+### Update `ocm` itself
+
+```bash
+ocm self update
+ocm self update --check
+```
 
 ### Discover other OpenClaw services on the machine
 
