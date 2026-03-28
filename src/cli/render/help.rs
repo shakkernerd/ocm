@@ -147,12 +147,13 @@ pub fn root_help(cmd: &str) -> String {
 pub fn setup_help(cmd: &str) -> String {
     render_leaf(
         "Guided setup",
-        "Interactive setup for stable, beta, exact-version, or local-command OpenClaw environments.",
+        "Interactive setup for stable, beta, specific-version, or local-checkout OpenClaw environments.",
         vec![format!("{cmd} setup")],
         &[],
         vec![format!("{cmd} setup")],
         &[
             "Setup asks a few questions, then runs the same env-first flow as `start`.",
+            "When run inside an OpenClaw checkout, local mode defaults to `pnpm openclaw` in that folder.",
             "Use `start` when you already know the source you want.",
         ],
     )

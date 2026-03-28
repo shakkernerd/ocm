@@ -80,7 +80,7 @@ fn setup_can_prepare_latest_stable_without_onboarding() {
         packument_server.url(),
     );
 
-    let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], "\n1\nn\nn\n");
+    let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], "1\n\nn\nn\n");
     assert!(setup.status.success(), "{}", stderr(&setup));
     let output = stdout(&setup);
     assert!(output.contains("OpenClaw setup"));
@@ -100,7 +100,7 @@ fn setup_can_prepare_a_local_command_launcher() {
     fs::create_dir_all(&project_dir).unwrap();
     let env = ocm_env(&root);
 
-    let input = format!("hacking\n4\npnpm openclaw\n{}\nn\nn\n", project_dir.display());
+    let input = format!("4\nhacking\npnpm openclaw\n{}\nn\nn\n", project_dir.display());
     let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], &input);
     assert!(setup.status.success(), "{}", stderr(&setup));
     let output = stdout(&setup);
@@ -111,4 +111,35 @@ fn setup_can_prepare_a_local_command_launcher() {
     assert!(show.status.success(), "{}", stderr(&show));
     let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
     assert_eq!(show_json["defaultLauncher"], "hacking.local");
+}
+
+#[test]
+fn setup_detects_a_local_openclaw_checkout_and_uses_default_local_values() {
+    let root = TestDir::new("setup-detect-local-checkout");
+    let repo = root.child("workspace/openclaw");
+    let scripts_dir = repo.join("scripts");
+    fs::create_dir_all(&scripts_dir).unwrap();
+    fs::write(
+        repo.join("package.json"),
+        r#"{"name":"openclaw","version":"2026.3.28"}"#,
+    )
+    .unwrap();
+    fs::write(scripts_dir.join("run-node.mjs"), "console.log('run');\n").unwrap();
+    let env = ocm_env(&root);
+
+    let setup = run_ocm_with_stdin(&repo, &env, &["setup"], "4\n\n\n\nn\nn\n");
+    assert!(setup.status.success(), "{}", stderr(&setup));
+    let output = stdout(&setup);
+    assert!(output.contains("Detected local OpenClaw checkout:"));
+    assert!(output.contains("Started env dev"));
+    assert!(output.contains("launcher: dev.local"));
+
+    let show = run_ocm(&repo, &env, &["launcher", "show", "dev.local", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["command"], "pnpm openclaw");
+    assert_eq!(
+        show_json["cwd"],
+        fs::canonicalize(&repo).unwrap().display().to_string()
+    );
 }

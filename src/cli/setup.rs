@@ -1,4 +1,8 @@
+use std::fs;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
 
 use super::{Cli, start::StartOnboardingMode};
 use crate::cli::start::StartRequest;
@@ -8,24 +12,43 @@ impl Cli {
     pub(super) fn handle_setup_command(&self, args: Vec<String>) -> Result<i32, String> {
         Self::assert_no_extra_args(&args)?;
 
+        let local_defaults = self.detect_local_setup_defaults();
+
         self.stdout_line("OpenClaw setup");
         self.stdout_line("");
-        self.stdout_line("Choose how to run OpenClaw:");
-        self.stdout_line("  1. Latest stable release");
+        self.stdout_line("Choose how you want to run OpenClaw:");
+        self.stdout_line("  1. Latest stable release (recommended)");
         self.stdout_line("  2. Beta release");
-        self.stdout_line("  3. Exact release version");
-        self.stdout_line("  4. Local command");
+        self.stdout_line("  3. Specific release version");
+        self.stdout_line("  4. Local command or checkout");
+        if let Some(defaults) = local_defaults.as_ref() {
+            self.stdout_line("");
+            self.stdout_line(&format!(
+                "Detected local OpenClaw checkout: {}",
+                defaults.cwd.display()
+            ));
+        }
         self.stdout_line("");
 
+        let mode = self.prompt_setup_mode()?;
+        let name_default = match mode {
+            SetupMode::Stable | SetupMode::Beta | SetupMode::Version => "default",
+            SetupMode::LocalCommand => {
+                if local_defaults.is_some() {
+                    "dev"
+                } else {
+                    "local"
+                }
+            }
+        };
         let name = loop {
-            let raw = self.prompt_with_default("Env name", "default")?;
+            let raw = self.prompt_with_default("Env name", name_default)?;
             match validate_name(&raw, "Environment name") {
                 Ok(value) => break value,
                 Err(error) => self.stderr_line(format!("ocm: {error}")),
             }
         };
 
-        let mode = self.prompt_setup_mode()?;
         let (version, channel, command, cwd) = match mode {
             SetupMode::Stable => (None, Some("stable".to_string()), None, None),
             SetupMode::Beta => (None, Some("beta".to_string()), None, None),
@@ -38,10 +61,19 @@ impl Cli {
             SetupMode::LocalCommand => (
                 None,
                 None,
-                Some(self.prompt_required("Command")?),
+                Some(self.prompt_with_default(
+                    "Command",
+                    local_defaults
+                        .as_ref()
+                        .map(|defaults| defaults.command.as_str())
+                        .unwrap_or("openclaw"),
+                )?),
                 Some(self.prompt_with_default(
                     "Working directory",
-                    &self.cwd.display().to_string(),
+                    &local_defaults
+                        .as_ref()
+                        .map(|defaults| defaults.cwd.display().to_string())
+                        .unwrap_or_else(|| self.cwd.display().to_string()),
                 )?),
             ),
         };
@@ -130,6 +162,17 @@ impl Cli {
             .map_err(|error| error.to_string())?;
         Ok(input.trim_end_matches(['\n', '\r']).to_string())
     }
+
+    fn detect_local_setup_defaults(&self) -> Option<LocalSetupDefaults> {
+        self.cwd
+            .ancestors()
+            .take(6)
+            .find_map(detect_openclaw_checkout)
+            .map(|cwd| LocalSetupDefaults {
+                command: "pnpm openclaw".to_string(),
+                cwd,
+            })
+    }
 }
 
 enum SetupMode {
@@ -137,4 +180,25 @@ enum SetupMode {
     Beta,
     Version,
     LocalCommand,
+}
+
+struct LocalSetupDefaults {
+    command: String,
+    cwd: PathBuf,
+}
+
+fn detect_openclaw_checkout(path: &Path) -> Option<PathBuf> {
+    let package_json = path.join("package.json");
+    let scripts_dir = path.join("scripts");
+    if !package_json.exists() || !scripts_dir.join("run-node.mjs").exists() {
+        return None;
+    }
+
+    let contents = fs::read_to_string(package_json).ok()?;
+    let package: Value = serde_json::from_str(&contents).ok()?;
+    if package.get("name").and_then(Value::as_str) == Some("openclaw") {
+        Some(path.to_path_buf())
+    } else {
+        None
+    }
 }
