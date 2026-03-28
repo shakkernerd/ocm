@@ -61,6 +61,8 @@ ocm start
 
 That creates or reuses an environment, prepares OpenClaw, and can start onboarding for you.
 
+If you want the full guide, including scenarios and command details, see [docs/USAGE.md](docs/USAGE.md).
+
 ## The main ideas
 
 - `env`: one isolated OpenClaw environment
