@@ -8,8 +8,8 @@ Once an environment exists, `ocm` can be your normal OpenClaw entrypoint:
 
 ```bash
 ocm @mybot -- status
+ocm @mybot -- tui
 ocm @mybot -- onboard
-ocm @mybot -- gateway run
 ```
 
 ## Why people use it
@@ -88,8 +88,8 @@ From there, use `ocm` for OpenClaw itself:
 
 ```bash
 ocm @mybot -- status
+ocm @mybot -- tui
 ocm @mybot -- onboard
-ocm @mybot -- gateway run
 ```
 
 ### Update OpenClaw later

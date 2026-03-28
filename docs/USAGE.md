@@ -126,6 +126,7 @@ Use this when a newer OpenClaw release is available and you want your environmen
 
 ```bash
 ocm @mybot -- status
+ocm @mybot -- tui
 ocm @mybot -- onboard
 ```
 
@@ -218,6 +219,7 @@ This is the shortest interactive path.
 
 ```bash
 ocm @mybot -- status
+ocm @mybot -- tui
 ocm @mybot -- onboard
 ```
 
