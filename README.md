@@ -2,13 +2,13 @@
 
 `ocm` is OpenClaw Manager.
 
-It gives you a clean way to run OpenClaw in separate environments, use published releases or local checkouts, and keep each setup isolated and easy to manage.
+It gives you one clean way to install, run, update, and keep OpenClaw isolated.
 
 Once an environment exists, `ocm` can be your normal OpenClaw entrypoint:
 
 ```bash
-ocm @mybot -- status
 ocm @mybot -- tui
+ocm @mybot -- status
 ocm @mybot -- onboard
 ```
 
@@ -56,7 +56,7 @@ Inside this repo, use the development wrapper:
 ./bin/ocm help
 ```
 
-## The easiest start
+## Start quickly
 
 If you want the guided path:
 
@@ -70,27 +70,19 @@ If you already know what you want:
 ocm start
 ```
 
-`setup` and `start` keep OpenClaw running in the background by default. If you do not pass a name, `ocm` generates one for you.
+`setup` walks you through the choices. `start` creates or reuses an environment, installs the latest stable OpenClaw release by default, and keeps it running in the background. If you do not pass a name, `ocm` generates one for you.
 
 ## Common paths
 
-### Simple: start one OpenClaw environment
+### Use the latest stable release
 
 ```bash
 ocm start mybot
 ocm @mybot -- onboard
-ocm @mybot -- status
-```
-
-This is the shortest path for most people. `ocm` installs the latest stable OpenClaw release, creates the environment, and keeps it running in the background.
-
-From there, use `ocm` for OpenClaw itself:
-
-```bash
-ocm @mybot -- status
 ocm @mybot -- tui
-ocm @mybot -- onboard
 ```
+
+This is the shortest path for most people.
 
 ### Update OpenClaw later
 
@@ -99,11 +91,11 @@ ocm upgrade mybot
 ocm upgrade --all
 ```
 
-### Use a local checkout
+### Use a local checkout or dev build
 
 ```bash
 ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service
-ocm @hacking -- onboard
+ocm @hacking -- tui
 ```
 
 Use `--no-service` when you want a quick local-dev setup without a background process. If you are already inside an OpenClaw checkout, `ocm setup` can detect that and suggest the local-command path automatically.
@@ -111,42 +103,16 @@ Use `--no-service` when you want a quick local-dev setup without a background pr
 ### Try beta or pin a specific release
 
 ```bash
-ocm start preview --channel beta
-ocm start pinned --version 2026.3.24
+ocm start beta-bot --channel beta
+ocm start pinned-bot --version 2026.3.24
 ```
 
-### Check and manage running services
+### Keep background services visible
 
 ```bash
 ocm service list
 ocm service status mybot
 ocm service logs mybot --tail 50
-```
-
-## What makes it useful
-
-`ocm` is built for both everyday use and heavier workflows.
-
-It can:
-
-- keep stable, beta, pinned, and local-dev OpenClaw setups side by side
-- manage published releases as local runtimes
-- run local checkouts through launchers
-- make `ocm @<env> -- <command>` the normal way to run OpenClaw
-- keep background services tied to the right environment
-- snapshot, export, import, repair, and destroy environments safely
-
-## A few commands worth knowing
-
-```bash
-ocm help
-ocm upgrade mybot
-ocm release list
-ocm runtime list
-ocm service list
-ocm env status mybot
-ocm env snapshot create mybot --label before-upgrade
-ocm env destroy mybot
 ```
 
 ## Learn more
