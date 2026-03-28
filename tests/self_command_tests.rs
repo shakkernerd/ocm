@@ -113,11 +113,14 @@ fn self_update_replaces_a_copied_binary_in_place() {
     fs::create_dir_all(copied_binary.parent().unwrap()).unwrap();
     fs::copy(env!("CARGO_BIN_EXE_ocm"), &copied_binary).unwrap();
 
+    let target_version = "9.9.9";
     let asset_name = current_release_asset_name();
     let archive_path = root.child(&asset_name);
     write_release_archive(
         &archive_path,
-        "#!/usr/bin/env bash\nif [[ \"$1\" == \"--version\" ]]; then\n  printf '0.2.2\\n'\nelse\n  printf 'updated ocm\\n'\nfi\n",
+        &format!(
+            "#!/usr/bin/env bash\nif [[ \"$1\" == \"--version\" ]]; then\n  printf '{target_version}\\n'\nelse\n  printf 'updated ocm\\n'\nfi\n"
+        ),
     );
     let asset = TestHttpServer::serve_bytes(
         "/download.tar.gz",
@@ -125,7 +128,7 @@ fn self_update_replaces_a_copied_binary_in_place() {
         &fs::read(&archive_path).unwrap(),
     );
     let metadata = format!(
-        "{{\"tag_name\":\"v0.2.2\",\"assets\":[{{\"name\":\"{asset_name}\",\"browser_download_url\":\"{}\"}}]}}",
+        "{{\"tag_name\":\"v{target_version}\",\"assets\":[{{\"name\":\"{asset_name}\",\"browser_download_url\":\"{}\"}}]}}",
         asset.url()
     );
     let release =
@@ -136,7 +139,7 @@ fn self_update_replaces_a_copied_binary_in_place() {
         &copied_binary,
         &cwd,
         &env,
-        &["self", "update", "--version", "0.2.2", "--raw"],
+        &["self", "update", "--version", target_version, "--raw"],
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
@@ -150,5 +153,5 @@ fn self_update_replaces_a_copied_binary_in_place() {
         .output()
         .unwrap();
     assert!(updated.status.success());
-    assert_eq!(String::from_utf8(updated.stdout).unwrap(), "0.2.2\n");
+    assert_eq!(String::from_utf8(updated.stdout).unwrap(), "9.9.9\n");
 }
