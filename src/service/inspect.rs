@@ -23,6 +23,7 @@ pub struct ServiceSummary {
     pub managed_label: String,
     pub managed_plist_path: String,
     pub global_label: String,
+    pub global_env_name: Option<String>,
     pub binding_kind: Option<String>,
     pub binding_name: Option<String>,
     pub command: Option<String>,
@@ -52,6 +53,7 @@ pub struct ServiceSummary {
 #[serde(rename_all = "camelCase")]
 pub struct ServiceSummaryList {
     pub global_label: String,
+    pub global_env_name: Option<String>,
     pub global_installed: bool,
     pub global_loaded: bool,
     pub global_running: bool,
@@ -121,14 +123,22 @@ pub fn list_services(
 ) -> Result<ServiceSummaryList, String> {
     let envs = list_environments(env, cwd)?;
     let global = inspect_job(GLOBAL_GATEWAY_LABEL, &global_plist_path(env));
+    let global_env_name = matched_env_name_in(&envs, global.config_path.as_deref());
     let mut services = Vec::with_capacity(envs.len());
     for meta in envs {
-        services.push(build_service_summary(meta, &global, env, cwd)?);
+        services.push(build_service_summary(
+            meta,
+            &global,
+            global_env_name.as_deref(),
+            env,
+            cwd,
+        )?);
     }
     services.sort_by(|left, right| left.env_name.cmp(&right.env_name));
 
     Ok(ServiceSummaryList {
         global_label: GLOBAL_GATEWAY_LABEL.to_string(),
+        global_env_name,
         global_installed: global.installed,
         global_loaded: global.loaded,
         global_running: global.running,
@@ -144,8 +154,10 @@ pub fn service_status(
     cwd: &Path,
 ) -> Result<ServiceSummary, String> {
     let meta = get_environment(name, env, cwd)?;
+    let envs = list_environments(env, cwd)?;
     let global = inspect_job(GLOBAL_GATEWAY_LABEL, &global_plist_path(env));
-    build_service_summary(meta, &global, env, cwd)
+    let global_env_name = matched_env_name_in(&envs, global.config_path.as_deref());
+    build_service_summary(meta, &global, global_env_name.as_deref(), env, cwd)
 }
 
 pub fn discover_services(
@@ -253,6 +265,7 @@ pub fn discover_services(
 fn build_service_summary(
     meta: EnvMeta,
     global: &LaunchdJobStatus,
+    global_env_name: Option<&str>,
     process_env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceSummary, String> {
@@ -319,6 +332,7 @@ fn build_service_summary(
         managed_label,
         managed_plist_path: display_path(&managed_plist_path),
         global_label: GLOBAL_GATEWAY_LABEL.to_string(),
+        global_env_name: global_env_name.map(|value| value.to_string()),
         binding_kind,
         binding_name,
         command,
@@ -344,6 +358,14 @@ fn build_service_summary(
         can_adopt_global,
         can_restore_global,
         issue,
+    })
+}
+
+fn matched_env_name_in(envs: &[EnvMeta], config_path: Option<&str>) -> Option<String> {
+    let config_path = config_path?;
+    envs.iter().find_map(|meta| {
+        let derived = display_path(&derive_env_paths(Path::new(&meta.root)).config_path);
+        (derived == config_path).then(|| meta.name.clone())
     })
 }
 

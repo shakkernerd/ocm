@@ -391,18 +391,6 @@ fn optional_state_row(label: &str, value: Option<String>) -> KeyValueRow {
     }
 }
 
-fn openclaw_service_row(label: &str, value: Option<String>) -> KeyValueRow {
-    match value.as_deref() {
-        Some("match") => KeyValueRow::success(label, "this env"),
-        Some("running-other") | Some("loaded-other") | Some("installed-other") => {
-            KeyValueRow::warning(label, "another env")
-        }
-        Some("absent") => KeyValueRow::muted(label, "none"),
-        Some(other) => KeyValueRow::plain(label, other),
-        None => KeyValueRow::muted(label, "—"),
-    }
-}
-
 fn resolution_row(status: &EnvStatusSummary) -> KeyValueRow {
     match (
         status.resolved_kind.as_deref(),
@@ -541,7 +529,7 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("Binding")));
         assert!(lines.iter().any(|line| line.contains("Gateway")));
         assert!(lines.iter().any(|line| line.contains("OCM service")));
-        assert!(lines.iter().any(|line| line.contains("OpenClaw service")));
+        assert!(!lines.iter().any(|line| line.contains("OpenClaw service")));
     }
 
     #[test]
@@ -786,7 +774,6 @@ pub fn env_status(status: &EnvStatusSummary, profile: RenderProfile) -> Vec<Stri
             optional_value_row("Port", status.gateway_port.map(|value| value.to_string())),
             optional_value_row("Port source", status.gateway_port_source.clone()),
             optional_state_row("OCM service", status.managed_service_state.clone()),
-            openclaw_service_row("OpenClaw service", status.global_service_state.clone()),
             KeyValueRow::plain("Root", status.root.clone()),
         ],
         profile.color,

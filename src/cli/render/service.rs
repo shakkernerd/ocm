@@ -33,24 +33,6 @@ fn global_relation(summary: &ServiceSummary) -> &'static str {
     }
 }
 
-fn openclaw_service_relation(state: &str) -> String {
-    match state {
-        "match" => "this env".to_string(),
-        "running-other" | "loaded-other" | "installed-other" => "another env".to_string(),
-        "absent" => "none".to_string(),
-        _ => state.to_string(),
-    }
-}
-
-fn openclaw_service_tone(state: &str) -> Tone {
-    match state {
-        "match" => Tone::Success,
-        "running-other" | "loaded-other" | "installed-other" => Tone::Warning,
-        "absent" => Tone::Muted,
-        _ => Tone::Plain,
-    }
-}
-
 fn state_tone(state: &str) -> Tone {
     match state {
         "running" | "match" => Tone::Success,
@@ -82,10 +64,17 @@ fn service_list_with_width(
     );
     let mut lines = vec![format!(
         "{}  {}  {}",
-        paint("OpenClaw service", Tone::Strong, profile.color),
+        paint("Machine-wide OpenClaw", Tone::Strong, profile.color),
         paint(&summary.global_label, Tone::Accent, profile.color),
         paint(global_state, state_tone(global_state), profile.color)
     )];
+    if let Some(env_name) = summary.global_env_name.as_deref() {
+        lines.push(format!(
+            "{} {}",
+            paint("env", Tone::Muted, profile.color),
+            paint(env_name, Tone::Accent, profile.color)
+        ));
+    }
     if let Some(config_path) = summary.global_config_path.as_deref() {
         lines.push(format!(
             "{} {}",
@@ -124,9 +113,7 @@ fn service_list_with_width(
             if service.issue.is_some() {
                 notes.push("issue");
             }
-
             let managed_state = daemon_state(service.installed, service.loaded, service.running);
-            let global_state = global_relation(service);
             let mut row = vec![
                 Cell::accent(service.env_name.clone()),
                 if binding == "—" {
@@ -139,11 +126,6 @@ fn service_list_with_width(
                     managed_state,
                     crate::infra::terminal::Align::Left,
                     state_tone(managed_state),
-                ),
-                Cell::new(
-                    openclaw_service_relation(global_state),
-                    crate::infra::terminal::Align::Left,
-                    openclaw_service_tone(global_state),
                 ),
             ];
             if show_notes {
@@ -160,9 +142,9 @@ fn service_list_with_width(
         .collect::<Vec<_>>();
     lines.extend(render_table(
         if show_notes {
-            &["Env", "Binding", "Port", "OCM", "OpenClaw", "Notes"]
+            &["Env", "Binding", "Port", "OCM", "Notes"]
         } else {
-            &["Env", "Binding", "Port", "OCM", "OpenClaw"]
+            &["Env", "Binding", "Port", "OCM"]
         },
         &rows,
         profile.color,
@@ -188,6 +170,9 @@ fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
             summary.global_running
         )
     )];
+    if let Some(env_name) = summary.global_env_name.as_deref() {
+        lines.push(format!("globalEnvName: {env_name}"));
+    }
     if let Some(config_path) = summary.global_config_path.as_deref() {
         lines.push(format!("globalConfigPath: {config_path}"));
     }
@@ -205,7 +190,6 @@ fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
                 "managed={}",
                 daemon_state(service.installed, service.loaded, service.running)
             ),
-            format!("global={}", global_relation(service)),
         ];
         if let (Some(kind), Some(name)) = (
             service.binding_kind.as_deref(),
@@ -237,7 +221,6 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
     }
 
     let managed_state = daemon_state(summary.installed, summary.loaded, summary.running);
-    let global_state = global_relation(summary);
     let mut lines = vec![paint(
         &format!("Service {}", summary.env_name),
         Tone::Strong,
@@ -252,11 +235,6 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
             KeyValueRow::accent("Port", summary.gateway_port.to_string()),
             bool_row("Managed by OCM", summary.installed),
             KeyValueRow::new("OCM service", managed_state, state_tone(managed_state)),
-            KeyValueRow::new(
-                "OpenClaw service",
-                openclaw_service_relation(global_state),
-                openclaw_service_tone(global_state),
-            ),
             optional_value_row(
                 "Binding",
                 summary
@@ -295,21 +273,22 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
 
     push_card(
         &mut lines,
-        "OpenClaw service",
+        "Machine-wide OpenClaw",
         vec![
             KeyValueRow::plain("Label", summary.global_label.clone()),
+            optional_value_row("Env", summary.global_env_name.clone()),
             KeyValueRow::new(
-                "This env",
-                if summary.global_matches_env {
-                    "yes"
-                } else {
-                    "no"
-                },
-                if summary.global_matches_env {
-                    Tone::Success
-                } else {
-                    Tone::Muted
-                },
+                "State",
+                daemon_state(
+                    summary.global_installed,
+                    summary.global_loaded,
+                    summary.global_running,
+                ),
+                state_tone(daemon_state(
+                    summary.global_installed,
+                    summary.global_loaded,
+                    summary.global_running,
+                )),
             ),
             optional_value_row("PID", summary.global_pid.map(|pid| pid.to_string())),
             optional_value_row("Current config", summary.global_config_path.clone()),
@@ -667,6 +646,7 @@ mod tests {
         let lines = service_list(
             &ServiceSummaryList {
                 global_label: "ai.openclaw.gateway".to_string(),
+                global_env_name: Some("demo".to_string()),
                 global_installed: true,
                 global_loaded: true,
                 global_running: false,
@@ -678,6 +658,7 @@ mod tests {
                     managed_label: "ai.openclaw.gateway.ocm.demo".to_string(),
                     managed_plist_path: "/tmp/demo.plist".to_string(),
                     global_label: "ai.openclaw.gateway".to_string(),
+                    global_env_name: Some("demo".to_string()),
                     binding_kind: Some("launcher".to_string()),
                     binding_name: Some("stable".to_string()),
                     command: Some("openclaw gateway run".to_string()),
@@ -706,13 +687,13 @@ mod tests {
             RenderProfile::pretty(false),
         );
 
-        assert!(lines[0].contains("OpenClaw service"));
-        assert!(lines[2].starts_with('┌'));
-        assert!(lines[3].contains("Env"));
-        assert!(lines[3].contains("OCM"));
-        assert!(lines[3].contains("OpenClaw"));
-        assert!(lines[5].contains("demo"));
-        assert!(lines[6].starts_with('└'));
+        assert!(lines[0].contains("Machine-wide OpenClaw"));
+        assert!(lines[1].contains("demo"));
+        assert!(lines[3].starts_with('┌'));
+        assert!(lines[4].contains("Env"));
+        assert!(lines[4].contains("OCM"));
+        assert!(lines[6].contains("demo"));
+        assert!(lines[7].starts_with('└'));
     }
 
     #[test]
@@ -730,7 +711,12 @@ mod tests {
         assert_eq!(lines[0], "Service demo");
         assert!(lines.iter().any(|line| line.contains("Managed by OCM")));
         assert!(lines.iter().any(|line| line.contains("OCM service")));
-        assert!(lines.iter().any(|line| line.contains("OpenClaw service")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Machine-wide OpenClaw"))
+        );
+        assert!(lines.iter().any(|line| line.contains("Env")));
     }
 
     #[test]
@@ -738,6 +724,7 @@ mod tests {
         let lines = service_list_with_width(
             &ServiceSummaryList {
                 global_label: "ai.openclaw.gateway".to_string(),
+                global_env_name: Some("demo".to_string()),
                 global_installed: true,
                 global_loaded: true,
                 global_running: false,
@@ -749,11 +736,10 @@ mod tests {
             Some(90),
         );
 
-        assert!(lines[2].starts_with('┌'));
-        assert!(lines[3].contains("Binding"));
-        assert!(lines[3].contains("OCM"));
-        assert!(lines[3].contains("OpenClaw"));
-        assert!(!lines[3].contains("Notes"));
+        assert!(lines[3].starts_with('┌'));
+        assert!(lines[4].contains("Binding"));
+        assert!(lines[4].contains("OCM"));
+        assert!(!lines[4].contains("Notes"));
         assert_eq!(
             lines.last().unwrap(),
             "Use service status <env> or --raw for notes and readiness details."
@@ -795,6 +781,7 @@ mod tests {
             managed_label: "ai.openclaw.gateway.ocm.demo".to_string(),
             managed_plist_path: "/tmp/demo.plist".to_string(),
             global_label: "ai.openclaw.gateway".to_string(),
+            global_env_name: Some("other".to_string()),
             binding_kind: Some("launcher".to_string()),
             binding_name: Some("stable".to_string()),
             command: Some("openclaw gateway run".to_string()),
