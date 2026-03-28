@@ -19,6 +19,7 @@ impl Cli {
         match path {
             [] => Ok(render::help::root_help(&cmd)),
             ["help"] | ["--help"] | ["-h"] => Ok(render::help::root_help(&cmd)),
+            ["setup"] => Ok(render::help::setup_help(&cmd)),
             ["start"] => Ok(render::help::start_help(&cmd)),
             ["init"] => Ok(render::help::init_help(&cmd)),
             ["env"] => Ok(render::help::env_help(&cmd)),
@@ -42,7 +43,14 @@ impl Cli {
             [group, ..]
                 if matches!(
                     *group,
-                    "start" | "env" | "release" | "launcher" | "runtime" | "service" | "init"
+                    "setup"
+                        | "start"
+                        | "env"
+                        | "release"
+                        | "launcher"
+                        | "runtime"
+                        | "service"
+                        | "init"
                 ) =>
             {
                 Err(format!("unknown help topic: {}", path.join(" ")))
@@ -64,11 +72,12 @@ impl Cli {
             [group]
                 if matches!(
                     group.as_str(),
-                    "start" | "env" | "release" | "launcher" | "runtime" | "service"
+                    "env" | "release" | "launcher" | "runtime" | "service"
                 ) =>
             {
                 Some(vec![group.as_str()])
             }
+            [group, flag] if group == "setup" && Self::is_help_flag(flag) => Some(vec!["setup"]),
             [group, flag] if group == "start" && Self::is_help_flag(flag) => Some(vec!["start"]),
             [group, next] if group == "init" && Self::is_help_token(next) => Some(vec!["init"]),
             [group, next, rest @ ..]

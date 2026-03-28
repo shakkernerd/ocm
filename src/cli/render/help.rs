@@ -99,6 +99,7 @@ pub fn root_help(cmd: &str) -> String {
         &mut lines,
         "Commands",
         format_entries(&[
+            ("setup", "Guided setup for release and local-dev flows"),
             ("start", "Fast path: create or reuse an env and get it ready"),
             (
                 "env",
@@ -131,6 +132,7 @@ pub fn root_help(cmd: &str) -> String {
         &mut lines,
         "More",
         format_examples(&[
+            format!("{cmd} help setup"),
             format!("{cmd} help start"),
             format!("{cmd} help env"),
             format!("{cmd} help release"),
@@ -140,6 +142,20 @@ pub fn root_help(cmd: &str) -> String {
         ]),
     );
     finish(lines)
+}
+
+pub fn setup_help(cmd: &str) -> String {
+    render_leaf(
+        "Guided setup",
+        "Interactive setup for stable, beta, exact-version, or local-command OpenClaw environments.",
+        vec![format!("{cmd} setup")],
+        &[],
+        vec![format!("{cmd} setup")],
+        &[
+            "Setup asks a few questions, then runs the same env-first flow as `start`.",
+            "Use `start` when you already know the source you want.",
+        ],
+    )
 }
 
 pub fn start_help(cmd: &str) -> String {

@@ -25,6 +25,29 @@ struct StartSummary {
     service_command: String,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) enum StartOnboardingMode {
+    Auto,
+    Always,
+    Never,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct StartRequest {
+    pub name: String,
+    pub root: Option<String>,
+    pub gateway_port: Option<u32>,
+    pub protect: bool,
+    pub service_requested: bool,
+    pub onboarding_mode: StartOnboardingMode,
+    pub runtime_name: Option<String>,
+    pub launcher_name: Option<String>,
+    pub version: Option<String>,
+    pub channel: Option<String>,
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 enum StartBinding {
     Runtime(String),
@@ -88,35 +111,66 @@ impl Cli {
             }
         };
 
-        let existing = self.environment_service().find(&name)?;
-        if existing.is_some() && root.is_some() {
-            return Err(format!(
-                "start cannot change the root for existing env {name}; use env create or env clone for a new root"
-            ));
-        }
-        if existing.is_some() && gateway_port.is_some() {
-            return Err(format!(
-                "start cannot change the port for existing env {name}; use a new env name or keep the current port"
-            ));
-        }
-
-        let desired_binding = self.resolve_start_binding(
-            &name,
-            existing.as_ref(),
+        let request = StartRequest {
+            name,
+            root,
+            gateway_port,
+            protect,
+            service_requested,
+            onboarding_mode: if onboard {
+                StartOnboardingMode::Always
+            } else if no_onboard {
+                StartOnboardingMode::Never
+            } else {
+                StartOnboardingMode::Auto
+            },
             runtime_name,
             launcher_name,
             version,
             channel,
             command,
             cwd,
+        };
+
+        self.run_start_request(request, json_flag)
+    }
+
+    pub(super) fn run_start_request(
+        &self,
+        request: StartRequest,
+        json_flag: bool,
+    ) -> Result<i32, String> {
+        let existing = self.environment_service().find(&request.name)?;
+        if existing.is_some() && request.root.is_some() {
+            return Err(format!(
+                "start cannot change the root for existing env {}; use env create or env clone for a new root",
+                request.name
+            ));
+        }
+        if existing.is_some() && request.gateway_port.is_some() {
+            return Err(format!(
+                "start cannot change the port for existing env {}; use a new env name or keep the current port",
+                request.name
+            ));
+        }
+
+        let desired_binding = self.resolve_start_binding(
+            &request.name,
+            existing.as_ref(),
+            request.runtime_name.clone(),
+            request.launcher_name.clone(),
+            request.version.clone(),
+            request.channel.clone(),
+            request.command.clone(),
+            request.cwd.clone(),
         )?;
 
         let created = existing.is_none();
         let mut meta = match existing {
             None => self.environment_service().create(CreateEnvironmentOptions {
-                name: name.clone(),
-                root,
-                gateway_port,
+                name: request.name.clone(),
+                root: request.root.clone(),
+                gateway_port: request.gateway_port,
                 default_runtime: match desired_binding.as_ref() {
                     Some(StartBinding::Runtime(runtime_name)) => Some(runtime_name.clone()),
                     _ => None,
@@ -125,19 +179,21 @@ impl Cli {
                     Some(StartBinding::Launcher(launcher_name)) => Some(launcher_name.clone()),
                     _ => None,
                 },
-                protected: protect,
+                protected: request.protect,
             })?,
-            Some(existing) => self.apply_start_to_existing(existing, desired_binding.as_ref(), protect)?,
+            Some(existing) => self.apply_start_to_existing(
+                existing,
+                desired_binding.as_ref(),
+                request.protect,
+            )?,
         };
 
         meta = self.environment_service().apply_effective_gateway_port(meta)?;
 
-        let onboarding_planned = if onboard {
-            true
-        } else if no_onboard {
-            false
-        } else {
-            created
+        let onboarding_planned = match request.onboarding_mode {
+            StartOnboardingMode::Always => true,
+            StartOnboardingMode::Never => false,
+            StartOnboardingMode::Auto => created,
         };
 
         if json_flag && onboarding_planned {
@@ -148,12 +204,12 @@ impl Cli {
         }
 
         let mut service_started = false;
-        if service_requested {
-            self.with_progress(format!("Installing service for {name}"), || {
-                self.service_service().install(&name)
+        if request.service_requested {
+            self.with_progress(format!("Installing service for {}", request.name), || {
+                self.service_service().install(&request.name)
             })?;
-            self.with_progress(format!("Starting service for {name}"), || {
-                self.service_service().start(&name)
+            self.with_progress(format!("Starting service for {}", request.name), || {
+                self.service_service().start(&request.name)
             })?;
             service_started = true;
         }
@@ -161,7 +217,7 @@ impl Cli {
         let (effective_port, gateway_port_source) =
             self.environment_service().resolve_effective_gateway_port(&meta)?;
         let summary = StartSummary {
-            env_name: name.clone(),
+            env_name: request.name.clone(),
             created,
             root: meta.root.clone(),
             gateway_port: effective_port,
@@ -170,12 +226,16 @@ impl Cli {
             default_launcher: meta.default_launcher.clone(),
             protected: meta.protected,
             onboarding_planned,
-            service_requested,
+            service_requested: request.service_requested,
             service_started,
-            activate_command: format!("eval \"$({} env use {})\"", self.command_example(), name),
-            run_command: format!("{} @{} -- status", self.command_example(), name),
-            onboard_command: format!("{} @{} -- onboard", self.command_example(), name),
-            service_command: format!("{} service install {}", self.command_example(), name),
+            activate_command: format!(
+                "eval \"$({} env use {})\"",
+                self.command_example(),
+                request.name
+            ),
+            run_command: format!("{} @{} -- status", self.command_example(), request.name),
+            onboard_command: format!("{} @{} -- onboard", self.command_example(), request.name),
+            service_command: format!("{} service install {}", self.command_example(), request.name),
         };
 
         if json_flag {
@@ -187,7 +247,7 @@ impl Cli {
 
         if onboarding_planned {
             return self.handle_env_run(vec![
-                name,
+                request.name,
                 "--".to_string(),
                 "onboard".to_string(),
             ]);

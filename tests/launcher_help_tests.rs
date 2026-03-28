@@ -20,11 +20,14 @@ fn top_level_help_is_clean_and_points_to_topics() {
     ));
     assert!(output.contains("ocm [--color <mode>] <command> [args]"));
     assert!(output.contains("Fast path: create or reuse an env and get it ready"));
+    assert!(output.contains("Guided setup for release and local-dev flows"));
     assert!(output.contains("--color <mode>"));
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
     assert!(output.contains("start"));
+    assert!(output.contains("setup"));
     assert!(output.contains("ocm start"));
+    assert!(output.contains("ocm help setup"));
     assert!(output.contains("ocm start mybot --channel beta"));
     assert!(output.contains("ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw"));
     assert!(output.contains("eval \"$(ocm env use default)\""));
@@ -81,6 +84,25 @@ fn start_help_is_available_from_help_and_flag() {
     assert!(output.contains("--onboard | --no-onboard"));
     assert!(output.contains("ocm start demo --channel stable"));
     assert!(output.contains("ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"));
+}
+
+#[test]
+fn setup_help_is_available_from_help_and_flag() {
+    let root = TestDir::new("help-setup");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "setup"]);
+    let via_flag = run_ocm(&cwd, &env, &["setup", "--help"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(via_flag.status.success(), "{}", stderr(&via_flag));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&via_flag));
+    assert!(output.contains("Guided setup"));
+    assert!(output.contains("ocm setup"));
+    assert!(output.contains("Interactive setup"));
 }
 
 #[test]

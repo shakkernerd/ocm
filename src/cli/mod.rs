@@ -6,6 +6,7 @@ mod release;
 mod render;
 mod runtime;
 mod service;
+mod setup;
 mod start;
 
 use std::collections::BTreeMap;
@@ -462,6 +463,7 @@ impl Cli {
         let result = match group.as_str() {
             "help" => cli.dispatch_help_command(rest),
             "init" => cli.handle_init_command(&action, rest),
+            "setup" => cli.handle_setup_command(args[1..].to_vec()),
             "start" => cli.handle_start_command(args[1..].to_vec()),
             "env" => cli.dispatch_env_command(action.as_str(), rest),
             "release" => cli.dispatch_release_command(action.as_str(), rest),

@@ -7,7 +7,7 @@ use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -204,6 +204,28 @@ pub fn run_ocm(cwd: &Path, env: &BTreeMap<String, String>, args: &[&str]) -> Out
     command.env_clear();
     command.envs(env);
     command.output().unwrap()
+}
+
+pub fn run_ocm_with_stdin(
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    args: &[&str],
+    input: &str,
+) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    command.current_dir(cwd);
+    command.args(args);
+    command.env_clear();
+    command.envs(env);
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    let mut child = command.spawn().unwrap();
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(input.as_bytes()).unwrap();
+    }
+    child.wait_with_output().unwrap()
 }
 
 pub fn stdout(output: &Output) -> String {
