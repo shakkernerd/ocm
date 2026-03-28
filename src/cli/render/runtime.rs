@@ -41,8 +41,8 @@ fn runtime_list_with_width(
                 vec![
                     Cell::accent(meta.name.clone()),
                     Cell::plain(meta.source_kind.as_str()),
+                    optional_cell(selector_summary(meta).as_deref()),
                     optional_cell(meta.release_version.as_deref()),
-                    optional_cell(meta.release_channel.as_deref()),
                     Cell::muted(meta.binary_path.clone()),
                 ]
             } else {
@@ -56,7 +56,7 @@ fn runtime_list_with_width(
         .collect::<Vec<_>>();
     let mut lines = render_table(
         if show_full {
-            &["Name", "Source", "Release", "Channel", "Binary"]
+            &["Name", "Source", "Tracks", "Current", "Binary"]
         } else {
             &["Name", "Source", "Target"]
         },
@@ -88,6 +88,9 @@ fn runtime_list_raw(runtimes: &[RuntimeMeta]) -> Vec<String> {
         if let Some(release_channel) = meta.release_channel.as_deref() {
             bits.push(format!("channel={release_channel}"));
         }
+        if let Some(tracks) = selector_summary(meta) {
+            bits.push(format!("tracks={tracks}"));
+        }
         lines.push(bits.join("  "));
     }
     lines
@@ -98,14 +101,42 @@ fn optional_cell(value: Option<&str>) -> Cell {
 }
 
 fn runtime_target(meta: &RuntimeMeta) -> String {
+    match selector_summary(meta) {
+        Some(selector) => match meta.release_version.as_deref() {
+            Some(version)
+                if meta.release_selector_kind == Some(RuntimeReleaseSelectorKind::Channel) =>
+            {
+                format!("{selector} -> {version}")
+            }
+            _ => selector,
+        },
+        None => match (
+            meta.release_version.as_deref(),
+            meta.release_channel.as_deref(),
+        ) {
+            (Some(version), Some(channel)) => format!("{version} ({channel})"),
+            (Some(version), None) => version.to_string(),
+            (None, Some(channel)) => format!("channel:{channel}"),
+            (None, None) => meta.binary_path.clone(),
+        },
+    }
+}
+
+fn selector_summary(meta: &RuntimeMeta) -> Option<String> {
     match (
-        meta.release_version.as_deref(),
-        meta.release_channel.as_deref(),
+        meta.release_selector_kind.as_ref(),
+        meta.release_selector_value.as_deref(),
     ) {
-        (Some(version), Some(channel)) => format!("{version} ({channel})"),
-        (Some(version), None) => version.to_string(),
-        (None, Some(channel)) => format!("channel:{channel}"),
-        (None, None) => meta.binary_path.clone(),
+        (Some(RuntimeReleaseSelectorKind::Version), Some(value)) => {
+            Some(format!("version {value}"))
+        }
+        (Some(RuntimeReleaseSelectorKind::Channel), Some(value)) => {
+            Some(format!("channel {value}"))
+        }
+        (Some(RuntimeReleaseSelectorKind::Version), None) => Some("version".to_string()),
+        (Some(RuntimeReleaseSelectorKind::Channel), None) => Some("channel".to_string()),
+        (None, None) => None,
+        (None, Some(value)) => Some(value.to_string()),
     }
 }
 
@@ -426,9 +457,11 @@ mod tests {
             runtime_list_with_width(&[sample_runtime()], RenderProfile::pretty(false), Some(80));
 
         assert!(lines[1].contains("Target"));
-        assert!(!lines[1].contains("Channel"));
+        assert!(!lines[1].contains("Current"));
         assert!(!lines[1].contains("Binary"));
-        assert!(lines.iter().any(|line| line.contains("2026.3.24 (stable)")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("channel stable -> 2026.3.24")));
         assert_eq!(
             lines.last().unwrap(),
             "Use --raw for full runtime path and release details."
@@ -440,9 +473,11 @@ mod tests {
         let lines =
             runtime_list_with_width(&[sample_runtime()], RenderProfile::pretty(false), Some(140));
 
-        assert!(lines[1].contains("Channel"));
+        assert!(lines[1].contains("Tracks"));
+        assert!(lines[1].contains("Current"));
         assert!(lines[1].contains("Binary"));
         assert!(lines.iter().any(|line| line.contains("/tmp/openclaw")));
+        assert!(lines.iter().any(|line| line.contains("channel stable")));
     }
 
     #[test]
