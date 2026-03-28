@@ -8,7 +8,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
-use crate::support::{TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout};
+use crate::support::{
+    TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout,
+    write_executable_script,
+};
 
 fn append_tar_file(
     builder: &mut Builder<&mut GzEncoder<Vec<u8>>>,
@@ -177,4 +180,29 @@ fn start_rejects_json_when_onboarding_would_run() {
     let output = run_ocm(&cwd, &env, &["start", "--json"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("start cannot combine --json with interactive onboarding"));
+}
+
+#[test]
+fn start_reports_recovery_steps_when_onboarding_fails() {
+    let root = TestDir::new("start-onboarding-failure");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let failing_openclaw = root.child("bin/failing-openclaw");
+    write_executable_script(&failing_openclaw, "#!/bin/sh\nexit 1\n");
+
+    let start = run_ocm(
+        &cwd,
+        &env,
+        &["start", "demo", "--command", &path_string(&failing_openclaw)],
+    );
+    assert_eq!(start.status.code(), Some(1));
+    assert!(stdout(&start).contains("Started env demo"));
+    let error = stderr(&start);
+    assert!(error.contains("env demo is ready, but onboarding exited with code 1"));
+    assert!(error.contains("retry: ocm @demo -- onboard"));
+    assert!(error.contains("run: ocm @demo -- status"));
+    assert!(error.contains("keep running: ocm service install demo"));
+    assert!(!error.contains("Run \"ocm help\" for usage."));
 }

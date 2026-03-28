@@ -246,11 +246,22 @@ impl Cli {
         self.stdout_lines(self.start_summary_lines(&summary));
 
         if onboarding_planned {
-            return self.handle_env_run(vec![
+            let onboarding = self.handle_env_run(vec![
                 request.name,
                 "--".to_string(),
                 "onboard".to_string(),
             ]);
+            return match onboarding {
+                Ok(0) => Ok(0),
+                Ok(code) => {
+                    self.print_onboarding_follow_up(&summary, None, Some(code));
+                    Ok(code)
+                }
+                Err(error) => {
+                    self.print_onboarding_follow_up(&summary, Some(&error), None);
+                    Ok(1)
+                }
+            };
         }
 
         Ok(0)
@@ -430,5 +441,41 @@ impl Cli {
         lines.push(format!("  activate: {}", summary.activate_command));
         lines.push(format!("  run: {}", summary.run_command));
         lines
+    }
+
+    fn print_onboarding_follow_up(
+        &self,
+        summary: &StartSummary,
+        error: Option<&str>,
+        exit_code: Option<i32>,
+    ) {
+        match (error, exit_code) {
+            (Some(error), _) => {
+                self.stderr_line(format!(
+                    "ocm: env {} is ready, but onboarding could not start",
+                    summary.env_name
+                ));
+                self.stderr_line(format!("  problem: {error}"));
+            }
+            (None, Some(code)) => {
+                self.stderr_line(format!(
+                    "ocm: env {} is ready, but onboarding exited with code {code}",
+                    summary.env_name
+                ));
+            }
+            _ => return,
+        }
+
+        self.stderr_line(format!("  retry: {}", summary.onboard_command));
+        self.stderr_line(format!("  run: {}", summary.run_command));
+        if summary.service_requested {
+            self.stderr_line(format!(
+                "  service: {} service status {}",
+                self.command_example(),
+                summary.env_name
+            ));
+        } else {
+            self.stderr_line(format!("  keep running: {}", summary.service_command));
+        }
     }
 }
