@@ -3,8 +3,8 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
-use crate::infra::archive::extract_tar_gz;
 use crate::infra::download::{
     artifact_file_name_from_url, download_to_file, file_sha256, normalize_sha256,
     verify_file_integrity, verify_file_sha256,
@@ -27,10 +27,74 @@ use super::layout::{
 };
 use super::now_utc;
 
+const INTERNAL_NPM_BIN_ENV: &str = "OCM_INTERNAL_NPM_BIN";
+
 fn trim_description(description: Option<String>) -> Option<String> {
     description
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn configured_npm_bin(env: &BTreeMap<String, String>) -> &str {
+    env.get(INTERNAL_NPM_BIN_ENV)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("npm")
+}
+
+fn installed_openclaw_binary_path(install_files: &Path) -> PathBuf {
+    install_files.join("node_modules/openclaw/openclaw.mjs")
+}
+
+fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    for bytes in [stderr, stdout] {
+        let text = String::from_utf8_lossy(bytes);
+        if let Some(line) = text.lines().find_map(|line| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        }) {
+            return Some(line.to_string());
+        }
+    }
+    None
+}
+
+fn install_openclaw_package_with_npm(
+    archive_path: &Path,
+    install_files: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let npm_bin = configured_npm_bin(env);
+    let output = Command::new(npm_bin)
+        .arg("install")
+        .arg("--prefix")
+        .arg(install_files)
+        .arg("--omit=dev")
+        .arg("--no-save")
+        .arg("--package-lock=false")
+        .arg(archive_path)
+        .env("npm_config_fund", "false")
+        .env("npm_config_audit", "false")
+        .env("npm_config_update_notifier", "false")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to run {npm_bin} while installing the OpenClaw package: {error}"
+            )
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let detail = summarize_command_output(&output.stdout, &output.stderr)
+        .unwrap_or_else(|| format!("{npm_bin} exited with code {}", output.status.code().unwrap_or(1)));
+    Err(format!(
+        "failed to install OpenClaw package dependencies with {npm_bin}: {detail}"
+    ))
 }
 
 fn build_installed_runtime_meta(
@@ -164,6 +228,7 @@ fn install_runtime_from_openclaw_package(
     release_selector_kind: Option<RuntimeReleaseSelectorKind>,
     release_selector_value: Option<String>,
     description: Option<String>,
+    env: &BTreeMap<String, String>,
 ) -> Result<RuntimeMeta, String> {
     if path_exists(&install_root) {
         return Err(format!(
@@ -181,13 +246,13 @@ fn install_runtime_from_openclaw_package(
             verify_file_integrity(&archive_path, source_integrity)?;
         }
 
-        extract_tar_gz(&archive_path, &install_files)?;
+        install_openclaw_package_with_npm(&archive_path, &install_files, env)?;
         let _ = fs::remove_file(&archive_path);
 
-        let binary_path = install_files.join("package/openclaw.mjs");
+        let binary_path = installed_openclaw_binary_path(&install_files);
         if !path_exists(&binary_path) {
             return Err(format!(
-                "OpenClaw release \"{release_version}\" is missing package/openclaw.mjs"
+                "OpenClaw release \"{release_version}\" is missing node_modules/openclaw/openclaw.mjs after installation"
             ));
         }
         #[cfg(unix)]
@@ -567,6 +632,7 @@ pub fn install_runtime_from_selected_official_openclaw_release(
         release_selector_kind,
         release_selector_value,
         description,
+        env,
     )
 }
 

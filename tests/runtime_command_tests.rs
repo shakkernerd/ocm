@@ -56,6 +56,10 @@ fn sha512_integrity(body: &[u8]) -> String {
     )
 }
 
+fn installed_openclaw_runtime_entrypoint(install_root: &std::path::Path) -> std::path::PathBuf {
+    install_root.join("files/node_modules/openclaw/openclaw.mjs")
+}
+
 #[test]
 fn runtime_list_uses_runtime_wording_when_empty() {
     let root = TestDir::new("runtime-list-empty");
@@ -299,7 +303,7 @@ fn runtime_install_from_manifest_version_downloads_and_records_release_metadata(
 }
 
 #[test]
-fn runtime_install_from_official_release_downloads_and_extracts_the_openclaw_package() {
+fn runtime_install_from_official_release_installs_the_openclaw_package() {
     let root = TestDir::new("runtime-install-official-release");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -329,7 +333,7 @@ fn runtime_install_from_official_release_downloads_and_extracts_the_openclaw_pac
     assert!(stdout(&install).contains("Installed runtime stable"));
 
     let install_root = runtime_install_root("stable", &env, &cwd).unwrap();
-    let expected_binary = install_root.join("files/package/openclaw.mjs");
+    let expected_binary = installed_openclaw_runtime_entrypoint(&install_root);
     assert_eq!(
         fs::read_to_string(&expected_binary).unwrap(),
         "#!/usr/bin/env node\nconsole.log('stable');\n"
@@ -349,6 +353,48 @@ fn runtime_install_from_official_release_downloads_and_extracts_the_openclaw_pac
         stdout(&which),
         format!("{}\n", path_string(&expected_binary))
     );
+}
+
+#[test]
+fn official_runtime_install_produces_a_runnable_env_binding() {
+    let root = TestDir::new("runtime-install-official-runnable");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball(
+        "#!/usr/bin/env node\nconsole.log(process.argv.slice(2).join(' '));\n",
+    );
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes(
+        "/openclaw",
+        "application/json",
+        packument.as_bytes(),
+    );
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--runtime", "stable"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let run = run_ocm(&cwd, &env, &["env", "run", "demo", "--", "status"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert_eq!(stdout(&run), "status\n");
 }
 
 #[test]
@@ -549,7 +595,7 @@ fn runtime_update_reuses_the_official_release_selector() {
     assert!(stdout(&update).contains("Updated runtime stable"));
 
     let install_root = runtime_install_root("stable", &env, &cwd).unwrap();
-    let expected_binary = install_root.join("files/package/openclaw.mjs");
+    let expected_binary = installed_openclaw_runtime_entrypoint(&install_root);
     assert_eq!(
         fs::read_to_string(&expected_binary).unwrap(),
         "#!/usr/bin/env node\nconsole.log('updated');\n"
