@@ -46,6 +46,14 @@ fn state_tone(state: &str) -> Tone {
 }
 
 pub fn service_list(summary: &ServiceSummaryList, profile: RenderProfile) -> Vec<String> {
+    service_list_with_width(summary, profile, terminal_width())
+}
+
+fn service_list_with_width(
+    summary: &ServiceSummaryList,
+    profile: RenderProfile,
+    width: Option<usize>,
+) -> Vec<String> {
     if !profile.pretty {
         return service_list_raw(summary);
     }
@@ -74,6 +82,7 @@ pub fn service_list(summary: &ServiceSummaryList, profile: RenderProfile) -> Vec
         return lines;
     }
 
+    let show_notes = width.map(|width| width >= 110).unwrap_or(true);
     let rows = summary
         .services
         .iter()
@@ -101,7 +110,7 @@ pub fn service_list(summary: &ServiceSummaryList, profile: RenderProfile) -> Vec
 
             let managed_state = daemon_state(service.installed, service.loaded, service.running);
             let global_state = global_relation(service);
-            vec![
+            let mut row = vec![
                 Cell::accent(service.env_name.clone()),
                 if binding == "—" {
                     Cell::muted(binding)
@@ -119,21 +128,36 @@ pub fn service_list(summary: &ServiceSummaryList, profile: RenderProfile) -> Vec
                     crate::infra::terminal::Align::Left,
                     state_tone(global_state),
                 ),
-                if notes.is_empty() {
+            ];
+            if show_notes {
+                row.push(if notes.is_empty() {
                     Cell::muted("—")
                 } else if service.issue.is_some() {
                     Cell::danger(notes.join(","))
                 } else {
                     Cell::warning(notes.join(","))
-                },
-            ]
+                });
+            }
+            row
         })
         .collect::<Vec<_>>();
     lines.extend(render_table(
-        &["Env", "Binding", "Port", "Managed", "Global", "Notes"],
+        if show_notes {
+            &["Env", "Binding", "Port", "Managed", "Global", "Notes"]
+        } else {
+            &["Env", "Binding", "Port", "Managed", "Global"]
+        },
         &rows,
         profile.color,
     ));
+    if !show_notes {
+        lines.push(String::new());
+        lines.push(paint(
+            "Use service status <env> or --raw for notes and readiness details.",
+            Tone::Muted,
+            profile.color,
+        ));
+    }
     lines
 }
 
@@ -616,7 +640,10 @@ fn service_status_tags(summary: &ServiceSummary) -> Vec<Cell> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderProfile, service_discover_with_width, service_list, service_status};
+    use super::{
+        RenderProfile, service_discover_with_width, service_list, service_list_with_width,
+        service_status,
+    };
     use crate::service::{
         DiscoveredServiceList, DiscoveredServiceSummary, ServiceSummary, ServiceSummaryList,
     };
@@ -689,6 +716,31 @@ mod tests {
         assert!(lines[1].contains("[managed loaded]"));
         assert!(lines.iter().any(|line| line.contains("Managed service")));
         assert!(lines.iter().any(|line| line.contains("Global service")));
+    }
+
+    #[test]
+    fn service_list_pretty_compacts_on_narrow_terminals() {
+        let lines = service_list_with_width(
+            &ServiceSummaryList {
+                global_label: "ai.openclaw.gateway".to_string(),
+                global_installed: true,
+                global_loaded: true,
+                global_running: false,
+                global_pid: None,
+                global_config_path: Some("/tmp/demo/.openclaw/openclaw.json".to_string()),
+                services: vec![sample_service_summary()],
+            },
+            RenderProfile::pretty(false),
+            Some(90),
+        );
+
+        assert!(lines[2].starts_with('┌'));
+        assert!(lines[3].contains("Binding"));
+        assert!(!lines[3].contains("Notes"));
+        assert_eq!(
+            lines.last().unwrap(),
+            "Use service status <env> or --raw for notes and readiness details."
+        );
     }
 
     #[test]
