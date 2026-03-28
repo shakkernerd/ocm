@@ -3,16 +3,16 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use dialoguer::{
-    Input, Select,
-    console::{Style, style},
+    console::{style, Style},
     theme::ColorfulTheme,
+    Input, Select,
 };
 use serde_json::Value;
 use time::OffsetDateTime;
 
-use super::{Cli, start::StartOnboardingMode};
+use super::{start::StartOnboardingMode, Cli};
 use crate::cli::start::StartRequest;
-use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
+use crate::infra::terminal::{paint, render_key_value_card, KeyValueRow, Tone};
 use crate::store::validate_name;
 
 impl Cli {
@@ -299,12 +299,12 @@ impl Cli {
         }
 
         match mode {
-            SetupMode::Stable => self.suggest_generated_env_name("stable"),
-            SetupMode::Beta => self.suggest_generated_env_name("beta"),
-            SetupMode::Version => self.suggest_generated_env_name("release"),
+            SetupMode::Stable | SetupMode::Beta | SetupMode::Version => {
+                self.suggest_generated_env_name()
+            }
             SetupMode::LocalCommand => local_defaults
                 .and_then(|defaults| self.preferred_checkout_env_name(defaults))
-                .unwrap_or_else(|| self.suggest_generated_env_name("dev")),
+                .unwrap_or_else(|| self.suggest_generated_env_name()),
         }
     }
 
@@ -319,34 +319,66 @@ impl Cli {
         Some(self.ensure_available_env_name(&preferred))
     }
 
-    fn suggest_generated_env_name(&self, prefix: &str) -> String {
-        const ADJECTIVES: &[&str] = &[
-            "amber", "bright", "calm", "cobalt", "ember", "quiet", "steady", "swift",
-        ];
-        const NOUNS: &[&str] = &[
-            "anchor", "comet", "forge", "harbor", "lantern", "otter", "signal", "trail",
+    fn suggest_generated_env_name(&self) -> String {
+        const NAME_POOL: &[&str] = &[
+            "atlas-harbor",
+            "aurora-trail",
+            "cedar-signal",
+            "cinder-lantern",
+            "cobalt-raven",
+            "copper-anchor",
+            "drift-forge",
+            "ember-meadow",
+            "glimmer-otter",
+            "harbor-mint",
+            "iris-brook",
+            "juniper-comet",
+            "kindle-bay",
+            "linen-peak",
+            "maple-signal",
+            "meadow-lark",
+            "midnight-fern",
+            "north-hollow",
+            "orchid-trail",
+            "quiet-marble",
+            "river-ember",
+            "saffron-brook",
+            "silver-cove",
+            "solstice-harbor",
+            "spring-fable",
+            "summit-lantern",
+            "tidal-forge",
+            "topaz-raven",
+            "violet-anchor",
+            "willow-comet",
+            "winter-grove",
+            "zephyr-mesa",
         ];
 
         let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
-        let seed = (now as u128) ^ (u128::from(std::process::id()) << 16);
-        let total = ADJECTIVES.len() * NOUNS.len();
+        let mut seed = (now as u64) ^ ((now >> 64) as u64) ^ (u64::from(std::process::id()) << 16);
+        seed ^= seed >> 30;
+        seed = seed.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        seed ^= seed >> 27;
+        seed = seed.wrapping_mul(0x94d0_49bb_1331_11eb);
+        seed ^= seed >> 31;
 
-        for attempt in 0..total {
-            let adjective = ADJECTIVES[((seed as usize) + attempt) % ADJECTIVES.len()];
-            let noun = NOUNS[(((seed >> 8) as usize) + attempt / ADJECTIVES.len()) % NOUNS.len()];
-            let candidate = format!("{prefix}-{adjective}-{noun}");
+        let start = (seed as usize) % NAME_POOL.len();
+        let step = 11usize;
+        for attempt in 0..NAME_POOL.len() {
+            let candidate = NAME_POOL[(start + attempt * step) % NAME_POOL.len()];
             if self
                 .environment_service()
-                .find(&candidate)
+                .find(candidate)
                 .ok()
                 .flatten()
                 .is_none()
             {
-                return candidate;
+                return candidate.to_string();
             }
         }
 
-        self.ensure_available_env_name(&format!("{prefix}-env"))
+        self.ensure_available_env_name("openclaw-env")
     }
 
     fn ensure_available_env_name(&self, preferred: &str) -> String {
