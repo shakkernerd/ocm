@@ -46,10 +46,12 @@ fn release_list_with_width(
             } else {
                 release.installed_runtime_names.join(", ")
             };
+            let install_as = release_install_name(release);
             if show_full {
                 vec![
                     Cell::accent(release.release.version.clone()),
                     optional_cell(release.release.channel.as_deref()),
+                    Cell::accent(install_as),
                     Cell::muted(published_at),
                     Cell::plain(installed),
                     Cell::muted(release.release.tarball_url.clone()),
@@ -58,6 +60,7 @@ fn release_list_with_width(
                 vec![
                     Cell::accent(release.release.version.clone()),
                     optional_cell(release.release.channel.as_deref()),
+                    Cell::accent(install_as),
                     Cell::muted(published_at),
                     Cell::plain(installed),
                 ]
@@ -67,9 +70,16 @@ fn release_list_with_width(
 
     let mut lines = render_table(
         if show_full {
-            &["Version", "Channel", "Published", "Installed", "Tarball"]
+            &[
+                "Version",
+                "Channel",
+                "Install as",
+                "Published",
+                "Installed",
+                "Tarball",
+            ]
         } else {
-            &["Version", "Channel", "Published", "Installed"]
+            &["Version", "Channel", "Install as", "Published", "Installed"]
         },
         &rows,
         profile.color,
@@ -95,6 +105,7 @@ fn release_list_raw(releases: &[OpenClawReleaseCatalogEntry]) -> Vec<String> {
         if let Some(channel) = release.release.channel.as_deref() {
             bits.push(format!("channel={channel}"));
         }
+        bits.push(format!("installAs={}", release_install_name(release)));
         if let Some(published_at) = release.release.published_at {
             if let Ok(published_at) = format_rfc3339(published_at) {
                 bits.push(format!("publishedAt={published_at}"));
@@ -119,6 +130,14 @@ fn release_list_raw(releases: &[OpenClawReleaseCatalogEntry]) -> Vec<String> {
 
 fn optional_cell(value: Option<&str>) -> Cell {
     value.map(Cell::plain).unwrap_or_else(|| Cell::muted("—"))
+}
+
+fn release_install_name(release: &OpenClawReleaseCatalogEntry) -> String {
+    release
+        .release
+        .channel
+        .clone()
+        .unwrap_or_else(|| release.release.version.clone())
 }
 
 pub fn release_show(
@@ -158,16 +177,11 @@ pub fn release_show(
     } else {
         release.installed_runtime_names.join(", ")
     };
-    let canonical_runtime_name = release
-        .release
-        .channel
-        .clone()
-        .unwrap_or_else(|| release.release.version.clone());
     push_card(
         &mut lines,
         "Local runtime mapping",
         vec![
-            KeyValueRow::accent("Install name", canonical_runtime_name),
+            KeyValueRow::accent("Install name", release_install_name(release)),
             KeyValueRow::new(
                 "Installed",
                 installed_runtimes,
@@ -246,7 +260,7 @@ fn optional_value_row(label: &str, value: Option<String>) -> KeyValueRow {
 mod tests {
     use time::OffsetDateTime;
 
-    use super::{release_list_with_width, release_show, RenderProfile};
+    use super::{release_list_raw, release_list_with_width, release_show, RenderProfile};
     use crate::runtime::{OpenClawRelease, OpenClawReleaseCatalogEntry};
 
     #[test]
@@ -258,12 +272,20 @@ mod tests {
         );
 
         assert!(lines[1].contains("Version"));
+        assert!(lines[1].contains("Install as"));
         assert!(lines[1].contains("Installed"));
         assert!(!lines[1].contains("Tarball"));
         assert_eq!(
             lines.last().unwrap(),
             "Use release show <version>, --raw, or --json for tarball details."
         );
+    }
+
+    #[test]
+    fn release_list_raw_includes_install_name() {
+        let lines = release_list_raw(&[sample_catalog_entry()]);
+
+        assert!(lines[0].contains("installAs=stable"));
     }
 
     #[test]
