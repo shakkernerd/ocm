@@ -135,7 +135,7 @@ fi
 mkdir -p "$bin_dir"
 destination="${bin_dir}/ocm"
 if [[ -e "$destination" && "$force" != "true" ]]; then
-  echo "error: ${destination} already exists; rerun with --force to replace it" >&2
+  echo "error: ${destination} already exists; run \"ocm self update\" or rerun with --force to replace it" >&2
   exit 1
 fi
 

@@ -21,6 +21,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("ocm [--color <mode>] <command> [args]"));
     assert!(output.contains("Fast path: create or reuse an env and get it ready"));
     assert!(output.contains("Guided setup for release and local-dev flows"));
+    assert!(output.contains("Update the installed ocm binary"));
     assert!(output.contains("--color <mode>"));
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
@@ -28,6 +29,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("setup"));
     assert!(output.contains("ocm start"));
     assert!(output.contains("ocm help setup"));
+    assert!(output.contains("ocm help self"));
     assert!(output.contains("ocm start mybot --channel beta"));
     assert!(output.contains("ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw"));
     assert!(output.contains("eval \"$(ocm env use default)\""));
@@ -105,6 +107,25 @@ fn setup_help_is_available_from_help_and_flag() {
     assert!(output.contains("Guided setup"));
     assert!(output.contains("ocm setup"));
     assert!(output.contains("Interactive setup"));
+}
+
+#[test]
+fn self_help_is_available_from_help_and_bare_group() {
+    let root = TestDir::new("help-self-group");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "self"]);
+    let bare = run_ocm(&cwd, &env, &["self"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(bare.status.success(), "{}", stderr(&bare));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&bare));
+    assert!(output.contains("Self commands"));
+    assert!(output.contains("Check for or install a newer ocm release"));
+    assert!(output.contains("ocm self update --check"));
 }
 
 #[test]
@@ -366,6 +387,22 @@ fn release_and_runtime_show_help_mentions_raw_mode() {
 }
 
 #[test]
+fn self_update_help_mentions_check_and_raw_modes() {
+    let root = TestDir::new("help-self-update");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let help = run_ocm(&cwd, &env, &["help", "self", "update"]);
+    assert!(help.status.success(), "{}", stderr(&help));
+    let output = stdout(&help);
+    assert!(output.contains("ocm self update [--version <version>] [--check] [--raw] [--json]"));
+    assert!(output.contains("--check"));
+    assert!(output.contains("--raw"));
+    assert!(output.contains("Exact versions accept either `0.2.1` or `v0.2.1`."));
+}
+
+#[test]
 fn runtime_verify_help_mentions_raw_mode() {
     let root = TestDir::new("help-runtime-verify");
     let cwd = root.child("workspace");
@@ -404,4 +441,16 @@ fn unknown_launcher_commands_use_launcher_specific_errors() {
     let output = run_ocm(&cwd, &env, &["launcher", "rename"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("unknown launcher command: rename"));
+}
+
+#[test]
+fn unknown_self_commands_use_self_specific_errors() {
+    let root = TestDir::new("self-unknown-command");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["self", "upgrade"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("unknown self command: upgrade"));
 }

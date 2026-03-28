@@ -104,6 +104,7 @@ pub fn root_help(cmd: &str) -> String {
                 "start",
                 "Fast path: create or reuse an env and get it ready",
             ),
+            ("self", "Update the installed ocm binary"),
             (
                 "env",
                 "Environment lifecycle, binding, execution, snapshots, and repair",
@@ -137,6 +138,7 @@ pub fn root_help(cmd: &str) -> String {
         format_examples(&[
             format!("{cmd} help setup"),
             format!("{cmd} help start"),
+            format!("{cmd} help self"),
             format!("{cmd} help env"),
             format!("{cmd} help release"),
             format!("{cmd} help service"),
@@ -245,6 +247,27 @@ pub fn init_help(cmd: &str) -> String {
             "This command prints shell code to stdout.",
             "Use it from your shell rc file or evaluate it explicitly.",
         ],
+    )
+}
+
+pub fn self_help(cmd: &str) -> String {
+    render_group(
+        "Self commands",
+        "Inspect and update the installed ocm binary.",
+        vec![
+            format!("{cmd} self <command> [args]"),
+            format!("{cmd} help self <command>"),
+        ],
+        &[(
+            "Maintenance",
+            &[("update", "Check for or install a newer ocm release")],
+        )],
+        vec![
+            format!("{cmd} self update --check"),
+            format!("{cmd} self update"),
+            format!("{cmd} self update --version 0.2.1"),
+        ],
+        vec![format!("{cmd} help self update")],
     )
 }
 
@@ -419,6 +442,37 @@ pub fn release_help(cmd: &str) -> String {
             format!("{cmd} help release show"),
         ],
     )
+}
+
+pub fn self_command_help(cmd: &str, action: &str) -> Option<String> {
+    match action {
+        "update" => Some(render_leaf(
+            "Update ocm",
+            "Check for or install a newer ocm release in place.",
+            vec![format!(
+                "{cmd} self update [--version <version>] [--check] [--raw] [--json]"
+            )],
+            &[
+                (
+                    "--version <version>",
+                    "Install one exact ocm release tag or version",
+                ),
+                ("--check", "Only report whether an update is available"),
+                ("--raw", "Use plain text instead of pretty TTY cards"),
+                ("--json", "Print the update summary as JSON"),
+            ],
+            vec![
+                format!("{cmd} self update --check"),
+                format!("{cmd} self update"),
+                format!("{cmd} self update --version 0.2.1"),
+            ],
+            &[
+                "The current binary is replaced in place on supported macOS and Linux installs.",
+                "Exact versions accept either `0.2.1` or `v0.2.1`.",
+            ],
+        )),
+        _ => None,
+    }
 }
 
 pub fn runtime_help(cmd: &str) -> String {

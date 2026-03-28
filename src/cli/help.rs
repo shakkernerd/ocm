@@ -22,8 +22,11 @@ impl Cli {
             ["setup"] => Ok(render::help::setup_help(&cmd)),
             ["start"] => Ok(render::help::start_help(&cmd)),
             ["init"] => Ok(render::help::init_help(&cmd)),
+            ["self"] => Ok(render::help::self_help(&cmd)),
             ["env"] => Ok(render::help::env_help(&cmd)),
             ["release"] => Ok(render::help::release_help(&cmd)),
+            ["self", action] => render::help::self_command_help(&cmd, action)
+                .ok_or_else(|| format!("unknown self command: {action}")),
             ["env", "snapshot"] => Ok(render::help::env_snapshot_help(&cmd)),
             ["env", action] => render::help::env_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown env command: {action}")),
@@ -45,6 +48,7 @@ impl Cli {
                     *group,
                     "setup"
                         | "start"
+                        | "self"
                         | "env"
                         | "release"
                         | "launcher"
@@ -72,7 +76,7 @@ impl Cli {
             [group]
                 if matches!(
                     group.as_str(),
-                    "env" | "release" | "launcher" | "runtime" | "service"
+                    "self" | "env" | "release" | "launcher" | "runtime" | "service"
                 ) =>
             {
                 Some(vec![group.as_str()])
@@ -83,7 +87,7 @@ impl Cli {
             [group, next, rest @ ..]
                 if matches!(
                     group.as_str(),
-                    "env" | "release" | "launcher" | "runtime" | "service"
+                    "self" | "env" | "release" | "launcher" | "runtime" | "service"
                 ) && Self::is_help_token(next) =>
             {
                 let mut topic = vec![group.as_str()];
@@ -93,7 +97,7 @@ impl Cli {
             [group, action, flag]
                 if matches!(
                     group.as_str(),
-                    "env" | "release" | "launcher" | "runtime" | "service"
+                    "self" | "env" | "release" | "launcher" | "runtime" | "service"
                 ) && Self::is_help_flag(flag) =>
             {
                 Some(vec![group.as_str(), action.as_str()])

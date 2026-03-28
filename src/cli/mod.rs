@@ -5,6 +5,7 @@ mod launcher;
 mod release;
 mod render;
 mod runtime;
+mod self_cmd;
 mod service;
 mod setup;
 mod start;
@@ -426,12 +427,6 @@ impl Cli {
             return 0;
         }
 
-        if let Err(error) = ensure_store(&cli.env, &cli.cwd) {
-            cli.stderr_line(format!("ocm: {error}"));
-            cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
-            return 1;
-        }
-
         if args[0] == "--" {
             return match cli.handle_active_env_run_shorthand(args[1..].to_vec()) {
                 Ok(code) => code,
@@ -463,6 +458,23 @@ impl Cli {
         } else {
             Vec::new()
         };
+
+        if group == "self" {
+            return match cli.dispatch_self_command(action.as_str(), rest) {
+                Ok(code) => code,
+                Err(error) => {
+                    cli.stderr_line(format!("ocm: {error}"));
+                    cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
+                    1
+                }
+            };
+        }
+
+        if let Err(error) = ensure_store(&cli.env, &cli.cwd) {
+            cli.stderr_line(format!("ocm: {error}"));
+            cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
+            return 1;
+        }
 
         let result = match group.as_str() {
             "help" => cli.dispatch_help_command(rest),

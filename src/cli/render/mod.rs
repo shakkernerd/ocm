@@ -3,6 +3,7 @@ pub mod help;
 pub mod launcher;
 pub mod release;
 pub mod runtime;
+pub mod self_update;
 pub mod service;
 
 use std::collections::BTreeMap;

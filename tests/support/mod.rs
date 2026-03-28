@@ -198,7 +198,16 @@ pub fn write_executable_script(path: &Path, contents: &str) {
 }
 
 pub fn run_ocm(cwd: &Path, env: &BTreeMap<String, String>, args: &[&str]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    run_ocm_binary(Path::new(env!("CARGO_BIN_EXE_ocm")), cwd, env, args)
+}
+
+pub fn run_ocm_binary(
+    binary: &Path,
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    args: &[&str],
+) -> Output {
+    let mut command = Command::new(binary);
     command.current_dir(cwd);
     command.args(args);
     command.env_clear();
