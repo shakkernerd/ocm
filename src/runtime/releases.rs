@@ -200,14 +200,14 @@ pub fn select_official_openclaw_release_by_channel(
     releases: &[OpenClawRelease],
     channel: &str,
 ) -> Result<OpenClawRelease, String> {
-    let channel = channel.trim();
+    let channel = normalize_openclaw_channel_selector(channel)?;
     if channel.is_empty() {
         return Err("OpenClaw release channel is required".to_string());
     }
 
     releases
         .iter()
-        .find(|release| release.channel.as_deref() == Some(channel))
+        .find(|release| release.channel.as_deref() == Some(channel.as_str()))
         .cloned()
         .ok_or_else(|| format!("OpenClaw release channel \"{channel}\" was not found"))
 }
@@ -403,6 +403,18 @@ fn map_openclaw_dist_tag(tag: &str) -> Option<&'static str> {
         "dev" => Some("dev"),
         _ => None,
     }
+}
+
+pub fn normalize_openclaw_channel_selector(channel: &str) -> Result<String, String> {
+    let channel = channel.trim();
+    if channel.is_empty() {
+        return Err("OpenClaw release channel is required".to_string());
+    }
+
+    Ok(match channel {
+        "latest" => "stable".to_string(),
+        value => value.to_string(),
+    })
 }
 
 fn openclaw_channel_priority(channel: &str) -> usize {

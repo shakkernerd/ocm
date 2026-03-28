@@ -275,6 +275,9 @@ fn official_openclaw_release_queries_support_version_and_channel() {
     let beta = select_official_openclaw_release_by_channel(&releases, "beta").unwrap();
     assert_eq!(beta.version, "2026.3.24-beta.2");
 
+    let latest = select_official_openclaw_release_by_channel(&releases, "latest").unwrap();
+    assert_eq!(latest.version, "2026.3.24");
+
     let all = query_official_openclaw_releases(&releases, None, None).unwrap();
     assert_eq!(all.len(), 2);
 

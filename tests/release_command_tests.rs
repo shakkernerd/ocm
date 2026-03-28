@@ -144,6 +144,22 @@ fn release_list_can_filter_by_channel_and_release_show_prints_one_version() {
         show_stdout
             .contains("tarballUrl: https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz")
     );
+
+    let latest_server =
+        TestHttpServer::serve_bytes("/openclaw-latest", "application/json", &packument_body());
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        latest_server.url(),
+    );
+    let latest = run_ocm(
+        &cwd,
+        &env,
+        &["release", "list", "--channel", "latest", "--json"],
+    );
+    assert!(latest.status.success(), "{}", stderr(&latest));
+    let latest_stdout = stdout(&latest);
+    assert!(latest_stdout.contains("\"version\": \"2026.3.24\""));
+    assert!(!latest_stdout.contains("2026.3.24-beta.2"));
 }
 
 #[test]

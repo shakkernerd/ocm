@@ -10,9 +10,9 @@ use crate::infra::download::{
     verify_file_integrity, verify_file_sha256,
 };
 use crate::runtime::releases::{
-    load_official_openclaw_releases, load_release_manifest, official_openclaw_releases_url,
-    select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
-    select_release,
+    load_official_openclaw_releases, load_release_manifest, normalize_openclaw_channel_selector,
+    official_openclaw_releases_url, select_official_openclaw_release_by_channel,
+    select_official_openclaw_release_by_version, select_release,
 };
 use crate::runtime::{
     AddRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
@@ -492,11 +492,16 @@ pub fn install_runtime_from_official_openclaw_release(
 ) -> Result<RuntimeMeta, String> {
     let name = validate_name(&options.name, "Runtime name")?;
     let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
+    let channel = options
+        .channel
+        .as_deref()
+        .map(normalize_openclaw_channel_selector)
+        .transpose()?;
 
     let releases_url = official_openclaw_releases_url(env);
     let releases = load_official_openclaw_releases(&releases_url)?;
     let (release_selector_kind, release_selector_value) =
-        match (options.version.as_deref(), options.channel.as_deref()) {
+        match (options.version.as_deref(), channel.as_deref()) {
             (Some(version), None) => (
                 Some(RuntimeReleaseSelectorKind::Version),
                 Some(version.trim().to_string()),
@@ -507,7 +512,7 @@ pub fn install_runtime_from_official_openclaw_release(
             ),
             _ => (None, None),
         };
-    let release = match (options.version.as_deref(), options.channel.as_deref()) {
+    let release = match (options.version.as_deref(), channel.as_deref()) {
         (Some(version), None) => select_official_openclaw_release_by_version(&releases, version)?,
         (None, Some(channel)) => select_official_openclaw_release_by_channel(&releases, channel)?,
         (Some(_), Some(_)) => {

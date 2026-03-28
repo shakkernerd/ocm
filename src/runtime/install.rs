@@ -1,8 +1,8 @@
 use super::{RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService};
 use crate::runtime::releases::{
     is_official_openclaw_releases_url, load_official_openclaw_releases,
-    official_openclaw_releases_url, select_official_openclaw_release_by_channel,
-    select_official_openclaw_release_by_version,
+    normalize_openclaw_channel_selector, official_openclaw_releases_url,
+    select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
 };
 use crate::store::{
     get_runtime, install_runtime, install_runtime_from_official_openclaw_release,
@@ -86,6 +86,10 @@ impl<'a> RuntimeService<'a> {
         let channel = channel
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
+        let channel = channel
+            .as_deref()
+            .map(normalize_openclaw_channel_selector)
+            .transpose()?;
 
         if version.is_some() && channel.is_some() {
             return Err(

@@ -333,6 +333,53 @@ fn env_create_with_channel_installs_and_binds_the_official_runtime() {
 }
 
 #[test]
+fn env_create_with_latest_channel_alias_binds_the_stable_runtime_name() {
+    let root = TestDir::new("runtime-binding-create-latest");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball(
+        "#!/bin/sh\nprintf 'official-latest'\n",
+        "2026.3.24",
+    );
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--channel", "latest"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    assert!(stdout(&show).contains("\"defaultRuntime\": \"stable\""));
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let runtime_stdout = stdout(&runtime);
+    assert!(runtime_stdout.contains("\"releaseSelectorKind\": \"channel\""));
+    assert!(runtime_stdout.contains("\"releaseSelectorValue\": \"stable\""));
+}
+
+#[test]
 fn env_create_with_version_installs_and_binds_the_official_runtime() {
     let root = TestDir::new("runtime-binding-create-version");
     let cwd = root.child("workspace");
