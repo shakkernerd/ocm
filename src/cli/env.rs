@@ -82,7 +82,7 @@ impl Cli {
     }
 
     pub(super) fn handle_env_destroy(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "env destroy")?;
         let (args, yes) = Self::consume_flag(args, "--yes");
         let (args, force) = Self::consume_flag(args, "--force");
         let Some(name) = args.first() else {
@@ -97,7 +97,11 @@ impl Cli {
                 return Ok(0);
             }
 
-            self.stdout_lines(render::env::env_destroy_preview(&summary));
+            self.stdout_lines(render::env::env_destroy_preview(
+                &summary,
+                profile,
+                &self.command_example(),
+            ));
             return Ok(0);
         }
 
@@ -105,7 +109,11 @@ impl Cli {
             if json_flag {
                 self.print_json(&summary)?;
             } else {
-                self.stdout_lines(render::env::env_destroy_preview(&summary));
+                self.stdout_lines(render::env::env_destroy_preview(
+                    &summary,
+                    profile,
+                    &self.command_example(),
+                ));
             }
             return Ok(1);
         }
@@ -138,7 +146,11 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::env::env_destroyed(&summary));
+        self.stdout_lines(render::env::env_destroyed(
+            &summary,
+            profile,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 

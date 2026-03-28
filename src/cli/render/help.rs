@@ -838,7 +838,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Destroy an environment",
             "Preview or remove an environment, its env snapshots, and its attached OCM-managed service.",
             vec![format!(
-                "{cmd} env destroy <name> [--yes] [--force] [--json]"
+                "{cmd} env destroy <name> [--yes] [--force] [--raw] [--json]"
             )],
             &[
                 ("--yes", "Apply destruction instead of showing a preview"),
@@ -846,6 +846,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                     "--force",
                     "Override protection and missing-marker safety rails",
                 ),
+                ("--raw", "Force plain output instead of TTY cards"),
                 ("--json", "Print the destroy preview or result as JSON"),
             ],
             vec![
@@ -857,6 +858,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 "Destroy removes env snapshots for that env and uninstalls its OCM-managed service when present.",
                 "Destroy does not remove shared runtimes or launchers.",
                 "If the separate machine-wide OpenClaw service is using the env, destroy refuses to apply.",
+                "TTY output uses cards by default. Piped output stays plain.",
             ],
         ),
         "remove" | "rm" => render_leaf(

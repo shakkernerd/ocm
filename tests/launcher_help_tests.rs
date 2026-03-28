@@ -140,9 +140,10 @@ fn env_destroy_help_describes_preview_first_teardown() {
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
     assert!(output.contains("Destroy an environment"));
-    assert!(output.contains("ocm env destroy <name> [--yes] [--force] [--json]"));
+    assert!(output.contains("ocm env destroy <name> [--yes] [--force] [--raw] [--json]"));
     assert!(output.contains("ocm env destroy demo --yes"));
     assert!(output.contains("Destroy does not remove shared runtimes or launchers."));
+    assert!(output.contains("TTY output uses cards by default."));
 }
 
 #[test]

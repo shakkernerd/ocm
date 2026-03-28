@@ -343,21 +343,24 @@ pub fn service_status(
     lines
 }
 
-fn service_status_next_steps(
-    summary: &ServiceSummary,
-    command_example: &str,
-) -> Vec<KeyValueRow> {
+fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) -> Vec<KeyValueRow> {
     if summary.can_adopt_global && !summary.installed {
         return vec![KeyValueRow::warning(
             "Move to OCM",
-            format!("{command_example} service adopt-global {}", summary.env_name),
+            format!(
+                "{command_example} service adopt-global {}",
+                summary.env_name
+            ),
         )];
     }
 
     if summary.can_restore_global && !summary.global_installed {
         return vec![KeyValueRow::warning(
             "Restore",
-            format!("{command_example} service restore-global {}", summary.env_name),
+            format!(
+                "{command_example} service restore-global {}",
+                summary.env_name
+            ),
         )];
     }
 
@@ -416,7 +419,10 @@ fn service_status_next_steps(
                     ),
                     KeyValueRow::accent(
                         "Logs",
-                        format!("{command_example} service logs {} --tail 50", summary.env_name),
+                        format!(
+                            "{command_example} service logs {} --tail 50",
+                            summary.env_name
+                        ),
                     ),
                 ];
             }
@@ -428,7 +434,10 @@ fn service_status_next_steps(
                     ),
                     KeyValueRow::accent(
                         "Logs",
-                        format!("{command_example} service logs {} --tail 50", summary.env_name),
+                        format!(
+                            "{command_example} service logs {} --tail 50",
+                            summary.env_name
+                        ),
                     ),
                 ];
             }
@@ -888,7 +897,11 @@ mod tests {
 
     #[test]
     fn service_status_pretty_uses_cards() {
-        let lines = service_status(&sample_service_summary(), RenderProfile::pretty(false), "ocm");
+        let lines = service_status(
+            &sample_service_summary(),
+            RenderProfile::pretty(false),
+            "ocm",
+        );
 
         assert_eq!(lines[0], "Service demo");
         assert!(lines.iter().any(|line| line.contains("OpenClaw")));
@@ -919,9 +932,11 @@ mod tests {
         let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
 
         assert!(lines.iter().any(|line| line.contains("Next")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("ocm service install demo")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm service install demo"))
+        );
     }
 
     #[test]
@@ -933,10 +948,16 @@ mod tests {
 
         let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
 
-        assert!(lines.iter().any(|line| line.contains("ocm @demo -- onboard")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("ocm service logs demo --tail 50")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm @demo -- onboard"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm service logs demo --tail 50"))
+        );
     }
 
     #[test]

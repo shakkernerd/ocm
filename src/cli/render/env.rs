@@ -20,7 +20,97 @@ pub fn env_removed(name: &str, root: &str) -> Vec<String> {
     vec![format!("Removed env {name}"), format!("  root: {root}")]
 }
 
-pub fn env_destroy_preview(summary: &EnvDestroySummary) -> Vec<String> {
+pub fn env_destroy_preview(
+    summary: &EnvDestroySummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return env_destroy_preview_raw(summary, command_example);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Destroy env {}", summary.env_name),
+        Tone::Strong,
+        profile.color,
+    )];
+
+    push_card(
+        &mut lines,
+        "Summary",
+        vec![
+            KeyValueRow::plain("Root", summary.root.clone()),
+            KeyValueRow::new(
+                "Protected",
+                if summary.protected { "yes" } else { "no" },
+                if summary.protected {
+                    Tone::Warning
+                } else {
+                    Tone::Muted
+                },
+            ),
+            KeyValueRow::new(
+                "Marker",
+                if summary.marker_present {
+                    "present"
+                } else {
+                    "missing"
+                },
+                if summary.marker_present {
+                    Tone::Success
+                } else {
+                    Tone::Danger
+                },
+            ),
+            KeyValueRow::plain("Snapshots", summary.snapshot_count.to_string()),
+            KeyValueRow::new(
+                "OCM service",
+                if summary.service_installed || summary.service_loaded || summary.service_running {
+                    "present"
+                } else {
+                    "absent"
+                },
+                if summary.service_installed || summary.service_loaded || summary.service_running {
+                    Tone::Warning
+                } else {
+                    Tone::Muted
+                },
+            ),
+        ],
+        profile.color,
+    );
+
+    let plan_rows = summary
+        .steps
+        .iter()
+        .map(|step| KeyValueRow::plain(&step.kind, step.description.clone()))
+        .collect::<Vec<_>>();
+    push_card(&mut lines, "Plan", plan_rows, profile.color);
+
+    if !summary.blockers.is_empty() {
+        let blocker_rows = summary
+            .blockers
+            .iter()
+            .enumerate()
+            .map(|(index, blocker)| KeyValueRow::danger(format!("#{}", index + 1), blocker.clone()))
+            .collect::<Vec<_>>();
+        push_card(&mut lines, "Blocked", blocker_rows, profile.color);
+    } else {
+        push_card(
+            &mut lines,
+            "Apply",
+            vec![KeyValueRow::warning(
+                "Run",
+                format!("{command_example} env destroy {} --yes", summary.env_name),
+            )],
+            profile.color,
+        );
+    }
+
+    lines
+}
+
+fn env_destroy_preview_raw(summary: &EnvDestroySummary, command_example: &str) -> Vec<String> {
     let mut lines = vec![format!("Destroy preview for env {}", summary.env_name)];
     lines.push(format!("  root: {}", summary.root));
     if summary.snapshot_count > 0 {
@@ -40,13 +130,70 @@ pub fn env_destroy_preview(summary: &EnvDestroySummary) -> Vec<String> {
             lines.push(format!("    {blocker}"));
         }
     } else {
-        lines.push("  re-run with --yes to destroy it".to_string());
+        lines.push(format!(
+            "  re-run with --yes to destroy it: {command_example} env destroy {} --yes",
+            summary.env_name
+        ));
     }
 
     lines
 }
 
-pub fn env_destroyed(summary: &EnvDestroySummary) -> Vec<String> {
+pub fn env_destroyed(
+    summary: &EnvDestroySummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return env_destroyed_raw(summary, command_example);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Destroyed env {}", summary.env_name),
+        Tone::Strong,
+        profile.color,
+    )];
+
+    push_card(
+        &mut lines,
+        "Removed",
+        vec![
+            KeyValueRow::plain("Root", summary.root.clone()),
+            KeyValueRow::plain("Snapshots", summary.snapshots_removed.to_string()),
+            KeyValueRow::new(
+                "OCM service",
+                if summary.service_uninstalled {
+                    "removed"
+                } else {
+                    "none"
+                },
+                if summary.service_uninstalled {
+                    Tone::Warning
+                } else {
+                    Tone::Muted
+                },
+            ),
+        ],
+        profile.color,
+    );
+
+    push_card(
+        &mut lines,
+        "Next",
+        vec![
+            KeyValueRow::accent("List envs", format!("{command_example} env list")),
+            KeyValueRow::accent(
+                "Start again",
+                format!("{command_example} start {}", summary.env_name),
+            ),
+        ],
+        profile.color,
+    );
+
+    lines
+}
+
+fn env_destroyed_raw(summary: &EnvDestroySummary, command_example: &str) -> Vec<String> {
     let mut lines = vec![format!("Destroyed env {}", summary.env_name)];
     lines.push(format!("  root: {}", summary.root));
     if summary.snapshots_removed > 0 {
@@ -58,6 +205,7 @@ pub fn env_destroyed(summary: &EnvDestroySummary) -> Vec<String> {
     if summary.service_uninstalled {
         lines.push(format!("  service removed: {}", summary.service_label));
     }
+    lines.push(format!("  list: {command_example} env list"));
     lines
 }
 
@@ -507,9 +655,10 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{
-        RenderProfile, env_doctor, env_list, env_resolved, env_show, env_snapshot_list,
-        env_snapshot_prune_preview, env_snapshot_show, env_status,
+        RenderProfile, env_destroy_preview, env_destroyed, env_doctor, env_list, env_resolved,
+        env_show, env_snapshot_list, env_snapshot_prune_preview, env_snapshot_show, env_status,
     };
+    use crate::cli::env::{EnvDestroyStepSummary, EnvDestroySummary};
     use crate::env::{
         EnvDoctorSummary, EnvSnapshotSummary, EnvStatusSummary, EnvSummary, ExecutionSummary,
     };
@@ -793,6 +942,56 @@ mod tests {
         assert_eq!(lines.last().unwrap(), "Re-run with --yes to remove them.");
     }
 
+    #[test]
+    fn env_destroy_preview_pretty_uses_cards() {
+        let lines = env_destroy_preview(
+            &sample_destroy_summary(false),
+            RenderProfile::pretty(false),
+            "ocm",
+        );
+
+        assert_eq!(lines[0], "Destroy env demo");
+        assert!(lines.iter().any(|line| line.contains("Summary")));
+        assert!(lines.iter().any(|line| line.contains("Plan")));
+        assert!(lines.iter().any(|line| line.contains("Apply")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm env destroy demo --yes"))
+        );
+    }
+
+    #[test]
+    fn env_destroy_preview_pretty_shows_blockers() {
+        let lines = env_destroy_preview(
+            &sample_destroy_summary(true),
+            RenderProfile::pretty(false),
+            "ocm",
+        );
+
+        assert!(lines.iter().any(|line| line.contains("Blocked")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("machine-wide OpenClaw service is using this env"))
+        );
+    }
+
+    #[test]
+    fn env_destroyed_pretty_uses_cards() {
+        let mut summary = sample_destroy_summary(false);
+        summary.snapshots_removed = 2;
+        summary.service_uninstalled = true;
+        summary.removed = true;
+
+        let lines = env_destroyed(&summary, RenderProfile::pretty(false), "ocm");
+        assert_eq!(lines[0], "Destroyed env demo");
+        assert!(lines.iter().any(|line| line.contains("Removed")));
+        assert!(lines.iter().any(|line| line.contains("Next")));
+        assert!(lines.iter().any(|line| line.contains("ocm env list")));
+        assert!(lines.iter().any(|line| line.contains("ocm start demo")));
+    }
+
     fn sample_snapshot(env_name: &str, label: &str) -> EnvSnapshotSummary {
         EnvSnapshotSummary {
             id: "snap-001".to_string(),
@@ -805,6 +1004,54 @@ mod tests {
             default_launcher: Some("stable".to_string()),
             protected: true,
             created_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn sample_destroy_summary(blocked: bool) -> EnvDestroySummary {
+        EnvDestroySummary {
+            env_name: "demo".to_string(),
+            root: "/tmp/demo".to_string(),
+            marker_path: "/tmp/demo/.ocm-env.json".to_string(),
+            marker_present: true,
+            protected: false,
+            apply: false,
+            force: false,
+            snapshot_count: 2,
+            service_installed: true,
+            service_loaded: true,
+            service_running: false,
+            service_label: "ai.openclaw.gateway.ocm.demo".to_string(),
+            global_openclaw_env_name: if blocked {
+                Some("demo".to_string())
+            } else {
+                Some("other".to_string())
+            },
+            global_openclaw_blocks_destroy: blocked,
+            blockers: if blocked {
+                vec![
+                    "the machine-wide OpenClaw service is using this env; move or remove that service first"
+                        .to_string(),
+                ]
+            } else {
+                Vec::new()
+            },
+            steps: vec![
+                EnvDestroyStepSummary {
+                    kind: "snapshots".to_string(),
+                    description: "remove 2 env snapshot(s)".to_string(),
+                },
+                EnvDestroyStepSummary {
+                    kind: "service".to_string(),
+                    description: "remove OCM service ai.openclaw.gateway.ocm.demo".to_string(),
+                },
+                EnvDestroyStepSummary {
+                    kind: "env".to_string(),
+                    description: "remove env root and metadata".to_string(),
+                },
+            ],
+            snapshots_removed: 0,
+            service_uninstalled: false,
+            removed: false,
         }
     }
 }
