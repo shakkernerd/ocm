@@ -31,17 +31,39 @@ impl Cli {
 
     pub(super) fn handle_release_show(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
-        let Some(version) = args.first() else {
-            return Err("release version is required".to_string());
-        };
-        Self::assert_no_extra_args(&args[1..])?;
+        let (args, version_flag) = Self::consume_option(args, "--version")?;
+        let version_flag = Self::require_option_value(version_flag, "--version")?;
+        let (args, channel) = Self::consume_option(args, "--channel")?;
+        let channel = Self::require_option_value(channel, "--channel")?;
+        if args.len() > 1 {
+            Self::assert_no_extra_args(&args[1..])?;
+        }
+        if args.first().is_some() && (version_flag.is_some() || channel.is_some()) {
+            return Err("release show accepts either a version argument, --version, or --channel".to_string());
+        }
+        if version_flag.is_some() && channel.is_some() {
+            return Err("release show accepts only one of --version or --channel".to_string());
+        }
+
+        let version = version_flag.or_else(|| args.first().cloned());
+        if version.is_none() && channel.is_none() {
+            return Err("release show requires a version or --channel".to_string());
+        }
 
         let release = self
             .runtime_service()
-            .official_openclaw_release_catalog(Some(version), None)?
+            .official_openclaw_release_catalog(version.as_deref(), channel.as_deref())?
             .into_iter()
             .next()
-            .ok_or_else(|| format!("OpenClaw release version \"{version}\" was not found"))?;
+            .ok_or_else(|| {
+                if let Some(version) = version.as_deref() {
+                    format!("OpenClaw release version \"{version}\" was not found")
+                } else if let Some(channel) = channel.as_deref() {
+                    format!("OpenClaw release channel \"{channel}\" was not found")
+                } else {
+                    "OpenClaw release was not found".to_string()
+                }
+            })?;
         if json_flag {
             self.print_json(&release)?;
             return Ok(0);

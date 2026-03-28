@@ -328,6 +328,7 @@ pub fn release_help(cmd: &str) -> String {
             format!("{cmd} release list --channel stable"),
             format!("{cmd} release install --channel stable"),
             format!("{cmd} release show 2026.3.24"),
+            format!("{cmd} release show --channel stable"),
         ],
         vec![
             format!("{cmd} help release install"),
@@ -847,10 +848,23 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "show" => render_leaf(
             "Show a published OpenClaw release",
-            "Print metadata for one exact published OpenClaw release.",
-            vec![format!("{cmd} release show <version> [--json]")],
-            &[("--json", "Print the release metadata as JSON")],
-            vec![format!("{cmd} release show 2026.3.24")],
+            "Print metadata for one published OpenClaw release selected by version or channel.",
+            vec![format!(
+                "{cmd} release show (<version> | --version <version> | --channel <channel>) [--json]"
+            )],
+            &[
+                ("--version <version>", "Show one exact published version"),
+                (
+                    "--channel <channel>",
+                    "Show the published release currently tagged for one channel",
+                ),
+                ("--json", "Print the release metadata as JSON"),
+            ],
+            vec![
+                format!("{cmd} release show 2026.3.24"),
+                format!("{cmd} release show --version 2026.3.24"),
+                format!("{cmd} release show --channel stable"),
+            ],
             &[],
         ),
         _ => return None,

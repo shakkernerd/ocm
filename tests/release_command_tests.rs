@@ -145,6 +145,18 @@ fn release_list_can_filter_by_channel_and_release_show_prints_one_version() {
             .contains("tarballUrl: https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz")
     );
 
+    let channel_show_server =
+        TestHttpServer::serve_bytes("/openclaw-show-channel", "application/json", &packument_body());
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        channel_show_server.url(),
+    );
+    let channel_show = run_ocm(&cwd, &env, &["release", "show", "--channel", "stable"]);
+    assert!(channel_show.status.success(), "{}", stderr(&channel_show));
+    let channel_show_stdout = stdout(&channel_show);
+    assert!(channel_show_stdout.contains("version: 2026.3.24"));
+    assert!(channel_show_stdout.contains("channel: stable"));
+
     let latest_server =
         TestHttpServer::serve_bytes("/openclaw-latest", "application/json", &packument_body());
     env.insert(
@@ -160,6 +172,18 @@ fn release_list_can_filter_by_channel_and_release_show_prints_one_version() {
     let latest_stdout = stdout(&latest);
     assert!(latest_stdout.contains("\"version\": \"2026.3.24\""));
     assert!(!latest_stdout.contains("2026.3.24-beta.2"));
+
+    let latest_show_server =
+        TestHttpServer::serve_bytes("/openclaw-show-latest", "application/json", &packument_body());
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        latest_show_server.url(),
+    );
+    let latest_show = run_ocm(&cwd, &env, &["release", "show", "--channel", "latest", "--json"]);
+    assert!(latest_show.status.success(), "{}", stderr(&latest_show));
+    let latest_show_stdout = stdout(&latest_show);
+    assert!(latest_show_stdout.contains("\"version\": \"2026.3.24\""));
+    assert!(!latest_show_stdout.contains("2026.3.24-beta.2"));
 }
 
 #[test]
