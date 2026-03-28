@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
+use crate::support::{ocm_env, run_ocm, stderr, stdout, TestDir};
 
 #[test]
 fn top_level_help_is_clean_and_points_to_topics() {
@@ -159,11 +159,8 @@ fn env_run_help_is_available_through_help_keyword_and_flag() {
     assert!(output.contains("ocm -- status"));
     assert!(output.contains("ocm @demo -- status"));
     assert!(output.contains("`--` is required before OpenClaw arguments."));
-    assert!(
-        output.contains(
-            "If an environment is active, you can also use the root-level `--` shortcut."
-        )
-    );
+    assert!(output
+        .contains("If an environment is active, you can also use the root-level `--` shortcut."));
     assert!(
         output.contains("For one-shot explicit env runs, use the root-level `@<env>` shortcut.")
     );
@@ -274,6 +271,28 @@ fn runtime_and_service_leaf_help_are_command_specific() {
     let output = stdout(&service);
     assert!(output.contains("Discover OpenClaw services"));
     assert!(output.contains("ocm service discover [--raw] [--json]"));
+}
+
+#[test]
+fn release_and_runtime_show_help_mentions_raw_mode() {
+    let root = TestDir::new("help-release-runtime-show");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let release_show = run_ocm(&cwd, &env, &["help", "release", "show"]);
+    assert!(release_show.status.success(), "{}", stderr(&release_show));
+    let output = stdout(&release_show);
+    assert!(output.contains(
+        "ocm release show (<version> | --version <version> | --channel <channel>) [--raw] [--json]"
+    ));
+    assert!(output.contains("TTY output uses grouped cards by default."));
+
+    let runtime_show = run_ocm(&cwd, &env, &["help", "runtime", "show"]);
+    assert!(runtime_show.status.success(), "{}", stderr(&runtime_show));
+    let output = stdout(&runtime_show);
+    assert!(output.contains("ocm runtime show <name> [--raw] [--json]"));
+    assert!(output.contains("TTY output uses grouped cards by default."));
 }
 
 #[test]

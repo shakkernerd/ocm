@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 
-use crate::infra::terminal::{Cell, Tone, paint, render_table, terminal_width};
+use crate::infra::terminal::{
+    paint, render_key_value_card, render_table, terminal_width, Cell, KeyValueRow, Tone,
+};
 use crate::runtime::OpenClawReleaseCatalogEntry;
 
-use super::{RenderProfile, format_key_value_lines, format_rfc3339};
+use super::{format_key_value_lines, format_rfc3339, RenderProfile};
 
 pub fn release_list(
     releases: &[OpenClawReleaseCatalogEntry],
@@ -119,7 +121,81 @@ fn optional_cell(value: Option<&str>) -> Cell {
     value.map(Cell::plain).unwrap_or_else(|| Cell::muted("—"))
 }
 
-pub fn release_show(release: &OpenClawReleaseCatalogEntry) -> Result<Vec<String>, String> {
+pub fn release_show(
+    release: &OpenClawReleaseCatalogEntry,
+    profile: RenderProfile,
+) -> Result<Vec<String>, String> {
+    if !profile.pretty {
+        return release_show_raw(release);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Release {}", release.release.version),
+        Tone::Strong,
+        profile.color,
+    )];
+
+    push_card(
+        &mut lines,
+        "Published release",
+        vec![
+            KeyValueRow::accent("Version", release.release.version.clone()),
+            optional_value_row("Channel", release.release.channel.clone()),
+            optional_value_row(
+                "Published",
+                release
+                    .release
+                    .published_at
+                    .map(format_rfc3339)
+                    .transpose()?,
+            ),
+        ],
+        profile.color,
+    );
+
+    let installed_runtimes = if release.installed_runtime_names.is_empty() {
+        "none".to_string()
+    } else {
+        release.installed_runtime_names.join(", ")
+    };
+    let canonical_runtime_name = release
+        .release
+        .channel
+        .clone()
+        .unwrap_or_else(|| release.release.version.clone());
+    push_card(
+        &mut lines,
+        "Local runtime mapping",
+        vec![
+            KeyValueRow::accent("Install name", canonical_runtime_name),
+            KeyValueRow::new(
+                "Installed",
+                installed_runtimes,
+                if release.installed_runtime_names.is_empty() {
+                    Tone::Muted
+                } else {
+                    Tone::Success
+                },
+            ),
+        ],
+        profile.color,
+    );
+
+    push_card(
+        &mut lines,
+        "Package",
+        vec![
+            KeyValueRow::accent("Tarball", release.release.tarball_url.clone()),
+            optional_value_row("Shasum", release.release.shasum.clone()),
+            optional_value_row("Integrity", release.release.integrity.clone()),
+        ],
+        profile.color,
+    );
+
+    Ok(lines)
+}
+
+fn release_show_raw(release: &OpenClawReleaseCatalogEntry) -> Result<Vec<String>, String> {
     let mut lines = BTreeMap::new();
     lines.insert("version".to_string(), release.release.version.clone());
     if let Some(channel) = release.release.channel.as_deref() {
@@ -149,11 +225,28 @@ pub fn release_show(release: &OpenClawReleaseCatalogEntry) -> Result<Vec<String>
     Ok(format_key_value_lines(lines))
 }
 
+fn push_card(lines: &mut Vec<String>, title: &str, rows: Vec<KeyValueRow>, color: bool) {
+    if rows.is_empty() {
+        return;
+    }
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.extend(render_key_value_card(title, &rows, color));
+}
+
+fn optional_value_row(label: &str, value: Option<String>) -> KeyValueRow {
+    match value {
+        Some(value) => KeyValueRow::plain(label, value),
+        None => KeyValueRow::muted(label, "—"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use time::OffsetDateTime;
 
-    use super::{RenderProfile, release_list_with_width};
+    use super::{release_list_with_width, release_show, RenderProfile};
     use crate::runtime::{OpenClawRelease, OpenClawReleaseCatalogEntry};
 
     #[test]
@@ -171,6 +264,31 @@ mod tests {
             lines.last().unwrap(),
             "Use release show <version>, --raw, or --json for tarball details."
         );
+    }
+
+    #[test]
+    fn release_show_pretty_uses_cards() {
+        let lines = release_show(&sample_catalog_entry(), RenderProfile::pretty(false)).unwrap();
+
+        assert_eq!(lines[0], "Release 2026.3.24");
+        assert!(lines.iter().any(|line| line.contains("Published release")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Local runtime mapping")));
+        assert!(lines.iter().any(|line| line.contains("Install name")));
+        assert!(lines.iter().any(|line| line.contains("stable")));
+        assert!(lines.iter().any(|line| line.contains("Package")));
+    }
+
+    #[test]
+    fn release_show_raw_keeps_key_value_lines() {
+        let lines = release_show(&sample_catalog_entry(), RenderProfile::raw()).unwrap();
+
+        assert!(lines.iter().any(|line| line == "version: 2026.3.24"));
+        assert!(lines.iter().any(|line| line == "channel: stable"));
+        assert!(lines.iter().any(|line| line.starts_with("tarballUrl: ")));
+        assert!(lines.iter().any(|line| line == "installedRuntimes: stable"));
+        assert!(!lines.iter().any(|line| line.contains('┌')));
     }
 
     fn sample_release() -> OpenClawRelease {

@@ -4,7 +4,7 @@ use crate::runtime::{
     RuntimeService, UpdateRuntimeFromReleaseOptions,
 };
 
-use super::{Cli, render};
+use super::{render, Cli};
 
 impl Cli {
     pub(super) fn handle_runtime_add(&self, args: Vec<String>) -> Result<i32, String> {
@@ -46,7 +46,7 @@ impl Cli {
     }
 
     pub(super) fn handle_runtime_show(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "runtime show")?;
         let Some(name) = args.first() else {
             return Err("runtime name is required".to_string());
         };
@@ -58,7 +58,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::runtime::runtime_show(&meta)?);
+        self.stdout_lines(render::runtime::runtime_show(&meta, profile)?);
         Ok(0)
     }
 

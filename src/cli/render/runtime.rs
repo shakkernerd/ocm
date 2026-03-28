@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 
-use crate::infra::terminal::{Cell, Tone, paint, render_table, terminal_width};
+use crate::infra::terminal::{
+    paint, render_key_value_card, render_table, terminal_width, Cell, KeyValueRow, Tone,
+};
 use crate::runtime::{
-    RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeUpdateBatchSummary,
-    RuntimeVerifySummary,
+    RuntimeBinarySummary, RuntimeMeta, RuntimeRelease, RuntimeReleaseSelectorKind,
+    RuntimeSourceKind, RuntimeUpdateBatchSummary, RuntimeVerifySummary,
 };
 
-use super::{RenderProfile, format_key_value_lines, format_rfc3339};
+use super::{format_key_value_lines, format_rfc3339, RenderProfile};
 
 pub fn runtime_added(meta: &RuntimeMeta) -> Vec<String> {
     vec![
@@ -107,7 +109,81 @@ fn runtime_target(meta: &RuntimeMeta) -> String {
     }
 }
 
-pub fn runtime_show(meta: &RuntimeMeta) -> Result<Vec<String>, String> {
+pub fn runtime_show(meta: &RuntimeMeta, profile: RenderProfile) -> Result<Vec<String>, String> {
+    if !profile.pretty {
+        return runtime_show_raw(meta);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Runtime {}", meta.name),
+        Tone::Strong,
+        profile.color,
+    )];
+
+    let mut runtime_rows = vec![
+        KeyValueRow::accent("Name", meta.name.clone()),
+        KeyValueRow::new(
+            "Source",
+            source_label(&meta.source_kind),
+            source_tone(&meta.source_kind),
+        ),
+        KeyValueRow::accent("Binary", meta.binary_path.clone()),
+    ];
+    if let Some(description) = meta.description.as_deref() {
+        runtime_rows.push(KeyValueRow::plain("Description", description));
+    }
+    push_card(&mut lines, "Runtime", runtime_rows, profile.color);
+
+    let mut release_rows = Vec::new();
+    if let Some(release_version) = meta.release_version.as_deref() {
+        release_rows.push(KeyValueRow::accent("Version", release_version));
+    }
+    if let Some(release_channel) = meta.release_channel.as_deref() {
+        release_rows.push(KeyValueRow::plain("Channel", release_channel));
+    }
+    if let Some(selector_kind) = meta.release_selector_kind.as_ref() {
+        release_rows.push(KeyValueRow::plain(
+            "Tracks",
+            selector_label(selector_kind, meta.release_selector_value.as_deref()),
+        ));
+    }
+    if release_rows.is_empty() {
+        release_rows.push(KeyValueRow::muted("Release", "manual"));
+    }
+    push_card(&mut lines, "Release", release_rows, profile.color);
+
+    let mut source_rows = Vec::new();
+    if let Some(install_root) = meta.install_root.as_deref() {
+        source_rows.push(KeyValueRow::plain("Install root", install_root));
+    }
+    if let Some(source_path) = meta.source_path.as_deref() {
+        source_rows.push(KeyValueRow::plain("Source path", source_path));
+    }
+    if let Some(source_url) = meta.source_url.as_deref() {
+        source_rows.push(KeyValueRow::plain("Source URL", source_url));
+    }
+    if let Some(source_manifest_url) = meta.source_manifest_url.as_deref() {
+        source_rows.push(KeyValueRow::plain("Manifest URL", source_manifest_url));
+    }
+    if let Some(source_sha256) = meta.source_sha256.as_deref() {
+        source_rows.push(KeyValueRow::plain("SHA-256", source_sha256));
+    }
+    push_card(&mut lines, "Source details", source_rows, profile.color);
+
+    push_card(
+        &mut lines,
+        "Metadata",
+        vec![
+            KeyValueRow::muted("Created", format_rfc3339(meta.created_at)?),
+            KeyValueRow::muted("Updated", format_rfc3339(meta.updated_at)?),
+        ],
+        profile.color,
+    );
+
+    Ok(lines)
+}
+
+fn runtime_show_raw(meta: &RuntimeMeta) -> Result<Vec<String>, String> {
     let mut lines = BTreeMap::new();
     lines.insert("kind".to_string(), meta.kind.clone());
     lines.insert("name".to_string(), meta.name.clone());
@@ -158,6 +234,39 @@ pub fn runtime_show(meta: &RuntimeMeta) -> Result<Vec<String>, String> {
         lines.insert("installRoot".to_string(), install_root.to_string());
     }
     Ok(format_key_value_lines(lines))
+}
+
+fn push_card(lines: &mut Vec<String>, title: &str, rows: Vec<KeyValueRow>, color: bool) {
+    if rows.is_empty() {
+        return;
+    }
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.extend(render_key_value_card(title, &rows, color));
+}
+
+fn source_label(source_kind: &RuntimeSourceKind) -> &'static str {
+    match source_kind {
+        RuntimeSourceKind::Registered => "registered",
+        RuntimeSourceKind::Installed => "installed",
+    }
+}
+
+fn source_tone(source_kind: &RuntimeSourceKind) -> Tone {
+    match source_kind {
+        RuntimeSourceKind::Registered => Tone::Accent,
+        RuntimeSourceKind::Installed => Tone::Success,
+    }
+}
+
+fn selector_label(kind: &RuntimeReleaseSelectorKind, value: Option<&str>) -> String {
+    match (kind, value) {
+        (RuntimeReleaseSelectorKind::Version, Some(value)) => format!("version {value}"),
+        (RuntimeReleaseSelectorKind::Channel, Some(value)) => format!("channel {value}"),
+        (RuntimeReleaseSelectorKind::Version, None) => "version".to_string(),
+        (RuntimeReleaseSelectorKind::Channel, None) => "channel".to_string(),
+    }
 }
 
 pub fn runtime_which(summary: &RuntimeBinarySummary) -> Vec<String> {
@@ -308,8 +417,8 @@ pub fn runtime_verify(summary: &RuntimeVerifySummary) -> Vec<String> {
 mod tests {
     use time::OffsetDateTime;
 
-    use super::{RenderProfile, runtime_list_with_width};
-    use crate::runtime::{RuntimeMeta, RuntimeSourceKind};
+    use super::{runtime_list_with_width, runtime_show, RenderProfile};
+    use crate::runtime::{RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind};
 
     #[test]
     fn runtime_list_pretty_compacts_on_narrow_terminals() {
@@ -336,6 +445,32 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("/tmp/openclaw")));
     }
 
+    #[test]
+    fn runtime_show_pretty_uses_cards() {
+        let lines = runtime_show(&sample_runtime(), RenderProfile::pretty(false)).unwrap();
+
+        assert_eq!(lines[0], "Runtime stable");
+        assert!(lines.iter().any(|line| line.contains("Runtime")));
+        assert!(lines.iter().any(|line| line.contains("Release")));
+        assert!(lines.iter().any(|line| line.contains("Tracks")));
+        assert!(lines.iter().any(|line| line.contains("channel stable")));
+        assert!(lines.iter().any(|line| line.contains("Source details")));
+        assert!(lines.iter().any(|line| line.contains("Metadata")));
+    }
+
+    #[test]
+    fn runtime_show_raw_keeps_key_value_lines() {
+        let lines = runtime_show(&sample_runtime(), RenderProfile::raw()).unwrap();
+
+        assert!(lines.iter().any(|line| line == "kind: ocm-runtime"));
+        assert!(lines.iter().any(|line| line == "name: stable"));
+        assert!(lines.iter().any(|line| line == "sourceKind: installed"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "releaseSelectorKind: channel"));
+        assert!(!lines.iter().any(|line| line.contains('┌')));
+    }
+
     fn sample_runtime() -> RuntimeMeta {
         RuntimeMeta {
             kind: "ocm-runtime".to_string(),
@@ -348,9 +483,9 @@ mod tests {
             source_sha256: None,
             release_version: Some("2026.3.24".to_string()),
             release_channel: Some("stable".to_string()),
-            release_selector_kind: None,
-            release_selector_value: None,
-            install_root: None,
+            release_selector_kind: Some(RuntimeReleaseSelectorKind::Channel),
+            release_selector_value: Some("stable".to_string()),
+            install_root: Some("/tmp/ocm/runtimes/stable".to_string()),
             description: None,
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,

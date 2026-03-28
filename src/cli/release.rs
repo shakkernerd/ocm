@@ -30,7 +30,7 @@ impl Cli {
     }
 
     pub(super) fn handle_release_show(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "release show")?;
         let (args, version_flag) = Self::consume_option(args, "--version")?;
         let version_flag = Self::require_option_value(version_flag, "--version")?;
         let (args, channel) = Self::consume_option(args, "--channel")?;
@@ -69,7 +69,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::release::release_show(&release)?);
+        self.stdout_lines(render::release::release_show(&release, profile)?);
         Ok(0)
     }
 

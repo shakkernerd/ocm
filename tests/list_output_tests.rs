@@ -4,7 +4,7 @@ use std::fs;
 
 use serde_json::Value;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
+use crate::support::{ocm_env, run_ocm, stderr, stdout, write_executable_script, TestDir};
 
 #[test]
 fn env_list_accepts_raw_output_mode() {
@@ -200,6 +200,61 @@ fn env_and_service_detail_commands_accept_raw_output_mode() {
     assert!(stdout(&service_status).contains("managedState: absent"));
     assert!(stdout(&service_status).contains("openclawState: stopped"));
     assert!(!stdout(&service_status).contains("┌"));
+}
+
+#[test]
+fn release_and_runtime_show_accept_raw_output_mode() {
+    let root = TestDir::new("release-runtime-show-raw");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let binary_path = cwd.join("bin/openclaw");
+    write_executable_script(&binary_path, "#!/bin/sh\nexit 0\n");
+    let runtime = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/openclaw"],
+    );
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+
+    let runtime_show = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--raw"]);
+    assert!(runtime_show.status.success(), "{}", stderr(&runtime_show));
+    assert!(stdout(&runtime_show).contains("name: stable"));
+    assert!(!stdout(&runtime_show).contains("┌"));
+
+    let release_show = run_ocm(
+        &cwd,
+        &env,
+        &["release", "show", "--channel", "stable", "--raw"],
+    );
+    assert!(release_show.status.success(), "{}", stderr(&release_show));
+    assert!(stdout(&release_show).contains("channel: stable"));
+    assert!(!stdout(&release_show).contains("┌"));
+}
+
+#[test]
+fn release_and_runtime_show_reject_json_and_raw_together() {
+    let root = TestDir::new("release-runtime-show-json-raw");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let runtime_show = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "show", "stable", "--json", "--raw"],
+    );
+    assert_eq!(runtime_show.status.code(), Some(1));
+    assert!(stderr(&runtime_show).contains("runtime show accepts only one of --json or --raw"));
+
+    let release_show = run_ocm(
+        &cwd,
+        &env,
+        &["release", "show", "--channel", "stable", "--json", "--raw"],
+    );
+    assert_eq!(release_show.status.code(), Some(1));
+    assert!(stderr(&release_show).contains("release show accepts only one of --json or --raw"));
 }
 
 #[test]

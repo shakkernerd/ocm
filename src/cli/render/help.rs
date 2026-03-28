@@ -850,13 +850,17 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
             "Show a published OpenClaw release",
             "Print metadata for one published OpenClaw release selected by version or channel.",
             vec![format!(
-                "{cmd} release show (<version> | --version <version> | --channel <channel>) [--json]"
+                "{cmd} release show (<version> | --version <version> | --channel <channel>) [--raw] [--json]"
             )],
             &[
                 ("--version <version>", "Show one exact published version"),
                 (
                     "--channel <channel>",
                     "Show the published release currently tagged for one channel",
+                ),
+                (
+                    "--raw",
+                    "Force plain key/value output instead of TTY card rendering",
                 ),
                 ("--json", "Print the release metadata as JSON"),
             ],
@@ -865,7 +869,7 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} release show --version 2026.3.24"),
                 format!("{cmd} release show --channel stable"),
             ],
-            &[],
+            &["TTY output uses grouped cards by default. Piped output stays plain."],
         ),
         _ => return None,
     })
@@ -1179,10 +1183,16 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
         "show" => render_leaf(
             "Show a runtime",
             "Print one runtime record.",
-            vec![format!("{cmd} runtime show <name> [--json]")],
-            &[("--json", "Print the runtime record as JSON")],
+            vec![format!("{cmd} runtime show <name> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain key/value output instead of TTY card rendering",
+                ),
+                ("--json", "Print the runtime record as JSON"),
+            ],
             vec![format!("{cmd} runtime show stable")],
-            &[],
+            &["TTY output uses grouped cards by default. Piped output stays plain."],
         ),
         "verify" => render_leaf(
             "Verify runtimes",
