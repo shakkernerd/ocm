@@ -1448,7 +1448,11 @@ environment = {
 
     #[test]
     fn discover_adoption_state_is_explicit() {
-        let env = BTreeMap::new();
+        let mut env = BTreeMap::new();
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "launchd".to_string(),
+        );
         let (adoptable, reason) = discover_adoption_state(
             "openclaw-global",
             Some("demo"),
@@ -1467,6 +1471,27 @@ environment = {
         assert_eq!(
             reason.as_deref(),
             Some("foreign OpenClaw services are discoverable but not adoptable yet")
+        );
+    }
+
+    #[test]
+    fn discover_adoption_state_is_backend_aware() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "systemd-user".to_string(),
+        );
+
+        let (adoptable, reason) = discover_adoption_state(
+            "openclaw-global",
+            Some("demo"),
+            Some("/tmp/openclaw.json"),
+            &env,
+        );
+        assert!(!adoptable);
+        assert_eq!(
+            reason.as_deref(),
+            Some("moving existing OpenClaw services into OCM is not supported on this backend yet")
         );
     }
 
