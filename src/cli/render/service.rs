@@ -33,6 +33,24 @@ fn global_relation(summary: &ServiceSummary) -> &'static str {
     }
 }
 
+fn openclaw_service_relation(state: &str) -> String {
+    match state {
+        "match" => "this env".to_string(),
+        "running-other" | "loaded-other" | "installed-other" => "another env".to_string(),
+        "absent" => "none".to_string(),
+        _ => state.to_string(),
+    }
+}
+
+fn openclaw_service_tone(state: &str) -> Tone {
+    match state {
+        "match" => Tone::Success,
+        "running-other" | "loaded-other" | "installed-other" => Tone::Warning,
+        "absent" => Tone::Muted,
+        _ => Tone::Plain,
+    }
+}
+
 fn state_tone(state: &str) -> Tone {
     match state {
         "running" | "match" => Tone::Success,
@@ -64,7 +82,7 @@ fn service_list_with_width(
     );
     let mut lines = vec![format!(
         "{}  {}  {}",
-        paint("Global service", Tone::Strong, profile.color),
+        paint("OpenClaw service", Tone::Strong, profile.color),
         paint(&summary.global_label, Tone::Accent, profile.color),
         paint(global_state, state_tone(global_state), profile.color)
     )];
@@ -123,9 +141,9 @@ fn service_list_with_width(
                     state_tone(managed_state),
                 ),
                 Cell::new(
-                    global_state,
+                    openclaw_service_relation(global_state),
                     crate::infra::terminal::Align::Left,
-                    state_tone(global_state),
+                    openclaw_service_tone(global_state),
                 ),
             ];
             if show_notes {
@@ -142,9 +160,9 @@ fn service_list_with_width(
         .collect::<Vec<_>>();
     lines.extend(render_table(
         if show_notes {
-            &["Env", "Binding", "Port", "Managed", "Global", "Notes"]
+            &["Env", "Binding", "Port", "OCM", "OpenClaw", "Notes"]
         } else {
-            &["Env", "Binding", "Port", "Managed", "Global"]
+            &["Env", "Binding", "Port", "OCM", "OpenClaw"]
         },
         &rows,
         profile.color,
@@ -230,10 +248,15 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
         &mut lines,
         "Status",
         vec![
-            KeyValueRow::plain("Kind", summary.service_kind.clone()),
+            KeyValueRow::plain("Type", summary.service_kind.clone()),
             KeyValueRow::accent("Port", summary.gateway_port.to_string()),
-            KeyValueRow::new("Managed", managed_state, state_tone(managed_state)),
-            KeyValueRow::new("Global", global_state, state_tone(global_state)),
+            bool_row("Managed by OCM", summary.installed),
+            KeyValueRow::new("OCM service", managed_state, state_tone(managed_state)),
+            KeyValueRow::new(
+                "OpenClaw service",
+                openclaw_service_relation(global_state),
+                openclaw_service_tone(global_state),
+            ),
             optional_value_row(
                 "Binding",
                 summary
@@ -248,7 +271,7 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
 
     push_card(
         &mut lines,
-        "Managed service",
+        "OCM service",
         vec![
             KeyValueRow::plain("Label", summary.managed_label.clone()),
             KeyValueRow::plain("Plist", summary.managed_plist_path.clone()),
@@ -272,14 +295,26 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
 
     push_card(
         &mut lines,
-        "Global service",
+        "OpenClaw service",
         vec![
             KeyValueRow::plain("Label", summary.global_label.clone()),
-            bool_row("Matches env", summary.global_matches_env),
+            KeyValueRow::new(
+                "This env",
+                if summary.global_matches_env {
+                    "yes"
+                } else {
+                    "no"
+                },
+                if summary.global_matches_env {
+                    Tone::Success
+                } else {
+                    Tone::Muted
+                },
+            ),
             optional_value_row("PID", summary.global_pid.map(|pid| pid.to_string())),
-            optional_value_row("Config path", summary.global_config_path.clone()),
+            optional_value_row("Current config", summary.global_config_path.clone()),
             bool_row("Backup available", summary.backup_available),
-            bool_row("Can adopt", summary.can_adopt_global),
+            bool_row("Move to OCM", summary.can_adopt_global),
             bool_row("Can restore", summary.can_restore_global),
             optional_value_row("Latest backup", summary.latest_backup_plist_path.clone()),
         ],
@@ -399,7 +434,7 @@ fn service_discover_with_width(
                 if adopt == "—" {
                     Cell::muted(adopt)
                 } else {
-                    Cell::warning(adopt)
+                    Cell::warning("yes")
                 },
             ];
             if show_command {
@@ -419,9 +454,17 @@ fn service_discover_with_width(
         .collect::<Vec<_>>();
     let mut lines = render_table(
         if show_command {
-            &["Label", "Kind", "State", "Port", "Env", "Adopt", "Command"]
+            &[
+                "Label",
+                "Managed by",
+                "State",
+                "Port",
+                "Env",
+                "Move",
+                "Command",
+            ]
         } else {
-            &["Label", "Kind", "State", "Port", "Env", "Adopt"]
+            &["Label", "Managed by", "State", "Port", "Env", "Move"]
         },
         &rows,
         profile.color,
@@ -439,8 +482,9 @@ fn service_discover_with_width(
 
 fn pretty_source_kind(source_kind: &str) -> String {
     match source_kind {
-        "openclaw-global" => "global".to_string(),
-        "ocm-managed" => "managed".to_string(),
+        "openclaw-global" => "OpenClaw".to_string(),
+        "ocm-managed" => "OCM".to_string(),
+        "foreign" => "Other".to_string(),
         other => other.to_string(),
     }
 }
@@ -662,9 +706,11 @@ mod tests {
             RenderProfile::pretty(false),
         );
 
-        assert!(lines[0].contains("Global service"));
+        assert!(lines[0].contains("OpenClaw service"));
         assert!(lines[2].starts_with('┌'));
         assert!(lines[3].contains("Env"));
+        assert!(lines[3].contains("OCM"));
+        assert!(lines[3].contains("OpenClaw"));
         assert!(lines[5].contains("demo"));
         assert!(lines[6].starts_with('└'));
     }
@@ -682,8 +728,9 @@ mod tests {
         let lines = service_status(&sample_service_summary(), RenderProfile::pretty(false));
 
         assert_eq!(lines[0], "Service demo");
-        assert!(lines.iter().any(|line| line.contains("Managed service")));
-        assert!(lines.iter().any(|line| line.contains("Global service")));
+        assert!(lines.iter().any(|line| line.contains("Managed by OCM")));
+        assert!(lines.iter().any(|line| line.contains("OCM service")));
+        assert!(lines.iter().any(|line| line.contains("OpenClaw service")));
     }
 
     #[test]
@@ -704,6 +751,8 @@ mod tests {
 
         assert!(lines[2].starts_with('┌'));
         assert!(lines[3].contains("Binding"));
+        assert!(lines[3].contains("OCM"));
+        assert!(lines[3].contains("OpenClaw"));
         assert!(!lines[3].contains("Notes"));
         assert_eq!(
             lines.last().unwrap(),
@@ -719,7 +768,7 @@ mod tests {
             Some(80),
         );
 
-        assert!(lines[1].contains("Kind"));
+        assert!(lines[1].contains("Managed by"));
         assert!(!lines[1].contains("Command"));
         assert_eq!(
             lines.last().unwrap(),
