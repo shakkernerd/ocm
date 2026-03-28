@@ -2,15 +2,17 @@
 
 `ocm` is OpenClaw Manager.
 
-It helps you run OpenClaw in separate environments, switch between them safely, install published releases, use local checkouts, and keep background services running without state collisions.
+It helps you run OpenClaw in separate environments, switch between them safely, use published releases or local checkouts, and keep background services running without state collisions.
 
-## What it does
+## Why use it
 
-- create isolated OpenClaw environments
-- install and manage published OpenClaw releases
-- run a local checkout or custom command through named launchers
-- start and inspect background OpenClaw services per environment
-- snapshot, export, import, clean up, and remove environments safely
+Use `ocm` when you want:
+
+- one clean OpenClaw environment per project, task, or instance
+- published OpenClaw releases installed locally and updated safely
+- local checkout or custom command workflows without manual shell setup
+- background services that are easy to inspect, start, stop, and remove
+- snapshots, export/import, and safer cleanup
 
 ## Install
 
@@ -45,7 +47,7 @@ Inside this repo, use the development wrapper:
 ./bin/ocm help
 ```
 
-## Quick start
+## Get started
 
 If you want the easiest first run:
 
@@ -53,7 +55,7 @@ If you want the easiest first run:
 ocm setup
 ```
 
-If you already know what you want, use the fast path:
+If you already know what you want:
 
 ```bash
 ocm start
@@ -61,21 +63,9 @@ ocm start
 
 That creates or reuses an environment, prepares OpenClaw, and can start onboarding for you.
 
-If you want the full guide, including scenarios and command details, see [docs/USAGE.md](docs/USAGE.md).
+## Common paths
 
-## The main ideas
-
-- `env`: one isolated OpenClaw environment
-- `release`: one published OpenClaw release you can inspect before installing
-- `runtime`: one local OpenClaw install managed by `ocm`
-- `launcher`: one named command for running OpenClaw, often used for local checkouts
-- `service`: one background OpenClaw process tied to one environment
-
-Most people should think about environments first. The rest exists to tell an environment what to run and whether it should stay running in the background.
-
-## Fastest paths
-
-### 1. Start with the latest stable release
+### Use the latest stable release
 
 ```bash
 ocm start
@@ -87,19 +77,19 @@ Or choose the environment name yourself:
 ocm start mybot
 ```
 
-### 2. Start with a beta release
+### Use the beta release
 
 ```bash
 ocm start mybot --channel beta
 ```
 
-### 3. Start with a specific published release
+### Pin to a specific published release
 
 ```bash
 ocm start mybot --version 2026.3.24
 ```
 
-### 4. Start from a local checkout
+### Use a local checkout
 
 ```bash
 ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw
@@ -107,7 +97,7 @@ ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw
 
 If you are already inside an OpenClaw checkout, `ocm setup` can detect that and suggest the local-command path automatically.
 
-## Running commands
+## Daily use
 
 Activate an environment in your shell:
 
@@ -115,7 +105,7 @@ Activate an environment in your shell:
 eval "$(ocm env use mybot)"
 ```
 
-Run OpenClaw inside the active environment:
+Run OpenClaw in the active environment:
 
 ```bash
 ocm -- status
@@ -129,7 +119,7 @@ ocm @mybot -- status
 ocm @mybot -- onboard
 ```
 
-Run any command inside an environment:
+Run any other command inside an environment:
 
 ```bash
 ocm env exec mybot -- sh -lc 'echo "$OPENCLAW_HOME"'
@@ -143,7 +133,7 @@ Install a persistent service for an environment:
 ocm service install mybot
 ```
 
-Inspect it:
+Check it:
 
 ```bash
 ocm service list
@@ -158,123 +148,35 @@ ocm service stop mybot
 ocm service uninstall mybot
 ```
 
-`service list` is the quick overview. `service status <env>` is the detailed view.
+## Published releases, runtimes, and local commands
 
-## Working with releases and runtimes
+`ocm` can work in three main ways:
 
-List published releases:
-
-```bash
-ocm release list
-ocm release list --channel stable
-ocm release show --channel stable
-```
-
-Install one published release as a local runtime:
-
-```bash
-ocm release install --channel stable
-ocm release install --version 2026.3.24
-```
-
-Inspect local runtimes:
-
-```bash
-ocm runtime list
-ocm runtime show stable
-ocm runtime verify stable
-```
-
-Update a tracked runtime:
-
-```bash
-ocm runtime update stable
-ocm runtime update --all
-```
-
-## Using local commands and launchers
-
-Register a launcher:
-
-```bash
-ocm launcher add dev --command 'pnpm openclaw' --cwd /path/to/openclaw
-```
-
-Create an environment that uses it:
-
-```bash
-ocm env create hacking --launcher dev
-```
-
-Inspect launchers:
-
-```bash
-ocm launcher list
-ocm launcher show dev
-```
-
-## Environment lifecycle
-
-Clone an environment:
-
-```bash
-ocm env clone mybot mybot-copy
-```
-
-Create and restore snapshots:
-
-```bash
-ocm env snapshot create mybot --label before-upgrade
-ocm env snapshot list mybot
-ocm env snapshot restore mybot <snapshot>
-```
-
-Export and import environments:
-
-```bash
-ocm env export mybot
-ocm env import ./mybot.tar --name restored-mybot
-```
-
-Inspect and repair:
-
-```bash
-ocm env status mybot
-ocm env doctor mybot
-ocm env cleanup mybot --yes
-ocm env repair-marker mybot
-```
-
-Remove an environment:
-
-```bash
-ocm env remove mybot
-```
-
-Remove the environment, its OCM-managed service, and its snapshots:
-
-```bash
-ocm env destroy mybot
-ocm env destroy mybot --yes
-```
-
-## Output modes
-
-Default terminal output is meant for people.
-
-Use:
-
-- `--json` for structured output
-- `--raw` for plain script-friendly output
-- `--color auto|always|never` for explicit color control
+- `release`: browse published OpenClaw releases
+- `runtime`: use a local OpenClaw install managed by `ocm`
+- `launcher`: use a local checkout or custom command
 
 Examples:
 
 ```bash
-ocm service list --json
-ocm env status mybot --raw
-ocm --color always runtime list
+ocm release list
+ocm release install --channel stable
+ocm runtime list
+ocm runtime verify stable
+ocm launcher add dev --command 'pnpm openclaw' --cwd /path/to/openclaw
 ```
+
+## More than just setup
+
+`ocm` also supports:
+
+- environment status and health checks
+- snapshots
+- export and import
+- cleanup and marker repair
+- safe environment teardown with `env destroy`
+
+If you want the full guide, including scenarios and command details, see [docs/USAGE.md](docs/USAGE.md).
 
 ## Help
 
@@ -287,11 +189,12 @@ ocm help
 Then go deeper:
 
 ```bash
-ocm help start
 ocm help setup
+ocm help start
 ocm help env
 ocm help release
 ocm help runtime
+ocm help launcher
 ocm help service
 ```
 
@@ -302,39 +205,12 @@ Current support:
 - macOS
 - Linux
 
-Background service support:
+Background services:
 
-- macOS: `launchd`
-- Linux: `systemd --user`
+- macOS uses `launchd`
+- Linux uses `systemd --user`
 
-Not supported yet:
-
-- Windows service support
-
-## Safety
-
-`ocm` keeps safety checks around destructive actions:
-
-- protected environments are not removed unless forced
-- environment roots are marker-checked before destructive cleanup
-- prune operations preview first
-- service install chooses the next free port instead of colliding with an existing one
-
-## Typical workflow
-
-For most users:
-
-1. `ocm setup`
-2. let it create an environment
-3. finish OpenClaw onboarding
-4. use `ocm service install <env>` if that environment should stay running
-5. use `ocm @<env> -- status` and `ocm service status <env>` as your main checks
-
-For local development:
-
-1. `ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw`
-2. `ocm @hacking -- onboard`
-3. `ocm service install hacking` if you want it running in the background
+Windows service support is not implemented yet.
 
 ## License
 
