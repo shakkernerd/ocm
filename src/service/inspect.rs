@@ -8,6 +8,10 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use super::platform::{
+    OCM_GATEWAY_LABEL_PREFIX, global_service_definition_path, managed_service_definition_path,
+    service_definition_dir,
+};
 use crate::env::{
     EnvMeta, EnvironmentService, ExecutionBinding, resolve_execution_binding,
     resolve_runtime_run_dir,
@@ -16,11 +20,10 @@ use crate::infra::shell::build_openclaw_env;
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
 use crate::store::{
     derive_env_paths, display_path, get_environment, get_launcher, get_runtime_verified,
-    list_environments, resolve_ocm_home, resolve_user_home,
+    list_environments, resolve_ocm_home,
 };
 
 pub(crate) const GLOBAL_GATEWAY_LABEL: &str = "ai.openclaw.gateway";
-pub(crate) const OCM_GATEWAY_LABEL_PREFIX: &str = "ai.openclaw.gateway.ocm.";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -817,19 +820,19 @@ fn resolve_openclaw_probe_spec(
 }
 
 pub(crate) fn managed_service_label(name: &str) -> String {
-    format!("{OCM_GATEWAY_LABEL_PREFIX}{name}")
+    super::platform::managed_service_label(name)
 }
 
 pub(crate) fn managed_plist_path(name: &str, env: &BTreeMap<String, String>) -> PathBuf {
-    launch_agents_dir(env).join(format!("{}.plist", managed_service_label(name)))
+    managed_service_definition_path(name, env)
 }
 
 pub(crate) fn global_plist_path(env: &BTreeMap<String, String>) -> PathBuf {
-    launch_agents_dir(env).join(format!("{GLOBAL_GATEWAY_LABEL}.plist"))
+    global_service_definition_path(env)
 }
 
 pub(crate) fn launch_agents_dir(env: &BTreeMap<String, String>) -> PathBuf {
-    resolve_user_home(env).join("Library").join("LaunchAgents")
+    service_definition_dir(env)
 }
 
 pub(crate) fn inspect_job(label: &str, plist_path: &Path) -> LaunchdJobStatus {

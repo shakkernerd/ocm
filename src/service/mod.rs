@@ -1,5 +1,6 @@
 mod inspect;
 mod manage;
+mod platform;
 
 use std::collections::BTreeMap;
 use std::path::Path;
