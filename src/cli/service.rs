@@ -110,7 +110,10 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_installed(&summary));
+        self.stdout_lines(render::service::service_installed(
+            &summary,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 
@@ -172,7 +175,10 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_action(&summary));
+        self.stdout_lines(render::service::service_action(
+            &summary,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 
@@ -189,7 +195,10 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_action(&summary));
+        self.stdout_lines(render::service::service_action(
+            &summary,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 
@@ -206,7 +215,10 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_action(&summary));
+        self.stdout_lines(render::service::service_action(
+            &summary,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 
@@ -223,7 +235,10 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_action(&summary));
+        self.stdout_lines(render::service::service_action(
+            &summary,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 

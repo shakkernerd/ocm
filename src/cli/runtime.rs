@@ -28,7 +28,10 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::runtime::runtime_added(&meta));
+        self.stdout_lines(render::runtime::runtime_added(
+            &meta,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 
@@ -223,11 +226,13 @@ impl Cli {
 
                 self.stdout_lines(match action {
                     OfficialRuntimePrepareAction::Installed => {
-                        render::runtime::runtime_installed(&meta)
+                        render::runtime::runtime_installed(&meta, &self.command_example())
                     }
-                    OfficialRuntimePrepareAction::Reused => render::runtime::runtime_reused(&meta),
+                    OfficialRuntimePrepareAction::Reused => {
+                        render::runtime::runtime_reused(&meta, &self.command_example())
+                    }
                     OfficialRuntimePrepareAction::Updated => {
-                        render::runtime::runtime_updated(&meta)
+                        render::runtime::runtime_updated(&meta, &self.command_example())
                     }
                 });
                 return Ok(0);
@@ -246,7 +251,10 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::runtime::runtime_installed(&meta));
+        self.stdout_lines(render::runtime::runtime_installed(
+            &meta,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 
@@ -333,7 +341,10 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::runtime::runtime_updated(&meta));
+        self.stdout_lines(render::runtime::runtime_updated(
+            &meta,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 

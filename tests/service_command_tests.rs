@@ -868,14 +868,20 @@ fn service_lifecycle_commands_use_the_env_scoped_launch_agent_label() {
 
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert!(install.status.success(), "{}", stderr(&install));
+    assert!(stdout(&install).contains("start: ocm service start demo"));
+    assert!(stdout(&install).contains("status: ocm service status demo"));
     let stop = run_ocm(&cwd, &env, &["service", "stop", "demo"]);
     assert!(stop.status.success(), "{}", stderr(&stop));
+    assert!(stdout(&stop).contains("status: ocm service status demo"));
     let start = run_ocm(&cwd, &env, &["service", "start", "demo"]);
     assert!(start.status.success(), "{}", stderr(&start));
+    assert!(stdout(&start).contains("status: ocm service status demo"));
     let restart = run_ocm(&cwd, &env, &["service", "restart", "demo"]);
     assert!(restart.status.success(), "{}", stderr(&restart));
+    assert!(stdout(&restart).contains("status: ocm service status demo"));
     let uninstall = run_ocm(&cwd, &env, &["service", "uninstall", "demo"]);
     assert!(uninstall.status.success(), "{}", stderr(&uninstall));
+    assert!(stdout(&uninstall).contains("install: ocm service install demo"));
 
     let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
     assert!(launchctl_log.contains("bootstrap gui/"));

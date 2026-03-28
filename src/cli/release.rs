@@ -123,9 +123,15 @@ impl Cli {
         }
 
         self.stdout_lines(match action {
-            OfficialRuntimePrepareAction::Installed => render::runtime::runtime_installed(&meta),
-            OfficialRuntimePrepareAction::Reused => render::runtime::runtime_reused(&meta),
-            OfficialRuntimePrepareAction::Updated => render::runtime::runtime_updated(&meta),
+            OfficialRuntimePrepareAction::Installed => {
+                render::runtime::runtime_installed(&meta, &self.command_example())
+            }
+            OfficialRuntimePrepareAction::Reused => {
+                render::runtime::runtime_reused(&meta, &self.command_example())
+            }
+            OfficialRuntimePrepareAction::Updated => {
+                render::runtime::runtime_updated(&meta, &self.command_example())
+            }
         });
         Ok(0)
     }

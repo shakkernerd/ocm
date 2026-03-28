@@ -560,7 +560,7 @@ fn service_discover_raw(summary: &DiscoveredServiceList) -> Vec<String> {
     lines
 }
 
-pub fn service_installed(summary: &ServiceInstallSummary) -> Vec<String> {
+pub fn service_installed(summary: &ServiceInstallSummary, command_example: &str) -> Vec<String> {
     let mut lines = vec![
         format!("Installed service {}", summary.env_name),
         format!("  label: {}", summary.managed_label),
@@ -583,6 +583,14 @@ pub fn service_installed(summary: &ServiceInstallSummary) -> Vec<String> {
     if !summary.args.is_empty() {
         lines.push(format!("  args: {}", summary.args.join(" ")));
     }
+    lines.push(format!(
+        "  start: {command_example} service start {}",
+        summary.env_name
+    ));
+    lines.push(format!(
+        "  status: {command_example} service status {}",
+        summary.env_name
+    ));
     for warning in &summary.warnings {
         lines.push(format!("  warning: {warning}"));
     }
@@ -629,7 +637,7 @@ pub fn service_restored(summary: &ServiceRestoreSummary) -> Vec<String> {
     lines
 }
 
-pub fn service_action(summary: &ServiceActionSummary) -> Vec<String> {
+pub fn service_action(summary: &ServiceActionSummary, command_example: &str) -> Vec<String> {
     let title = match summary.action.as_str() {
         "start" => "Started",
         "stop" => "Stopped",
@@ -644,6 +652,16 @@ pub fn service_action(summary: &ServiceActionSummary) -> Vec<String> {
     ];
     if let Some(port) = summary.gateway_port {
         lines.push(format!("  port: {port}"));
+    }
+    match summary.action.as_str() {
+        "uninstall" => lines.push(format!(
+            "  install: {command_example} service install {}",
+            summary.env_name
+        )),
+        _ => lines.push(format!(
+            "  status: {command_example} service status {}",
+            summary.env_name
+        )),
     }
     for warning in &summary.warnings {
         lines.push(format!("  warning: {warning}"));

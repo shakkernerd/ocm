@@ -10,10 +10,11 @@ use crate::runtime::{
 
 use super::{format_key_value_lines, format_rfc3339, RenderProfile};
 
-pub fn runtime_added(meta: &RuntimeMeta) -> Vec<String> {
+pub fn runtime_added(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
     vec![
         format!("Added runtime {}", meta.name),
         format!("  binary path: {}", meta.binary_path),
+        format!("  use in env: {command_example} env create demo --runtime {}", meta.name),
     ]
 }
 
@@ -308,7 +309,7 @@ pub fn runtime_removed(name: &str) -> Vec<String> {
     vec![format!("Removed runtime {name}")]
 }
 
-pub fn runtime_installed(meta: &RuntimeMeta) -> Vec<String> {
+pub fn runtime_installed(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
     let mut lines = vec![
         format!("Installed runtime {}", meta.name),
         format!("  binary path: {}", meta.binary_path),
@@ -316,10 +317,14 @@ pub fn runtime_installed(meta: &RuntimeMeta) -> Vec<String> {
     if let Some(install_root) = meta.install_root.as_deref() {
         lines.push(format!("  install root: {install_root}"));
     }
+    lines.push(format!(
+        "  use in env: {command_example} env create demo --runtime {}",
+        meta.name
+    ));
     lines
 }
 
-pub fn runtime_reused(meta: &RuntimeMeta) -> Vec<String> {
+pub fn runtime_reused(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
     let mut lines = vec![
         format!("Using installed runtime {}", meta.name),
         format!("  binary path: {}", meta.binary_path),
@@ -327,6 +332,10 @@ pub fn runtime_reused(meta: &RuntimeMeta) -> Vec<String> {
     if let Some(install_root) = meta.install_root.as_deref() {
         lines.push(format!("  install root: {install_root}"));
     }
+    lines.push(format!(
+        "  use in env: {command_example} env create demo --runtime {}",
+        meta.name
+    ));
     lines
 }
 
@@ -379,7 +388,7 @@ pub fn runtime_update_batch(batch: &RuntimeUpdateBatchSummary) -> Vec<String> {
     lines
 }
 
-pub fn runtime_updated(meta: &RuntimeMeta) -> Vec<String> {
+pub fn runtime_updated(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
     let mut lines = vec![
         format!("Updated runtime {}", meta.name),
         format!("  binary path: {}", meta.binary_path),
@@ -387,6 +396,10 @@ pub fn runtime_updated(meta: &RuntimeMeta) -> Vec<String> {
     if let Some(install_root) = meta.install_root.as_deref() {
         lines.push(format!("  install root: {install_root}"));
     }
+    lines.push(format!(
+        "  use in env: {command_example} env create demo --runtime {}",
+        meta.name
+    ));
     lines
 }
 

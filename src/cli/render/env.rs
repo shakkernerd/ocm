@@ -64,6 +64,12 @@ pub fn env_created(
         "  activate: eval \"$({command_example} env use {})\"",
         summary.name
     ));
+    if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
+        lines.push(format!("  onboard: {command_example} @{} -- onboard", summary.name));
+        lines.push(format!("  run: {command_example} @{} -- status", summary.name));
+    } else {
+        lines.push("  next: bind a runtime or launcher before running OpenClaw".to_string());
+    }
     lines
 }
 
@@ -86,6 +92,9 @@ pub fn env_cloned(
         "  activate: eval \"$({command_example} env use {})\"",
         summary.name
     ));
+    if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
+        lines.push(format!("  run: {command_example} @{} -- status", summary.name));
+    }
     lines
 }
 
@@ -126,6 +135,9 @@ pub fn env_imported(summary: &EnvImportSummary, command_example: &str) -> Vec<St
         "  activate: eval \"$({command_example} env use {})\"",
         summary.name
     ));
+    if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
+        lines.push(format!("  run: {command_example} @{} -- status", summary.name));
+    }
     lines
 }
 

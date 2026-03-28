@@ -244,6 +244,7 @@ fn release_install_uses_the_published_openclaw_source() {
     let output = stdout(&install);
     assert!(output.contains("Installed runtime stable"));
     assert!(output.contains("install root:"));
+    assert!(output.contains("use in env: ocm env create demo --runtime stable"));
 }
 
 #[test]
@@ -305,6 +306,7 @@ fn release_install_reuses_a_matching_installed_runtime() {
     let second = run_ocm(&cwd, &env, &["release", "install", "--channel", "stable"]);
     assert!(second.status.success(), "{}", stderr(&second));
     assert!(stdout(&second).contains("Using installed runtime stable"));
+    assert!(stdout(&second).contains("use in env: ocm env create demo --runtime stable"));
 }
 
 #[test]
