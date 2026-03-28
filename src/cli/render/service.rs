@@ -232,7 +232,11 @@ fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
     lines
 }
 
-pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<String> {
+pub fn service_status(
+    summary: &ServiceSummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
     if !profile.pretty {
         return service_status_raw(summary);
     }
@@ -331,7 +335,109 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
         );
     }
 
+    let next_steps = service_status_next_steps(summary, command_example);
+    if !next_steps.is_empty() {
+        push_card(&mut lines, "Next", next_steps, profile.color);
+    }
+
     lines
+}
+
+fn service_status_next_steps(
+    summary: &ServiceSummary,
+    command_example: &str,
+) -> Vec<KeyValueRow> {
+    if summary.can_adopt_global && !summary.installed {
+        return vec![KeyValueRow::warning(
+            "Move to OCM",
+            format!("{command_example} service adopt-global {}", summary.env_name),
+        )];
+    }
+
+    if summary.can_restore_global && !summary.global_installed {
+        return vec![KeyValueRow::warning(
+            "Restore",
+            format!("{command_example} service restore-global {}", summary.env_name),
+        )];
+    }
+
+    if summary.binding_kind.is_none() {
+        return vec![KeyValueRow::accent(
+            "Start",
+            format!("{command_example} start {}", summary.env_name),
+        )];
+    }
+
+    if summary.binding_kind.as_deref() == Some("launcher") && summary.command.is_none() {
+        return vec![
+            KeyValueRow::accent("List launchers", format!("{command_example} launcher list")),
+            KeyValueRow::warning(
+                "Rebind",
+                format!(
+                    "{command_example} env set-launcher {} <launcher>",
+                    summary.env_name
+                ),
+            ),
+        ];
+    }
+
+    if summary.binding_kind.as_deref() == Some("runtime") && summary.issue.is_some() {
+        let mut rows = Vec::new();
+        if let Some(runtime_name) = summary.binding_name.as_deref() {
+            rows.push(KeyValueRow::accent(
+                "Check runtime",
+                format!("{command_example} runtime verify {runtime_name}"),
+            ));
+        }
+        if !rows.is_empty() {
+            return rows;
+        }
+    }
+
+    match daemon_state(summary.installed, summary.loaded, summary.running) {
+        "absent" => {
+            return vec![KeyValueRow::accent(
+                "Install",
+                format!("{command_example} service install {}", summary.env_name),
+            )];
+        }
+        "installed" => {
+            return vec![KeyValueRow::accent(
+                "Start",
+                format!("{command_example} service start {}", summary.env_name),
+            )];
+        }
+        "loaded" | "running" => match summary.openclaw_state.as_str() {
+            "auth-required" => {
+                return vec![
+                    KeyValueRow::warning(
+                        "Repair",
+                        format!("{command_example} @{} -- onboard", summary.env_name),
+                    ),
+                    KeyValueRow::accent(
+                        "Logs",
+                        format!("{command_example} service logs {} --tail 50", summary.env_name),
+                    ),
+                ];
+            }
+            "stopped" | "unreachable" | "responding-but-invalid" | "wrong-service" => {
+                return vec![
+                    KeyValueRow::warning(
+                        "Restart",
+                        format!("{command_example} service restart {}", summary.env_name),
+                    ),
+                    KeyValueRow::accent(
+                        "Logs",
+                        format!("{command_example} service logs {} --tail 50", summary.env_name),
+                    ),
+                ];
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+
+    Vec::new()
 }
 
 fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
@@ -774,7 +880,7 @@ mod tests {
 
     #[test]
     fn service_status_uses_relation_style_global_state() {
-        let lines = service_status(&sample_service_summary(), RenderProfile::raw());
+        let lines = service_status(&sample_service_summary(), RenderProfile::raw(), "ocm");
 
         assert!(lines.contains(&"globalState: loaded-other".to_string()));
         assert!(lines.contains(&"globalMatchesEnv: false".to_string()));
@@ -782,7 +888,7 @@ mod tests {
 
     #[test]
     fn service_status_pretty_uses_cards() {
-        let lines = service_status(&sample_service_summary(), RenderProfile::pretty(false));
+        let lines = service_status(&sample_service_summary(), RenderProfile::pretty(false), "ocm");
 
         assert_eq!(lines[0], "Service demo");
         assert!(lines.iter().any(|line| line.contains("OpenClaw")));
@@ -796,10 +902,41 @@ mod tests {
         summary.global_env_name = Some("demo".to_string());
         summary.global_matches_env = true;
 
-        let lines = service_status(&summary, RenderProfile::pretty(false));
+        let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
 
         assert!(lines.iter().any(|line| line.contains("OpenClaw service")));
         assert!(lines.iter().any(|line| line.contains("Env")));
+    }
+
+    #[test]
+    fn service_status_pretty_suggests_install_when_service_is_absent() {
+        let mut summary = sample_service_summary();
+        summary.installed = false;
+        summary.loaded = false;
+        summary.running = false;
+        summary.openclaw_state = "stopped".to_string();
+
+        let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
+
+        assert!(lines.iter().any(|line| line.contains("Next")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("ocm service install demo")));
+    }
+
+    #[test]
+    fn service_status_pretty_suggests_repair_for_auth_required() {
+        let mut summary = sample_service_summary();
+        summary.running = true;
+        summary.openclaw_state = "auth-required".to_string();
+        summary.openclaw_detail = Some("gateway token mismatch".to_string());
+
+        let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
+
+        assert!(lines.iter().any(|line| line.contains("ocm @demo -- onboard")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("ocm service logs demo --tail 50")));
     }
 
     #[test]

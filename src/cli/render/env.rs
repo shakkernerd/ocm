@@ -536,6 +536,7 @@ mod tests {
                 issue: None,
             },
             RenderProfile::pretty(false),
+            "ocm",
         );
 
         assert_eq!(lines[0], "Environment status demo");
@@ -544,6 +545,72 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("OCM service")));
         assert!(lines.iter().any(|line| line.contains("OpenClaw")));
         assert!(!lines.iter().any(|line| line.contains("OpenClaw service")));
+    }
+
+    #[test]
+    fn env_status_pretty_suggests_start_for_unbound_env() {
+        let lines = env_status(
+            &EnvStatusSummary {
+                env_name: "bare".to_string(),
+                root: "/tmp/bare".to_string(),
+                gateway_port: Some(18789),
+                gateway_port_source: Some("computed".to_string()),
+                default_runtime: None,
+                default_launcher: None,
+                resolved_kind: None,
+                resolved_name: None,
+                binary_path: None,
+                command: None,
+                run_dir: None,
+                runtime_source_kind: None,
+                runtime_release_version: None,
+                runtime_release_channel: None,
+                runtime_health: None,
+                managed_service_state: Some("absent".to_string()),
+                openclaw_state: Some("stopped".to_string()),
+                global_service_state: Some("absent".to_string()),
+                issue: Some("missing binding".to_string()),
+            },
+            RenderProfile::pretty(false),
+            "ocm",
+        );
+
+        assert!(lines.iter().any(|line| line.contains("Next")));
+        assert!(lines.iter().any(|line| line.contains("ocm start bare")));
+    }
+
+    #[test]
+    fn env_status_pretty_suggests_service_repair_for_unreachable_env() {
+        let lines = env_status(
+            &EnvStatusSummary {
+                env_name: "demo".to_string(),
+                root: "/tmp/demo".to_string(),
+                gateway_port: Some(18789),
+                gateway_port_source: Some("metadata".to_string()),
+                default_runtime: None,
+                default_launcher: Some("stable".to_string()),
+                resolved_kind: Some("launcher".to_string()),
+                resolved_name: Some("stable".to_string()),
+                binary_path: None,
+                command: Some("openclaw".to_string()),
+                run_dir: Some("/tmp/demo".to_string()),
+                runtime_source_kind: None,
+                runtime_release_version: None,
+                runtime_release_channel: None,
+                runtime_health: None,
+                managed_service_state: Some("loaded".to_string()),
+                openclaw_state: Some("unreachable".to_string()),
+                global_service_state: Some("absent".to_string()),
+                issue: None,
+            },
+            RenderProfile::pretty(false),
+            "ocm",
+        );
+
+        assert!(lines.iter().any(|line| line.contains("ocm service restart demo")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("ocm service logs demo --tail 50")));
     }
 
     #[test]
@@ -725,7 +792,11 @@ fn env_show_raw(summary: &EnvSummary) -> Result<Vec<String>, String> {
     Ok(format_key_value_lines(lines))
 }
 
-pub fn env_status(status: &EnvStatusSummary, profile: RenderProfile) -> Vec<String> {
+pub fn env_status(
+    status: &EnvStatusSummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
     if !profile.pretty {
         return env_status_raw(status);
     }
@@ -803,7 +874,129 @@ pub fn env_status(status: &EnvStatusSummary, profile: RenderProfile) -> Vec<Stri
         );
     }
 
+    let next_steps = env_status_next_steps(status, command_example);
+    if !next_steps.is_empty() {
+        push_card(&mut lines, "Next", next_steps, profile.color);
+    }
+
     lines
+}
+
+fn env_status_next_steps(status: &EnvStatusSummary, command_example: &str) -> Vec<KeyValueRow> {
+    if status.resolved_kind.is_none() {
+        return vec![KeyValueRow::accent(
+            "Start",
+            format!("{command_example} start {}", status.env_name),
+        )];
+    }
+
+    if status.resolved_kind.as_deref() == Some("runtime") {
+        if matches!(status.runtime_health.as_deref(), Some("missing" | "broken")) {
+            let mut rows = Vec::new();
+            if let Some(runtime_name) = status.resolved_name.as_deref() {
+                rows.push(KeyValueRow::accent(
+                    "Check runtime",
+                    format!("{command_example} runtime verify {runtime_name}"),
+                ));
+            }
+            if let Some(channel) = status.runtime_release_channel.as_deref() {
+                rows.push(KeyValueRow::warning(
+                    "Repair binding",
+                    format!(
+                        "{command_example} env set-runtime {} --channel {channel}",
+                        status.env_name
+                    ),
+                ));
+            } else if let Some(version) = status.runtime_release_version.as_deref() {
+                rows.push(KeyValueRow::warning(
+                    "Repair binding",
+                    format!(
+                        "{command_example} env set-runtime {} --version {version}",
+                        status.env_name
+                    ),
+                ));
+            }
+            if !rows.is_empty() {
+                return rows;
+            }
+        }
+    }
+
+    if status.resolved_kind.as_deref() == Some("launcher")
+        && status.command.is_none()
+        && status.issue.is_some()
+    {
+        return vec![
+            KeyValueRow::accent("List launchers", format!("{command_example} launcher list")),
+            KeyValueRow::warning(
+                "Rebind",
+                format!(
+                    "{command_example} env set-launcher {} <launcher>",
+                    status.env_name
+                ),
+            ),
+        ];
+    }
+
+    match status.managed_service_state.as_deref() {
+        Some("absent") | None => {
+            if status.openclaw_state.as_deref() == Some("healthy") {
+                return vec![KeyValueRow::warning(
+                    "Keep running",
+                    format!("{command_example} service install {}", status.env_name),
+                )];
+            }
+
+            if status.resolved_kind.is_some() {
+                return vec![
+                    KeyValueRow::accent(
+                        "Run now",
+                        format!("{command_example} @{} -- status", status.env_name),
+                    ),
+                    KeyValueRow::warning(
+                        "Keep running",
+                        format!("{command_example} service install {}", status.env_name),
+                    ),
+                ];
+            }
+        }
+        Some("installed") => {
+            return vec![KeyValueRow::accent(
+                "Start service",
+                format!("{command_example} service start {}", status.env_name),
+            )];
+        }
+        Some("loaded") | Some("running") => match status.openclaw_state.as_deref() {
+            Some("auth-required") => {
+                return vec![
+                    KeyValueRow::warning(
+                        "Repair",
+                        format!("{command_example} @{} -- onboard", status.env_name),
+                    ),
+                    KeyValueRow::accent(
+                        "Logs",
+                        format!("{command_example} service logs {} --tail 50", status.env_name),
+                    ),
+                ];
+            }
+            Some("stopped" | "unreachable" | "responding-but-invalid" | "wrong-service") => {
+                return vec![
+                    KeyValueRow::warning(
+                        "Restart",
+                        format!("{command_example} service restart {}", status.env_name),
+                    ),
+                    KeyValueRow::accent(
+                        "Logs",
+                        format!("{command_example} service logs {} --tail 50", status.env_name),
+                    ),
+                ];
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+
+    Vec::new()
 }
 
 fn env_status_raw(status: &EnvStatusSummary) -> Vec<String> {

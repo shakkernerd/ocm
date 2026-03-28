@@ -398,7 +398,11 @@ impl Cli {
             self.print_json(&status)?;
             return Ok(0);
         }
-        self.stdout_lines(render::env::env_status(&status, profile));
+        self.stdout_lines(render::env::env_status(
+            &status,
+            profile,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 

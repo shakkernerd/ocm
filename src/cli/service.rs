@@ -158,7 +158,11 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_status(&summary, profile));
+        self.stdout_lines(render::service::service_status(
+            &summary,
+            profile,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 
