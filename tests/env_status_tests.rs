@@ -45,6 +45,7 @@ fn env_status_reports_the_resolved_launcher() {
     assert!(output.contains("resolvedName: fallback"));
     assert!(output.contains("command: printf launcher"));
     assert!(output.contains("managedServiceState: absent"));
+    assert!(output.contains("openclawState: stopped"));
     assert!(output.contains("globalServiceState: absent"));
 }
 
@@ -100,6 +101,7 @@ fn env_status_reports_when_an_environment_has_no_binding() {
     assert!(output.contains("gatewayPort: 18789"));
     assert!(output.contains("gatewayPortSource: computed"));
     assert!(output.contains("managedServiceState: absent"));
+    assert!(output.contains("openclawState: stopped"));
     assert!(output.contains("globalServiceState: absent"));
     assert!(output.contains("issue: environment \"demo\" has no default runtime or launcher"));
 }
@@ -139,6 +141,7 @@ fn env_status_json_reports_runtime_health_and_binding_shape() {
     assert_eq!(value["runtimeHealth"], "ok");
     assert_eq!(value["runtimeSourceKind"], "registered");
     assert_eq!(value["managedServiceState"], "absent");
+    assert_eq!(value["openclawState"], "stopped");
     assert_eq!(value["globalServiceState"], "absent");
     assert!(value["issue"].is_null());
 }

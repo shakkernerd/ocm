@@ -198,6 +198,7 @@ fn env_and_service_detail_commands_accept_raw_output_mode() {
         stderr(&service_status)
     );
     assert!(stdout(&service_status).contains("managedState: absent"));
+    assert!(stdout(&service_status).contains("openclawState: stopped"));
     assert!(!stdout(&service_status).contains("┌"));
 }
 

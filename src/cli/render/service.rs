@@ -35,10 +35,12 @@ fn global_relation(summary: &ServiceSummary) -> &'static str {
 
 fn state_tone(state: &str) -> Tone {
     match state {
-        "running" | "match" => Tone::Success,
+        "running" | "match" | "healthy" => Tone::Success,
         "loaded" | "installed" | "loaded-other" | "installed-other" | "running-other" => {
             Tone::Warning
         }
+        "unreachable" => Tone::Danger,
+        "stopped" | "unknown" => Tone::Muted,
         "absent" => Tone::Muted,
         _ => Tone::Plain,
     }
@@ -114,6 +116,11 @@ fn service_list_with_width(
                     crate::infra::terminal::Align::Left,
                     state_tone(managed_state),
                 ),
+                Cell::new(
+                    service.openclaw_state.clone(),
+                    crate::infra::terminal::Align::Left,
+                    state_tone(&service.openclaw_state),
+                ),
             ];
             if show_notes {
                 row.push(if notes.is_empty() {
@@ -129,9 +136,9 @@ fn service_list_with_width(
         .collect::<Vec<_>>();
     let mut lines = render_table(
         if show_notes {
-            &["Env", "Binding", "Port", "OCM", "Notes"]
+            &["Env", "Binding", "Port", "Service", "OpenClaw", "Notes"]
         } else {
-            &["Env", "Binding", "Port", "OCM"]
+            &["Env", "Binding", "Port", "Service", "OpenClaw"]
         },
         &rows,
         profile.color,
@@ -198,6 +205,7 @@ fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
                 "managed={}",
                 daemon_state(service.installed, service.loaded, service.running)
             ),
+            format!("openclaw={}", service.openclaw_state),
         ];
         if let (Some(kind), Some(name)) = (
             service.binding_kind.as_deref(),
@@ -241,8 +249,12 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
         vec![
             KeyValueRow::plain("Type", summary.service_kind.clone()),
             KeyValueRow::accent("Port", summary.gateway_port.to_string()),
-            enabled_row("Managed by OCM", summary.installed),
-            KeyValueRow::new("OCM service", managed_state, state_tone(managed_state)),
+            KeyValueRow::new("Service", managed_state, state_tone(managed_state)),
+            KeyValueRow::new(
+                "OpenClaw",
+                summary.openclaw_state.clone(),
+                state_tone(&summary.openclaw_state),
+            ),
             optional_value_row(
                 "Binding",
                 summary
@@ -335,6 +347,7 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
             "managedState: {}",
             daemon_state(summary.installed, summary.loaded, summary.running)
         ),
+        format!("openclawState: {}", summary.openclaw_state),
         format!("globalState: {}", global_state),
         format!("globalMatchesEnv: {}", summary.global_matches_env),
         format!("backupAvailable: {}", summary.backup_available),
@@ -415,6 +428,11 @@ fn service_discover_with_width(
                     crate::infra::terminal::Align::Left,
                     state_tone(state),
                 ),
+                Cell::new(
+                    service.openclaw_state.clone(),
+                    crate::infra::terminal::Align::Left,
+                    state_tone(&service.openclaw_state),
+                ),
                 service
                     .gateway_port
                     .map(|port| Cell::right(port.to_string(), Tone::Accent))
@@ -450,14 +468,23 @@ fn service_discover_with_width(
             &[
                 "Label",
                 "Managed by",
-                "State",
+                "Service",
+                "OpenClaw",
                 "Port",
                 "Env",
                 "Move",
                 "Command",
             ]
         } else {
-            &["Label", "Managed by", "State", "Port", "Env", "Move"]
+            &[
+                "Label",
+                "Managed by",
+                "Service",
+                "OpenClaw",
+                "Port",
+                "Env",
+                "Move",
+            ]
         },
         &rows,
         profile.color,
@@ -491,6 +518,7 @@ fn service_discover_raw(summary: &DiscoveredServiceList) -> Vec<String> {
             service.source_kind,
             daemon_state(service.installed, service.loaded, service.running)
         ));
+        lines.push(format!("  openclawState: {}", service.openclaw_state));
         lines.push(format!("  plist: {}", service.plist_path));
         if let Some(config_path) = service.config_path.as_deref() {
             lines.push(format!("  config: {config_path}"));
@@ -637,14 +665,6 @@ fn optional_value_row(label: &str, value: Option<String>) -> KeyValueRow {
     }
 }
 
-fn enabled_row(label: &str, value: bool) -> KeyValueRow {
-    if value {
-        KeyValueRow::success(label, "yes")
-    } else {
-        KeyValueRow::muted(label, "no")
-    }
-}
-
 fn available_row(label: &str, value: bool) -> KeyValueRow {
     if value {
         KeyValueRow::accent(label, "yes")
@@ -696,6 +716,7 @@ mod tests {
                     args: Vec::new(),
                     run_dir: "/tmp/demo".to_string(),
                     gateway_port: 18789,
+                    openclaw_state: "healthy".to_string(),
                     installed: true,
                     loaded: true,
                     running: true,
@@ -719,7 +740,8 @@ mod tests {
 
         assert!(lines[0].starts_with('┌'));
         assert!(lines[1].contains("Env"));
-        assert!(lines[1].contains("OCM"));
+        assert!(lines[1].contains("Service"));
+        assert!(lines[1].contains("OpenClaw"));
         assert!(lines[3].contains("demo"));
         assert!(lines[4].starts_with('└'));
         assert_eq!(
@@ -741,7 +763,7 @@ mod tests {
         let lines = service_status(&sample_service_summary(), RenderProfile::pretty(false));
 
         assert_eq!(lines[0], "Service demo");
-        assert!(lines.iter().any(|line| line.contains("Managed by OCM")));
+        assert!(lines.iter().any(|line| line.contains("OpenClaw")));
         assert!(lines.iter().any(|line| line.contains("OCM service")));
         assert!(!lines.iter().any(|line| line.contains("OpenClaw service")));
     }
@@ -777,7 +799,8 @@ mod tests {
 
         assert!(lines[0].starts_with('┌'));
         assert!(lines[1].contains("Binding"));
-        assert!(lines[1].contains("OCM"));
+        assert!(lines[1].contains("Service"));
+        assert!(lines[1].contains("OpenClaw"));
         assert!(!lines[1].contains("Notes"));
         assert_eq!(
             lines[6],
@@ -832,6 +855,7 @@ mod tests {
             args: Vec::new(),
             run_dir: "/tmp/demo".to_string(),
             gateway_port: 18789,
+            openclaw_state: "stopped".to_string(),
             installed: true,
             loaded: true,
             running: false,
@@ -866,6 +890,7 @@ mod tests {
                 state_dir: Some("/tmp/demo/.openclaw".to_string()),
                 openclaw_home: Some("/tmp/demo".to_string()),
                 gateway_port: Some(18789),
+                openclaw_state: "stopped".to_string(),
                 program: Some("/bin/sh".to_string()),
                 program_arguments: vec![
                     "/bin/sh".to_string(),

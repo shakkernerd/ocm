@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -31,6 +33,7 @@ pub struct ServiceSummary {
     pub args: Vec<String>,
     pub run_dir: String,
     pub gateway_port: u32,
+    pub openclaw_state: String,
     pub installed: bool,
     pub loaded: bool,
     pub running: bool,
@@ -77,6 +80,7 @@ pub struct DiscoveredServiceSummary {
     pub state_dir: Option<String>,
     pub openclaw_home: Option<String>,
     pub gateway_port: Option<u32>,
+    pub openclaw_state: String,
     pub program: Option<String>,
     pub program_arguments: Vec<String>,
     pub working_directory: Option<String>,
@@ -116,6 +120,8 @@ pub(crate) struct LaunchdJobStatus {
     pub(crate) config_path: Option<String>,
     pub(crate) gateway_port: Option<u32>,
 }
+
+const GATEWAY_PROBE_TIMEOUT_MS: u64 = 120;
 
 pub fn list_services(
     env: &BTreeMap<String, String>,
@@ -244,6 +250,12 @@ pub fn discover_services(
             state_dir,
             openclaw_home,
             gateway_port,
+            openclaw_state: detect_openclaw_state(
+                gateway_port,
+                status.installed,
+                status.loaded,
+                status.running,
+            ),
             program,
             program_arguments,
             working_directory,
@@ -340,6 +352,12 @@ fn build_service_summary(
         args,
         run_dir,
         gateway_port: env_meta.gateway_port.unwrap_or_default(),
+        openclaw_state: detect_openclaw_state(
+            env_meta.gateway_port,
+            managed.installed,
+            managed.loaded,
+            managed.running,
+        ),
         installed: managed.installed,
         loaded: managed.loaded,
         running: managed.running,
@@ -359,6 +377,39 @@ fn build_service_summary(
         can_restore_global,
         issue,
     })
+}
+
+fn detect_openclaw_state(
+    gateway_port: Option<u32>,
+    installed: bool,
+    loaded: bool,
+    running: bool,
+) -> String {
+    if let Some(port) = gateway_port {
+        if gateway_port_reachable(port) {
+            return "healthy".to_string();
+        }
+    }
+
+    if running || loaded {
+        return "unreachable".to_string();
+    }
+    if installed || gateway_port.is_some() {
+        return "stopped".to_string();
+    }
+    "unknown".to_string()
+}
+
+fn gateway_port_reachable(port: u32) -> bool {
+    let Ok(port) = u16::try_from(port) else {
+        return false;
+    };
+    let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    TcpStream::connect_timeout(
+        &address.into(),
+        Duration::from_millis(GATEWAY_PROBE_TIMEOUT_MS),
+    )
+    .is_ok()
 }
 
 fn matched_env_name_in(envs: &[EnvMeta], config_path: Option<&str>) -> Option<String> {

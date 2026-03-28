@@ -426,12 +426,12 @@ fn doctor_state_tone(status: &str) -> Tone {
 
 fn state_tone(state: &str) -> Tone {
     match state {
-        "ok" | "running" | "match" => Tone::Success,
+        "ok" | "running" | "match" | "healthy" => Tone::Success,
         "loaded" | "installed" | "loaded-other" | "installed-other" | "running-other" => {
             Tone::Warning
         }
-        "broken" | "missing" => Tone::Danger,
-        "absent" => Tone::Muted,
+        "broken" | "missing" | "unreachable" => Tone::Danger,
+        "absent" | "stopped" | "unknown" => Tone::Muted,
         _ => Tone::Plain,
     }
 }
@@ -519,6 +519,7 @@ mod tests {
                 runtime_release_channel: None,
                 runtime_health: None,
                 managed_service_state: Some("running".to_string()),
+                openclaw_state: Some("healthy".to_string()),
                 global_service_state: Some("absent".to_string()),
                 issue: None,
             },
@@ -529,6 +530,7 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("Binding")));
         assert!(lines.iter().any(|line| line.contains("Gateway")));
         assert!(lines.iter().any(|line| line.contains("OCM service")));
+        assert!(lines.iter().any(|line| line.contains("OpenClaw")));
         assert!(!lines.iter().any(|line| line.contains("OpenClaw service")));
     }
 
@@ -774,6 +776,7 @@ pub fn env_status(status: &EnvStatusSummary, profile: RenderProfile) -> Vec<Stri
             optional_value_row("Port", status.gateway_port.map(|value| value.to_string())),
             optional_value_row("Port source", status.gateway_port_source.clone()),
             optional_state_row("OCM service", status.managed_service_state.clone()),
+            optional_state_row("OpenClaw", status.openclaw_state.clone()),
             KeyValueRow::plain("Root", status.root.clone()),
         ],
         profile.color,
@@ -837,6 +840,9 @@ fn env_status_raw(status: &EnvStatusSummary) -> Vec<String> {
     }
     if let Some(state) = status.managed_service_state.as_deref() {
         lines.push(format!("managedServiceState: {state}"));
+    }
+    if let Some(state) = status.openclaw_state.as_deref() {
+        lines.push(format!("openclawState: {state}"));
     }
     if let Some(state) = status.global_service_state.as_deref() {
         lines.push(format!("globalServiceState: {state}"));

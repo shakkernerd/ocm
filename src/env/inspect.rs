@@ -26,6 +26,7 @@ pub struct EnvStatusSummary {
     pub runtime_release_channel: Option<String>,
     pub runtime_health: Option<String>,
     pub managed_service_state: Option<String>,
+    pub openclaw_state: Option<String>,
     pub global_service_state: Option<String>,
     pub issue: Option<String>,
 }
@@ -51,12 +52,14 @@ impl<'a> EnvironmentService<'a> {
             runtime_release_channel: None,
             runtime_health: None,
             managed_service_state: None,
+            openclaw_state: None,
             global_service_state: None,
             issue: None,
         };
 
         if let Ok(service) = ServiceService::new(self.env, self.cwd).status(name) {
             summary.managed_service_state = Some(service_managed_state(&service));
+            summary.openclaw_state = Some(service.openclaw_state.clone());
             summary.global_service_state = Some(service_global_state(&service));
         }
 
