@@ -30,6 +30,60 @@ fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<S
     env.insert("PATH".to_string(), combined_path);
 }
 
+fn install_fake_systemd_tools(
+    root: &TestDir,
+    env: &mut std::collections::BTreeMap<String, String>,
+) {
+    let bin_dir = root.child("fake-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let log_path = root.child("systemctl.log");
+    let journal_log_path = root.child("journalctl.log");
+    let systemctl_script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"show\" ]; then\n  unit=\"$3\"\n  home=\"${{HOME:-$PWD}}\"\n  unit_path=\"$home/.config/systemd/user/$unit.service\"\n  if [ -f \"$unit_path\" ]; then\n    printf 'LoadState=loaded\\nUnitFileState=enabled\\nActiveState=active\\nSubState=running\\nMainPID=4242\\nFragmentPath=%s\\n' \"$unit_path\"\n    exit 0\n  fi\n  printf 'Unit %s could not be found\\n' \"$unit\" >&2\n  exit 1\nfi\nexit 0\n",
+        path_string(&log_path)
+    );
+    let journalctl_script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nprintf 'gateway ok\\n'\n",
+        path_string(&journal_log_path)
+    );
+    write_executable_script(&bin_dir.join("systemctl"), &systemctl_script);
+    write_executable_script(&bin_dir.join("journalctl"), &journalctl_script);
+
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let combined_path = if existing_path.is_empty() {
+        path_string(&bin_dir)
+    } else {
+        format!("{}:{existing_path}", path_string(&bin_dir))
+    };
+    env.insert("PATH".to_string(), combined_path);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "systemd-user".to_string(),
+    );
+}
+
+fn write_systemd_unit(
+    path: &Path,
+    description: &str,
+    exec_start: &str,
+    working_directory: Option<&str>,
+    env_vars: &[(&str, &str)],
+) {
+    let working_directory_section = working_directory
+        .map(|value| format!("WorkingDirectory={value}\n"))
+        .unwrap_or_default();
+    let environment_section = env_vars
+        .iter()
+        .map(|(key, value)| format!("Environment=\"{key}={value}\"\n"))
+        .collect::<String>();
+    write_text(
+        path,
+        &format!(
+            "[Unit]\nDescription={description}\n\n[Service]\nType=simple\n{working_directory_section}ExecStart={exec_start}\n{environment_section}Restart=always\n\n[Install]\nWantedBy=default.target\n"
+        ),
+    );
+}
+
 fn allocate_free_port() -> u16 {
     TcpListener::bind(("127.0.0.1", 0))
         .unwrap()
@@ -1374,4 +1428,154 @@ fn unknown_service_commands_use_service_specific_errors() {
     let output = run_ocm(&cwd, &env, &["service", "reload"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("unknown service command: reload"));
+}
+
+#[test]
+fn systemd_service_install_writes_unit_and_enables_it() {
+    let root = TestDir::new("service-install-systemd");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_systemd_tools(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "/bin/true"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let output = run_ocm(&cwd, &env, &["service", "install", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let unit_path = root.child("home/.config/systemd/user/ai.openclaw.gateway.ocm.demo.service");
+    assert_eq!(summary["managedPlistPath"], path_string(&unit_path));
+    assert!(unit_path.exists());
+    let unit = fs::read_to_string(&unit_path).unwrap();
+    assert!(unit.contains("ExecStart=/bin/sh -lc"));
+    assert!(unit.contains("/bin/true"));
+    assert!(unit.contains("Environment=\"OPENCLAW_GATEWAY_PORT=18789\""));
+
+    let systemctl_log = fs::read_to_string(root.child("systemctl.log")).unwrap();
+    assert!(systemctl_log.contains("--user daemon-reload"));
+    assert!(systemctl_log.contains("--user enable --now ai.openclaw.gateway.ocm.demo"));
+}
+
+#[test]
+fn systemd_service_status_and_discover_use_units() {
+    let root = TestDir::new("service-status-systemd");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_systemd_tools(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "/bin/true"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    write_systemd_unit(
+        &root.child("home/.config/systemd/user/ai.openclaw.gateway.ocm.demo.service"),
+        "demo",
+        "/bin/sh -lc \"/bin/true gateway run --port 18789\"",
+        Some(&path_string(&root.child("ocm-home/envs/demo"))),
+        &[
+            (
+                "OPENCLAW_CONFIG_PATH",
+                &path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json")),
+            ),
+            ("OPENCLAW_GATEWAY_PORT", "18789"),
+            (
+                "OPENCLAW_HOME",
+                &path_string(&root.child("ocm-home/envs/demo")),
+            ),
+        ],
+    );
+    write_systemd_unit(
+        &root.child("home/.config/systemd/user/ai.openclaw.gateway.service"),
+        "global",
+        "/usr/bin/node /tmp/openclaw gateway --port 18790",
+        Some("/tmp"),
+        &[
+            (
+                "OPENCLAW_CONFIG_PATH",
+                &path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json")),
+            ),
+            ("OPENCLAW_GATEWAY_PORT", "18790"),
+        ],
+    );
+
+    let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let summary: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    assert_eq!(summary["installed"], true);
+    assert_eq!(summary["loaded"], true);
+    assert_eq!(summary["running"], true);
+    assert_eq!(
+        summary["managedPlistPath"],
+        path_string(&root.child("home/.config/systemd/user/ai.openclaw.gateway.ocm.demo.service"))
+    );
+
+    let discover = run_ocm(&cwd, &env, &["service", "discover", "--json"]);
+    assert!(discover.status.success(), "{}", stderr(&discover));
+    let discovered: Value = serde_json::from_str(&stdout(&discover)).unwrap();
+    let services = discovered["services"].as_array().unwrap();
+    assert!(services.iter().any(|service| {
+        service["label"] == "ai.openclaw.gateway.ocm.demo" && service["sourceKind"] == "ocm-managed"
+    }));
+    assert!(services.iter().any(|service| {
+        service["label"] == "ai.openclaw.gateway" && service["sourceKind"] == "openclaw-global"
+    }));
+}
+
+#[test]
+fn systemd_service_logs_use_journalctl() {
+    let root = TestDir::new("service-logs-systemd");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_systemd_tools(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "/bin/true"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let output = run_ocm(&cwd, &env, &["service", "logs", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(
+        summary["path"],
+        "journalctl --user --unit ai.openclaw.gateway.ocm.demo"
+    );
+    assert_eq!(summary["content"], "gateway ok\n");
+
+    let journalctl_log = fs::read_to_string(root.child("journalctl.log")).unwrap();
+    assert!(journalctl_log.contains("--user --unit ai.openclaw.gateway.ocm.demo"));
 }

@@ -272,9 +272,9 @@ pub fn service_status(summary: &ServiceSummary, profile: RenderProfile) -> Vec<S
         "OCM service",
         vec![
             KeyValueRow::plain("Label", summary.managed_label.clone()),
-            KeyValueRow::plain("Plist", summary.managed_plist_path.clone()),
+            KeyValueRow::plain("Service file", summary.managed_plist_path.clone()),
             optional_value_row("PID", summary.pid.map(|pid| pid.to_string())),
-            optional_value_row("Launchd state", summary.state.clone()),
+            optional_value_row("Manager state", summary.state.clone()),
         ],
         profile.color,
     );
@@ -375,7 +375,7 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
         lines.push(format!("managedPid: {pid}"));
     }
     if let Some(state) = summary.state.as_deref() {
-        lines.push(format!("managedLaunchdState: {state}"));
+        lines.push(format!("managedStateDetail: {state}"));
     }
     if let Some(global_pid) = summary.global_pid {
         lines.push(format!("globalPid: {global_pid}"));
@@ -564,7 +564,7 @@ pub fn service_installed(summary: &ServiceInstallSummary) -> Vec<String> {
     let mut lines = vec![
         format!("Installed service {}", summary.env_name),
         format!("  label: {}", summary.managed_label),
-        format!("  plist: {}", summary.managed_plist_path),
+        format!("  service file: {}", summary.managed_plist_path),
         format!("  port: {}", summary.gateway_port),
         format!(
             "  binding: {}:{}",
@@ -597,10 +597,10 @@ pub fn service_adopted(summary: &ServiceAdoptionSummary) -> Vec<String> {
             format!("Adopted global service {}", summary.env_name)
         },
         format!("  global label: {}", summary.global_label),
-        format!("  global plist: {}", summary.global_plist_path),
-        format!("  backup plist: {}", summary.backup_plist_path),
+        format!("  global service file: {}", summary.global_plist_path),
+        format!("  backup service file: {}", summary.backup_plist_path),
         format!("  managed label: {}", summary.managed_label),
-        format!("  managed plist: {}", summary.managed_plist_path),
+        format!("  managed service file: {}", summary.managed_plist_path),
         format!("  port: {}", summary.gateway_port),
     ];
     for warning in &summary.warnings {
@@ -617,10 +617,10 @@ pub fn service_restored(summary: &ServiceRestoreSummary) -> Vec<String> {
             format!("Restored global service {}", summary.env_name)
         },
         format!("  global label: {}", summary.global_label),
-        format!("  global plist: {}", summary.global_plist_path),
-        format!("  backup plist: {}", summary.backup_plist_path),
+        format!("  global service file: {}", summary.global_plist_path),
+        format!("  backup service file: {}", summary.backup_plist_path),
         format!("  managed label: {}", summary.managed_label),
-        format!("  managed plist: {}", summary.managed_plist_path),
+        format!("  managed service file: {}", summary.managed_plist_path),
         format!("  port: {}", summary.gateway_port),
     ];
     for warning in &summary.warnings {
@@ -640,7 +640,7 @@ pub fn service_action(summary: &ServiceActionSummary) -> Vec<String> {
     let mut lines = vec![
         format!("{title} service {}", summary.env_name),
         format!("  label: {}", summary.managed_label),
-        format!("  plist: {}", summary.managed_plist_path),
+        format!("  service file: {}", summary.managed_plist_path),
     ];
     if let Some(port) = summary.gateway_port {
         lines.push(format!("  port: {port}"));

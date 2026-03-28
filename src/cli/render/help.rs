@@ -1073,14 +1073,14 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "adopt-global" => render_leaf(
             "Adopt the legacy global service",
-            "Move the legacy global OpenClaw LaunchAgent into the env-scoped OCM service model.",
+            "Move the legacy machine-wide OpenClaw service into the env-scoped OCM service model.",
             vec![format!(
                 "{cmd} service adopt-global <env> [--dry-run] [--json]"
             )],
             &[
                 (
                     "--dry-run",
-                    "Preview adoption without mutating files or launchd state",
+                    "Preview adoption without mutating files or service-manager state",
                 ),
                 ("--json", "Print the adoption summary as JSON"),
             ],
@@ -1096,7 +1096,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 (
                     "--dry-run",
-                    "Preview the restore without mutating files or launchd state",
+                    "Preview the restore without mutating files or service-manager state",
                 ),
                 ("--json", "Print the restore summary as JSON"),
             ],

@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use super::platform::{
-    OCM_GATEWAY_LABEL_PREFIX, global_service_definition_path, managed_service_definition_path,
-    service_definition_dir,
+    OCM_GATEWAY_LABEL_PREFIX, ServiceManagerKind, global_service_definition_path,
+    managed_service_definition_path, service_definition_dir, service_definition_extension,
+    service_manager_kind,
 };
 use crate::env::{
     EnvMeta, EnvironmentService, ExecutionBinding, resolve_execution_binding,
@@ -180,7 +181,7 @@ pub fn list_services(
     cwd: &Path,
 ) -> Result<ServiceSummaryList, String> {
     let envs = list_environments(env, cwd)?;
-    let global = inspect_job(GLOBAL_GATEWAY_LABEL, &global_plist_path(env));
+    let global = inspect_job(GLOBAL_GATEWAY_LABEL, &global_plist_path(env), env);
     let global_env_name = matched_env_name_in(&envs, global.config_path.as_deref());
     let mut services = Vec::with_capacity(envs.len());
     for meta in envs {
@@ -231,7 +232,7 @@ fn service_status_with_depth(
 ) -> Result<ServiceSummary, String> {
     let meta = get_environment(name, env, cwd)?;
     let envs = list_environments(env, cwd)?;
-    let global = inspect_job(GLOBAL_GATEWAY_LABEL, &global_plist_path(env));
+    let global = inspect_job(GLOBAL_GATEWAY_LABEL, &global_plist_path(env), env);
     let global_env_name = matched_env_name_in(&envs, global.config_path.as_deref());
     build_service_summary(meta, &global, global_env_name.as_deref(), env, cwd, depth)
 }
@@ -258,11 +259,13 @@ pub fn discover_services(
     for entry in fs::read_dir(&launch_agents_dir).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         let plist_path = entry.path();
-        if plist_path.extension().and_then(|value| value.to_str()) != Some("plist") {
+        if plist_path.extension().and_then(|value| value.to_str())
+            != Some(service_definition_extension(service_manager_kind(env)))
+        {
             continue;
         }
 
-        let label = read_launch_agent_label(&plist_path)?
+        let label = read_service_label(&plist_path, env)?
             .or_else(|| {
                 plist_path
                     .file_stem()
@@ -270,15 +273,15 @@ pub fn discover_services(
                     .map(|value| value.to_string())
             })
             .unwrap_or_else(|| display_path(&plist_path));
-        let config_path = read_launch_agent_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH")?;
-        let state_dir = read_launch_agent_environment_value(&plist_path, "OPENCLAW_STATE_DIR")?;
-        let openclaw_home = read_launch_agent_environment_value(&plist_path, "OPENCLAW_HOME")?;
-        let program_arguments = read_plist_array_values(&plist_path, "ProgramArguments")?;
-        let program = read_plist_string_value(&plist_path, "Program")?
-            .or_else(|| program_arguments.first().cloned());
-        let working_directory = read_plist_string_value(&plist_path, "WorkingDirectory")?;
+        let config_path = read_service_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH", env)?;
+        let state_dir = read_service_environment_value(&plist_path, "OPENCLAW_STATE_DIR", env)?;
+        let openclaw_home = read_service_environment_value(&plist_path, "OPENCLAW_HOME", env)?;
+        let program_arguments = read_service_program_arguments(&plist_path, env)?;
+        let program =
+            read_service_program(&plist_path, env)?.or_else(|| program_arguments.first().cloned());
+        let working_directory = read_service_working_directory(&plist_path, env)?;
         let gateway_port =
-            read_launch_agent_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT")?
+            read_service_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT", env)?
                 .and_then(|value| value.parse::<u32>().ok());
 
         if !looks_like_openclaw_service(
@@ -293,7 +296,7 @@ pub fn discover_services(
             continue;
         }
 
-        let status = inspect_job(&label, &plist_path);
+        let status = inspect_job(&label, &plist_path, env);
         let config_path = config_path.or(status.config_path.clone());
         let gateway_port = gateway_port.or(status.gateway_port);
         let matched_env_name = config_path
@@ -305,6 +308,7 @@ pub fn discover_services(
             &source_kind,
             matched_env_name.as_deref(),
             config_path.as_deref(),
+            env,
         );
 
         services.push(DiscoveredServiceSummary {
@@ -357,7 +361,7 @@ fn build_service_summary(
     let env_meta = service.apply_effective_gateway_port(meta)?;
     let managed_label = managed_service_label(&env_meta.name);
     let managed_plist_path = managed_plist_path(&env_meta.name, process_env);
-    let managed = inspect_job(&managed_label, &managed_plist_path);
+    let managed = inspect_job(&managed_label, &managed_plist_path, process_env);
     let launch = resolve_service_launch(&env_meta, process_env, cwd);
     let probe_spec = resolve_openclaw_probe_spec(&env_meta, process_env, cwd).ok();
     let env_config_path = display_path(&derive_env_paths(Path::new(&env_meta.root)).config_path);
@@ -367,10 +371,18 @@ fn build_service_summary(
         .map(|value| value == env_config_path)
         .unwrap_or(false);
     let latest_backup_plist_path =
-        latest_matching_global_backup_path(&env_config_path, process_env, cwd)?;
+        if service_manager_kind(process_env) == ServiceManagerKind::Launchd {
+            latest_matching_global_backup_path(&env_config_path, process_env, cwd)?
+        } else {
+            None
+        };
     let backup_available = latest_backup_plist_path.is_some();
-    let can_adopt_global = global.installed && global_matches_env;
-    let can_restore_global = !global.installed && backup_available;
+    let can_adopt_global = service_manager_kind(process_env) == ServiceManagerKind::Launchd
+        && global.installed
+        && global_matches_env;
+    let can_restore_global = service_manager_kind(process_env) == ServiceManagerKind::Launchd
+        && !global.installed
+        && backup_available;
 
     let (binding_kind, binding_name, command, binary_path, args, run_dir, issue) = match launch {
         Ok(ServiceLaunchSpec::Launcher {
@@ -835,9 +847,13 @@ pub(crate) fn launch_agents_dir(env: &BTreeMap<String, String>) -> PathBuf {
     service_definition_dir(env)
 }
 
-pub(crate) fn inspect_job(label: &str, plist_path: &Path) -> LaunchdJobStatus {
+pub(crate) fn inspect_job(
+    label: &str,
+    service_path: &Path,
+    env: &BTreeMap<String, String>,
+) -> LaunchdJobStatus {
     let mut status = LaunchdJobStatus {
-        installed: plist_path.exists(),
+        installed: service_path.exists(),
         ..LaunchdJobStatus::default()
     };
 
@@ -847,31 +863,51 @@ pub(crate) fn inspect_job(label: &str, plist_path: &Path) -> LaunchdJobStatus {
         return status;
     }
 
-    status.config_path = read_launch_agent_environment_value(plist_path, "OPENCLAW_CONFIG_PATH")
+    status.config_path = read_service_environment_value(service_path, "OPENCLAW_CONFIG_PATH", env)
         .ok()
         .flatten();
-    status.gateway_port = read_launch_agent_environment_value(plist_path, "OPENCLAW_GATEWAY_PORT")
-        .ok()
-        .flatten()
-        .and_then(|value| value.parse::<u32>().ok());
+    status.gateway_port =
+        read_service_environment_value(service_path, "OPENCLAW_GATEWAY_PORT", env)
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<u32>().ok());
 
-    #[cfg(target_os = "macos")]
-    {
-        let Some(uid) = current_uid() else {
-            return status;
-        };
-        let target = format!("gui/{uid}/{label}");
-        let output = Command::new("launchctl").args(["print", &target]).output();
-        let Ok(output) = output else {
-            return status;
-        };
-        if !output.status.success() {
-            return status;
+    match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => {
+            let Some(uid) = current_uid() else {
+                return status;
+            };
+            let target = format!("gui/{uid}/{label}");
+            let output = Command::new("launchctl").args(["print", &target]).output();
+            let Ok(output) = output else {
+                return status;
+            };
+            if !output.status.success() {
+                return status;
+            }
+
+            let text = String::from_utf8_lossy(&output.stdout);
+            status.loaded = true;
+            parse_launchctl_print(&text, &mut status);
         }
+        ServiceManagerKind::SystemdUser => {
+            let output = Command::new("systemctl")
+                .args([
+                    "--user",
+                    "show",
+                    label,
+                    "--property=LoadState,UnitFileState,ActiveState,SubState,MainPID,FragmentPath",
+                ])
+                .output();
+            let Ok(output) = output else {
+                return status;
+            };
+            if !output.status.success() {
+                return status;
+            }
 
-        let text = String::from_utf8_lossy(&output.stdout);
-        status.loaded = true;
-        parse_launchctl_print(&text, &mut status);
+            parse_systemctl_show(&String::from_utf8_lossy(&output.stdout), &mut status);
+        }
     }
 
     status
@@ -911,6 +947,42 @@ fn parse_launchctl_print(raw: &str, status: &mut LaunchdJobStatus) {
     }
 }
 
+fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
+    let mut load_state = None;
+    let mut unit_file_state = None;
+    let mut active_state = None;
+    let mut sub_state = None;
+    for line in raw.lines() {
+        if let Some(value) = line.strip_prefix("LoadState=") {
+            load_state = Some(value.trim().to_string());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("UnitFileState=") {
+            unit_file_state = Some(value.trim().to_string());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("ActiveState=") {
+            active_state = Some(value.trim().to_string());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("SubState=") {
+            sub_state = Some(value.trim().to_string());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("MainPID=") {
+            let pid = value.trim().parse::<u32>().ok().filter(|pid| *pid > 0);
+            status.pid = pid;
+        }
+    }
+
+    status.loaded = load_state.as_deref() == Some("loaded")
+        || unit_file_state
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "not-found" | "masked"));
+    status.running = active_state.as_deref() == Some("active");
+    status.state = sub_state.or(active_state);
+}
+
 fn latest_matching_global_backup_path(
     env_config_path: &str,
     env: &BTreeMap<String, String>,
@@ -929,11 +1001,14 @@ fn latest_matching_global_backup_path(
             continue;
         };
         if !file_name.starts_with(&format!("{GLOBAL_GATEWAY_LABEL}."))
-            || !file_name.ends_with(".plist")
+            || !file_name.ends_with(&format!(
+                ".{}",
+                service_definition_extension(service_manager_kind(env))
+            ))
         {
             continue;
         }
-        if read_launch_agent_environment_value(&path, "OPENCLAW_CONFIG_PATH")?.as_deref()
+        if read_service_environment_value(&path, "OPENCLAW_CONFIG_PATH", env)?.as_deref()
             == Some(env_config_path)
         {
             matches.push(path);
@@ -982,7 +1057,22 @@ fn discover_adoption_state(
     source_kind: &str,
     matched_env_name: Option<&str>,
     config_path: Option<&str>,
+    env: &BTreeMap<String, String>,
 ) -> (bool, Option<String>) {
+    if service_manager_kind(env) != ServiceManagerKind::Launchd {
+        return match source_kind {
+            "openclaw-global" => (
+                false,
+                Some("moving existing OpenClaw services into OCM is not supported on this backend yet".to_string()),
+            ),
+            "ocm-managed" => (false, Some("already managed by ocm".to_string())),
+            _ => (
+                false,
+                Some("foreign OpenClaw services are discoverable but not adoptable yet".to_string()),
+            ),
+        };
+    }
+
     match source_kind {
         "ocm-managed" => (false, Some("already managed by ocm".to_string())),
         "openclaw-global" => {
@@ -1018,8 +1108,60 @@ fn discover_adoption_state(
     }
 }
 
-fn read_launch_agent_label(plist_path: &Path) -> Result<Option<String>, String> {
-    read_plist_string_value(plist_path, "Label")
+fn read_service_label(
+    service_path: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => read_plist_string_value(service_path, "Label"),
+        ServiceManagerKind::SystemdUser => Ok(service_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_string())),
+    }
+}
+
+pub(crate) fn read_service_environment_value(
+    service_path: &Path,
+    key: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => read_launch_agent_environment_value(service_path, key),
+        ServiceManagerKind::SystemdUser => read_systemd_environment_value(service_path, key),
+    }
+}
+
+fn read_service_program(
+    service_path: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => read_plist_string_value(service_path, "Program"),
+        ServiceManagerKind::SystemdUser => {
+            Ok(read_systemd_exec_start(service_path)?.first().cloned())
+        }
+    }
+}
+
+fn read_service_program_arguments(
+    service_path: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<String>, String> {
+    match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => read_plist_array_values(service_path, "ProgramArguments"),
+        ServiceManagerKind::SystemdUser => read_systemd_exec_start(service_path),
+    }
+}
+
+fn read_service_working_directory(
+    service_path: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => read_plist_string_value(service_path, "WorkingDirectory"),
+        ServiceManagerKind::SystemdUser => read_systemd_directive(service_path, "WorkingDirectory"),
+    }
 }
 
 fn read_launch_agent_environment_value(
@@ -1053,6 +1195,101 @@ fn read_plist_array_values(plist_path: &Path, key: &str) -> Result<Vec<String>, 
     let raw = fs::read_to_string(plist_path).map_err(|error| error.to_string())?;
     let key_marker = format!("<key>{key}</key>");
     read_plist_array_values_from_section(&raw, &key_marker)
+}
+
+fn read_systemd_environment_value(
+    service_path: &Path,
+    key: &str,
+) -> Result<Option<String>, String> {
+    for entry in read_systemd_directive_values(service_path, "Environment")? {
+        let unquoted = systemd_unquote(&entry);
+        if let Some((entry_key, value)) = unquoted.split_once('=') {
+            if entry_key == key {
+                return Ok(Some(value.to_string()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn read_systemd_exec_start(service_path: &Path) -> Result<Vec<String>, String> {
+    let Some(value) = read_systemd_directive(service_path, "ExecStart")? else {
+        return Ok(Vec::new());
+    };
+    parse_systemd_words(&value)
+}
+
+fn read_systemd_directive(service_path: &Path, key: &str) -> Result<Option<String>, String> {
+    Ok(read_systemd_directive_values(service_path, key)?
+        .into_iter()
+        .next())
+}
+
+fn read_systemd_directive_values(service_path: &Path, key: &str) -> Result<Vec<String>, String> {
+    let raw = fs::read_to_string(service_path).map_err(|error| error.to_string())?;
+    let mut values = Vec::new();
+    let mut in_service = false;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_service = trimmed.eq_ignore_ascii_case("[Service]");
+            continue;
+        }
+        if !in_service || trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';')
+        {
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix(&format!("{key}=")) {
+            values.push(value.trim().to_string());
+        }
+    }
+
+    Ok(values)
+}
+
+fn parse_systemd_words(raw: &str) -> Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut chars = raw.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            '\\' => {
+                let Some(next) = chars.next() else {
+                    return Err("invalid systemd escape sequence".to_string());
+                };
+                current.push(next);
+            }
+            ch if ch.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if in_quotes {
+        return Err("unterminated quoted systemd value".to_string());
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    Ok(words)
+}
+
+fn systemd_unquote(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+        trimmed[1..trimmed.len() - 1]
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn read_plist_string_value_from_section(
@@ -1115,8 +1352,10 @@ mod tests {
     use super::{
         LaunchdJobStatus, discover_adoption_state, discovered_source_kind,
         looks_like_openclaw_service, managed_service_label, parse_launchctl_print,
-        read_plist_array_values_from_section, string_mentions_openclaw,
+        parse_systemctl_show, parse_systemd_words, read_plist_array_values_from_section,
+        string_mentions_openclaw,
     };
+    use std::collections::BTreeMap;
 
     #[test]
     fn managed_service_labels_are_env_scoped() {
@@ -1209,8 +1448,13 @@ environment = {
 
     #[test]
     fn discover_adoption_state_is_explicit() {
-        let (adoptable, reason) =
-            discover_adoption_state("openclaw-global", Some("demo"), Some("/tmp/openclaw.json"));
+        let env = BTreeMap::new();
+        let (adoptable, reason) = discover_adoption_state(
+            "openclaw-global",
+            Some("demo"),
+            Some("/tmp/openclaw.json"),
+            &env,
+        );
         assert!(adoptable);
         assert_eq!(
             reason.as_deref(),
@@ -1218,11 +1462,39 @@ environment = {
         );
 
         let (adoptable, reason) =
-            discover_adoption_state("foreign", Some("demo"), Some("/tmp/openclaw.json"));
+            discover_adoption_state("foreign", Some("demo"), Some("/tmp/openclaw.json"), &env);
         assert!(!adoptable);
         assert_eq!(
             reason.as_deref(),
             Some("foreign OpenClaw services are discoverable but not adoptable yet")
+        );
+    }
+
+    #[test]
+    fn parse_systemctl_show_extracts_core_fields() {
+        let mut status = LaunchdJobStatus::default();
+        parse_systemctl_show(
+            "LoadState=loaded\nUnitFileState=enabled\nActiveState=active\nSubState=running\nMainPID=4242\n",
+            &mut status,
+        );
+
+        assert!(status.loaded);
+        assert!(status.running);
+        assert_eq!(status.pid, Some(4242));
+        assert_eq!(status.state.as_deref(), Some("running"));
+    }
+
+    #[test]
+    fn systemd_word_parser_round_trips_quoted_exec_start() {
+        let words =
+            parse_systemd_words("/bin/sh -lc \"openclaw gateway run --port 18789\"").unwrap();
+        assert_eq!(
+            words,
+            vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "openclaw gateway run --port 18789".to_string()
+            ]
         );
     }
 
