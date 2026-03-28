@@ -100,7 +100,10 @@ fn setup_can_prepare_a_local_command_launcher() {
     fs::create_dir_all(&project_dir).unwrap();
     let env = ocm_env(&root);
 
-    let input = format!("4\nhacking\npnpm openclaw\n{}\nn\nn\n", project_dir.display());
+    let input = format!(
+        "4\nhacking\npnpm openclaw\n{}\nn\nn\n",
+        project_dir.display()
+    );
     let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], &input);
     assert!(setup.status.success(), "{}", stderr(&setup));
     let output = stdout(&setup);

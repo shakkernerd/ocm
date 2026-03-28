@@ -2,6 +2,7 @@ use serde::Serialize;
 
 use super::Cli;
 use crate::env::{CreateEnvironmentOptions, EnvMeta};
+use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
 use crate::launcher::AddLauncherOptions;
 use crate::store::validate_name;
 
@@ -167,28 +168,30 @@ impl Cli {
 
         let created = existing.is_none();
         let mut meta = match existing {
-            None => self.environment_service().create(CreateEnvironmentOptions {
-                name: request.name.clone(),
-                root: request.root.clone(),
-                gateway_port: request.gateway_port,
-                default_runtime: match desired_binding.as_ref() {
-                    Some(StartBinding::Runtime(runtime_name)) => Some(runtime_name.clone()),
-                    _ => None,
-                },
-                default_launcher: match desired_binding.as_ref() {
-                    Some(StartBinding::Launcher(launcher_name)) => Some(launcher_name.clone()),
-                    _ => None,
-                },
-                protected: request.protect,
-            })?,
-            Some(existing) => self.apply_start_to_existing(
-                existing,
-                desired_binding.as_ref(),
-                request.protect,
-            )?,
+            None => self
+                .environment_service()
+                .create(CreateEnvironmentOptions {
+                    name: request.name.clone(),
+                    root: request.root.clone(),
+                    gateway_port: request.gateway_port,
+                    default_runtime: match desired_binding.as_ref() {
+                        Some(StartBinding::Runtime(runtime_name)) => Some(runtime_name.clone()),
+                        _ => None,
+                    },
+                    default_launcher: match desired_binding.as_ref() {
+                        Some(StartBinding::Launcher(launcher_name)) => Some(launcher_name.clone()),
+                        _ => None,
+                    },
+                    protected: request.protect,
+                })?,
+            Some(existing) => {
+                self.apply_start_to_existing(existing, desired_binding.as_ref(), request.protect)?
+            }
         };
 
-        meta = self.environment_service().apply_effective_gateway_port(meta)?;
+        meta = self
+            .environment_service()
+            .apply_effective_gateway_port(meta)?;
 
         let onboarding_planned = match request.onboarding_mode {
             StartOnboardingMode::Always => true,
@@ -214,8 +217,9 @@ impl Cli {
             service_started = true;
         }
 
-        let (effective_port, gateway_port_source) =
-            self.environment_service().resolve_effective_gateway_port(&meta)?;
+        let (effective_port, gateway_port_source) = self
+            .environment_service()
+            .resolve_effective_gateway_port(&meta)?;
         let summary = StartSummary {
             env_name: request.name.clone(),
             created,
@@ -235,7 +239,11 @@ impl Cli {
             ),
             run_command: format!("{} @{} -- status", self.command_example(), request.name),
             onboard_command: format!("{} @{} -- onboard", self.command_example(), request.name),
-            service_command: format!("{} service install {}", self.command_example(), request.name),
+            service_command: format!(
+                "{} service install {}",
+                self.command_example(),
+                request.name
+            ),
         };
 
         if json_flag {
@@ -244,13 +252,13 @@ impl Cli {
         }
 
         self.stdout_lines(self.start_summary_lines(&summary));
+        if onboarding_planned {
+            self.stdout_lines(self.onboarding_handoff_lines(&summary));
+        }
 
         if onboarding_planned {
-            let onboarding = self.handle_env_run(vec![
-                request.name,
-                "--".to_string(),
-                "onboard".to_string(),
-            ]);
+            let onboarding =
+                self.handle_env_run(vec![request.name, "--".to_string(), "onboard".to_string()]);
             return match onboarding {
                 Ok(0) => Ok(0),
                 Ok(code) => {
@@ -339,12 +347,8 @@ impl Cli {
         if version.is_some() || channel.is_some() {
             let runtime_name =
                 self.with_progress(format!("Preparing OpenClaw runtime for {env_name}"), || {
-                    self.environment_service().resolve_runtime_binding_request(
-                        None,
-                        version,
-                        channel,
-                        "start",
-                    )
+                    self.environment_service()
+                        .resolve_runtime_binding_request(None, version, channel, "start")
                 })?;
             return Ok(runtime_name.map(StartBinding::Runtime));
         }
@@ -402,6 +406,14 @@ impl Cli {
     }
 
     fn start_summary_lines(&self, summary: &StartSummary) -> Vec<String> {
+        if self.stdout_is_terminal() {
+            return self.start_summary_lines_pretty(summary);
+        }
+
+        self.start_summary_lines_raw(summary)
+    }
+
+    fn start_summary_lines_raw(&self, summary: &StartSummary) -> Vec<String> {
         let mut lines = vec![if summary.created {
             format!("Started env {}", summary.env_name)
         } else {
@@ -443,6 +455,87 @@ impl Cli {
         lines
     }
 
+    fn start_summary_lines_pretty(&self, summary: &StartSummary) -> Vec<String> {
+        let color = self.color_output_enabled_for(self.stdout_is_terminal(), self.color_mode());
+        let mut lines = vec![paint(
+            if summary.onboarding_planned {
+                if summary.created {
+                    "Environment ready"
+                } else {
+                    "Environment updated"
+                }
+            } else if summary.created {
+                "OpenClaw ready"
+            } else {
+                "OpenClaw updated"
+            },
+            Tone::Strong,
+            color,
+        )];
+        lines.push(String::new());
+
+        let mut overview = vec![
+            KeyValueRow::accent("Env", &summary.env_name),
+            KeyValueRow::plain("Root", &summary.root),
+            KeyValueRow::accent(
+                "Port",
+                format!("{} ({})", summary.gateway_port, summary.gateway_port_source),
+            ),
+        ];
+        if let Some(runtime) = summary.default_runtime.as_deref() {
+            overview.push(KeyValueRow::success("Runtime", runtime));
+        }
+        if let Some(launcher) = summary.default_launcher.as_deref() {
+            overview.push(KeyValueRow::success("Launcher", launcher));
+        }
+        overview.push(KeyValueRow::plain(
+            "Service",
+            if summary.service_requested {
+                if summary.service_started {
+                    "running".to_string()
+                } else {
+                    "requested".to_string()
+                }
+            } else {
+                "not installed".to_string()
+            },
+        ));
+        lines.extend(render_key_value_card("Environment", &overview, color));
+        lines.push(String::new());
+
+        if summary.onboarding_planned {
+            let mut up_next = vec![
+                KeyValueRow::accent("OpenClaw", "Onboarding starts below"),
+                KeyValueRow::warning("Retry", &summary.onboard_command),
+                KeyValueRow::accent("Status later", &summary.run_command),
+            ];
+            if !summary.service_requested {
+                up_next.push(KeyValueRow::muted("Keep running", &summary.service_command));
+            }
+            lines.extend(render_key_value_card("Up next", &up_next, color));
+        } else {
+            let mut next = vec![
+                KeyValueRow::accent("Activate", &summary.activate_command),
+                KeyValueRow::accent("Status", &summary.run_command),
+            ];
+            next.push(KeyValueRow::warning("Onboard", &summary.onboard_command));
+            if !summary.service_requested {
+                next.push(KeyValueRow::muted("Keep running", &summary.service_command));
+            }
+            lines.extend(render_key_value_card("Next", &next, color));
+        }
+        lines
+    }
+
+    fn onboarding_handoff_lines(&self, summary: &StartSummary) -> Vec<String> {
+        if !self.stdout_is_terminal() {
+            return Vec::new();
+        }
+
+        let color = self.color_output_enabled_for(self.stdout_is_terminal(), self.color_mode());
+        onboarding_handoff_lines_pretty(summary, color)
+    }
+
     fn print_onboarding_follow_up(
         &self,
         summary: &StartSummary,
@@ -477,5 +570,96 @@ impl Cli {
         } else {
             self.stderr_line(format!("  keep running: {}", summary.service_command));
         }
+    }
+}
+
+fn onboarding_handoff_lines_pretty(summary: &StartSummary, color: bool) -> Vec<String> {
+    vec![
+        String::new(),
+        paint("OpenClaw onboarding starts below.", Tone::Accent, color),
+        paint(
+            &format!("If you stop now, rerun: {}", summary.onboard_command),
+            Tone::Muted,
+            color,
+        ),
+        String::new(),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use super::{Cli, StartSummary, onboarding_handoff_lines_pretty};
+
+    fn sample_summary(onboarding_planned: bool) -> StartSummary {
+        StartSummary {
+            env_name: "demo".to_string(),
+            created: true,
+            root: "/tmp/demo".to_string(),
+            gateway_port: 18_789,
+            gateway_port_source: "metadata".to_string(),
+            default_runtime: Some("stable".to_string()),
+            default_launcher: None,
+            protected: false,
+            onboarding_planned,
+            service_requested: true,
+            service_started: true,
+            activate_command: "eval \"$(ocm env use demo)\"".to_string(),
+            run_command: "ocm @demo -- status".to_string(),
+            onboard_command: "ocm @demo -- onboard".to_string(),
+            service_command: "ocm service install demo".to_string(),
+        }
+    }
+
+    fn test_cli() -> Cli {
+        Cli {
+            env: BTreeMap::new(),
+            cwd: PathBuf::from("/tmp"),
+        }
+    }
+
+    #[test]
+    fn pretty_start_summary_for_onboarding_flow_uses_up_next_card() {
+        let lines = test_cli().start_summary_lines_pretty(&sample_summary(true));
+        assert_eq!(lines[0], "Environment ready");
+        assert!(lines.iter().any(|line| line.contains("Environment")));
+        assert!(lines.iter().any(|line| line.contains("Runtime")));
+        assert!(lines.iter().any(|line| line.contains("Up next")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Onboarding starts below"))
+        );
+        assert!(!lines.iter().any(|line| line.contains("Activate")));
+    }
+
+    #[test]
+    fn pretty_start_summary_without_onboarding_keeps_next_steps() {
+        let lines = test_cli().start_summary_lines_pretty(&sample_summary(false));
+        assert_eq!(lines[0], "OpenClaw ready");
+        assert!(lines.iter().any(|line| line.contains("Next")));
+        assert!(lines.iter().any(|line| line.contains("Activate")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm @demo -- status"))
+        );
+    }
+
+    #[test]
+    fn onboarding_handoff_mentions_retry_command() {
+        let lines = onboarding_handoff_lines_pretty(&sample_summary(true), false);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("OpenClaw onboarding starts below"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm @demo -- onboard"))
+        );
     }
 }

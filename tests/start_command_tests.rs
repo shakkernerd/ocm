@@ -9,8 +9,7 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout,
-    write_executable_script,
+    TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
 };
 
 fn append_tar_file(
@@ -132,7 +131,10 @@ fn start_can_create_a_local_command_launcher() {
     assert!(launcher.status.success(), "{}", stderr(&launcher));
     let launcher_json: Value = serde_json::from_str(&stdout(&launcher)).unwrap();
     assert_eq!(launcher_json["command"], "pnpm openclaw");
-    assert_eq!(launcher_json["cwd"], project_dir.to_string_lossy().to_string());
+    assert_eq!(
+        launcher_json["cwd"],
+        project_dir.to_string_lossy().to_string()
+    );
 
     let show = run_ocm(&cwd, &env, &["env", "show", "hacking", "--json"]);
     assert!(show.status.success(), "{}", stderr(&show));
@@ -195,7 +197,12 @@ fn start_reports_recovery_steps_when_onboarding_fails() {
     let start = run_ocm(
         &cwd,
         &env,
-        &["start", "demo", "--command", &path_string(&failing_openclaw)],
+        &[
+            "start",
+            "demo",
+            "--command",
+            &path_string(&failing_openclaw),
+        ],
     );
     assert_eq!(start.status.code(), Some(1));
     assert!(stdout(&start).contains("Started env demo"));

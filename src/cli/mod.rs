@@ -143,6 +143,10 @@ impl Cli {
         io::stdout().is_terminal()
     }
 
+    fn stdin_is_terminal(&self) -> bool {
+        io::stdin().is_terminal()
+    }
+
     fn stderr_is_terminal(&self) -> bool {
         io::stderr().is_terminal()
     }
