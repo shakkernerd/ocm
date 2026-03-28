@@ -19,14 +19,17 @@ fn top_level_help_is_clean_and_points_to_topics() {
         "Manage isolated OpenClaw environments, releases, runtimes, launchers, and services."
     ));
     assert!(output.contains("ocm [--color <mode>] <command> [args]"));
+    assert!(output.contains("Fast path: create or reuse an env and get it ready"));
     assert!(output.contains("--color <mode>"));
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
-    assert!(output.contains("release list --channel stable"));
-    assert!(output.contains("release install --channel stable"));
-    assert!(output.contains("env create demo --channel stable"));
+    assert!(output.contains("start"));
+    assert!(output.contains("ocm start"));
+    assert!(output.contains("ocm start mybot --channel beta"));
+    assert!(output.contains("ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw"));
+    assert!(output.contains("eval \"$(ocm env use default)\""));
     assert!(output.contains("ocm -- status"));
-    assert!(output.contains("ocm @demo -- status"));
+    assert!(output.contains("ocm help start"));
     assert!(output.contains("ocm help env"));
     assert!(output.contains("ocm help release"));
     assert!(output.contains("ocm help runtime install"));
@@ -47,7 +50,7 @@ fn help_uses_ocm_self_for_root_and_leaf_examples() {
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
     assert!(output.contains("./bin/ocm [--color <mode>] <command> [args]"));
-    assert!(output.contains("eval \"$(./bin/ocm env use demo)\""));
+    assert!(output.contains("eval \"$(./bin/ocm env use default)\""));
 
     let help = run_ocm(&cwd, &env, &["help", "env", "run"]);
     assert!(help.status.success(), "{}", stderr(&help));
@@ -56,6 +59,28 @@ fn help_uses_ocm_self_for_root_and_leaf_examples() {
         "./bin/ocm env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>"
     ));
     assert!(output.contains("./bin/ocm env run demo -- onboard"));
+}
+
+#[test]
+fn start_help_is_available_from_help_and_flag() {
+    let root = TestDir::new("help-start");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "start"]);
+    let via_flag = run_ocm(&cwd, &env, &["start", "--help"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(via_flag.status.success(), "{}", stderr(&via_flag));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&via_flag));
+    assert!(output.contains("Start an environment"));
+    assert!(output.contains("ocm start [name]"));
+    assert!(output.contains("--service"));
+    assert!(output.contains("--onboard | --no-onboard"));
+    assert!(output.contains("ocm start demo --channel stable"));
+    assert!(output.contains("ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"));
 }
 
 #[test]

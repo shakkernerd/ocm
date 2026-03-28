@@ -200,6 +200,14 @@ impl<'a> EnvironmentService<'a> {
         get_environment(name, self.env, self.cwd)
     }
 
+    pub fn find(&self, name: &str) -> Result<Option<EnvMeta>, String> {
+        match get_environment(name, self.env, self.cwd) {
+            Ok(meta) => Ok(Some(meta)),
+            Err(error) if error.contains("does not exist") => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn touch(&self, name: &str) -> Result<EnvMeta, String> {
         let mut meta = get_environment(name, self.env, self.cwd)?;
         meta.last_used_at = Some(now_utc());

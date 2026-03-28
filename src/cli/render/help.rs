@@ -99,6 +99,7 @@ pub fn root_help(cmd: &str) -> String {
         &mut lines,
         "Commands",
         format_entries(&[
+            ("start", "Fast path: create or reuse an env and get it ready"),
             (
                 "env",
                 "Environment lifecycle, binding, execution, snapshots, and repair",
@@ -119,19 +120,18 @@ pub fn root_help(cmd: &str) -> String {
         &mut lines,
         "Get started",
         format_examples(&[
-            format!("{cmd} release list --channel stable"),
-            format!("{cmd} release install --channel stable"),
-            format!("{cmd} env create demo --channel stable"),
-            format!("eval \"$({cmd} env use demo)\""),
+            format!("{cmd} start"),
+            format!("{cmd} start mybot --channel beta"),
+            format!("{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw"),
+            format!("eval \"$({cmd} env use default)\""),
             format!("{cmd} -- status"),
-            format!("{cmd} @demo -- status"),
-            format!("{cmd} env run demo -- status"),
         ]),
     );
     push_section(
         &mut lines,
         "More",
         format_examples(&[
+            format!("{cmd} help start"),
             format!("{cmd} help env"),
             format!("{cmd} help release"),
             format!("{cmd} help service"),
@@ -140,6 +140,51 @@ pub fn root_help(cmd: &str) -> String {
         ]),
     );
     finish(lines)
+}
+
+pub fn start_help(cmd: &str) -> String {
+    render_leaf(
+        "Start an environment",
+        "Fast path: create or reuse an environment, prepare the selected OpenClaw source, and optionally run onboarding.",
+        vec![format!(
+            "{cmd} start [name] [--runtime <name> | --launcher <name> | --version <version> | --channel <channel> | --command <command>] [--cwd <path>] [--root <path>] [--port <port>] [--protect] [--service] [--onboard | --no-onboard] [--json]"
+        )],
+        &[
+            ("[name]", "Environment name. Defaults to `default`."),
+            ("--runtime <name>", "Use one installed runtime by name"),
+            ("--launcher <name>", "Use one existing launcher by name"),
+            (
+                "--version <version>",
+                "Install or reuse one exact published OpenClaw release",
+            ),
+            (
+                "--channel <channel>",
+                "Install or reuse the published release currently tagged for one channel",
+            ),
+            (
+                "--command <command>",
+                "Create or reuse an env-local launcher from a local command",
+            ),
+            ("--cwd <path>", "Working directory for `--command`"),
+            ("--root <path>", "Custom root for a newly created environment"),
+            ("--port <port>", "Persist an explicit gateway port for a new environment"),
+            ("--protect", "Mark the environment as protected"),
+            ("--service", "Install and start a persistent env-scoped service"),
+            ("--onboard", "Run onboarding even when the env already exists"),
+            ("--no-onboard", "Skip onboarding output and print next steps instead"),
+            ("--json", "Print a machine-readable start summary"),
+        ],
+        vec![
+            format!("{cmd} start"),
+            format!("{cmd} start demo --channel stable"),
+            format!("{cmd} start demo --version 2026.3.24 --service"),
+            format!("{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"),
+        ],
+        &[
+            "If an environment already exists, start reuses it and only adjusts binding/protection when you asked for it.",
+            "`--json` requires `--no-onboard` because onboarding is interactive.",
+        ],
+    )
 }
 
 pub fn init_help(cmd: &str) -> String {
