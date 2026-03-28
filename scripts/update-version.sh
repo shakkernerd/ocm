@@ -42,21 +42,17 @@ fi
 
 export OCM_NEW_VERSION="$new_version"
 
-perl -0pi -e '
-  s{
-    (\[package\]\n(?:(?!^\[).*\n)*?version = ")
-    [^"]+
-    (")
-  }{$1.$ENV{OCM_NEW_VERSION}.$2}msex
-' Cargo.toml
+perl -0pi -e 's/^(version = ")[^"]+(")/$1.$ENV{OCM_NEW_VERSION}.$2/me' Cargo.toml
 
-perl -0pi -e '
-  s{
-    (\[\[package\]\]\nname = "ocm"\nversion = ")
-    [^"]+
-    (")
-  }{$1.$ENV{OCM_NEW_VERSION}.$2}msex
-' Cargo.lock
+perl -0pi -e 's/(\[\[package\]\]\nname = "ocm"\nversion = ")[^"]+(")/$1.$ENV{OCM_NEW_VERSION}.$2/se' Cargo.lock
+
+updated_toml_version="$(perl -ne 'print "$1\n" if /^version = "([^"]+)"$/' Cargo.toml | head -n1)"
+updated_lock_version="$(perl -0ne 'print "$1\n" if /\[\[package\]\]\nname = "ocm"\nversion = "([^"]+)"/s' Cargo.lock | head -n1)"
+
+if [[ "$updated_toml_version" != "$new_version" || "$updated_lock_version" != "$new_version" ]]; then
+  echo "error: version files did not update cleanly" >&2
+  exit 1
+fi
 
 cargo check --locked --quiet
 
