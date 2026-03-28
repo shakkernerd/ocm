@@ -1,265 +1,339 @@
 # ocm
 
-OpenClaw Manager.
+`ocm` is OpenClaw Manager.
 
-`ocm` is the local control plane for OpenClaw environments, runtimes, launchers, and persistent services.
+It helps you run OpenClaw in separate environments, switch between them safely, install published releases, use local checkouts, and keep background services running without state collisions.
 
-It exists for one practical reason: running multiple OpenClaw setups on one machine should feel normal, not fragile.
-
-With `ocm` you can:
+## What it does
 
 - create isolated OpenClaw environments
-- bind an environment to a launcher or runtime
-- activate or run inside that environment safely
-- install and verify managed runtimes
-- run persistent OpenClaw services per environment
-- clone, snapshot, export, import, repair, and clean up environments
-
-## Why use it
-
-Bare OpenClaw is fine when you have one setup and one state directory.
-
-It gets painful when you need:
-
-- separate OpenClaw state per project, branch, or customer
-- a stable dev launcher and a stable packaged runtime side by side
-- persistent instances on different ports without collisions
-- predictable cleanup and teardown
-- clear service visibility instead of guessing what is running
-
-`ocm` makes the environment the primary unit. Each env gets its own `OPENCLAW_HOME`, so state stays isolated and disposable.
-
-## Product model
-
-- `env`: an isolated OpenClaw environment
-- `launcher`: a named command recipe for running OpenClaw
-- `runtime`: a registered or installed OpenClaw binary/toolchain
-- `service`: a persistent OpenClaw gateway bound to one env
+- install and manage published OpenClaw releases
+- run a local checkout or custom command through named launchers
+- start and inspect background OpenClaw services per environment
+- snapshot, export, import, clean up, and remove environments safely
 
 ## Install
 
-### Release install
-
-Use the install script:
+Install the latest release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh | bash
 ```
 
-Install a specific release or prefix:
+Install a specific release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh | bash -s -- --version v0.1.0
-curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh | bash -s -- --prefix ~/.local
+curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh | bash -s -- --version v<ocm-version>
 ```
 
-### From source
+Update an existing install:
+
+```bash
+ocm self update
+ocm self update --check
+```
+
+Install from source:
 
 ```bash
 cargo install --path .
 ```
 
-### Development wrapper
-
-Inside the repo:
+Inside this repo, use the development wrapper:
 
 ```bash
 ./bin/ocm help
 ```
 
-The wrapper is for local development and keeps examples pointed at the repo-local command.
+## Quick start
 
-## Quickstart
-
-Register a launcher:
+If you want the easiest first run:
 
 ```bash
-ocm launcher add stable --command openclaw
+ocm setup
 ```
 
-Create an environment:
+If you already know what you want, use the fast path:
 
 ```bash
-ocm env create demo --launcher stable
+ocm start
 ```
 
-Activate it in your shell:
+That creates or reuses an environment, prepares OpenClaw, and can start onboarding for you.
+
+## The main ideas
+
+- `env`: one isolated OpenClaw environment
+- `release`: one published OpenClaw release you can inspect before installing
+- `runtime`: one local OpenClaw install managed by `ocm`
+- `launcher`: one named command for running OpenClaw, often used for local checkouts
+- `service`: one background OpenClaw process tied to one environment
+
+Most people should think about environments first. The rest exists to tell an environment what to run and whether it should stay running in the background.
+
+## Fastest paths
+
+### 1. Start with the latest stable release
 
 ```bash
-eval "$(ocm env use demo)"
+ocm start
 ```
 
-Run OpenClaw in the active env:
+Or choose the environment name yourself:
+
+```bash
+ocm start mybot
+```
+
+### 2. Start with a beta release
+
+```bash
+ocm start mybot --channel beta
+```
+
+### 3. Start with a specific published release
+
+```bash
+ocm start mybot --version 2026.3.24
+```
+
+### 4. Start from a local checkout
+
+```bash
+ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw
+```
+
+If you are already inside an OpenClaw checkout, `ocm setup` can detect that and suggest the local-command path automatically.
+
+## Running commands
+
+Activate an environment in your shell:
+
+```bash
+eval "$(ocm env use mybot)"
+```
+
+Run OpenClaw inside the active environment:
 
 ```bash
 ocm -- status
 ocm -- onboard
 ```
 
-Run against a named env without activating it first:
+Run against a named environment without activating it first:
 
 ```bash
-ocm @demo -- status
-ocm @demo -- onboard
+ocm @mybot -- status
+ocm @mybot -- onboard
 ```
 
-Install a persistent service for that env:
+Run any command inside an environment:
 
 ```bash
-ocm service install demo
-ocm service status demo
-ocm service logs demo --tail 20
+ocm env exec mybot -- sh -lc 'echo "$OPENCLAW_HOME"'
 ```
 
-## Daily workflow
+## Background services
 
-The launcher-first path is still the easiest way to get started.
-
-1. Register one launcher for the OpenClaw command you normally use.
-2. Create one env per project, task, or production instance.
-3. Use `ocm env use <name>` for interactive work.
-4. Use `ocm -- ...` or `ocm @<env> -- ...` for fast command execution.
-5. Install `ocm service` for any env that should keep running.
-
-Example:
+Install a persistent service for an environment:
 
 ```bash
-ocm launcher add dev --command 'pnpm openclaw' --cwd /path/to/openclaw
-ocm env create hacking --launcher dev
-ocm @hacking -- onboard
-ocm service install hacking
-ocm service start hacking
-ocm service status hacking
+ocm service install mybot
 ```
 
-## Runtime management
-
-`ocm` supports both registered binaries and installer-managed runtimes.
-
-Register an existing binary:
-
-```bash
-ocm runtime add stable --path /path/to/openclaw
-ocm env create prod --runtime stable
-```
-
-Install a managed runtime:
-
-```bash
-ocm runtime install nightly --url https://example.test/openclaw-nightly
-ocm runtime verify nightly
-ocm runtime which nightly
-```
-
-Inspect and update:
-
-```bash
-ocm runtime list
-ocm runtime show nightly
-ocm runtime update nightly
-ocm runtime update --all
-```
-
-## Services
-
-`ocm service` makes OpenClaw instances persistent and inspectable.
-
-Core commands:
+Inspect it:
 
 ```bash
 ocm service list
-ocm service status demo
-ocm service install demo
-ocm service start demo
-ocm service stop demo
-ocm service restart demo
-ocm service uninstall demo
-ocm service logs demo --tail 50
-ocm service discover
+ocm service status mybot
+ocm service logs mybot --tail 50
 ```
 
-What `service list` tells you:
+Stop or remove it:
 
-- which envs have OCM-managed services
-- which port each env is using
-- service-manager state
-- actual OpenClaw reachability
+```bash
+ocm service stop mybot
+ocm service uninstall mybot
+```
 
-What `service discover` tells you:
+`service list` is the quick overview. `service status <env>` is the detailed view.
 
-- OCM-managed services
-- separate OpenClaw services outside OCM
-- foreign/self-managed OpenClaw services discovered on the machine
+## Working with releases and runtimes
+
+List published releases:
+
+```bash
+ocm release list
+ocm release list --channel stable
+ocm release show --channel stable
+```
+
+Install one published release as a local runtime:
+
+```bash
+ocm release install --channel stable
+ocm release install --version 2026.3.24
+```
+
+Inspect local runtimes:
+
+```bash
+ocm runtime list
+ocm runtime show stable
+ocm runtime verify stable
+```
+
+Update a tracked runtime:
+
+```bash
+ocm runtime update stable
+ocm runtime update --all
+```
+
+## Using local commands and launchers
+
+Register a launcher:
+
+```bash
+ocm launcher add dev --command 'pnpm openclaw' --cwd /path/to/openclaw
+```
+
+Create an environment that uses it:
+
+```bash
+ocm env create hacking --launcher dev
+```
+
+Inspect launchers:
+
+```bash
+ocm launcher list
+ocm launcher show dev
+```
 
 ## Environment lifecycle
 
-`ocm` already includes the lifecycle tools needed to treat envs as real operational units:
+Clone an environment:
 
 ```bash
-ocm env clone demo demo-copy
-ocm env snapshot create demo --label before-upgrade
-ocm env snapshot list demo
-ocm env snapshot restore demo <snapshot-id>
-ocm env export demo
-ocm env import ./demo.tar --name restored-demo
-ocm env doctor demo
-ocm env cleanup demo --yes
-ocm env repair-marker demo
+ocm env clone mybot mybot-copy
+```
+
+Create and restore snapshots:
+
+```bash
+ocm env snapshot create mybot --label before-upgrade
+ocm env snapshot list mybot
+ocm env snapshot restore mybot <snapshot>
+```
+
+Export and import environments:
+
+```bash
+ocm env export mybot
+ocm env import ./mybot.tar --name restored-mybot
+```
+
+Inspect and repair:
+
+```bash
+ocm env status mybot
+ocm env doctor mybot
+ocm env cleanup mybot --yes
+ocm env repair-marker mybot
+```
+
+Remove an environment:
+
+```bash
+ocm env remove mybot
+```
+
+Remove the environment, its OCM-managed service, and its snapshots:
+
+```bash
+ocm env destroy mybot
+ocm env destroy mybot --yes
 ```
 
 ## Output modes
 
-By default, `ocm` prefers human-friendly terminal output.
+Default terminal output is meant for people.
 
-Use these when you need something else:
+Use:
 
-- `--json`: structured output
-- `--raw`: plain script-friendly output
-- `--color auto|always|never`: explicit color control
+- `--json` for structured output
+- `--raw` for plain script-friendly output
+- `--color auto|always|never` for explicit color control
 
 Examples:
 
 ```bash
 ocm service list --json
-ocm env status demo --raw
+ocm env status mybot --raw
 ocm --color always runtime list
+```
+
+## Help
+
+Start here:
+
+```bash
+ocm help
+```
+
+Then go deeper:
+
+```bash
+ocm help start
+ocm help setup
+ocm help env
+ocm help release
+ocm help runtime
+ocm help service
 ```
 
 ## Platform support
 
 Current support:
 
-- macOS: envs, launchers, runtimes, lifecycle, shell helpers, and persistent services via `launchd`
-- Linux: envs, launchers, runtimes, lifecycle, shell helpers, and persistent services via `systemd --user`
+- macOS
+- Linux
 
-Current limitation:
+Background service support:
 
-- `service adopt-global` and `service restore-global` are currently for the legacy machine-wide OpenClaw service model and remain launchd-oriented
-- Windows service support is not implemented yet
+- macOS: `launchd`
+- Linux: `systemd --user`
+
+Not supported yet:
+
+- Windows service support
 
 ## Safety
 
-`ocm` keeps safety rails on destructive operations:
+`ocm` keeps safety checks around destructive actions:
 
-- protected envs are not removed unless explicitly forced
-- env roots are marker-checked before destructive cleanup
-- prune is preview-first
-- service install auto-assigns the next free gateway port instead of crashing into a conflict
+- protected environments are not removed unless forced
+- environment roots are marker-checked before destructive cleanup
+- prune operations preview first
+- service install chooses the next free port instead of colliding with an existing one
 
-## Help
+## Typical workflow
 
-```bash
-ocm help
-ocm help env
-ocm help runtime
-ocm help service
-ocm help service install
-```
+For most users:
 
-## Development
+1. `ocm setup`
+2. let it create an environment
+3. finish OpenClaw onboarding
+4. use `ocm service install <env>` if that environment should stay running
+5. use `ocm @<env> -- status` and `ocm service status <env>` as your main checks
 
-```bash
-cargo build
-./target/debug/ocm help
-env CARGO_HOME=/tmp/ocm-cargo-home CARGO_TARGET_DIR="$PWD/target" cargo test
-```
+For local development:
+
+1. `ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw`
+2. `ocm @hacking -- onboard`
+3. `ocm service install hacking` if you want it running in the background
+
+## License
+
+See [LICENSE](LICENSE).
