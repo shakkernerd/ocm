@@ -235,15 +235,45 @@ fn choose_cloned_gateway_port(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<u32, String> {
-    let preferred = source
-        .gateway_port
-        .or_else(|| read_config_gateway_port(source))
-        .unwrap_or(18_789);
+    let mut envs = list_environments(env, cwd)?;
+    envs.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.name.cmp(&right.name))
+    });
 
-    let mut claimed = list_environments(env, cwd)?
-        .into_iter()
-        .filter_map(|meta| meta.gateway_port.or_else(|| read_config_gateway_port(&meta)))
-        .collect::<std::collections::BTreeSet<_>>();
+    let mut claimed = std::collections::BTreeSet::new();
+    let mut effective_ports = std::collections::BTreeMap::new();
+
+    for meta in &envs {
+        if let Some(port) = meta.gateway_port.or_else(|| read_config_gateway_port(meta)) {
+            claimed.insert(port);
+            effective_ports.insert(meta.name.clone(), port);
+        }
+    }
+
+    for meta in &envs {
+        if effective_ports.contains_key(&meta.name) {
+            continue;
+        }
+
+        let mut port = 18_789;
+        while claimed.contains(&port) {
+            port = port.saturating_add(1);
+        }
+        claimed.insert(port);
+        effective_ports.insert(meta.name.clone(), port);
+    }
+
+    let preferred = effective_ports
+        .get(&source.name)
+        .copied()
+        .or_else(|| {
+            source
+                .gateway_port
+                .or_else(|| read_config_gateway_port(source))
+        })
+        .unwrap_or(18_789);
 
     let mut port = preferred.max(18_789);
     while claimed.contains(&port) || !gateway_port_available(port) {

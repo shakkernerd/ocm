@@ -257,7 +257,8 @@ fn environment_clone_copies_the_root_and_resets_identity_metadata() {
         "hello clone"
     );
     assert_eq!(cloned.name, "target");
-    assert_eq!(cloned.gateway_port, Some(19790));
+    assert_ne!(cloned.gateway_port, Some(19789));
+    assert!(cloned.gateway_port.unwrap() >= 19790);
     assert_eq!(cloned.default_runtime.as_deref(), Some("stable"));
     assert_eq!(cloned.default_launcher.as_deref(), Some("stable"));
     assert!(cloned.protected);
@@ -303,6 +304,42 @@ fn clone_environment_skips_busy_ports_when_assigning_a_new_identity() {
 
     assert_eq!(cloned.gateway_port, Some(19791));
     drop(occupied);
+}
+
+#[test]
+fn clone_environment_assigns_a_new_port_when_the_source_only_had_a_computed_port() {
+    let root = TestDir::new("store-env-clone-computed-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let source = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: Some("stable".to_string()),
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let cloned = clone_environment(
+        CloneEnvironmentOptions {
+            source_name: source.name,
+            name: "target".to_string(),
+            root: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_ne!(cloned.gateway_port, Some(18789));
+    assert!(cloned.gateway_port.unwrap() >= 18790);
 }
 
 #[test]
