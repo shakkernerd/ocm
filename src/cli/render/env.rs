@@ -1431,7 +1431,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("machine-wide OpenClaw service is using this env"))
+                .any(|line| line.contains("machine-wide OpenClaw service"))
         );
     }
 

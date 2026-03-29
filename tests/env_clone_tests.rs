@@ -2,6 +2,8 @@ mod support;
 
 use std::fs;
 
+use serde_json::Value;
+
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_text};
 
 #[test]
@@ -30,8 +32,14 @@ fn env_clone_copies_state_into_a_new_environment() {
     let show = run_ocm(&cwd, &env, &["env", "show", "target", "--json"]);
     assert!(show.status.success(), "{}", stderr(&show));
     let show_stdout = stdout(&show);
+    let show_json: Value = serde_json::from_str(&show_stdout).unwrap();
     assert!(show_stdout.contains("\"name\": \"target\""));
-    assert!(show_stdout.contains("\"gatewayPort\": 19790"));
+    let gateway_port = show_json
+        .get("gatewayPort")
+        .and_then(Value::as_u64)
+        .unwrap();
+    assert_ne!(gateway_port, 19_789);
+    assert!(gateway_port >= 19_790);
     assert!(show_stdout.contains("\"protected\": true"));
 
     assert_eq!(

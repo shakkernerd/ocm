@@ -595,6 +595,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
+    use crate::cli::INTERNAL_COLOR_MODE_ENV;
+
     use super::{Cli, StartSummary, onboarding_handoff_lines_pretty};
 
     fn sample_summary(onboarding_planned: bool) -> StartSummary {
@@ -618,8 +620,10 @@ mod tests {
     }
 
     fn test_cli() -> Cli {
+        let mut env = BTreeMap::new();
+        env.insert(INTERNAL_COLOR_MODE_ENV.to_string(), "never".to_string());
         Cli {
-            env: BTreeMap::new(),
+            env,
             cwd: PathBuf::from("/tmp"),
         }
     }

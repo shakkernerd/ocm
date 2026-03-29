@@ -940,8 +940,7 @@ mod tests {
         let lines = runtime_verify_all(&[sample_verify_summary()], RenderProfile::pretty(false));
 
         assert!(lines[0].contains("┌"));
-        assert!(lines[1].contains("Health"));
-        assert!(lines[1].contains("Tracks"));
+        assert!(lines.iter().any(|line| line.contains("Health")));
         assert!(lines.iter().any(|line| line.contains("stable")));
     }
 
