@@ -325,8 +325,8 @@ pub fn uninstall_service(
 ) -> Result<ServiceActionSummary, String> {
     let service = EnvironmentService::new(env, cwd);
     let env_meta = service.apply_effective_gateway_port(service.get(name)?)?;
-    let managed_label = managed_service_label(&env_meta.name);
-    let managed_plist_path = managed_plist_path(&env_meta.name, env);
+    let managed_label = managed_service_label(&env_meta.name, env, cwd)?;
+    let managed_plist_path = managed_plist_path(&env_meta.name, env, cwd)?;
 
     uninstall_managed_service_by_label(&managed_label, &managed_plist_path, env)?;
     let plist_path = display_path(&managed_plist_path);
@@ -356,7 +356,7 @@ pub fn service_logs(
     let env_meta = EnvironmentService::new(env, cwd).get(name)?;
     let stream = normalize_log_stream(stream)?;
     if service_manager_kind(env) == ServiceManagerKind::SystemdUser {
-        let label = managed_service_label(&env_meta.name);
+        let label = managed_service_label(&env_meta.name, env, cwd)?;
         let path = format!("journalctl --user --unit {label}");
         let content = read_systemd_service_logs(&label, tail_lines)?;
         return Ok(ServiceLogSummary {
@@ -428,8 +428,8 @@ fn prepare_service_with_allowed_busy_port(
         persist_service_gateway_port(name, env, cwd, allowed_busy_port, persist_gateway_port)?;
     let env_meta = port_assignment.env_meta;
     let launch = resolve_service_launch(&env_meta, env, cwd)?;
-    let managed_label = managed_service_label(&env_meta.name);
-    let managed_plist_path = managed_plist_path(&env_meta.name, env);
+    let managed_label = managed_service_label(&env_meta.name, env, cwd)?;
+    let managed_plist_path = managed_plist_path(&env_meta.name, env, cwd)?;
     let log_dir = service_log_dir(&env_meta);
     let stdout_path = service_stdout_log_path(&env_meta);
     let stderr_path = service_stderr_log_path(&env_meta);
@@ -759,8 +759,8 @@ fn prepare_global_restore(
     }
 
     let backup = latest_matching_global_plist_backup(&env_meta, env, cwd)?;
-    let managed_label = managed_service_label(&env_meta.name);
-    let managed_plist_path = managed_plist_path(&env_meta.name, env);
+    let managed_label = managed_service_label(&env_meta.name, env, cwd)?;
+    let managed_plist_path = managed_plist_path(&env_meta.name, env, cwd)?;
     let mut warnings = Vec::new();
     if !managed_plist_path.exists() {
         warnings.push(format!(

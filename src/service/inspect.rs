@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use super::platform::{
     OCM_GATEWAY_LABEL_PREFIX, ServiceManagerKind, global_service_definition_path,
-    managed_service_definition_path, service_definition_dir, service_definition_extension,
+    managed_service_identity, service_definition_dir, service_definition_extension,
     service_manager_kind,
 };
 use crate::env::{
@@ -359,9 +359,8 @@ fn build_service_summary(
 ) -> Result<ServiceSummary, String> {
     let service = EnvironmentService::new(process_env, cwd);
     let env_meta = service.apply_effective_gateway_port(meta)?;
-    let managed_label = managed_service_label(&env_meta.name);
-    let managed_plist_path = managed_plist_path(&env_meta.name, process_env);
-    let managed = inspect_job(&managed_label, &managed_plist_path, process_env);
+    let managed = managed_service_identity(&env_meta.name, process_env, cwd)?;
+    let managed_status = inspect_job(&managed.label, &managed.definition_path, process_env);
     let launch = resolve_service_launch(&env_meta, process_env, cwd);
     let probe_spec = resolve_openclaw_probe_spec(&env_meta, process_env, cwd).ok();
     let env_config_path = display_path(&derive_env_paths(Path::new(&env_meta.root)).config_path);
@@ -426,16 +425,16 @@ fn build_service_summary(
     let openclaw_probe = match depth {
         ServiceProbeDepth::Fast => detect_openclaw_state_fast(
             env_meta.gateway_port,
-            managed.installed,
-            managed.loaded,
-            managed.running,
+            managed_status.installed,
+            managed_status.loaded,
+            managed_status.running,
         ),
         ServiceProbeDepth::Deep => detect_openclaw_state_detailed(
             &env_meta,
             env_meta.gateway_port,
-            managed.installed,
-            managed.loaded,
-            managed.running,
+            managed_status.installed,
+            managed_status.loaded,
+            managed_status.running,
             probe_spec.as_ref(),
             process_env,
         ),
@@ -444,8 +443,8 @@ fn build_service_summary(
     Ok(ServiceSummary {
         env_name: env_meta.name,
         service_kind: "gateway".to_string(),
-        managed_label,
-        managed_plist_path: display_path(&managed_plist_path),
+        managed_label: managed.label,
+        managed_plist_path: display_path(&managed.definition_path),
         global_label: GLOBAL_GATEWAY_LABEL.to_string(),
         global_env_name: global_env_name.map(|value| value.to_string()),
         binding_kind,
@@ -457,11 +456,11 @@ fn build_service_summary(
         gateway_port: env_meta.gateway_port.unwrap_or_default(),
         openclaw_state: openclaw_probe.state,
         openclaw_detail: openclaw_probe.detail,
-        installed: managed.installed,
-        loaded: managed.loaded,
-        running: managed.running,
-        pid: managed.pid,
-        state: managed.state,
+        installed: managed_status.installed,
+        loaded: managed_status.loaded,
+        running: managed_status.running,
+        pid: managed_status.pid,
+        state: managed_status.state,
         global_installed: global.installed,
         global_loaded: global.loaded,
         global_running: global.running,
@@ -831,12 +830,20 @@ fn resolve_openclaw_probe_spec(
     }
 }
 
-pub(crate) fn managed_service_label(name: &str) -> String {
-    super::platform::managed_service_label(name)
+pub(crate) fn managed_service_label(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<String, String> {
+    Ok(managed_service_identity(name, env, cwd)?.label)
 }
 
-pub(crate) fn managed_plist_path(name: &str, env: &BTreeMap<String, String>) -> PathBuf {
-    managed_service_definition_path(name, env)
+pub(crate) fn managed_plist_path(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    Ok(managed_service_identity(name, env, cwd)?.definition_path)
 }
 
 pub(crate) fn global_plist_path(env: &BTreeMap<String, String>) -> PathBuf {
@@ -1356,13 +1363,16 @@ mod tests {
         string_mentions_openclaw,
     };
     use std::collections::BTreeMap;
+    use std::path::Path;
 
     #[test]
-    fn managed_service_labels_are_env_scoped() {
-        assert_eq!(
-            managed_service_label("demo"),
-            "ai.openclaw.gateway.ocm.demo"
-        );
+    fn managed_service_labels_are_store_scoped() {
+        let mut env = BTreeMap::new();
+        env.insert("OCM_HOME".to_string(), "/tmp/store".to_string());
+
+        let label = managed_service_label("demo", &env, Path::new("/tmp")).unwrap();
+        assert!(label.starts_with("ai.openclaw.gateway.ocm."));
+        assert!(label.ends_with(".demo"));
     }
 
     #[test]
@@ -1394,6 +1404,10 @@ environment = {
     fn discover_classification_is_stable() {
         assert_eq!(
             discovered_source_kind("ai.openclaw.gateway.ocm.demo"),
+            "ocm-managed"
+        );
+        assert_eq!(
+            discovered_source_kind("ai.openclaw.gateway.ocm.f8587fe2b3.demo"),
             "ocm-managed"
         );
         assert_eq!(

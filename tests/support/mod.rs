@@ -13,6 +13,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
+use sha2::{Digest, Sha256};
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct TestDir {
@@ -178,6 +180,55 @@ pub fn ocm_env(root: &TestDir) -> BTreeMap<String, String> {
     let mut env = base_env(&home);
     env.insert("OCM_HOME".to_string(), path_string(&ocm_home));
     env
+}
+
+pub fn test_service_store_hash(env: &BTreeMap<String, String>, cwd: &Path) -> String {
+    let store = env
+        .get("OCM_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cwd.join(".ocm"));
+    let store = if store.is_absolute() {
+        store
+    } else {
+        cwd.join(store)
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(path_string(&store).as_bytes());
+    format!("{:x}", hasher.finalize())[..10].to_string()
+}
+
+pub fn managed_service_label(env: &BTreeMap<String, String>, cwd: &Path, name: &str) -> String {
+    format!(
+        "ai.openclaw.gateway.ocm.{}.{}",
+        test_service_store_hash(env, cwd),
+        name
+    )
+}
+
+pub fn managed_service_definition_path(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    name: &str,
+) -> PathBuf {
+    let label = managed_service_label(env, cwd, name);
+    let home = PathBuf::from(
+        env.get("HOME")
+            .cloned()
+            .unwrap_or_else(|| path_string(&cwd.join("home"))),
+    );
+    if env
+        .get("OCM_INTERNAL_SERVICE_MANAGER")
+        .is_some_and(|value| value.contains("systemd"))
+    {
+        home.join(".config")
+            .join("systemd")
+            .join("user")
+            .join(format!("{label}.service"))
+    } else {
+        home.join("Library")
+            .join("LaunchAgents")
+            .join(format!("{label}.plist"))
+    }
 }
 
 pub fn write_text(path: &Path, contents: &str) {

@@ -5,7 +5,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::support::{
-    TestDir, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script, write_text,
+    TestDir, managed_service_definition_path, managed_service_label, ocm_env, path_string, run_ocm,
+    stderr, stdout, write_executable_script, write_text,
 };
 
 fn install_fake_launchctl(root: &TestDir, env: &mut BTreeMap<String, String>) {
@@ -97,15 +98,16 @@ fn env_destroy_preview_reports_service_snapshot_and_env_steps() {
 
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert!(install.status.success(), "{}", stderr(&install));
+    let managed_label = managed_service_label(&env, &cwd, "demo");
 
     let preview = run_ocm(&cwd, &env, &["env", "destroy", "demo"]);
     assert!(preview.status.success(), "{}", stderr(&preview));
     let output = stdout(&preview);
     assert!(output.contains("Destroy preview for env demo"));
     assert!(output.contains("snapshots: 1"));
-    assert!(output.contains("service: ai.openclaw.gateway.ocm.demo"));
+    assert!(output.contains(&format!("service: {managed_label}")));
     assert!(output.contains("snapshots: remove 1 env snapshot(s)"));
-    assert!(output.contains("service: remove OCM service ai.openclaw.gateway.ocm.demo"));
+    assert!(output.contains(&format!("service: remove OCM service {managed_label}")));
     assert!(output.contains("env: remove env root and metadata"));
     assert!(output.contains("re-run with --yes to destroy it"));
 
@@ -151,23 +153,21 @@ fn env_destroy_yes_uninstalls_service_removes_snapshots_and_deletes_env() {
 
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert!(install.status.success(), "{}", stderr(&install));
+    let managed_label = managed_service_label(&env, &cwd, "demo");
+    let managed_path = managed_service_definition_path(&env, &cwd, "demo");
 
     let destroy = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--yes"]);
     assert!(destroy.status.success(), "{}", stderr(&destroy));
     let output = stdout(&destroy);
     assert!(output.contains("Destroyed env demo"));
     assert!(output.contains("snapshots removed: 1"));
-    assert!(output.contains("service removed: ai.openclaw.gateway.ocm.demo"));
+    assert!(output.contains(&format!("service removed: {managed_label}")));
 
     let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
     assert!(!show.status.success());
     assert!(stderr(&show).contains("environment \"demo\" does not exist"));
 
-    assert!(
-        !root
-            .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-            .exists()
-    );
+    assert!(!managed_path.exists());
     assert!(!root.child("ocm-home/snapshots/demo").exists());
 
     let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();

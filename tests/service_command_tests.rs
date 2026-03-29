@@ -8,8 +8,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::support::{
-    TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout,
-    write_executable_script, write_text,
+    TestDir, TestHttpServer, managed_service_definition_path, managed_service_label, ocm_env,
+    path_string, run_ocm, stderr, stdout, write_executable_script, write_text,
 };
 
 fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<String, String>) {
@@ -204,6 +204,8 @@ fn service_list_reports_launcher_and_runtime_bindings_in_json() {
 
     let services = summary["services"].as_array().unwrap();
     assert_eq!(services.len(), 2);
+    let demo_label = managed_service_label(&env, &cwd, "demo");
+    let demo_path = managed_service_definition_path(&env, &cwd, "demo");
 
     let demo = services
         .iter()
@@ -212,14 +214,8 @@ fn service_list_reports_launcher_and_runtime_bindings_in_json() {
     assert_eq!(demo["bindingKind"], "launcher");
     assert_eq!(demo["bindingName"], "stable");
     assert_eq!(demo["gatewayPort"], 18789);
-    assert_eq!(demo["managedLabel"], "ai.openclaw.gateway.ocm.demo");
-    assert_eq!(
-        demo["managedPlistPath"],
-        format!(
-            "{}/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist",
-            root.child("home").display()
-        )
-    );
+    assert_eq!(demo["managedLabel"], demo_label);
+    assert_eq!(demo["managedPlistPath"], path_string(&demo_path));
     assert_eq!(
         demo["runDir"],
         path_string(&root.child("ocm-home/envs/demo"))
@@ -548,9 +544,11 @@ fn service_discover_lists_ocm_global_and_foreign_services_in_json() {
     let demo_config_path = path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json"));
     let demo_state_dir = path_string(&root.child("ocm-home/envs/demo/.openclaw"));
     let demo_openclaw_home = demo_state_dir.clone();
+    let demo_label = managed_service_label(&env, &cwd, "demo");
+    let demo_path = managed_service_definition_path(&env, &cwd, "demo");
     write_launch_agent_plist(
-        &root.child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist"),
-        "ai.openclaw.gateway.ocm.demo",
+        &demo_path,
+        &demo_label,
         &["/bin/sh", "-lc", "openclaw gateway run --port 18789"],
         Some(&demo_state_dir),
         &[
@@ -600,7 +598,7 @@ fn service_discover_lists_ocm_global_and_foreign_services_in_json() {
 
     let managed = services
         .iter()
-        .find(|service| service["label"] == "ai.openclaw.gateway.ocm.demo")
+        .find(|service| service["label"] == demo_label)
         .unwrap();
     assert_eq!(managed["sourceKind"], "ocm-managed");
     assert_eq!(managed["matchedEnvName"], "demo");
@@ -783,9 +781,10 @@ fn service_install_persists_a_gateway_port_and_writes_a_launch_agent() {
     let env_meta: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
     assert_eq!(env_meta["gatewayPort"], assigned_port);
 
-    let plist_path = root.child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist");
+    let managed_label = managed_service_label(&env, &cwd, "demo");
+    let plist_path = managed_service_definition_path(&env, &cwd, "demo");
     let plist = fs::read_to_string(&plist_path).unwrap();
-    assert!(plist.contains("ai.openclaw.gateway.ocm.demo"));
+    assert!(plist.contains(&managed_label));
     assert!(plist.contains("<string>/bin/sh</string>"));
     assert!(plist.contains(&format!(
         "openclaw &apos;gateway&apos; &apos;run&apos; &apos;--port&apos; &apos;{assigned_port}&apos;"
@@ -882,17 +881,15 @@ fn service_lifecycle_commands_use_the_env_scoped_launch_agent_label() {
     let uninstall = run_ocm(&cwd, &env, &["service", "uninstall", "demo"]);
     assert!(uninstall.status.success(), "{}", stderr(&uninstall));
     assert!(stdout(&uninstall).contains("install: ocm service install demo"));
+    let managed_label = managed_service_label(&env, &cwd, "demo");
+    let managed_path = managed_service_definition_path(&env, &cwd, "demo");
 
     let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
     assert!(launchctl_log.contains("bootstrap gui/"));
     assert!(launchctl_log.contains("kickstart -k gui/"));
     assert!(launchctl_log.contains("bootout gui/"));
-    assert!(launchctl_log.contains("ai.openclaw.gateway.ocm.demo"));
-    assert!(
-        !root
-            .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-            .exists()
-    );
+    assert!(launchctl_log.contains(&managed_label));
+    assert!(!managed_path.exists());
 }
 
 #[test]
@@ -930,11 +927,7 @@ fn service_uninstall_does_not_require_a_still_valid_binding() {
     let uninstall = run_ocm(&cwd, &env, &["service", "uninstall", "demo"]);
     assert!(uninstall.status.success(), "{}", stderr(&uninstall));
     assert!(stdout(&uninstall).contains("Uninstalled service demo"));
-    assert!(
-        !root
-            .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-            .exists()
-    );
+    assert!(!managed_service_definition_path(&env, &cwd, "demo").exists());
 }
 
 #[test]
@@ -1080,9 +1073,11 @@ fn service_adopt_global_migrates_a_matching_global_launch_agent() {
     let output = run_ocm(&cwd, &env, &["service", "adopt-global", "demo", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let managed_label = managed_service_label(&env, &cwd, "demo");
+    let managed_path = managed_service_definition_path(&env, &cwd, "demo");
     assert_eq!(summary["envName"], "demo");
     assert_eq!(summary["globalLabel"], "ai.openclaw.gateway");
-    assert_eq!(summary["managedLabel"], "ai.openclaw.gateway.ocm.demo");
+    assert_eq!(summary["managedLabel"], managed_label);
     assert_eq!(summary["gatewayPort"], assigned_port);
     assert_eq!(summary["dryRun"], false);
     assert_eq!(summary["adopted"], true);
@@ -1095,17 +1090,14 @@ fn service_adopt_global_migrates_a_matching_global_launch_agent() {
             .child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
             .exists()
     );
-    assert!(
-        root.child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-            .exists()
-    );
+    assert!(managed_path.exists());
     assert!(Path::new(backup_plist_path).exists());
 
     let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
     assert!(launchctl_log.contains("bootout gui/"));
     assert!(launchctl_log.contains("ai.openclaw.gateway"));
     assert!(launchctl_log.contains("bootstrap gui/"));
-    assert!(launchctl_log.contains("ai.openclaw.gateway.ocm.demo.plist"));
+    assert!(launchctl_log.contains(&format!("{managed_label}.plist")));
 }
 
 #[test]
@@ -1221,16 +1213,15 @@ fn service_adopt_global_dry_run_reports_the_plan_without_mutating_state() {
         root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
             .exists()
     );
-    assert!(
-        !root
-            .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-            .exists()
-    );
+    assert!(!managed_service_definition_path(&env, &cwd, "demo").exists());
     assert!(!Path::new(backup_plist_path).exists());
 
     let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
     assert!(!launchctl_log.contains("bootstrap gui/"));
-    assert!(!launchctl_log.contains("ai.openclaw.gateway.ocm.demo.plist"));
+    assert!(!launchctl_log.contains(&format!(
+        "{}.plist",
+        managed_service_label(&env, &cwd, "demo")
+    )));
     assert!(!launchctl_log.contains("bootout gui/"));
 
     let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
@@ -1306,11 +1297,7 @@ fn service_restore_global_restores_the_latest_matching_backup() {
 
     let global_plist = root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist");
     assert!(global_plist.exists());
-    assert!(
-        !root
-            .child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-            .exists()
-    );
+    assert!(!managed_service_definition_path(&env, &cwd, "demo").exists());
     assert_eq!(
         fs::read_to_string(&global_plist).unwrap(),
         fs::read_to_string(Path::new(&backup_plist_path)).unwrap()
@@ -1318,7 +1305,7 @@ fn service_restore_global_restores_the_latest_matching_backup() {
 
     let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
     assert!(launchctl_log.contains("bootout gui/"));
-    assert!(launchctl_log.contains("ai.openclaw.gateway.ocm.demo"));
+    assert!(launchctl_log.contains(&managed_service_label(&env, &cwd, "demo")));
     assert!(launchctl_log.contains("ai.openclaw.gateway.plist"));
 }
 
@@ -1394,10 +1381,7 @@ fn service_restore_global_dry_run_reports_the_latest_matching_backup_without_mut
             .child("home/Library/LaunchAgents/ai.openclaw.gateway.plist")
             .exists()
     );
-    assert!(
-        root.child("home/Library/LaunchAgents/ai.openclaw.gateway.ocm.demo.plist")
-            .exists()
-    );
+    assert!(managed_service_definition_path(&env, &cwd, "demo").exists());
     assert_eq!(
         fs::read_to_string(root.child("launchctl.log")).unwrap(),
         launchctl_log_before
@@ -1511,7 +1495,8 @@ fn systemd_service_install_writes_unit_and_enables_it() {
     assert!(output.status.success(), "{}", stderr(&output));
 
     let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
-    let unit_path = root.child("home/.config/systemd/user/ai.openclaw.gateway.ocm.demo.service");
+    let managed_label = managed_service_label(&env, &cwd, "demo");
+    let unit_path = managed_service_definition_path(&env, &cwd, "demo");
     assert_eq!(summary["managedPlistPath"], path_string(&unit_path));
     assert!(unit_path.exists());
     let unit = fs::read_to_string(&unit_path).unwrap();
@@ -1524,7 +1509,7 @@ fn systemd_service_install_writes_unit_and_enables_it() {
 
     let systemctl_log = fs::read_to_string(root.child("systemctl.log")).unwrap();
     assert!(systemctl_log.contains("--user daemon-reload"));
-    assert!(systemctl_log.contains("--user enable --now ai.openclaw.gateway.ocm.demo"));
+    assert!(systemctl_log.contains(&format!("--user enable --now {managed_label}")));
 }
 
 #[test]
@@ -1549,8 +1534,10 @@ fn systemd_service_status_and_discover_use_units() {
     );
     assert!(created.status.success(), "{}", stderr(&created));
 
+    let managed_label = managed_service_label(&env, &cwd, "demo");
+    let managed_path = managed_service_definition_path(&env, &cwd, "demo");
     write_systemd_unit(
-        &root.child("home/.config/systemd/user/ai.openclaw.gateway.ocm.demo.service"),
+        &managed_path,
         "demo",
         "/bin/sh -lc \"/bin/true gateway run --port 18789\"",
         Some(&path_string(&root.child("ocm-home/envs/demo"))),
@@ -1586,17 +1573,14 @@ fn systemd_service_status_and_discover_use_units() {
     assert_eq!(summary["installed"], true);
     assert_eq!(summary["loaded"], true);
     assert_eq!(summary["running"], true);
-    assert_eq!(
-        summary["managedPlistPath"],
-        path_string(&root.child("home/.config/systemd/user/ai.openclaw.gateway.ocm.demo.service"))
-    );
+    assert_eq!(summary["managedPlistPath"], path_string(&managed_path));
 
     let discover = run_ocm(&cwd, &env, &["service", "discover", "--json"]);
     assert!(discover.status.success(), "{}", stderr(&discover));
     let discovered: Value = serde_json::from_str(&stdout(&discover)).unwrap();
     let services = discovered["services"].as_array().unwrap();
     assert!(services.iter().any(|service| {
-        service["label"] == "ai.openclaw.gateway.ocm.demo" && service["sourceKind"] == "ocm-managed"
+        service["label"] == managed_label && service["sourceKind"] == "ocm-managed"
     }));
     assert!(services.iter().any(|service| {
         service["label"] == "ai.openclaw.gateway" && service["sourceKind"] == "openclaw-global"
@@ -1628,12 +1612,13 @@ fn systemd_service_logs_use_journalctl() {
     let output = run_ocm(&cwd, &env, &["service", "logs", "demo", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let managed_label = managed_service_label(&env, &cwd, "demo");
     assert_eq!(
         summary["path"],
-        "journalctl --user --unit ai.openclaw.gateway.ocm.demo"
+        format!("journalctl --user --unit {managed_label}")
     );
     assert_eq!(summary["content"], "gateway ok\n");
 
     let journalctl_log = fs::read_to_string(root.child("journalctl.log")).unwrap();
-    assert!(journalctl_log.contains("--user --unit ai.openclaw.gateway.ocm.demo"));
+    assert!(journalctl_log.contains(&format!("--user --unit {managed_label}")));
 }
