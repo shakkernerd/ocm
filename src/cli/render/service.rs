@@ -1212,9 +1212,11 @@ mod tests {
         );
 
         assert!(lines[1].contains("Command"));
-        assert!(!lines
-            .iter()
-            .any(|line| line.contains("Use --raw or --json for full command details.")));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("Use --raw or --json for full command details."))
+        );
     }
 
     fn sample_service_summary() -> ServiceSummary {
