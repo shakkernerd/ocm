@@ -177,7 +177,15 @@ fn env_and_service_detail_commands_accept_raw_output_mode() {
     let created = run_ocm(
         &cwd,
         &env,
-        &["env", "create", "demo", "--launcher", "stable", "--port", &port],
+        &[
+            "env",
+            "create",
+            "demo",
+            "--launcher",
+            "stable",
+            "--port",
+            &port,
+        ],
     );
     assert!(created.status.success(), "{}", stderr(&created));
 

@@ -1,11 +1,52 @@
 use std::collections::BTreeMap;
 
-use crate::infra::terminal::{Cell, Tone, paint, render_table, terminal_width};
+use crate::infra::terminal::{
+    Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, terminal_width,
+};
 use crate::launcher::LauncherMeta;
 
 use super::{RenderProfile, format_key_value_lines, format_rfc3339};
 
-pub fn launcher_added(meta: &LauncherMeta) -> Vec<String> {
+pub fn launcher_added(
+    meta: &LauncherMeta,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return launcher_added_raw(meta);
+    }
+
+    let mut lines = vec![paint("Launcher added", Tone::Strong, profile.color)];
+    let mut rows = vec![
+        KeyValueRow::accent("Name", meta.name.clone()),
+        KeyValueRow::plain("Command", meta.command.clone()),
+    ];
+    if let Some(cwd) = meta.cwd.as_deref() {
+        rows.push(KeyValueRow::plain("Cwd", cwd));
+    }
+    if let Some(description) = meta.description.as_deref() {
+        rows.push(KeyValueRow::plain("Description", description));
+    }
+    push_card(&mut lines, "Launcher", rows, profile.color);
+    push_card(
+        &mut lines,
+        "Next",
+        vec![
+            KeyValueRow::accent(
+                "Use in env",
+                format!("{command_example} env create demo --launcher {}", meta.name),
+            ),
+            KeyValueRow::accent(
+                "Show",
+                format!("{command_example} launcher show {}", meta.name),
+            ),
+        ],
+        profile.color,
+    );
+    lines
+}
+
+fn launcher_added_raw(meta: &LauncherMeta) -> Vec<String> {
     let mut lines = vec![
         format!("Added launcher {}", meta.name),
         format!("  command: {}", meta.command),
@@ -83,7 +124,50 @@ fn launcher_list_raw(launchers: &[LauncherMeta]) -> Vec<String> {
     lines
 }
 
-pub fn launcher_show(meta: &LauncherMeta) -> Result<Vec<String>, String> {
+pub fn launcher_show(
+    meta: &LauncherMeta,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Result<Vec<String>, String> {
+    if !profile.pretty {
+        return launcher_show_raw(meta);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Launcher {}", meta.name),
+        Tone::Strong,
+        profile.color,
+    )];
+    let mut rows = vec![
+        KeyValueRow::accent("Name", meta.name.clone()),
+        KeyValueRow::plain("Command", meta.command.clone()),
+    ];
+    if let Some(cwd) = meta.cwd.as_deref() {
+        rows.push(KeyValueRow::plain("Cwd", cwd));
+    }
+    if let Some(description) = meta.description.as_deref() {
+        rows.push(KeyValueRow::plain("Description", description));
+    }
+    push_card(&mut lines, "Launcher", rows, profile.color);
+    push_card(
+        &mut lines,
+        "Next",
+        vec![
+            KeyValueRow::accent(
+                "Use in env",
+                format!("{command_example} env create demo --launcher {}", meta.name),
+            ),
+            KeyValueRow::warning(
+                "Remove",
+                format!("{command_example} launcher remove {}", meta.name),
+            ),
+        ],
+        profile.color,
+    );
+    Ok(lines)
+}
+
+fn launcher_show_raw(meta: &LauncherMeta) -> Result<Vec<String>, String> {
     let mut lines = BTreeMap::new();
     lines.insert("kind".to_string(), meta.kind.clone());
     lines.insert("name".to_string(), meta.name.clone());
@@ -99,8 +183,38 @@ pub fn launcher_show(meta: &LauncherMeta) -> Result<Vec<String>, String> {
     Ok(format_key_value_lines(lines))
 }
 
-pub fn launcher_removed(name: &str) -> Vec<String> {
-    vec![format!("Removed launcher {name}")]
+pub fn launcher_removed(name: &str, profile: RenderProfile, command_example: &str) -> Vec<String> {
+    if !profile.pretty {
+        return vec![format!("Removed launcher {name}")];
+    }
+
+    let mut lines = vec![paint("Launcher removed", Tone::Strong, profile.color)];
+    push_card(
+        &mut lines,
+        "Launcher",
+        vec![KeyValueRow::accent("Name", name)],
+        profile.color,
+    );
+    push_card(
+        &mut lines,
+        "Next",
+        vec![KeyValueRow::accent(
+            "List",
+            format!("{command_example} launcher list"),
+        )],
+        profile.color,
+    );
+    lines
+}
+
+fn push_card(lines: &mut Vec<String>, title: &str, rows: Vec<KeyValueRow>, color: bool) {
+    if rows.is_empty() {
+        return;
+    }
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.extend(render_key_value_card(title, &rows, color));
 }
 
 #[cfg(test)]

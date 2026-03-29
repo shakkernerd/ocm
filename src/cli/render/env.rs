@@ -12,12 +12,48 @@ use crate::infra::terminal::{
 
 use super::{RenderProfile, format_key_value_lines, format_rfc3339};
 
-pub fn env_protected(name: &str, protected: bool) -> Vec<String> {
-    vec![format!("Updated env {name}: protected={protected}")]
+pub fn env_protected(name: &str, protected: bool, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return vec![format!("Updated env {name}: protected={protected}")];
+    }
+
+    let mut lines = vec![paint("Environment updated", Tone::Strong, profile.color)];
+    push_card(
+        &mut lines,
+        "Environment",
+        vec![
+            KeyValueRow::accent("Name", name),
+            KeyValueRow::new(
+                "Protected",
+                if protected { "yes" } else { "no" },
+                if protected {
+                    Tone::Warning
+                } else {
+                    Tone::Muted
+                },
+            ),
+        ],
+        profile.color,
+    );
+    lines
 }
 
-pub fn env_removed(name: &str, root: &str) -> Vec<String> {
-    vec![format!("Removed env {name}"), format!("  root: {root}")]
+pub fn env_removed(name: &str, root: &str, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return vec![format!("Removed env {name}"), format!("  root: {root}")];
+    }
+
+    let mut lines = vec![paint("Environment removed", Tone::Strong, profile.color)];
+    push_card(
+        &mut lines,
+        "Environment",
+        vec![
+            KeyValueRow::accent("Name", name),
+            KeyValueRow::plain("Root", root),
+        ],
+        profile.color,
+    );
+    lines
 }
 
 pub fn env_destroy_preview(
@@ -209,7 +245,60 @@ fn env_destroyed_raw(summary: &EnvDestroySummary, command_example: &str) -> Vec<
     lines
 }
 
-pub fn env_prune_preview(older_than_days: i64, candidates: &[EnvSummary]) -> Vec<String> {
+pub fn env_prune_preview(
+    older_than_days: i64,
+    candidates: &[EnvSummary],
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return env_prune_preview_raw(older_than_days, candidates);
+    }
+
+    let mut lines = vec![paint(
+        "Environment prune preview",
+        Tone::Strong,
+        profile.color,
+    )];
+    push_card(
+        &mut lines,
+        "Summary",
+        vec![
+            KeyValueRow::plain("Older than", format!("{older_than_days} day(s)")),
+            KeyValueRow::warning("Candidates", candidates.len().to_string()),
+        ],
+        profile.color,
+    );
+    if candidates.is_empty() {
+        push_card(
+            &mut lines,
+            "Apply",
+            vec![KeyValueRow::muted("Result", "nothing to remove")],
+            profile.color,
+        );
+        return lines;
+    }
+
+    let rows = candidates
+        .iter()
+        .map(|summary| {
+            vec![
+                Cell::accent(summary.name.clone()),
+                Cell::muted(summary.root.clone()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    lines.push(String::new());
+    lines.extend(render_table(&["Env", "Root"], &rows, profile.color));
+    lines.push(String::new());
+    lines.push(paint(
+        "Re-run with --yes to remove them.",
+        Tone::Muted,
+        profile.color,
+    ));
+    lines
+}
+
+fn env_prune_preview_raw(older_than_days: i64, candidates: &[EnvSummary]) -> Vec<String> {
     let mut lines = vec![format!(
         "Prune preview ({}d): {} candidate(s)",
         older_than_days,
@@ -222,7 +311,41 @@ pub fn env_prune_preview(older_than_days: i64, candidates: &[EnvSummary]) -> Vec
     lines
 }
 
-pub fn env_pruned(removed: &[EnvSummary]) -> Vec<String> {
+pub fn env_pruned(removed: &[EnvSummary], profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return env_pruned_raw(removed);
+    }
+
+    let mut lines = vec![paint(
+        "Environment prune applied",
+        Tone::Strong,
+        profile.color,
+    )];
+    push_card(
+        &mut lines,
+        "Summary",
+        vec![KeyValueRow::plain("Removed", removed.len().to_string())],
+        profile.color,
+    );
+    if removed.is_empty() {
+        return lines;
+    }
+
+    let rows = removed
+        .iter()
+        .map(|summary| {
+            vec![
+                Cell::accent(summary.name.clone()),
+                Cell::muted(summary.root.clone()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    lines.push(String::new());
+    lines.extend(render_table(&["Env", "Root"], &rows, profile.color));
+    lines
+}
+
+fn env_pruned_raw(removed: &[EnvSummary]) -> Vec<String> {
     let mut lines = vec![format!("Pruned {} environment(s).", removed.len())];
     for summary in removed {
         lines.push(format!("  {}  {}", summary.name, summary.root));
@@ -231,6 +354,39 @@ pub fn env_pruned(removed: &[EnvSummary]) -> Vec<String> {
 }
 
 pub fn env_created(
+    summary: &EnvSummary,
+    gateway_port_source: Option<&str>,
+    command_example: &str,
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return env_created_raw(summary, gateway_port_source, command_example);
+    }
+
+    let mut lines = vec![paint("Environment created", Tone::Strong, profile.color)];
+
+    let mut environment = vec![
+        KeyValueRow::accent("Name", summary.name.clone()),
+        KeyValueRow::plain("Root", summary.root.clone()),
+        action_gateway_port_row(summary.gateway_port, gateway_port_source),
+        action_binding_row(summary),
+    ];
+    if summary.protected {
+        environment.push(KeyValueRow::warning("Protected", "yes"));
+    }
+    push_card(&mut lines, "Environment", environment, profile.color);
+
+    push_card(
+        &mut lines,
+        "Next",
+        env_action_next_steps(summary, command_example, true),
+        profile.color,
+    );
+
+    lines
+}
+
+fn env_created_raw(
     summary: &EnvSummary,
     gateway_port_source: Option<&str>,
     command_example: &str,
@@ -274,6 +430,43 @@ pub fn env_cloned(
     gateway_port_source: Option<&str>,
     source_name: &str,
     command_example: &str,
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return env_cloned_raw(summary, gateway_port_source, source_name, command_example);
+    }
+
+    let mut lines = vec![paint("Environment cloned", Tone::Strong, profile.color)];
+
+    push_card(
+        &mut lines,
+        "Environment",
+        vec![
+            KeyValueRow::accent("Name", summary.name.clone()),
+            KeyValueRow::plain("From", source_name),
+            KeyValueRow::plain("Root", summary.root.clone()),
+            action_gateway_port_row(summary.gateway_port, gateway_port_source),
+            action_binding_row(summary),
+            KeyValueRow::muted("Service", "not copied"),
+        ],
+        profile.color,
+    );
+
+    push_card(
+        &mut lines,
+        "Next",
+        env_action_next_steps(summary, command_example, true),
+        profile.color,
+    );
+
+    lines
+}
+
+fn env_cloned_raw(
+    summary: &EnvSummary,
+    gateway_port_source: Option<&str>,
+    source_name: &str,
+    command_example: &str,
 ) -> Vec<String> {
     let mut lines = vec![
         format!("Cloned env {} from {}", summary.name, source_name),
@@ -299,7 +492,31 @@ pub fn env_cloned(
     lines
 }
 
-pub fn env_exported(summary: &EnvExportSummary) -> Vec<String> {
+pub fn env_exported(summary: &EnvExportSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return env_exported_raw(summary);
+    }
+
+    let mut lines = vec![paint("Environment exported", Tone::Strong, profile.color)];
+
+    let mut export_rows = vec![
+        KeyValueRow::accent("Name", summary.name.clone()),
+        KeyValueRow::plain("Root", summary.root.clone()),
+        KeyValueRow::plain("Archive", summary.archive_path.clone()),
+        action_export_binding_row(
+            summary.default_runtime.clone(),
+            summary.default_launcher.clone(),
+        ),
+    ];
+    if summary.protected {
+        export_rows.push(KeyValueRow::warning("Protected", "yes"));
+    }
+    push_card(&mut lines, "Export", export_rows, profile.color);
+
+    lines
+}
+
+fn env_exported_raw(summary: &EnvExportSummary) -> Vec<String> {
     let mut lines = vec![
         format!("Exported env {}", summary.name),
         format!("  root: {}", summary.root),
@@ -317,7 +534,52 @@ pub fn env_exported(summary: &EnvExportSummary) -> Vec<String> {
     lines
 }
 
-pub fn env_imported(summary: &EnvImportSummary, command_example: &str) -> Vec<String> {
+pub fn env_imported(
+    summary: &EnvImportSummary,
+    command_example: &str,
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return env_imported_raw(summary, command_example);
+    }
+
+    let mut lines = vec![paint("Environment imported", Tone::Strong, profile.color)];
+
+    let mut import_rows = vec![
+        KeyValueRow::accent("Name", summary.name.clone()),
+        KeyValueRow::plain("From", summary.source_name.clone()),
+        KeyValueRow::plain("Root", summary.root.clone()),
+        KeyValueRow::plain("Archive", summary.archive_path.clone()),
+        action_export_binding_row(
+            summary.default_runtime.clone(),
+            summary.default_launcher.clone(),
+        ),
+    ];
+    if summary.protected {
+        import_rows.push(KeyValueRow::warning("Protected", "yes"));
+    }
+    push_card(&mut lines, "Environment", import_rows, profile.color);
+
+    let mut next = vec![KeyValueRow::accent(
+        "Start",
+        format!("{command_example} start {}", summary.name),
+    )];
+    if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
+        next.push(KeyValueRow::accent(
+            "Run",
+            format!("{command_example} @{} -- status", summary.name),
+        ));
+        next.push(KeyValueRow::warning(
+            "Onboard",
+            format!("{command_example} @{} -- onboard", summary.name),
+        ));
+    }
+    push_card(&mut lines, "Next", next, profile.color);
+
+    lines
+}
+
+fn env_imported_raw(summary: &EnvImportSummary, command_example: &str) -> Vec<String> {
     let mut lines = vec![
         format!("Imported env {} from {}", summary.name, summary.source_name),
         format!("  root: {}", summary.root),
@@ -432,7 +694,54 @@ fn env_doctor_raw(doctor: &EnvDoctorSummary) -> Vec<String> {
     lines
 }
 
-pub fn env_cleanup_batch(cleanup: &EnvCleanupBatchSummary) -> Vec<String> {
+pub fn env_cleanup_batch(cleanup: &EnvCleanupBatchSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return env_cleanup_batch_raw(cleanup);
+    }
+
+    let mut lines = vec![paint(
+        if cleanup.apply {
+            "Environment cleanup applied"
+        } else {
+            "Environment cleanup preview"
+        },
+        Tone::Strong,
+        profile.color,
+    )];
+    push_card(
+        &mut lines,
+        "Summary",
+        vec![
+            KeyValueRow::plain("Scope", "all environments"),
+            KeyValueRow::plain("Count", cleanup.count.to_string()),
+        ],
+        profile.color,
+    );
+    if cleanup.results.is_empty() {
+        return lines;
+    }
+
+    let rows = cleanup
+        .results
+        .iter()
+        .map(|result| {
+            vec![
+                Cell::accent(result.env_name.clone()),
+                Cell::muted(result.root.clone()),
+                Cell::plain(result.actions.len().to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    lines.push(String::new());
+    lines.extend(render_table(
+        &["Env", "Root", "Actions"],
+        &rows,
+        profile.color,
+    ));
+    lines
+}
+
+fn env_cleanup_batch_raw(cleanup: &EnvCleanupBatchSummary) -> Vec<String> {
     let mut lines = if cleanup.apply {
         vec![format!("Applied cleanup (--all): {} env(s)", cleanup.count)]
     } else {
@@ -453,7 +762,70 @@ pub fn env_cleanup_batch(cleanup: &EnvCleanupBatchSummary) -> Vec<String> {
     lines
 }
 
-pub fn env_cleanup(cleanup: &EnvCleanupSummary) -> Vec<String> {
+pub fn env_cleanup(cleanup: &EnvCleanupSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return env_cleanup_raw(cleanup);
+    }
+
+    let mut lines = vec![paint(
+        if cleanup.apply {
+            "Environment cleanup applied"
+        } else {
+            "Environment cleanup preview"
+        },
+        Tone::Strong,
+        profile.color,
+    )];
+    push_card(
+        &mut lines,
+        "Environment",
+        vec![
+            KeyValueRow::accent("Env", cleanup.env_name.clone()),
+            KeyValueRow::plain("Root", cleanup.root.clone()),
+            KeyValueRow::plain("Actions", cleanup.actions.len().to_string()),
+        ],
+        profile.color,
+    );
+    if !cleanup.actions.is_empty() {
+        let actions = cleanup
+            .actions
+            .iter()
+            .map(|action| KeyValueRow::plain(&action.kind, action.description.clone()))
+            .collect::<Vec<_>>();
+        push_card(&mut lines, "Plan", actions, profile.color);
+    }
+    if cleanup.apply {
+        if let Some(healthy_after) = cleanup.healthy_after {
+            push_card(
+                &mut lines,
+                "Result",
+                vec![KeyValueRow::new(
+                    "Healthy",
+                    if healthy_after { "yes" } else { "no" },
+                    if healthy_after {
+                        Tone::Success
+                    } else {
+                        Tone::Danger
+                    },
+                )],
+                profile.color,
+            );
+        }
+    } else if !cleanup.actions.is_empty() {
+        push_card(
+            &mut lines,
+            "Apply",
+            vec![KeyValueRow::warning(
+                "Run",
+                "re-run with --yes to apply them",
+            )],
+            profile.color,
+        );
+    }
+    lines
+}
+
+fn env_cleanup_raw(cleanup: &EnvCleanupSummary) -> Vec<String> {
     let mut lines = if cleanup.apply {
         vec![format!("Applied cleanup for env {}", cleanup.env_name)]
     } else {
@@ -488,12 +860,34 @@ pub fn env_cleanup(cleanup: &EnvCleanupSummary) -> Vec<String> {
     lines
 }
 
-pub fn env_marker_repaired(repaired: &EnvMarkerRepairSummary) -> Vec<String> {
-    vec![
-        format!("Repaired marker for env {}", repaired.env_name),
-        format!("  root: {}", repaired.root),
-        format!("  marker: {}", repaired.marker_path),
-    ]
+pub fn env_marker_repaired(
+    repaired: &EnvMarkerRepairSummary,
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return vec![
+            format!("Repaired marker for env {}", repaired.env_name),
+            format!("  root: {}", repaired.root),
+            format!("  marker: {}", repaired.marker_path),
+        ];
+    }
+
+    let mut lines = vec![paint(
+        "Environment marker repaired",
+        Tone::Strong,
+        profile.color,
+    )];
+    push_card(
+        &mut lines,
+        "Marker",
+        vec![
+            KeyValueRow::accent("Env", repaired.env_name.clone()),
+            KeyValueRow::plain("Root", repaired.root.clone()),
+            KeyValueRow::plain("Marker", repaired.marker_path.clone()),
+        ],
+        profile.color,
+    );
+    lines
 }
 
 pub fn env_list(summaries: &[EnvSummary], profile: RenderProfile) -> Vec<String> {
@@ -573,6 +967,68 @@ fn render_gateway_port_line(port: u32, source: Option<&str>) -> String {
         Some("metadata") | None => format!("  gateway port: {port}"),
         Some(source) => format!("  effective gateway port: {port} ({source})"),
     }
+}
+
+fn action_gateway_port_row(port: Option<u32>, source: Option<&str>) -> KeyValueRow {
+    match port {
+        Some(port) => match source {
+            Some("metadata") | None => KeyValueRow::accent("Port", port.to_string()),
+            Some(source) => KeyValueRow::accent("Port", format!("{port} ({source})")),
+        },
+        None => KeyValueRow::muted("Port", "—"),
+    }
+}
+
+fn action_binding_row(summary: &EnvSummary) -> KeyValueRow {
+    action_export_binding_row(
+        summary.default_runtime.clone(),
+        summary.default_launcher.clone(),
+    )
+}
+
+fn action_export_binding_row(
+    default_runtime: Option<String>,
+    default_launcher: Option<String>,
+) -> KeyValueRow {
+    match (default_runtime, default_launcher) {
+        (Some(runtime), _) => KeyValueRow::accent("Binding", format!("runtime:{runtime}")),
+        (None, Some(launcher)) => KeyValueRow::accent("Binding", format!("launcher:{launcher}")),
+        (None, None) => KeyValueRow::muted("Binding", "none yet"),
+    }
+}
+
+fn env_action_next_steps(
+    summary: &EnvSummary,
+    command_example: &str,
+    include_start: bool,
+) -> Vec<KeyValueRow> {
+    let mut rows = Vec::new();
+    if include_start {
+        rows.push(KeyValueRow::accent(
+            "Start",
+            format!("{command_example} start {}", summary.name),
+        ));
+    }
+    if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
+        rows.push(KeyValueRow::accent(
+            "Run",
+            format!("{command_example} @{} -- status", summary.name),
+        ));
+        rows.push(KeyValueRow::warning(
+            "Onboard",
+            format!("{command_example} @{} -- onboard", summary.name),
+        ));
+    } else {
+        rows.push(KeyValueRow::warning(
+            "Set runtime",
+            format!("{command_example} env set-runtime {} stable", summary.name),
+        ));
+        rows.push(KeyValueRow::warning(
+            "Set launcher",
+            format!("{command_example} env set-launcher {} dev", summary.name),
+        ));
+    }
+    rows
 }
 
 fn push_card(lines: &mut Vec<String>, title: &str, rows: Vec<KeyValueRow>, color: bool) {
@@ -1433,7 +1889,25 @@ fn env_status_raw(status: &EnvStatusSummary) -> Vec<String> {
     lines
 }
 
-pub fn env_snapshot_created(snapshot: &EnvSnapshotSummary) -> Vec<String> {
+pub fn env_snapshot_created(snapshot: &EnvSnapshotSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return env_snapshot_created_raw(snapshot);
+    }
+
+    let mut lines = vec![paint("Snapshot created", Tone::Strong, profile.color)];
+    let mut rows = vec![
+        KeyValueRow::accent("Env", snapshot.env_name.clone()),
+        KeyValueRow::accent("Snapshot", snapshot.id.clone()),
+        KeyValueRow::plain("Archive", snapshot.archive_path.clone()),
+    ];
+    if let Some(label) = snapshot.label.as_deref() {
+        rows.push(KeyValueRow::plain("Label", label));
+    }
+    push_card(&mut lines, "Snapshot", rows, profile.color);
+    lines
+}
+
+fn env_snapshot_created_raw(snapshot: &EnvSnapshotSummary) -> Vec<String> {
     let mut lines = vec![
         format!(
             "Created snapshot {} for env {}",
@@ -1574,7 +2048,36 @@ fn env_snapshot_list_raw(snapshots: &[EnvSnapshotSummary]) -> Vec<String> {
     lines
 }
 
-pub fn env_snapshot_restored(restored: &EnvSnapshotRestoreSummary) -> Vec<String> {
+pub fn env_snapshot_restored(
+    restored: &EnvSnapshotRestoreSummary,
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return env_snapshot_restored_raw(restored);
+    }
+
+    let mut lines = vec![paint("Snapshot restored", Tone::Strong, profile.color)];
+    let mut rows = vec![
+        KeyValueRow::accent("Env", restored.env_name.clone()),
+        KeyValueRow::accent("Snapshot", restored.snapshot_id.clone()),
+        KeyValueRow::plain("Root", restored.root.clone()),
+        KeyValueRow::plain("Archive", restored.archive_path.clone()),
+        action_export_binding_row(
+            restored.default_runtime.clone(),
+            restored.default_launcher.clone(),
+        ),
+    ];
+    if let Some(label) = restored.label.as_deref() {
+        rows.push(KeyValueRow::plain("Label", label));
+    }
+    if restored.protected {
+        rows.push(KeyValueRow::warning("Protected", "yes"));
+    }
+    push_card(&mut lines, "Environment", rows, profile.color);
+    lines
+}
+
+fn env_snapshot_restored_raw(restored: &EnvSnapshotRestoreSummary) -> Vec<String> {
     let mut lines = vec![
         format!(
             "Restored env {} from snapshot {}",
@@ -1598,7 +2101,28 @@ pub fn env_snapshot_restored(restored: &EnvSnapshotRestoreSummary) -> Vec<String
     lines
 }
 
-pub fn env_snapshot_removed(removed: &EnvSnapshotRemoveSummary) -> Vec<String> {
+pub fn env_snapshot_removed(
+    removed: &EnvSnapshotRemoveSummary,
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return env_snapshot_removed_raw(removed);
+    }
+
+    let mut lines = vec![paint("Snapshot removed", Tone::Strong, profile.color)];
+    let mut rows = vec![
+        KeyValueRow::accent("Env", removed.env_name.clone()),
+        KeyValueRow::accent("Snapshot", removed.snapshot_id.clone()),
+        KeyValueRow::plain("Archive", removed.archive_path.clone()),
+    ];
+    if let Some(label) = removed.label.as_deref() {
+        rows.push(KeyValueRow::plain("Label", label));
+    }
+    push_card(&mut lines, "Snapshot", rows, profile.color);
+    lines
+}
+
+fn env_snapshot_removed_raw(removed: &EnvSnapshotRemoveSummary) -> Vec<String> {
     let mut lines = vec![
         format!(
             "Removed snapshot {} for env {}",
@@ -1807,12 +2331,44 @@ fn env_resolved_raw(summary: &ExecutionSummary) -> Vec<String> {
     lines
 }
 
-pub fn env_runtime_updated(name: &str, runtime_name: &str) -> Vec<String> {
-    vec![format!("Updated env {name}: defaultRuntime={runtime_name}")]
+pub fn env_runtime_updated(name: &str, runtime_name: &str, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return vec![format!("Updated env {name}: defaultRuntime={runtime_name}")];
+    }
+
+    let mut lines = vec![paint("Environment updated", Tone::Strong, profile.color)];
+    push_card(
+        &mut lines,
+        "Binding",
+        vec![
+            KeyValueRow::accent("Env", name),
+            KeyValueRow::accent("Runtime", runtime_name),
+        ],
+        profile.color,
+    );
+    lines
 }
 
-pub fn env_launcher_updated(name: &str, launcher_name: &str) -> Vec<String> {
-    vec![format!(
-        "Updated env {name}: defaultLauncher={launcher_name}"
-    )]
+pub fn env_launcher_updated(
+    name: &str,
+    launcher_name: &str,
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return vec![format!(
+            "Updated env {name}: defaultLauncher={launcher_name}"
+        )];
+    }
+
+    let mut lines = vec![paint("Environment updated", Tone::Strong, profile.color)];
+    push_card(
+        &mut lines,
+        "Binding",
+        vec![
+            KeyValueRow::accent("Env", name),
+            KeyValueRow::accent("Launcher", launcher_name),
+        ],
+        profile.color,
+    );
+    lines
 }

@@ -17,7 +17,8 @@ impl Cli {
     }
 
     pub(super) fn handle_service_restore_global(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "service restore-global")?;
         let (args, dry_run) = Self::consume_flag(args, "--dry-run");
         let Some(name) = args.first() else {
             return Err("service restore-global requires <env>".to_string());
@@ -37,12 +38,13 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_restored(&summary));
+        self.stdout_lines(render::service::service_restored(&summary, profile));
         Ok(0)
     }
 
     pub(super) fn handle_service_adopt_global(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "service adopt-global")?;
         let (args, dry_run) = Self::consume_flag(args, "--dry-run");
         let Some(name) = args.first() else {
             return Err("service adopt-global requires <env>".to_string());
@@ -62,7 +64,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::service::service_adopted(&summary));
+        self.stdout_lines(render::service::service_adopted(&summary, profile));
         Ok(0)
     }
 
@@ -96,7 +98,8 @@ impl Cli {
     }
 
     pub(super) fn handle_service_install(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "service install")?;
         let Some(name) = args.first() else {
             return Err("service install requires <env>".to_string());
         };
@@ -112,6 +115,7 @@ impl Cli {
 
         self.stdout_lines(render::service::service_installed(
             &summary,
+            profile,
             &self.command_example(),
         ));
         Ok(0)
@@ -167,7 +171,7 @@ impl Cli {
     }
 
     pub(super) fn handle_service_start(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "service start")?;
         let Some(name) = args.first() else {
             return Err("service start requires <env>".to_string());
         };
@@ -181,13 +185,14 @@ impl Cli {
 
         self.stdout_lines(render::service::service_action(
             &summary,
+            profile,
             &self.command_example(),
         ));
         Ok(0)
     }
 
     pub(super) fn handle_service_stop(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "service stop")?;
         let Some(name) = args.first() else {
             return Err("service stop requires <env>".to_string());
         };
@@ -201,13 +206,15 @@ impl Cli {
 
         self.stdout_lines(render::service::service_action(
             &summary,
+            profile,
             &self.command_example(),
         ));
         Ok(0)
     }
 
     pub(super) fn handle_service_restart(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "service restart")?;
         let Some(name) = args.first() else {
             return Err("service restart requires <env>".to_string());
         };
@@ -221,13 +228,15 @@ impl Cli {
 
         self.stdout_lines(render::service::service_action(
             &summary,
+            profile,
             &self.command_example(),
         ));
         Ok(0)
     }
 
     pub(super) fn handle_service_uninstall(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "service uninstall")?;
         let Some(name) = args.first() else {
             return Err("service uninstall requires <env>".to_string());
         };
@@ -241,6 +250,7 @@ impl Cli {
 
         self.stdout_lines(render::service::service_action(
             &summary,
+            profile,
             &self.command_example(),
         ));
         Ok(0)

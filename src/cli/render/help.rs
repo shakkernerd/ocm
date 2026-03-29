@@ -639,7 +639,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Create an environment",
             "Create an isolated OpenClaw environment and optionally bind a runtime, install an official OpenClaw release, or bind a launcher.",
             vec![format!(
-                "{cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name> | --version <version> | --channel <channel>] [--launcher <name>] [--protect] [--json]"
+                "{cmd} env create <name> [--root <path>] [--port <port>] [--runtime <name> | --version <version> | --channel <channel>] [--launcher <name>] [--protect] [--raw] [--json]"
             )],
             &[
                 (
@@ -661,6 +661,10 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--launcher <name>", "Bind a launcher at creation time"),
                 ("--protect", "Mark the environment as protected"),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
                 ("--json", "Print the created environment summary as JSON"),
             ],
             vec![
@@ -677,12 +681,16 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Clone an environment",
             "Copy an environment root and metadata into a new isolated environment.",
             vec![format!(
-                "{cmd} env clone <source> <target> [--root <path>] [--json]"
+                "{cmd} env clone <source> <target> [--root <path>] [--raw] [--json]"
             )],
             &[
                 (
                     "--root <path>",
                     "Use a custom root path for the cloned environment",
+                ),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
                 ),
                 ("--json", "Print the cloned environment summary as JSON"),
             ],
@@ -697,10 +705,14 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Export an environment",
             "Write a portable environment archive that can be imported later.",
             vec![format!(
-                "{cmd} env export <name> [--output <path>] [--json]"
+                "{cmd} env export <name> [--output <path>] [--raw] [--json]"
             )],
             &[
                 ("--output <path>", "Write the archive to a specific path"),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
                 ("--json", "Print the export summary as JSON"),
             ],
             vec![format!(
@@ -712,11 +724,15 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Import an environment",
             "Create a new environment from a portable environment archive.",
             vec![format!(
-                "{cmd} env import <archive> [--name <name>] [--root <path>] [--json]"
+                "{cmd} env import <archive> [--name <name>] [--root <path>] [--raw] [--json]"
             )],
             &[
                 ("--name <name>", "Override the imported environment name"),
                 ("--root <path>", "Override the imported environment root"),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
                 ("--json", "Print the imported environment summary as JSON"),
             ],
             vec![format!(
@@ -794,7 +810,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Repair safe environment issues",
             "Preview or apply narrow, safe repairs such as marker rewrites and missing binding cleanup.",
             vec![format!(
-                "{cmd} env cleanup (<name> | --all) [--yes] [--json]"
+                "{cmd} env cleanup (<name> | --all) [--yes] [--raw] [--json]"
             )],
             &[
                 (
@@ -802,6 +818,10 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                     "Operate on every environment with actionable repairs",
                 ),
                 ("--yes", "Apply repairs instead of showing a preview"),
+                (
+                    "--raw",
+                    "Force plain output instead of the TTY receipt view",
+                ),
                 ("--json", "Print cleanup summaries as JSON"),
             ],
             vec![
@@ -814,8 +834,14 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
         "repair-marker" => render_leaf(
             "Repair an environment marker",
             "Rewrite `.ocm-env.json` for a known environment root.",
-            vec![format!("{cmd} env repair-marker <name> [--json]")],
-            &[("--json", "Print the repair summary as JSON")],
+            vec![format!("{cmd} env repair-marker <name> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the repair summary as JSON"),
+            ],
             vec![format!("{cmd} env repair-marker demo")],
             &[],
         ),
@@ -908,8 +934,10 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Bind or clear a runtime",
             "Set the default runtime for an environment, clear it with `none`, or bind an official OpenClaw release directly.",
             vec![
-                format!("{cmd} env set-runtime <name> <runtime|none>"),
-                format!("{cmd} env set-runtime <name> (--version <version> | --channel <channel>)"),
+                format!("{cmd} env set-runtime <name> <runtime|none> [--raw] [--json]"),
+                format!(
+                    "{cmd} env set-runtime <name> (--version <version> | --channel <channel>) [--raw] [--json]"
+                ),
             ],
             &[
                 (
@@ -920,6 +948,11 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                     "--channel <channel>",
                     "Install or reuse the published release currently tagged for one channel",
                 ),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the updated environment record as JSON"),
             ],
             vec![
                 format!("{cmd} env set-runtime demo stable"),
@@ -932,8 +965,16 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
         "set-launcher" => render_leaf(
             "Bind or clear a launcher",
             "Set the default launcher for an environment, or clear it with `none`.",
-            vec![format!("{cmd} env set-launcher <name> <launcher|none>")],
-            &[],
+            vec![format!(
+                "{cmd} env set-launcher <name> <launcher|none> [--raw] [--json]"
+            )],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the updated environment record as JSON"),
+            ],
             vec![
                 format!("{cmd} env set-launcher demo stable"),
                 format!("{cmd} env set-launcher demo none"),
@@ -943,8 +984,16 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
         "protect" => render_leaf(
             "Toggle environment protection",
             "Mark an environment as protected or unprotected for destructive commands.",
-            vec![format!("{cmd} env protect <name> <on|off>")],
-            &[],
+            vec![format!(
+                "{cmd} env protect <name> <on|off> [--raw] [--json]"
+            )],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the updated environment record as JSON"),
+            ],
             vec![format!("{cmd} env protect demo on")],
             &[],
         ),
@@ -978,8 +1027,17 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
         "remove" | "rm" => render_leaf(
             "Remove an environment",
             "Delete an environment root and metadata, subject to safety rails.",
-            vec![format!("{cmd} env remove <name> [--force]")],
-            &[("--force", "Override protection for the target environment")],
+            vec![format!(
+                "{cmd} env remove <name> [--force] [--raw] [--json]"
+            )],
+            &[
+                ("--force", "Override protection for the target environment"),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the removed environment record as JSON"),
+            ],
             vec![
                 format!("{cmd} env remove demo"),
                 format!("{cmd} env remove demo --force"),
@@ -990,7 +1048,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Prune old environments",
             "Preview or remove unused environments older than a threshold.",
             vec![format!(
-                "{cmd} env prune [--older-than <days>] [--yes] [--json]"
+                "{cmd} env prune [--older-than <days>] [--yes] [--raw] [--json]"
             )],
             &[
                 (
@@ -998,6 +1056,10 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                     "Age threshold in days. Defaults to 14",
                 ),
                 ("--yes", "Apply removals instead of showing a preview"),
+                (
+                    "--raw",
+                    "Force plain output instead of the TTY receipt view",
+                ),
                 ("--json", "Print prune summaries as JSON"),
             ],
             vec![
@@ -1017,7 +1079,7 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
             "Install a published OpenClaw release",
             "Install a published OpenClaw release as a local managed runtime.",
             vec![format!(
-                "{cmd} release install [<name>] (--version <version> | --channel <channel>) [--description <text>] [--force] [--json]"
+                "{cmd} release install [<name>] (--version <version> | --channel <channel>) [--description <text>] [--force] [--raw] [--json]"
             )],
             &[
                 (
@@ -1032,6 +1094,10 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
                 (
                     "--force",
                     "Replace an existing managed runtime of the same name",
+                ),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
                 ),
                 ("--json", "Print the installed runtime record as JSON"),
             ],
@@ -1105,10 +1171,14 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
             "Create an environment snapshot",
             "Capture a point-in-time snapshot of an environment.",
             vec![format!(
-                "{cmd} env snapshot create <name> [--label <label>] [--json]"
+                "{cmd} env snapshot create <name> [--label <label>] [--raw] [--json]"
             )],
             &[
                 ("--label <label>", "Add a human label to the snapshot"),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
                 ("--json", "Print the snapshot summary as JSON"),
             ],
             vec![format!(
@@ -1160,9 +1230,15 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
             "Restore an environment snapshot",
             "Replace an environment root with the contents of a snapshot.",
             vec![format!(
-                "{cmd} env snapshot restore <name> <snapshot> [--json]"
+                "{cmd} env snapshot restore <name> <snapshot> [--raw] [--json]"
             )],
-            &[("--json", "Print the restore summary as JSON")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the restore summary as JSON"),
+            ],
             vec![format!(
                 "{cmd} env snapshot restore demo 1742922000-123456789"
             )],
@@ -1172,9 +1248,15 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
             "Remove an environment snapshot",
             "Delete snapshot metadata and archived content for a snapshot.",
             vec![format!(
-                "{cmd} env snapshot remove <name> <snapshot> [--json]"
+                "{cmd} env snapshot remove <name> <snapshot> [--raw] [--json]"
             )],
-            &[("--json", "Print the removal summary as JSON")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the removal summary as JSON"),
+            ],
             vec![format!(
                 "{cmd} env snapshot remove demo 1742922000-123456789"
             )],
@@ -1220,7 +1302,7 @@ pub fn launcher_command_help(cmd: &str, action: &str) -> Option<String> {
             "Create a launcher",
             "Register a named command recipe for running OpenClaw or related workflows.",
             vec![format!(
-                "{cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>] [--json]"
+                "{cmd} launcher add <name> --command \"<launcher>\" [--cwd <path>] [--description <text>] [--raw] [--json]"
             )],
             &[
                 (
@@ -1232,6 +1314,10 @@ pub fn launcher_command_help(cmd: &str, action: &str) -> Option<String> {
                     "Optional working directory for the launcher",
                 ),
                 ("--description <text>", "Optional human description"),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
                 ("--json", "Print the launcher record as JSON"),
             ],
             vec![
@@ -1257,16 +1343,25 @@ pub fn launcher_command_help(cmd: &str, action: &str) -> Option<String> {
         "show" => render_leaf(
             "Show a launcher",
             "Print one launcher definition.",
-            vec![format!("{cmd} launcher show <name> [--json]")],
-            &[("--json", "Print the launcher as JSON")],
+            vec![format!("{cmd} launcher show <name> [--raw] [--json]")],
+            &[
+                ("--raw", "Force plain key/value output instead of TTY cards"),
+                ("--json", "Print the launcher as JSON"),
+            ],
             vec![format!("{cmd} launcher show stable")],
             &[],
         ),
         "remove" | "rm" => render_leaf(
             "Remove a launcher",
             "Delete a launcher definition.",
-            vec![format!("{cmd} launcher remove <name>")],
-            &[],
+            vec![format!("{cmd} launcher remove <name> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the removed launcher record as JSON"),
+            ],
             vec![format!("{cmd} launcher remove stable")],
             &[],
         ),
@@ -1280,11 +1375,15 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
             "Register an existing runtime",
             "Register a named OpenClaw binary that already exists on disk.",
             vec![format!(
-                "{cmd} runtime add <name> --path <binary> [--description <text>] [--json]"
+                "{cmd} runtime add <name> --path <binary> [--description <text>] [--raw] [--json]"
             )],
             &[
                 ("--path <binary>", "Filesystem path to the OpenClaw binary"),
                 ("--description <text>", "Optional human description"),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
                 ("--json", "Print the runtime record as JSON"),
             ],
             vec![format!("{cmd} runtime add stable --path /path/to/openclaw")],
@@ -1294,7 +1393,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
             "Install a managed runtime",
             "Install a runtime from the official OpenClaw release source, a local binary, a direct URL, or a custom release manifest.",
             vec![format!(
-                "{cmd} runtime install [<name>] (--version <version> | --channel <channel> | --path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force] [--json]"
+                "{cmd} runtime install [<name>] (--version <version> | --channel <channel> | --path <binary> | --url <url> | --manifest-url <url> (--version <version> | --channel <channel>)) [--description <text>] [--force] [--raw] [--json]"
             )],
             &[
                 (
@@ -1315,6 +1414,10 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 (
                     "--force",
                     "Replace an existing managed runtime of the same name",
+                ),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
                 ),
                 ("--json", "Print the runtime record as JSON"),
             ],
@@ -1337,7 +1440,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
             "Update managed runtimes",
             "Update one runtime or every managed runtime using stored release provenance.",
             vec![format!(
-                "{cmd} runtime update (<name> | --all) [--version <version> | --channel <channel>] [--json]"
+                "{cmd} runtime update (<name> | --all) [--version <version> | --channel <channel>] [--raw] [--json]"
             )],
             &[
                 ("--all", "Update every managed runtime"),
@@ -1348,6 +1451,10 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 (
                     "--channel <channel>",
                     "Override the selected release channel",
+                ),
+                (
+                    "--raw",
+                    "Force plain output instead of TTY receipts or tables",
                 ),
                 ("--json", "Print update summaries as JSON"),
             ],
@@ -1449,8 +1556,14 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
         "remove" | "rm" => render_leaf(
             "Remove a runtime",
             "Delete a runtime record.",
-            vec![format!("{cmd} runtime remove <name>")],
-            &[],
+            vec![format!("{cmd} runtime remove <name> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the removed runtime record as JSON"),
+            ],
             vec![format!("{cmd} runtime remove stable")],
             &[],
         ),
@@ -1481,12 +1594,16 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             "Adopt the legacy global service",
             "Move the legacy machine-wide OpenClaw service into the env-scoped OCM service model.",
             vec![format!(
-                "{cmd} service adopt-global <env> [--dry-run] [--json]"
+                "{cmd} service adopt-global <env> [--dry-run] [--raw] [--json]"
             )],
             &[
                 (
                     "--dry-run",
                     "Preview adoption without mutating files or service-manager state",
+                ),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
                 ),
                 ("--json", "Print the adoption summary as JSON"),
             ],
@@ -1497,12 +1614,16 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             "Restore the legacy global service",
             "Restore a previously adopted global OpenClaw service from backup.",
             vec![format!(
-                "{cmd} service restore-global <env> [--dry-run] [--json]"
+                "{cmd} service restore-global <env> [--dry-run] [--raw] [--json]"
             )],
             &[
                 (
                     "--dry-run",
                     "Preview the restore without mutating files or service-manager state",
+                ),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
                 ),
                 ("--json", "Print the restore summary as JSON"),
             ],
@@ -1512,8 +1633,14 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         "install" => render_leaf(
             "Install an env-scoped service",
             "Create a persistent service for an environment using the current binding and effective port.",
-            vec![format!("{cmd} service install <env> [--json]")],
-            &[("--json", "Print the install summary as JSON")],
+            vec![format!("{cmd} service install <env> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the install summary as JSON"),
+            ],
             vec![format!("{cmd} service install demo")],
             &["If the preferred port is busy, OCM auto-provisions the next free port and warns."],
         ),
@@ -1570,32 +1697,56 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         "start" => render_leaf(
             "Start a service",
             "Start an installed env-scoped service.",
-            vec![format!("{cmd} service start <env> [--json]")],
-            &[("--json", "Print the action summary as JSON")],
+            vec![format!("{cmd} service start <env> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the action summary as JSON"),
+            ],
             vec![format!("{cmd} service start demo")],
             &[],
         ),
         "stop" => render_leaf(
             "Stop a service",
             "Stop an installed env-scoped service.",
-            vec![format!("{cmd} service stop <env> [--json]")],
-            &[("--json", "Print the action summary as JSON")],
+            vec![format!("{cmd} service stop <env> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the action summary as JSON"),
+            ],
             vec![format!("{cmd} service stop demo")],
             &[],
         ),
         "restart" => render_leaf(
             "Restart a service",
             "Restart an installed env-scoped service.",
-            vec![format!("{cmd} service restart <env> [--json]")],
-            &[("--json", "Print the action summary as JSON")],
+            vec![format!("{cmd} service restart <env> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the action summary as JSON"),
+            ],
             vec![format!("{cmd} service restart demo")],
             &[],
         ),
         "uninstall" => render_leaf(
             "Uninstall a service",
             "Remove an env-scoped service definition.",
-            vec![format!("{cmd} service uninstall <env> [--json]")],
-            &[("--json", "Print the action summary as JSON")],
+            vec![format!("{cmd} service uninstall <env> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the action summary as JSON"),
+            ],
             vec![format!("{cmd} service uninstall demo")],
             &[],
         ),

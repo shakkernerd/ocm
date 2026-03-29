@@ -8,7 +8,7 @@ use super::{Cli, render};
 
 impl Cli {
     pub(super) fn handle_runtime_add(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "runtime add")?;
         let (args, path) = Self::consume_option(args, "--path")?;
         let path = Self::require_option_value(path, "--path")?;
         let (args, description) = Self::consume_option(args, "--description")?;
@@ -30,6 +30,7 @@ impl Cli {
 
         self.stdout_lines(render::runtime::runtime_added(
             &meta,
+            profile,
             &self.command_example(),
         ));
         Ok(0)
@@ -86,18 +87,28 @@ impl Cli {
     }
 
     pub(super) fn handle_runtime_remove(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "runtime remove")?;
         let Some(name) = args.first() else {
             return Err("runtime name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
         let meta = self.runtime_service().remove(name)?;
-        self.stdout_lines(render::runtime::runtime_removed(&meta.name));
+        if json_flag {
+            self.print_json(&meta)?;
+            return Ok(0);
+        }
+        self.stdout_lines(render::runtime::runtime_removed(
+            &meta.name,
+            profile,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 
     pub(super) fn handle_runtime_install(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "runtime install")?;
         let (args, force) = Self::consume_flag(args, "--force");
         let (args, path) = Self::consume_option(args, "--path")?;
         let path = Self::require_option_value(path, "--path")?;
@@ -230,13 +241,13 @@ impl Cli {
 
                 self.stdout_lines(match action {
                     OfficialRuntimePrepareAction::Installed => {
-                        render::runtime::runtime_installed(&meta, &self.command_example())
+                        render::runtime::runtime_installed(&meta, profile, &self.command_example())
                     }
                     OfficialRuntimePrepareAction::Reused => {
-                        render::runtime::runtime_reused(&meta, &self.command_example())
+                        render::runtime::runtime_reused(&meta, profile, &self.command_example())
                     }
                     OfficialRuntimePrepareAction::Updated => {
-                        render::runtime::runtime_updated(&meta, &self.command_example())
+                        render::runtime::runtime_updated(&meta, profile, &self.command_example())
                     }
                 });
                 return Ok(0);
@@ -257,6 +268,7 @@ impl Cli {
 
         self.stdout_lines(render::runtime::runtime_installed(
             &meta,
+            profile,
             &self.command_example(),
         ));
         Ok(0)
@@ -304,7 +316,7 @@ impl Cli {
     }
 
     pub(super) fn handle_runtime_update(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "runtime update")?;
         let (args, all_flag) = Self::consume_flag(args, "--all");
         let (args, version) = Self::consume_option(args, "--version")?;
         let version = Self::require_option_value(version, "--version")?;
@@ -323,7 +335,7 @@ impl Cli {
                 return Ok(code);
             }
 
-            self.stdout_lines(render::runtime::runtime_update_batch(&batch));
+            self.stdout_lines(render::runtime::runtime_update_batch(&batch, profile));
             return Ok(code);
         }
         let Some(name) = args.first() else {
@@ -347,6 +359,7 @@ impl Cli {
 
         self.stdout_lines(render::runtime::runtime_updated(
             &meta,
+            profile,
             &self.command_example(),
         ));
         Ok(0)

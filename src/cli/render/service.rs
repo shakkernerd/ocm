@@ -675,7 +675,67 @@ fn service_discover_raw(summary: &DiscoveredServiceList) -> Vec<String> {
     lines
 }
 
-pub fn service_installed(summary: &ServiceInstallSummary, command_example: &str) -> Vec<String> {
+pub fn service_installed(
+    summary: &ServiceInstallSummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return service_installed_raw(summary, command_example);
+    }
+
+    let mut lines = vec![paint("Service installed", Tone::Strong, profile.color)];
+    let mut service_rows = vec![
+        KeyValueRow::accent("Env", summary.env_name.clone()),
+        KeyValueRow::plain("Type", summary.service_kind.clone()),
+        KeyValueRow::accent("Port", summary.gateway_port.to_string()),
+        KeyValueRow::accent(
+            "Binding",
+            format!("{}:{}", summary.binding_kind, summary.binding_name),
+        ),
+    ];
+    if summary.persisted_gateway_port {
+        service_rows.push(KeyValueRow::success("Port saved", "yes"));
+    }
+    push_card(&mut lines, "Service", service_rows, profile.color);
+
+    let mut next = vec![
+        KeyValueRow::accent(
+            "Start",
+            format!("{command_example} service start {}", summary.env_name),
+        ),
+        KeyValueRow::accent(
+            "Status",
+            format!("{command_example} service status {}", summary.env_name),
+        ),
+        KeyValueRow::accent(
+            "Logs",
+            format!(
+                "{command_example} service logs {} --tail 50",
+                summary.env_name
+            ),
+        ),
+    ];
+    if !summary.warnings.is_empty() {
+        next.push(KeyValueRow::warning(
+            "Warnings",
+            format!("{} warning(s)", summary.warnings.len()),
+        ));
+    }
+    push_card(&mut lines, "Next", next, profile.color);
+    if !summary.warnings.is_empty() {
+        let warnings = summary
+            .warnings
+            .iter()
+            .enumerate()
+            .map(|(index, warning)| KeyValueRow::warning(format!("#{}", index + 1), warning))
+            .collect::<Vec<_>>();
+        push_card(&mut lines, "Warnings", warnings, profile.color);
+    }
+    lines
+}
+
+fn service_installed_raw(summary: &ServiceInstallSummary, command_example: &str) -> Vec<String> {
     let mut lines = vec![
         format!("Installed service {}", summary.env_name),
         format!("  label: {}", summary.managed_label),
@@ -712,7 +772,44 @@ pub fn service_installed(summary: &ServiceInstallSummary, command_example: &str)
     lines
 }
 
-pub fn service_adopted(summary: &ServiceAdoptionSummary) -> Vec<String> {
+pub fn service_adopted(summary: &ServiceAdoptionSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return service_adopted_raw(summary);
+    }
+
+    let mut lines = vec![paint(
+        if summary.dry_run {
+            "Global service move planned"
+        } else {
+            "Global service moved"
+        },
+        Tone::Strong,
+        profile.color,
+    )];
+    push_card(
+        &mut lines,
+        "Service",
+        vec![
+            KeyValueRow::accent("Env", summary.env_name.clone()),
+            KeyValueRow::plain("Port", summary.gateway_port.to_string()),
+            KeyValueRow::plain("OpenClaw label", summary.global_label.clone()),
+            KeyValueRow::plain("OCM label", summary.managed_label.clone()),
+        ],
+        profile.color,
+    );
+    if !summary.warnings.is_empty() {
+        let warnings = summary
+            .warnings
+            .iter()
+            .enumerate()
+            .map(|(index, warning)| KeyValueRow::warning(format!("#{}", index + 1), warning))
+            .collect::<Vec<_>>();
+        push_card(&mut lines, "Warnings", warnings, profile.color);
+    }
+    lines
+}
+
+fn service_adopted_raw(summary: &ServiceAdoptionSummary) -> Vec<String> {
     let mut lines = vec![
         if summary.dry_run {
             format!("Would adopt global service {}", summary.env_name)
@@ -732,7 +829,44 @@ pub fn service_adopted(summary: &ServiceAdoptionSummary) -> Vec<String> {
     lines
 }
 
-pub fn service_restored(summary: &ServiceRestoreSummary) -> Vec<String> {
+pub fn service_restored(summary: &ServiceRestoreSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return service_restored_raw(summary);
+    }
+
+    let mut lines = vec![paint(
+        if summary.dry_run {
+            "Global service restore planned"
+        } else {
+            "Global service restored"
+        },
+        Tone::Strong,
+        profile.color,
+    )];
+    push_card(
+        &mut lines,
+        "Service",
+        vec![
+            KeyValueRow::accent("Env", summary.env_name.clone()),
+            KeyValueRow::plain("Port", summary.gateway_port.to_string()),
+            KeyValueRow::plain("OpenClaw label", summary.global_label.clone()),
+            KeyValueRow::plain("OCM label", summary.managed_label.clone()),
+        ],
+        profile.color,
+    );
+    if !summary.warnings.is_empty() {
+        let warnings = summary
+            .warnings
+            .iter()
+            .enumerate()
+            .map(|(index, warning)| KeyValueRow::warning(format!("#{}", index + 1), warning))
+            .collect::<Vec<_>>();
+        push_card(&mut lines, "Warnings", warnings, profile.color);
+    }
+    lines
+}
+
+fn service_restored_raw(summary: &ServiceRestoreSummary) -> Vec<String> {
     let mut lines = vec![
         if summary.dry_run {
             format!("Would restore global service {}", summary.env_name)
@@ -752,7 +886,68 @@ pub fn service_restored(summary: &ServiceRestoreSummary) -> Vec<String> {
     lines
 }
 
-pub fn service_action(summary: &ServiceActionSummary, command_example: &str) -> Vec<String> {
+pub fn service_action(
+    summary: &ServiceActionSummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return service_action_raw(summary, command_example);
+    }
+
+    let title = match summary.action.as_str() {
+        "start" => "Service started",
+        "stop" => "Service stopped",
+        "restart" => "Service restarted",
+        "uninstall" => "Service uninstalled",
+        _ => "Service updated",
+    };
+    let mut lines = vec![paint(title, Tone::Strong, profile.color)];
+    let mut service_rows = vec![
+        KeyValueRow::accent("Env", summary.env_name.clone()),
+        KeyValueRow::plain("Type", summary.service_kind.clone()),
+    ];
+    if let Some(port) = summary.gateway_port {
+        service_rows.push(KeyValueRow::accent("Port", port.to_string()));
+    }
+    push_card(&mut lines, "Service", service_rows, profile.color);
+
+    let next = match summary.action.as_str() {
+        "uninstall" => vec![
+            KeyValueRow::accent(
+                "Install",
+                format!("{command_example} service install {}", summary.env_name),
+            ),
+            KeyValueRow::accent("List", format!("{command_example} service list")),
+        ],
+        _ => vec![
+            KeyValueRow::accent(
+                "Status",
+                format!("{command_example} service status {}", summary.env_name),
+            ),
+            KeyValueRow::accent(
+                "Logs",
+                format!(
+                    "{command_example} service logs {} --tail 50",
+                    summary.env_name
+                ),
+            ),
+        ],
+    };
+    push_card(&mut lines, "Next", next, profile.color);
+    if !summary.warnings.is_empty() {
+        let warnings = summary
+            .warnings
+            .iter()
+            .enumerate()
+            .map(|(index, warning)| KeyValueRow::warning(format!("#{}", index + 1), warning))
+            .collect::<Vec<_>>();
+        push_card(&mut lines, "Warnings", warnings, profile.color);
+    }
+    lines
+}
+
+fn service_action_raw(summary: &ServiceActionSummary, command_example: &str) -> Vec<String> {
     let title = match summary.action.as_str() {
         "start" => "Started",
         "stop" => "Stopped",

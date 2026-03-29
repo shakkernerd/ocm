@@ -208,7 +208,7 @@ fn env_create_help_mentions_release_selectors() {
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
     assert!(output.contains(
-        "ocm env create <name> [--root <path>] [--port <port>] [--runtime <name> | --version <version> | --channel <channel>] [--launcher <name>] [--protect] [--json]"
+        "ocm env create <name> [--root <path>] [--port <port>] [--runtime <name> | --version <version> | --channel <channel>] [--launcher <name>] [--protect] [--raw] [--json]"
     ));
     assert!(output.contains("--version <version>"));
     assert!(output.contains("--channel <channel>"));
@@ -348,7 +348,7 @@ fn nested_snapshot_help_is_available() {
     assert!(leaf.status.success(), "{}", stderr(&leaf));
     let output = stdout(&leaf);
     assert!(output.contains("Create an environment snapshot"));
-    assert!(output.contains("ocm env snapshot create <name> [--label <label>] [--json]"));
+    assert!(output.contains("ocm env snapshot create <name> [--label <label>] [--raw] [--json]"));
 
     let show = run_ocm(&cwd, &env, &["help", "env", "snapshot", "show"]);
     assert!(show.status.success(), "{}", stderr(&show));

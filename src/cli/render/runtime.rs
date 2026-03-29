@@ -10,7 +10,45 @@ use crate::runtime::{
 
 use super::{RenderProfile, format_key_value_lines, format_rfc3339};
 
-pub fn runtime_added(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
+pub fn runtime_added(
+    meta: &RuntimeMeta,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return runtime_added_raw(meta, command_example);
+    }
+
+    let mut lines = vec![paint("Runtime added", Tone::Strong, profile.color)];
+    push_card(
+        &mut lines,
+        "Runtime",
+        vec![
+            KeyValueRow::accent("Name", meta.name.clone()),
+            KeyValueRow::plain("Source", source_label(&meta.source_kind)),
+            KeyValueRow::accent("Binary", meta.binary_path.clone()),
+        ],
+        profile.color,
+    );
+    push_card(
+        &mut lines,
+        "Next",
+        vec![
+            KeyValueRow::accent(
+                "Use in env",
+                format!("{command_example} env create demo --runtime {}", meta.name),
+            ),
+            KeyValueRow::accent(
+                "Show",
+                format!("{command_example} runtime show {}", meta.name),
+            ),
+        ],
+        profile.color,
+    );
+    lines
+}
+
+fn runtime_added_raw(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
     vec![
         format!("Added runtime {}", meta.name),
         format!("  binary path: {}", meta.binary_path),
@@ -337,11 +375,43 @@ pub fn runtime_which(summary: &RuntimeBinarySummary) -> Vec<String> {
     vec![summary.binary_path.clone()]
 }
 
-pub fn runtime_removed(name: &str) -> Vec<String> {
-    vec![format!("Removed runtime {name}")]
+pub fn runtime_removed(name: &str, profile: RenderProfile, command_example: &str) -> Vec<String> {
+    if !profile.pretty {
+        return vec![format!("Removed runtime {name}")];
+    }
+
+    let mut lines = vec![paint("Runtime removed", Tone::Strong, profile.color)];
+    push_card(
+        &mut lines,
+        "Runtime",
+        vec![KeyValueRow::accent("Name", name)],
+        profile.color,
+    );
+    push_card(
+        &mut lines,
+        "Next",
+        vec![KeyValueRow::accent(
+            "List",
+            format!("{command_example} runtime list"),
+        )],
+        profile.color,
+    );
+    lines
 }
 
-pub fn runtime_installed(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
+pub fn runtime_installed(
+    meta: &RuntimeMeta,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return runtime_installed_raw(meta, command_example);
+    }
+
+    runtime_action_receipt("Runtime installed", meta, profile, command_example)
+}
+
+fn runtime_installed_raw(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
     let mut lines = vec![
         format!("Installed runtime {}", meta.name),
         format!("  binary path: {}", meta.binary_path),
@@ -356,7 +426,19 @@ pub fn runtime_installed(meta: &RuntimeMeta, command_example: &str) -> Vec<Strin
     lines
 }
 
-pub fn runtime_reused(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
+pub fn runtime_reused(
+    meta: &RuntimeMeta,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return runtime_reused_raw(meta, command_example);
+    }
+
+    runtime_action_receipt("Runtime ready", meta, profile, command_example)
+}
+
+fn runtime_reused_raw(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
     let mut lines = vec![
         format!("Using installed runtime {}", meta.name),
         format!("  binary path: {}", meta.binary_path),
@@ -389,10 +471,72 @@ pub fn runtime_releases(releases: &[RuntimeRelease]) -> Vec<String> {
     lines
 }
 
-pub fn runtime_update_batch(batch: &RuntimeUpdateBatchSummary) -> Vec<String> {
+pub fn runtime_update_batch(
+    batch: &RuntimeUpdateBatchSummary,
+    profile: RenderProfile,
+) -> Vec<String> {
     if batch.results.is_empty() {
-        return vec!["No runtimes.".to_string()];
+        return if profile.pretty {
+            vec![paint("No runtimes.", Tone::Muted, profile.color)]
+        } else {
+            vec!["No runtimes.".to_string()]
+        };
     }
+    if !profile.pretty {
+        return runtime_update_batch_raw(batch);
+    }
+
+    let mut lines = vec![paint(
+        "Runtime upgrade summary",
+        Tone::Strong,
+        profile.color,
+    )];
+    push_card(
+        &mut lines,
+        "Summary",
+        vec![
+            KeyValueRow::plain("Total", batch.count.to_string()),
+            KeyValueRow::success("Updated", batch.updated.to_string()),
+            KeyValueRow::muted("Skipped", batch.skipped.to_string()),
+            KeyValueRow::new(
+                "Failed",
+                batch.failed.to_string(),
+                if batch.failed > 0 {
+                    Tone::Danger
+                } else {
+                    Tone::Muted
+                },
+            ),
+        ],
+        profile.color,
+    );
+
+    let rows = batch
+        .results
+        .iter()
+        .map(|summary| {
+            vec![
+                Cell::accent(summary.name.clone()),
+                Cell::plain(summary.outcome.clone()),
+                Cell::plain(summary.source_kind.clone()),
+                summary
+                    .release_version
+                    .as_deref()
+                    .map(Cell::plain)
+                    .unwrap_or_else(|| Cell::muted("—")),
+            ]
+        })
+        .collect::<Vec<_>>();
+    lines.push(String::new());
+    lines.extend(render_table(
+        &["Runtime", "Outcome", "Source", "Version"],
+        &rows,
+        profile.color,
+    ));
+    lines
+}
+
+fn runtime_update_batch_raw(batch: &RuntimeUpdateBatchSummary) -> Vec<String> {
     let mut lines = vec![format!(
         "Runtime update summary: total={} updated={} skipped={} failed={}",
         batch.count, batch.updated, batch.skipped, batch.failed
@@ -420,7 +564,19 @@ pub fn runtime_update_batch(batch: &RuntimeUpdateBatchSummary) -> Vec<String> {
     lines
 }
 
-pub fn runtime_updated(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
+pub fn runtime_updated(
+    meta: &RuntimeMeta,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return runtime_updated_raw(meta, command_example);
+    }
+
+    runtime_action_receipt("Runtime updated", meta, profile, command_example)
+}
+
+fn runtime_updated_raw(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
     let mut lines = vec![
         format!("Updated runtime {}", meta.name),
         format!("  binary path: {}", meta.binary_path),
@@ -432,6 +588,46 @@ pub fn runtime_updated(meta: &RuntimeMeta, command_example: &str) -> Vec<String>
         "  use in env: {command_example} env create demo --runtime {}",
         meta.name
     ));
+    lines
+}
+
+fn runtime_action_receipt(
+    title: &str,
+    meta: &RuntimeMeta,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    let mut lines = vec![paint(title, Tone::Strong, profile.color)];
+
+    let mut runtime_rows = vec![
+        KeyValueRow::accent("Name", meta.name.clone()),
+        KeyValueRow::plain("Source", source_label(&meta.source_kind)),
+        KeyValueRow::accent("Binary", meta.binary_path.clone()),
+    ];
+    if let Some(version) = meta.release_version.as_deref() {
+        runtime_rows.push(KeyValueRow::plain("Version", version));
+    }
+    if let Some(selector) = selector_summary(meta) {
+        runtime_rows.push(KeyValueRow::plain("Tracks", selector));
+    }
+    push_card(&mut lines, "Runtime", runtime_rows, profile.color);
+
+    push_card(
+        &mut lines,
+        "Next",
+        vec![
+            KeyValueRow::accent(
+                "Use in env",
+                format!("{command_example} env create demo --runtime {}", meta.name),
+            ),
+            KeyValueRow::accent(
+                "Verify",
+                format!("{command_example} runtime verify {}", meta.name),
+            ),
+        ],
+        profile.color,
+    );
+
     lines
 }
 

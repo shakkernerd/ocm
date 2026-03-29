@@ -42,7 +42,15 @@ fn env_status_reports_the_resolved_launcher() {
     let create = run_ocm(
         &cwd,
         &env,
-        &["env", "create", "demo", "--launcher", "fallback", "--port", &port],
+        &[
+            "env",
+            "create",
+            "demo",
+            "--launcher",
+            "fallback",
+            "--port",
+            &port,
+        ],
     );
     assert!(create.status.success(), "{}", stderr(&create));
 
@@ -138,7 +146,15 @@ fn env_status_json_reports_runtime_health_and_binding_shape() {
     let create = run_ocm(
         &cwd,
         &env,
-        &["env", "create", "demo", "--runtime", "stable", "--port", &port],
+        &[
+            "env",
+            "create",
+            "demo",
+            "--runtime",
+            "stable",
+            "--port",
+            &port,
+        ],
     );
     assert!(create.status.success(), "{}", stderr(&create));
 

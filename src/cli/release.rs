@@ -81,7 +81,8 @@ impl Cli {
     }
 
     pub(super) fn handle_release_install(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "release install")?;
         let (args, force) = Self::consume_flag(args, "--force");
         let (args, version) = Self::consume_option(args, "--version")?;
         let version = Self::require_option_value(version, "--version")?;
@@ -131,13 +132,13 @@ impl Cli {
 
         self.stdout_lines(match action {
             OfficialRuntimePrepareAction::Installed => {
-                render::runtime::runtime_installed(&meta, &self.command_example())
+                render::runtime::runtime_installed(&meta, profile, &self.command_example())
             }
             OfficialRuntimePrepareAction::Reused => {
-                render::runtime::runtime_reused(&meta, &self.command_example())
+                render::runtime::runtime_reused(&meta, profile, &self.command_example())
             }
             OfficialRuntimePrepareAction::Updated => {
-                render::runtime::runtime_updated(&meta, &self.command_example())
+                render::runtime::runtime_updated(&meta, profile, &self.command_example())
             }
         });
         Ok(0)
