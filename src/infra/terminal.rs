@@ -112,12 +112,12 @@ pub fn paint(text: &str, tone: Tone, color: bool) -> String {
 
     let code = match tone {
         Tone::Plain => return text.to_string(),
-        Tone::Strong => "1;38;5;153",
-        Tone::Accent => "38;5;81",
-        Tone::Success => "38;5;78",
-        Tone::Warning => "38;5;221",
-        Tone::Danger => "38;5;203",
-        Tone::Muted => "38;5;244",
+        Tone::Strong => "1;34",
+        Tone::Accent => "34",
+        Tone::Success => "32",
+        Tone::Warning => "33",
+        Tone::Danger => "31",
+        Tone::Muted => "90",
     };
     format!("\u{1b}[{code}m{text}\u{1b}[0m")
 }
@@ -297,7 +297,7 @@ fn render_key_value_row(
     } else {
         let key = paint(
             &pad_and_truncate(&row.key, key_width, Align::Left),
-            Tone::Muted,
+            Tone::Plain,
             color,
         );
         let value_width = inner_width.saturating_sub(key_width + 2);
@@ -458,7 +458,7 @@ mod tests {
         assert_eq!(paint("running", Tone::Success, false), "running");
         assert_eq!(
             paint("running", Tone::Success, true),
-            "\u{1b}[38;5;78mrunning\u{1b}[0m"
+            "\u{1b}[32mrunning\u{1b}[0m"
         );
     }
 
@@ -470,9 +470,9 @@ mod tests {
             true,
         );
 
-        assert!(table[0].contains("\u{1b}[38;5;244m"));
-        assert!(table[1].contains("\u{1b}[1;38;5;153mName"));
-        assert!(table[3].contains("\u{1b}[38;5;78mrunning"));
+        assert!(table[0].contains("\u{1b}[90m"));
+        assert!(table[1].contains("\u{1b}[1;34mName"));
+        assert!(table[3].contains("\u{1b}[32mrunning"));
     }
 
     #[test]
