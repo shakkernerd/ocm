@@ -322,6 +322,12 @@ Use this when you want to see:
 ocm env clone mybot mybot-copy
 ```
 
+Clone copies the environment state into a new environment, gives the clone its own gateway port, and keeps the background service separate. The usual next step is:
+
+```bash
+ocm start mybot-copy
+```
+
 ### Snapshots
 
 Create:

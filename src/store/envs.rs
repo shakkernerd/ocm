@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -198,6 +199,7 @@ pub fn clone_environment(
     let result = (|| {
         copy_dir_recursive(&source_paths.root, &target_paths.root)?;
         let created_at = now_utc();
+        let gateway_port = choose_cloned_gateway_port(&source, env, cwd)?;
         let marker = EnvMarker {
             kind: "ocm-env-marker".to_string(),
             name: name.clone(),
@@ -209,7 +211,7 @@ pub fn clone_environment(
             kind: "ocm-env".to_string(),
             name,
             root: display_path(&target_paths.root),
-            gateway_port: source.gateway_port,
+            gateway_port: Some(gateway_port),
             default_runtime: source.default_runtime,
             default_launcher: source.default_launcher,
             protected: source.protected,
@@ -226,6 +228,46 @@ pub fn clone_environment(
     }
 
     result
+}
+
+fn choose_cloned_gateway_port(
+    source: &EnvMeta,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<u32, String> {
+    let preferred = source
+        .gateway_port
+        .or_else(|| read_config_gateway_port(source))
+        .unwrap_or(18_789);
+
+    let mut claimed = list_environments(env, cwd)?
+        .into_iter()
+        .filter_map(|meta| meta.gateway_port.or_else(|| read_config_gateway_port(&meta)))
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let mut port = preferred.max(18_789);
+    while claimed.contains(&port) || !gateway_port_available(port) {
+        claimed.insert(port);
+        port = port.saturating_add(1);
+    }
+
+    Ok(port)
+}
+
+fn read_config_gateway_port(meta: &EnvMeta) -> Option<u32> {
+    let config_path = derive_env_paths(Path::new(&meta.root)).config_path;
+    let raw = fs::read_to_string(config_path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let port = value.get("gateway")?.get("port")?.as_u64()?;
+    if (1..=u16::MAX as u64).contains(&port) {
+        Some(port as u32)
+    } else {
+        None
+    }
+}
+
+fn gateway_port_available(port: u32) -> bool {
+    TcpListener::bind(("127.0.0.1", port as u16)).is_ok()
 }
 
 pub fn export_environment(

@@ -257,7 +257,7 @@ fn environment_clone_copies_the_root_and_resets_identity_metadata() {
         "hello clone"
     );
     assert_eq!(cloned.name, "target");
-    assert_eq!(cloned.gateway_port, Some(19789));
+    assert_eq!(cloned.gateway_port, Some(19790));
     assert_eq!(cloned.default_runtime.as_deref(), Some("stable"));
     assert_eq!(cloned.default_launcher.as_deref(), Some("stable"));
     assert!(cloned.protected);
@@ -266,6 +266,43 @@ fn environment_clone_copies_the_root_and_resets_identity_metadata() {
 
     let marker_raw = fs::read_to_string(target_root.join(".ocm-env.json")).unwrap();
     assert!(marker_raw.contains("\"name\": \"target\""));
+}
+
+#[test]
+fn clone_environment_skips_busy_ports_when_assigning_a_new_identity() {
+    let root = TestDir::new("store-env-clone-port-busy");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let source = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let occupied = std::net::TcpListener::bind(("127.0.0.1", 19790)).unwrap();
+
+    let cloned = clone_environment(
+        CloneEnvironmentOptions {
+            source_name: source.name,
+            name: "target".to_string(),
+            root: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(cloned.gateway_port, Some(19791));
+    drop(occupied);
 }
 
 #[test]

@@ -1,6 +1,7 @@
 mod support;
 
 use std::fs;
+use std::net::TcpListener;
 
 use ocm::infra::download::file_sha256;
 use serde_json::Value;
@@ -9,12 +10,21 @@ use crate::support::{
     TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout, write_executable_script,
 };
 
+fn allocate_free_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
 #[test]
 fn env_status_reports_the_resolved_launcher() {
     let root = TestDir::new("env-status-launcher");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    let port = allocate_free_port().to_string();
 
     let add = run_ocm(
         &cwd,
@@ -32,15 +42,15 @@ fn env_status_reports_the_resolved_launcher() {
     let create = run_ocm(
         &cwd,
         &env,
-        &["env", "create", "demo", "--launcher", "fallback"],
+        &["env", "create", "demo", "--launcher", "fallback", "--port", &port],
     );
     assert!(create.status.success(), "{}", stderr(&create));
 
     let status = run_ocm(&cwd, &env, &["env", "status", "demo"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let output = stdout(&status);
-    assert!(output.contains("gatewayPort: 18789"));
-    assert!(output.contains("gatewayPortSource: computed"));
+    assert!(output.contains(&format!("gatewayPort: {port}")));
+    assert!(output.contains("gatewayPortSource: metadata"));
     assert!(output.contains("resolvedKind: launcher"));
     assert!(output.contains("resolvedName: fallback"));
     assert!(output.contains("command: printf launcher"));
@@ -90,16 +100,17 @@ fn env_status_reports_when_an_environment_has_no_binding() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    let port = allocate_free_port().to_string();
 
-    let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--port", &port]);
     assert!(create.status.success(), "{}", stderr(&create));
 
     let status = run_ocm(&cwd, &env, &["env", "status", "demo"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let output = stdout(&status);
     assert!(output.contains("envName: demo"));
-    assert!(output.contains("gatewayPort: 18789"));
-    assert!(output.contains("gatewayPortSource: computed"));
+    assert!(output.contains(&format!("gatewayPort: {port}")));
+    assert!(output.contains("gatewayPortSource: metadata"));
     assert!(output.contains("managedServiceState: absent"));
     assert!(output.contains("openclawState: stopped"));
     assert!(output.contains("globalServiceState: absent"));
@@ -115,6 +126,7 @@ fn env_status_json_reports_runtime_health_and_binding_shape() {
     let runtime_path = bin_dir.join("stable");
     write_executable_script(&runtime_path, "#!/bin/sh\nexit 0\n");
     let env = ocm_env(&root);
+    let port = allocate_free_port().to_string();
 
     let add = run_ocm(
         &cwd,
@@ -126,7 +138,7 @@ fn env_status_json_reports_runtime_health_and_binding_shape() {
     let create = run_ocm(
         &cwd,
         &env,
-        &["env", "create", "demo", "--runtime", "stable"],
+        &["env", "create", "demo", "--runtime", "stable", "--port", &port],
     );
     assert!(create.status.success(), "{}", stderr(&create));
 
@@ -134,8 +146,8 @@ fn env_status_json_reports_runtime_health_and_binding_shape() {
     assert!(status.status.success(), "{}", stderr(&status));
     let value: Value = serde_json::from_str(&stdout(&status)).unwrap();
     assert_eq!(value["envName"], "demo");
-    assert_eq!(value["gatewayPort"], 18789);
-    assert_eq!(value["gatewayPortSource"], "computed");
+    assert_eq!(value["gatewayPort"], port.parse::<u64>().unwrap());
+    assert_eq!(value["gatewayPortSource"], "metadata");
     assert_eq!(value["resolvedKind"], "runtime");
     assert_eq!(value["resolvedName"], "stable");
     assert_eq!(value["runtimeHealth"], "ok");

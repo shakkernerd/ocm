@@ -1,10 +1,19 @@
 mod support;
 
 use std::fs;
+use std::net::TcpListener;
 
 use serde_json::Value;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
+
+fn allocate_free_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
 
 #[test]
 fn env_list_accepts_raw_output_mode() {
@@ -156,6 +165,7 @@ fn env_and_service_detail_commands_accept_raw_output_mode() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    let port = allocate_free_port().to_string();
 
     let launcher = run_ocm(
         &cwd,
@@ -167,7 +177,7 @@ fn env_and_service_detail_commands_accept_raw_output_mode() {
     let created = run_ocm(
         &cwd,
         &env,
-        &["env", "create", "demo", "--launcher", "stable"],
+        &["env", "create", "demo", "--launcher", "stable", "--port", &port],
     );
     assert!(created.status.success(), "{}", stderr(&created));
 
@@ -178,7 +188,7 @@ fn env_and_service_detail_commands_accept_raw_output_mode() {
 
     let env_status = run_ocm(&cwd, &env, &["env", "status", "demo", "--raw"]);
     assert!(env_status.status.success(), "{}", stderr(&env_status));
-    assert!(stdout(&env_status).contains("gatewayPort: 18789"));
+    assert!(stdout(&env_status).contains(&format!("gatewayPort: {port}")));
     assert!(!stdout(&env_status).contains("┌"));
 
     let env_resolve = run_ocm(&cwd, &env, &["env", "resolve", "demo", "--raw"]);

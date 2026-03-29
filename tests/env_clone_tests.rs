@@ -31,7 +31,7 @@ fn env_clone_copies_state_into_a_new_environment() {
     assert!(show.status.success(), "{}", stderr(&show));
     let show_stdout = stdout(&show);
     assert!(show_stdout.contains("\"name\": \"target\""));
-    assert!(show_stdout.contains("\"gatewayPort\": 19789"));
+    assert!(show_stdout.contains("\"gatewayPort\": 19790"));
     assert!(show_stdout.contains("\"protected\": true"));
 
     assert_eq!(

@@ -284,11 +284,13 @@ pub fn env_cloned(
     if let Some(port) = summary.gateway_port {
         lines.push(render_gateway_port_line(port, gateway_port_source));
     }
-    lines.push(format!(
-        "  activate: eval \"$({command_example} env use {})\"",
-        summary.name
-    ));
+    lines.push("  service: not copied from source".to_string());
+    lines.push(format!("  start: {command_example} start {}", summary.name));
     if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
+        lines.push(format!(
+            "  onboard: {command_example} @{} -- onboard",
+            summary.name
+        ));
         lines.push(format!(
             "  run: {command_example} @{} -- status",
             summary.name

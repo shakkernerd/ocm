@@ -687,7 +687,11 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the cloned environment summary as JSON"),
             ],
             vec![format!("{cmd} env clone demo demo-copy")],
-            &["Clone resets environment identity while preserving the copied state."],
+            &[
+                "Clone resets environment identity while preserving the copied state.",
+                "Clone assigns a fresh gateway port to the new env to avoid collisions.",
+                "Background services are not copied; use `start` or `service install` for the clone.",
+            ],
         ),
         "export" => render_leaf(
             "Export an environment",
