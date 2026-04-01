@@ -34,12 +34,15 @@ pub struct RuntimeBinarySummary {
 impl<'a> RuntimeService<'a> {
     pub fn verify(&self, name: &str) -> Result<RuntimeVerifySummary, String> {
         let meta = get_runtime(name, self.env, self.cwd)?;
-        Ok(build_verify_summary(meta))
+        Ok(build_verify_summary(meta, self.env))
     }
 
     pub fn verify_all(&self) -> Result<Vec<RuntimeVerifySummary>, String> {
         let runtimes = list_runtimes(self.env, self.cwd)?;
-        Ok(runtimes.into_iter().map(build_verify_summary).collect())
+        Ok(runtimes
+            .into_iter()
+            .map(|meta| build_verify_summary(meta, self.env))
+            .collect())
     }
 
     pub fn which(&self, name: &str) -> Result<RuntimeBinarySummary, String> {
@@ -54,8 +57,11 @@ impl<'a> RuntimeService<'a> {
     }
 }
 
-fn build_verify_summary(meta: RuntimeMeta) -> RuntimeVerifySummary {
-    let issue = runtime_integrity_issue(&meta);
+fn build_verify_summary(
+    meta: RuntimeMeta,
+    env: &std::collections::BTreeMap<String, String>,
+) -> RuntimeVerifySummary {
+    let issue = runtime_integrity_issue(&meta, env);
     RuntimeVerifySummary {
         name: meta.name,
         binary_path: meta.binary_path,

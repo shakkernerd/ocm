@@ -8,7 +8,9 @@ use serde_json::json;
 use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
-use crate::support::{TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout};
+use crate::support::{
+    TestDir, TestHttpServer, install_fake_node_and_npm, ocm_env, run_ocm, stderr, stdout,
+};
 
 fn append_tar_file(
     builder: &mut Builder<&mut GzEncoder<Vec<u8>>>,
@@ -92,6 +94,7 @@ fn release_list_uses_the_official_openclaw_source() {
     fs::create_dir_all(&cwd).unwrap();
     let server = TestHttpServer::serve_bytes("/openclaw", "application/json", &packument_body());
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),
@@ -203,6 +206,7 @@ fn release_list_rejects_conflicting_selectors() {
     fs::create_dir_all(&cwd).unwrap();
     let server = TestHttpServer::serve_bytes("/openclaw", "application/json", &packument_body());
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),
@@ -244,6 +248,7 @@ fn release_install_uses_the_published_openclaw_source() {
     );
     let server = TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),

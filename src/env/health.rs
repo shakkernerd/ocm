@@ -200,7 +200,7 @@ impl<'a> EnvironmentService<'a> {
 
         let runtime_status = if let Some(runtime_name) = env.default_runtime.clone() {
             match get_runtime(&runtime_name, self.env, self.cwd) {
-                Ok(runtime) => match runtime_integrity_issue(&runtime) {
+                Ok(runtime) => match runtime_integrity_issue(&runtime, self.env) {
                     Some(issue) => {
                         push_issue(&mut issues, format!("runtime \"{}\" {issue}", runtime.name));
                         "broken".to_string()

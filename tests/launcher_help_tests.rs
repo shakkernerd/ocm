@@ -98,6 +98,9 @@ fn start_help_is_available_from_help_and_flag() {
         "ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
     ));
     assert!(output.contains("Start installs and starts the env service by default."));
+    assert!(
+        output.contains("Official release selectors require Node.js >= 22.14.0 and npm on PATH.")
+    );
 }
 
 #[test]
@@ -137,6 +140,9 @@ fn setup_help_is_available_from_help_and_flag() {
     assert!(output.contains("Guided setup"));
     assert!(output.contains("ocm setup"));
     assert!(output.contains("Interactive setup"));
+    assert!(
+        output.contains("Official release choices require Node.js >= 22.14.0 and npm on PATH.")
+    );
 }
 
 #[test]
@@ -386,6 +392,9 @@ fn runtime_and_service_leaf_help_are_command_specific() {
     assert!(output.contains("Install a managed runtime"));
     assert!(output.contains("--manifest-url <url>"));
     assert!(output.contains("Exactly one install source must be provided."));
+    assert!(
+        output.contains("Official release installs require Node.js >= 22.14.0 and npm on PATH.")
+    );
 
     let service = run_ocm(&cwd, &env, &["service", "discover", "--help"]);
     assert!(service.status.success(), "{}", stderr(&service));

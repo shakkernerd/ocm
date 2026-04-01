@@ -56,6 +56,9 @@ Inside this repo, use the development wrapper:
 ./bin/ocm help
 ```
 
+Published OpenClaw release flows in `ocm` need Node.js `22.14.0` or newer and `npm` on `PATH`.
+Local checkout flows keep using whatever command and toolchain you choose.
+
 ## Start quickly
 
 If you want the guided path:

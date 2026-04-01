@@ -3,11 +3,11 @@ mod support;
 use std::fs;
 use std::net::TcpListener;
 
-use ocm::infra::download::file_sha256;
 use serde_json::Value;
 
 use crate::support::{
-    TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout, write_executable_script,
+    TestDir, TestHttpServer, install_fake_node_and_npm, ocm_env, openclaw_package_tarball, run_ocm,
+    sha512_integrity, stderr, stdout, write_executable_script,
 };
 
 fn allocate_free_port() -> u16 {
@@ -180,42 +180,29 @@ fn env_status_reports_release_backed_runtime_details() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
 
-    let artifact_body = b"release-runtime";
-    let digest_path = root.child("sha256/openclaw-stable");
-    fs::create_dir_all(digest_path.parent().unwrap()).unwrap();
-    fs::write(&digest_path, artifact_body).unwrap();
-    let sha256 = file_sha256(&digest_path).unwrap();
-
-    let artifact_server = TestHttpServer::serve_bytes(
-        "/artifacts/openclaw-stable",
+    let tarball =
+        openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n", "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
         "application/octet-stream",
-        artifact_body,
+        &tarball,
     );
     let manifest_body = format!(
-        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
-        artifact_server.url(),
-        sha256
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
     );
-    let manifest_server = TestHttpServer::serve_bytes(
-        "/manifests/releases.json",
-        "application/json",
-        manifest_body.as_bytes(),
+    let manifest_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", manifest_body.as_bytes());
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        manifest_server.url(),
     );
-    let env = ocm_env(&root);
 
-    let install = run_ocm(
-        &cwd,
-        &env,
-        &[
-            "runtime",
-            "install",
-            "stable",
-            "--manifest-url",
-            &manifest_server.url(),
-            "--channel",
-            "stable",
-        ],
-    );
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
     assert!(install.status.success(), "{}", stderr(&install));
 
     let create = run_ocm(
@@ -230,11 +217,78 @@ fn env_status_reports_release_backed_runtime_details() {
     let value: Value = serde_json::from_str(&stdout(&status)).unwrap();
     assert_eq!(value["resolvedKind"], "runtime");
     assert_eq!(value["runtimeSourceKind"], "installed");
-    assert_eq!(value["runtimeReleaseVersion"], "0.2.0");
+    assert_eq!(value["runtimeReleaseVersion"], "2026.3.24");
     assert_eq!(value["runtimeReleaseChannel"], "stable");
     assert_eq!(value["runtimeHealth"], "ok");
     assert_eq!(value["gatewayPort"], 18789);
     assert_eq!(value["gatewayPortSource"], "computed");
+}
+
+#[test]
+fn env_status_reports_official_runtime_host_requirement_issues() {
+    let root = TestDir::new("env-status-official-runtime-host-issue");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball =
+        openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n", "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let empty_path = root.child("empty-bin");
+    fs::create_dir_all(&empty_path).unwrap();
+    let mut status_env = env.clone();
+    status_env.insert("PATH".to_string(), empty_path.to_string_lossy().to_string());
+    status_env.insert(
+        "OCM_INTERNAL_NPM_BIN".to_string(),
+        root.child("fake-node-bin/npm")
+            .to_string_lossy()
+            .to_string(),
+    );
+
+    let status = run_ocm(&cwd, &status_env, &["env", "status", "demo", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let value: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    assert_eq!(value["runtimeHealth"], "broken");
+    assert!(
+        value["issue"]
+            .as_str()
+            .unwrap()
+            .contains("official OpenClaw runtimes require Node.js >= 22.14.0 and npm on PATH")
+    );
+    assert!(
+        value["issue"]
+            .as_str()
+            .unwrap()
+            .contains("node was not found on PATH")
+    );
 }
 
 #[test]

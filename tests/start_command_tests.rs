@@ -9,8 +9,8 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, install_fake_launchctl, ocm_env, path_string, run_ocm, stderr, stdout,
-    write_executable_script,
+    TestDir, TestHttpServer, install_fake_launchctl, install_fake_node_and_npm, ocm_env,
+    path_string, run_ocm, stderr, stdout, write_executable_script,
 };
 
 fn append_tar_file(
@@ -76,6 +76,7 @@ fn start_generates_an_env_name_and_uses_latest_stable_runtime() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
         "launchd".to_string(),
@@ -133,6 +134,7 @@ fn start_without_a_name_generates_a_new_env_each_time() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 4);
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),

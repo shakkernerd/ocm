@@ -11,7 +11,8 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
+    TestDir, TestHttpServer, install_fake_node_and_npm, ocm_env, path_string, run_ocm, stderr,
+    stdout, write_executable_script,
 };
 
 fn append_tar_file(
@@ -323,6 +324,7 @@ fn runtime_install_from_official_release_installs_the_openclaw_package() {
     let packument_server =
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -378,6 +380,7 @@ fn official_runtime_install_produces_a_runnable_env_binding() {
     let packument_server =
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -406,6 +409,7 @@ fn runtime_install_rejects_non_canonical_names_for_official_releases() {
     let packument = br#"{"dist-tags":{"latest":"2026.3.24"},"versions":{"2026.3.24":{"version":"2026.3.24","dist":{"tarball":"https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"}}}}"#;
     let server = TestHttpServer::serve_bytes("/openclaw", "application/json", packument);
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),
@@ -446,6 +450,7 @@ fn runtime_install_reuses_a_matching_official_runtime() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -500,6 +505,7 @@ fn runtime_install_refreshes_a_channel_runtime_when_the_published_release_moves(
         vec![first_packument.into_bytes(), second_packument.into_bytes()],
     );
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -579,6 +585,7 @@ fn runtime_update_reuses_the_official_release_selector() {
         vec![packument_v1.into_bytes(), packument_v2.into_bytes()],
     );
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -677,6 +684,84 @@ fn runtime_install_from_manifest_channel_selects_the_matching_release() {
     assert!(show_stdout.contains("releaseSelectorValue: nightly"));
     assert!(show_stdout.contains(&format!("sourceSha256: {nightly_sha256}")));
     assert!(show_stdout.contains("description: nightly manifest runtime"));
+}
+
+#[test]
+fn official_runtime_install_fails_early_when_npm_is_missing() {
+    let root = TestDir::new("runtime-install-official-missing-npm");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+    env.insert(
+        "OCM_INTERNAL_NPM_BIN".to_string(),
+        path_string(&root.child("missing-npm")),
+    );
+
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert_eq!(install.status.code(), Some(1));
+    let error = stderr(&install);
+    assert!(
+        error.contains("official OpenClaw runtimes require Node.js >= 22.14.0 and npm on PATH")
+    );
+    assert!(error.contains("was not found on PATH"));
+    assert!(!root.child("ocm-home/runtimes/stable").exists());
+}
+
+#[test]
+fn official_runtime_install_fails_early_when_node_is_too_old() {
+    let root = TestDir::new("runtime-install-official-old-node");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "20.11.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert_eq!(install.status.code(), Some(1));
+    let error = stderr(&install);
+    assert!(
+        error.contains("official OpenClaw runtimes require Node.js >= 22.14.0 and npm on PATH")
+    );
+    assert!(error.contains("found Node.js v20.11.0; upgrade to 22.14.0 or newer"));
+    assert!(!root.child("ocm-home/runtimes/stable").exists());
 }
 
 #[test]

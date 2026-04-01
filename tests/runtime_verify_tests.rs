@@ -6,7 +6,8 @@ use ocm::infra::download::file_sha256;
 use serde_json::Value;
 
 use crate::support::{
-    TestDir, TestHttpServer, ocm_env, run_ocm, stderr, stdout, write_executable_script,
+    TestDir, TestHttpServer, install_fake_node_and_npm, ocm_env, openclaw_package_tarball,
+    path_string, run_ocm, sha512_integrity, stderr, stdout, write_executable_script,
 };
 
 #[test]
@@ -175,5 +176,67 @@ fn runtime_verify_reports_checksum_drift_for_release_backed_runtimes() {
             .as_str()
             .unwrap()
             .contains("sha256 mismatch:")
+    );
+}
+
+#[test]
+fn runtime_verify_reports_missing_node_for_official_runtimes() {
+    let root = TestDir::new("runtime-verify-official-missing-node");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball =
+        openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n", "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let empty_path = root.child("empty-bin");
+    fs::create_dir_all(&empty_path).unwrap();
+    let mut verify_env = env.clone();
+    verify_env.insert("PATH".to_string(), path_string(&empty_path));
+    verify_env.insert(
+        "OCM_INTERNAL_NPM_BIN".to_string(),
+        path_string(&root.child("fake-node-bin/npm")),
+    );
+
+    let verify = run_ocm(
+        &cwd,
+        &verify_env,
+        &["runtime", "verify", "stable", "--json"],
+    );
+    assert_eq!(verify.status.code(), Some(1));
+    let value: Value = serde_json::from_str(&stdout(&verify)).unwrap();
+    assert_eq!(value["healthy"], false);
+    assert!(
+        value["issue"]
+            .as_str()
+            .unwrap()
+            .contains("official OpenClaw runtimes require Node.js >= 22.14.0 and npm on PATH")
+    );
+    assert!(
+        value["issue"]
+            .as_str()
+            .unwrap()
+            .contains("node was not found on PATH")
     );
 }

@@ -166,6 +166,7 @@ pub fn setup_help(cmd: &str) -> String {
         vec![format!("{cmd} setup")],
         &[
             "Setup asks a few questions, then runs the same env-first flow as `start`.",
+            "Official release choices require Node.js >= 22.14.0 and npm on PATH.",
             "When run inside an OpenClaw checkout, local mode defaults to `pnpm openclaw` in that folder.",
             "Use `start` when you already know the source you want.",
         ],
@@ -240,6 +241,7 @@ pub fn start_help(cmd: &str) -> String {
         &[
             "If an environment already exists, start reuses it and only adjusts binding/protection when you asked for it.",
             "Start installs and starts the env service by default. Use `--no-service` when you do not want a background process.",
+            "Official release selectors require Node.js >= 22.14.0 and npm on PATH.",
             "`--json` requires `--no-onboard` because onboarding is interactive.",
         ],
     )
@@ -1106,7 +1108,10 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} release install --channel beta"),
                 format!("{cmd} release install --version 2026.3.24"),
             ],
-            &["Official installs use canonical runtime names derived from the selector."],
+            &[
+                "Official installs use canonical runtime names derived from the selector.",
+                "Official release installs require Node.js >= 22.14.0 and npm on PATH.",
+            ],
         ),
         "list" => render_leaf(
             "List published OpenClaw releases",
@@ -1434,6 +1439,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Exactly one install source must be provided.",
                 "Official installs use canonical runtime names unless you reuse the same canonical name explicitly.",
+                "Official release installs require Node.js >= 22.14.0 and npm on PATH.",
             ],
         ),
         "update" => render_leaf(

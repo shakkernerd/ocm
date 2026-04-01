@@ -13,7 +13,11 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
+use base64::Engine;
+use flate2::{Compression, write::GzEncoder};
+use sha2::Sha512;
 use sha2::{Digest, Sha256};
+use tar::{Builder, Header};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -265,6 +269,124 @@ pub fn install_fake_launchctl(root: &TestDir, env: &mut BTreeMap<String, String>
         format!("{}:{existing_path}", path_string(&bin_dir))
     };
     env.insert("PATH".to_string(), combined_path);
+}
+
+pub fn install_fake_node_and_npm(
+    root: &TestDir,
+    env: &mut BTreeMap<String, String>,
+    node_version: &str,
+) {
+    let bin_dir = root.child("fake-node-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    let node_script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'v{}\n'
+  exit 0
+fi
+script="$1"
+shift
+if [ -n "$script" ] && grep -q "process\.argv\.slice(2)\.join(' ')" "$script"; then
+  printf '%s\n' "$*"
+  exit 0
+fi
+literal=$(sed -n "s/.*console\.log('\(.*\)');.*/\1/p" "$script" | head -n 1)
+if [ -n "$literal" ]; then
+  printf '%s\n' "$literal"
+  exit 0
+fi
+printf 'fake node run %s %s\n' "$script" "$*"
+"#,
+        node_version
+    );
+    write_executable_script(&bin_dir.join("node"), &node_script);
+
+    let npm_script = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '10.0.0\n'
+  exit 0
+fi
+
+prefix=""
+archive=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --prefix)
+      shift
+      prefix="$1"
+      ;;
+    install|--omit=dev|--no-save|--package-lock=false)
+      ;;
+    *)
+      archive="$1"
+      ;;
+  esac
+  shift
+done
+
+if [ -z "$prefix" ] || [ -z "$archive" ]; then
+  echo "fake npm expected --prefix and archive path" >&2
+  exit 1
+fi
+
+mkdir -p "$prefix/node_modules/openclaw"
+tar -xzf "$archive" -C "$prefix/node_modules/openclaw" --strip-components=1 package
+"#;
+    write_executable_script(&bin_dir.join("npm"), npm_script);
+
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let combined_path = if existing_path.is_empty() {
+        path_string(&bin_dir)
+    } else {
+        format!("{}:{existing_path}", path_string(&bin_dir))
+    };
+    env.insert("PATH".to_string(), combined_path);
+}
+
+fn append_tar_file(
+    builder: &mut Builder<&mut GzEncoder<Vec<u8>>>,
+    path: &str,
+    body: &[u8],
+    mode: u32,
+) {
+    let mut header = Header::new_gnu();
+    header.set_size(body.len() as u64);
+    header.set_mode(mode);
+    header.set_cksum();
+    builder.append_data(&mut header, path, body).unwrap();
+}
+
+pub fn openclaw_package_tarball(script_body: &str, version: &str) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    {
+        let mut builder = Builder::new(&mut encoder);
+        append_tar_file(
+            &mut builder,
+            "package/openclaw.mjs",
+            script_body.as_bytes(),
+            0o755,
+        );
+        append_tar_file(
+            &mut builder,
+            "package/package.json",
+            format!(
+                "{{\"name\":\"openclaw\",\"version\":\"{version}\",\"bin\":{{\"openclaw\":\"openclaw.mjs\"}}}}"
+            )
+            .as_bytes(),
+            0o644,
+        );
+        builder.finish().unwrap();
+    }
+    encoder.finish().unwrap()
+}
+
+pub fn sha512_integrity(body: &[u8]) -> String {
+    let digest = Sha512::digest(body);
+    format!(
+        "sha512-{}",
+        base64::engine::general_purpose::STANDARD.encode(digest)
+    )
 }
 
 pub fn run_ocm(cwd: &Path, env: &BTreeMap<String, String>, args: &[&str]) -> Output {

@@ -76,7 +76,7 @@ impl<'a> EnvironmentService<'a> {
                             Some(runtime.source_kind.as_str().to_string());
                         summary.runtime_release_version = runtime.release_version.clone();
                         summary.runtime_release_channel = runtime.release_channel.clone();
-                        match runtime_integrity_issue(&runtime) {
+                        match runtime_integrity_issue(&runtime, self.env) {
                             None => summary.runtime_health = Some("ok".to_string()),
                             Some(error) => {
                                 summary.runtime_health = Some("broken".to_string());

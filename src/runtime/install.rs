@@ -182,7 +182,7 @@ impl<'a> RuntimeService<'a> {
                 ));
             }
 
-            let healthy = runtime_integrity_issue(&existing).is_none();
+            let healthy = runtime_integrity_issue(&existing, self.env).is_none();
             let same_release = existing.release_version.as_deref()
                 == Some(selected_release.version.as_str())
                 && existing.source_url.as_deref() == Some(selected_release.tarball_url.as_str());

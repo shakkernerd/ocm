@@ -9,7 +9,8 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, install_fake_launchctl, ocm_env, run_ocm, stderr, stdout,
+    TestDir, TestHttpServer, install_fake_launchctl, install_fake_node_and_npm, ocm_env, run_ocm,
+    stderr, stdout,
 };
 
 fn append_tar_file(
@@ -104,6 +105,7 @@ fn upgrade_updates_a_tracked_runtime_and_restarts_the_service() {
     );
 
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -151,6 +153,7 @@ fn upgrade_reports_pinned_envs_without_moving_them() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -199,6 +202,7 @@ fn upgrade_can_switch_a_local_launcher_env_to_a_published_runtime() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
