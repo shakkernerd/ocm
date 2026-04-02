@@ -19,19 +19,32 @@ fn doctor_host_reports_missing_required_tools() {
     env.insert("PATH".to_string(), path_string(&empty_path));
 
     let doctor = run_ocm(&cwd, &env, &["doctor", "host", "--json"]);
-    assert_eq!(doctor.status.code(), Some(1), "{}", stderr(&doctor));
+    assert!(doctor.status.success(), "{}", stderr(&doctor));
 
     let value: Value = serde_json::from_str(&stdout(&doctor)).unwrap();
-    assert_eq!(value["healthy"], Value::Bool(false));
-    assert_eq!(value["officialReleaseReady"], Value::Bool(false));
-    assert_eq!(value["requiredIssues"], Value::from(2));
+    assert_eq!(value["healthy"], Value::Bool(true));
+    assert_eq!(value["officialReleaseReady"], Value::Bool(true));
+    assert_eq!(value["requiredIssues"], Value::from(0));
+    assert_eq!(value["recommendedGaps"], Value::from(9));
 
     let checks = value["checks"].as_array().unwrap();
     assert!(checks.iter().any(|check| {
-        check["name"] == "Node.js" && check["level"] == "required" && check["status"] == "missing"
+        check["name"] == "Node.js"
+            && check["level"] == "recommended"
+            && check["status"] == "missing"
+            && check["detail"]
+                .as_str()
+                .unwrap_or("")
+                .contains("private Node.js toolchain")
     }));
     assert!(checks.iter().any(|check| {
-        check["name"] == "npm" && check["level"] == "required" && check["status"] == "missing"
+        check["name"] == "npm"
+            && check["level"] == "recommended"
+            && check["status"] == "missing"
+            && check["detail"]
+                .as_str()
+                .unwrap_or("")
+                .contains("private Node.js + npm toolchain")
     }));
 }
 
@@ -53,9 +66,15 @@ fn doctor_host_reports_ready_official_release_requirements() {
 
     let checks = value["checks"].as_array().unwrap();
     assert!(checks.iter().any(|check| {
-        check["name"] == "Node.js" && check["status"] == "ok" && check["available"] == true
+        check["name"] == "Node.js"
+            && check["level"] == "recommended"
+            && check["status"] == "ok"
+            && check["available"] == true
     }));
     assert!(checks.iter().any(|check| {
-        check["name"] == "npm" && check["status"] == "ok" && check["available"] == true
+        check["name"] == "npm"
+            && check["level"] == "recommended"
+            && check["status"] == "ok"
+            && check["available"] == true
     }));
 }

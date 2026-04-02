@@ -18,6 +18,8 @@ use flate2::{Compression, write::GzEncoder};
 use sha2::Sha512;
 use sha2::{Digest, Sha256};
 use tar::{Builder, Header};
+use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -379,6 +381,155 @@ pub fn openclaw_package_tarball(script_body: &str, version: &str) -> Vec<u8> {
         builder.finish().unwrap();
     }
     encoder.finish().unwrap()
+}
+
+pub fn fake_managed_node_archive(version: &str) -> Vec<u8> {
+    let (suffix, node_relative_path, npm_cli_relative_path, archive_kind) =
+        managed_node_archive_layout();
+    let root = format!("node-v{version}-{suffix}");
+    let node_script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'v{}\n'
+  exit 0
+fi
+script="$1"
+shift
+case "$script" in
+  *npm-cli.js)
+    prefix=""
+    archive=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --prefix)
+          shift
+          prefix="$1"
+          ;;
+        install|--omit=dev|--no-save|--package-lock=false)
+          ;;
+        *)
+          archive="$1"
+          ;;
+      esac
+      shift
+    done
+
+    if [ -z "$prefix" ] || [ -z "$archive" ]; then
+      echo "fake managed node expected --prefix and archive path" >&2
+      exit 1
+    fi
+
+    /bin/mkdir -p "$prefix/node_modules/openclaw"
+    /usr/bin/tar -xzf "$archive" -C "$prefix/node_modules/openclaw" --strip-components=1 package
+    exit 0
+    ;;
+esac
+if [ -n "$script" ] && /usr/bin/grep -q "process\.argv\.slice(2)\.join(' ')" "$script"; then
+  printf '%s\n' "$*"
+  exit 0
+fi
+literal=$(/usr/bin/sed -n "s/.*console\.log('\(.*\)');.*/\1/p" "$script" | /usr/bin/head -n 1)
+if [ -n "$literal" ]; then
+  printf '%s\n' "$literal"
+  exit 0
+fi
+printf 'fake managed node run %s %s\n' "$script" "$*"
+"#,
+        version
+    );
+    let npm_cli = b"// fake npm cli entrypoint for managed-node tests\n";
+
+    match archive_kind {
+        ManagedNodeArchiveKind::TarGz => {
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            {
+                let mut builder = Builder::new(&mut encoder);
+                append_tar_file(
+                    &mut builder,
+                    &format!("{root}/{node_relative_path}"),
+                    node_script.as_bytes(),
+                    0o755,
+                );
+                append_tar_file(
+                    &mut builder,
+                    &format!("{root}/{npm_cli_relative_path}"),
+                    npm_cli,
+                    0o644,
+                );
+                builder.finish().unwrap();
+            }
+            encoder.finish().unwrap()
+        }
+        ManagedNodeArchiveKind::Zip => {
+            let cursor = std::io::Cursor::new(Vec::new());
+            let mut writer = ZipWriter::new(cursor);
+            let node_options = SimpleFileOptions::default().unix_permissions(0o755);
+            let file_options = SimpleFileOptions::default().unix_permissions(0o644);
+            writer
+                .start_file(format!("{root}/{node_relative_path}"), node_options)
+                .unwrap();
+            writer.write_all(node_script.as_bytes()).unwrap();
+            writer
+                .start_file(format!("{root}/{npm_cli_relative_path}"), file_options)
+                .unwrap();
+            writer.write_all(npm_cli).unwrap();
+            writer.finish().unwrap().into_inner()
+        }
+    }
+}
+
+pub fn install_fake_managed_node_archive(
+    _root: &TestDir,
+    env: &mut BTreeMap<String, String>,
+    version: &str,
+) -> TestHttpServer {
+    let archive = fake_managed_node_archive(version);
+    let server = TestHttpServer::serve_bytes(
+        "/managed-node-toolchain",
+        "application/octet-stream",
+        &archive,
+    );
+    env.insert(
+        "OCM_INTERNAL_MANAGED_NODE_ARCHIVE_URL".to_string(),
+        server.url(),
+    );
+    server
+}
+
+#[derive(Clone, Copy)]
+enum ManagedNodeArchiveKind {
+    TarGz,
+    Zip,
+}
+
+fn managed_node_archive_layout() -> (String, &'static str, &'static str, ManagedNodeArchiveKind) {
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        other => panic!("unsupported test architecture for fake managed node archive: {other}"),
+    };
+
+    match std::env::consts::OS {
+        "macos" => (
+            format!("darwin-{arch}"),
+            "bin/node",
+            "lib/node_modules/npm/bin/npm-cli.js",
+            ManagedNodeArchiveKind::TarGz,
+        ),
+        "linux" => (
+            format!("linux-{arch}"),
+            "bin/node",
+            "lib/node_modules/npm/bin/npm-cli.js",
+            ManagedNodeArchiveKind::TarGz,
+        ),
+        "windows" => (
+            format!("win-{arch}"),
+            "node.exe",
+            "node_modules/npm/bin/npm-cli.js",
+            ManagedNodeArchiveKind::Zip,
+        ),
+        other => panic!("unsupported test OS for fake managed node archive: {other}"),
+    }
 }
 
 pub fn sha512_integrity(body: &[u8]) -> String {

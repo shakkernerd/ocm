@@ -101,7 +101,7 @@ fn env_doctor_json_reports_marker_and_runtime_health_issues() {
 }
 
 #[test]
-fn env_doctor_reports_official_runtime_host_requirement_issues() {
+fn env_doctor_keeps_official_runtime_healthy_when_managed_fallback_is_available() {
     let root = TestDir::new("env-doctor-official-runtime-host-issue");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -152,19 +152,8 @@ fn env_doctor_reports_official_runtime_host_requirement_issues() {
     let doctor = run_ocm(&cwd, &doctor_env, &["env", "doctor", "demo", "--json"]);
     assert!(doctor.status.success(), "{}", stderr(&doctor));
     let value: Value = serde_json::from_str(&stdout(&doctor)).unwrap();
-    assert_eq!(value["healthy"], false);
-    assert_eq!(value["runtimeStatus"], "broken");
+    assert_eq!(value["healthy"], true);
+    assert_eq!(value["runtimeStatus"], "ok");
     let issues = value["issues"].as_array().unwrap();
-    assert!(issues.iter().any(|issue| {
-        issue
-            .as_str()
-            .unwrap()
-            .contains("official OpenClaw runtimes require Node.js >= 22.14.0 and npm on PATH")
-    }));
-    assert!(issues.iter().any(|issue| {
-        issue
-            .as_str()
-            .unwrap()
-            .contains("node was not found on PATH")
-    }));
+    assert!(issues.is_empty());
 }

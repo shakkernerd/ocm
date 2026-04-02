@@ -19,8 +19,20 @@ impl Cli {
         profile: Option<render::RenderProfile>,
         json_output: bool,
     ) -> Result<Option<i32>, String> {
-        match host::verify_official_openclaw_runtime_host(&self.env) {
-            Ok(()) => Ok(None),
+        let host_ready = host::verify_official_openclaw_runtime_host(&self.env);
+        match host::verify_official_openclaw_runtime_support(&self.env) {
+            Ok(()) if host_ready.is_ok() => Ok(None),
+            Ok(()) => {
+                if !json_output {
+                    let summary = host::doctor_host(&self.env);
+                    self.stdout_lines(render::doctor::host_doctor(
+                        &summary,
+                        profile.unwrap_or_else(|| self.default_render_profile()),
+                        &self.command_example(),
+                    ));
+                }
+                Ok(None)
+            }
             Err(error) if json_output => Err(error),
             Err(_) => {
                 let summary = host::doctor_host(&self.env);

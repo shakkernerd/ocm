@@ -5,21 +5,22 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::host::{configured_npm_bin, verify_official_openclaw_runtime_host};
+use crate::host::verify_official_openclaw_runtime_host;
 use crate::infra::download::{
     artifact_file_name_from_url, download_to_file, file_sha256, normalize_sha256,
     verify_file_integrity, verify_file_sha256,
 };
+use crate::managed_node::managed_runtime_install_command;
 use crate::runtime::releases::{
-    OpenClawRelease, is_official_openclaw_releases_url, load_official_openclaw_releases,
-    load_release_manifest, normalize_openclaw_channel_selector, official_openclaw_releases_url,
+    OpenClawRelease, load_official_openclaw_releases, load_release_manifest,
+    normalize_openclaw_channel_selector, official_openclaw_releases_url,
     select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
     select_release,
 };
 use crate::runtime::{
     AddRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
     InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind,
-    RuntimeSourceKind,
+    RuntimeSourceKind, is_official_openclaw_package_runtime,
 };
 
 use super::common::{ensure_dir, load_json_files, path_exists, read_json, write_json};
@@ -39,22 +40,6 @@ fn installed_openclaw_binary_path(install_files: &Path) -> PathBuf {
     install_files.join("node_modules/openclaw/openclaw.mjs")
 }
 
-fn official_openclaw_runtime_issue(
-    meta: &RuntimeMeta,
-    env: &BTreeMap<String, String>,
-) -> Option<String> {
-    if meta.source_kind != RuntimeSourceKind::Installed {
-        return None;
-    }
-    if !is_official_openclaw_releases_url(meta.source_manifest_url.as_deref(), env) {
-        return None;
-    }
-    if !Path::new(&meta.binary_path).ends_with(Path::new("node_modules/openclaw/openclaw.mjs")) {
-        return None;
-    }
-    verify_official_openclaw_runtime_host(env).err()
-}
-
 fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
     for bytes in [stderr, stdout] {
         let text = String::from_utf8_lossy(bytes);
@@ -71,10 +56,26 @@ fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
 fn install_openclaw_package_with_npm(
     archive_path: &Path,
     install_files: &Path,
+    cwd: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let npm_bin = configured_npm_bin(env);
-    let output = Command::new(npm_bin)
+    let host_ready = verify_official_openclaw_runtime_host(env).is_ok();
+    let install_command = if host_ready {
+        crate::managed_node::CommandSpec {
+            program: env
+                .get("OCM_INTERNAL_NPM_BIN")
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("npm")
+                .to_string(),
+            args: Vec::new(),
+        }
+    } else {
+        managed_runtime_install_command(env, cwd)?
+    };
+
+    let output = Command::new(&install_command.program)
+        .args(&install_command.args)
         .arg("install")
         .arg("--prefix")
         .arg(install_files)
@@ -90,7 +91,10 @@ fn install_openclaw_package_with_npm(
         .stderr(Stdio::piped())
         .output()
         .map_err(|error| {
-            format!("failed to run {npm_bin} while installing the OpenClaw package: {error}")
+            format!(
+                "failed to run {} while installing the OpenClaw package: {error}",
+                install_command.program
+            )
         })?;
 
     if output.status.success() {
@@ -99,12 +103,14 @@ fn install_openclaw_package_with_npm(
 
     let detail = summarize_command_output(&output.stdout, &output.stderr).unwrap_or_else(|| {
         format!(
-            "{npm_bin} exited with code {}",
+            "{} exited with code {}",
+            install_command.program,
             output.status.code().unwrap_or(1)
         )
     });
     Err(format!(
-        "failed to install OpenClaw package dependencies with {npm_bin}: {detail}"
+        "failed to install OpenClaw package dependencies with {}: {detail}",
+        install_command.program
     ))
 }
 
@@ -240,6 +246,7 @@ fn install_runtime_from_openclaw_package(
     release_selector_value: Option<String>,
     description: Option<String>,
     env: &BTreeMap<String, String>,
+    cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
     if path_exists(&install_root) {
         return Err(format!(
@@ -247,8 +254,6 @@ fn install_runtime_from_openclaw_package(
             display_path(&install_root)
         ));
     }
-    verify_official_openclaw_runtime_host(env)?;
-
     let result = (|| {
         ensure_dir(&install_files)?;
         let archive_name = artifact_file_name_from_url(&tarball_url)?;
@@ -258,7 +263,7 @@ fn install_runtime_from_openclaw_package(
             verify_file_integrity(&archive_path, source_integrity)?;
         }
 
-        install_openclaw_package_with_npm(&archive_path, &install_files, env)?;
+        install_openclaw_package_with_npm(&archive_path, &install_files, cwd, env)?;
         let _ = fs::remove_file(&archive_path);
 
         let binary_path = installed_openclaw_binary_path(&install_files);
@@ -645,6 +650,7 @@ pub fn install_runtime_from_selected_official_openclaw_release(
         release_selector_value,
         description,
         env,
+        cwd,
     )
 }
 
@@ -688,7 +694,11 @@ pub fn runtime_integrity_issue(
         ));
     }
 
-    official_openclaw_runtime_issue(meta, env)
+    if is_official_openclaw_package_runtime(meta, env) {
+        return None;
+    }
+
+    None
 }
 
 pub fn verify_runtime_binary(

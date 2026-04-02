@@ -4,11 +4,13 @@ use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
+use crate::managed_node::{
+    OPENCLAW_MIN_NODE_VERSION, managed_node_fallback_detail, managed_node_fallback_supported,
+};
 use crate::service::{ServiceManagerKind, service_manager_kind};
 use crate::store::resolve_user_home;
 
 const INTERNAL_NPM_BIN_ENV: &str = "OCM_INTERNAL_NPM_BIN";
-pub const OPENCLAW_MIN_NODE_VERSION: &str = "22.14.0";
 const CHROME_MCP_MIN_MAJOR: u32 = 144;
 
 #[derive(Clone, Debug, Serialize)]
@@ -117,9 +119,7 @@ pub fn official_openclaw_runtime_requirement_message(
     )
 }
 
-pub fn verify_official_openclaw_runtime_host(env: &BTreeMap<String, String>) -> Result<(), String> {
-    let _ = npm_version(env)
-        .map_err(|detail| official_openclaw_runtime_requirement_message(&detail, env))?;
+pub fn verify_official_openclaw_runtime_node(env: &BTreeMap<String, String>) -> Result<(), String> {
     let node_version = node_version(env)
         .map_err(|detail| official_openclaw_runtime_requirement_message(&detail, env))?;
     match compare_version_like(&node_version, OPENCLAW_MIN_NODE_VERSION) {
@@ -135,6 +135,26 @@ pub fn verify_official_openclaw_runtime_host(env: &BTreeMap<String, String>) -> 
             env,
         )),
     }
+}
+
+pub fn verify_official_openclaw_runtime_host(env: &BTreeMap<String, String>) -> Result<(), String> {
+    let _ = npm_version(env)
+        .map_err(|detail| official_openclaw_runtime_requirement_message(&detail, env))?;
+    verify_official_openclaw_runtime_node(env)
+}
+
+pub fn verify_official_openclaw_runtime_support(
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    if verify_official_openclaw_runtime_host(env).is_ok() || managed_node_fallback_supported() {
+        return Ok(());
+    }
+
+    let fallback_detail = managed_node_fallback_detail().unwrap_or_else(|detail| detail);
+    Err(official_openclaw_runtime_requirement_message(
+        &format!("{fallback_detail}. Install the host tools on this machine"),
+        env,
+    ))
 }
 
 pub fn compare_version_like(left: &str, right: &str) -> Option<std::cmp::Ordering> {
@@ -169,7 +189,11 @@ fn command_example(env: &BTreeMap<String, String>) -> String {
 }
 
 fn host_checks(env: &BTreeMap<String, String>) -> Vec<HostCheckSummary> {
-    let mut checks = vec![node_check(env), npm_check(env)];
+    let managed_fallback_supported = managed_node_fallback_supported();
+    let mut checks = vec![
+        node_check(env, managed_fallback_supported),
+        npm_check(env, managed_fallback_supported),
+    ];
 
     if cfg!(unix) {
         checks.push(python_check());
@@ -189,28 +213,34 @@ fn host_checks(env: &BTreeMap<String, String>) -> Vec<HostCheckSummary> {
     checks
 }
 
-fn node_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
+fn node_check(
+    env: &BTreeMap<String, String>,
+    managed_fallback_supported: bool,
+) -> HostCheckSummary {
+    let level = if managed_fallback_supported {
+        HostCheckLevel::Recommended
+    } else {
+        HostCheckLevel::Required
+    };
     match node_version(env) {
         Ok(version) => match compare_version_like(&version, OPENCLAW_MIN_NODE_VERSION) {
             Some(std::cmp::Ordering::Less) => check(
                 "official-release",
                 "Node.js",
                 "Run published OpenClaw releases",
-                HostCheckLevel::Required,
+                level,
                 HostCheckStatus::Outdated,
                 Some(version.clone()),
                 Some(format!(
                     "found Node.js {version}; official releases need {OPENCLAW_MIN_NODE_VERSION} or newer"
                 )),
-                Some(format!(
-                    "Install Node.js {OPENCLAW_MIN_NODE_VERSION} or newer."
-                )),
+                Some(node_suggestion(managed_fallback_supported)),
             ),
             Some(_) => check(
                 "official-release",
                 "Node.js",
                 "Run published OpenClaw releases",
-                HostCheckLevel::Required,
+                level,
                 HostCheckStatus::Ok,
                 Some(version),
                 None,
@@ -220,39 +250,40 @@ fn node_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
                 "official-release",
                 "Node.js",
                 "Run published OpenClaw releases",
-                HostCheckLevel::Required,
+                level,
                 HostCheckStatus::Outdated,
                 Some(version.clone()),
                 Some(format!(
                     "node --version returned an unreadable version: {version}"
                 )),
-                Some(format!(
-                    "Install Node.js {OPENCLAW_MIN_NODE_VERSION} or newer."
-                )),
+                Some(node_suggestion(managed_fallback_supported)),
             ),
         },
         Err(detail) => check(
             "official-release",
             "Node.js",
             "Run published OpenClaw releases",
-            HostCheckLevel::Required,
+            level,
             HostCheckStatus::Missing,
             None,
-            Some(detail),
-            Some(format!(
-                "Install Node.js {OPENCLAW_MIN_NODE_VERSION} or newer."
-            )),
+            Some(node_detail(detail, managed_fallback_supported)),
+            Some(node_suggestion(managed_fallback_supported)),
         ),
     }
 }
 
-fn npm_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
+fn npm_check(env: &BTreeMap<String, String>, managed_fallback_supported: bool) -> HostCheckSummary {
+    let level = if managed_fallback_supported {
+        HostCheckLevel::Recommended
+    } else {
+        HostCheckLevel::Required
+    };
     match npm_version(env) {
         Ok(version) => check(
             "official-release",
             "npm",
             "Install published OpenClaw releases",
-            HostCheckLevel::Required,
+            level,
             HostCheckStatus::Ok,
             Some(version),
             None,
@@ -262,12 +293,50 @@ fn npm_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
             "official-release",
             "npm",
             "Install published OpenClaw releases",
-            HostCheckLevel::Required,
+            level,
             HostCheckStatus::Missing,
             None,
-            Some(detail),
-            Some("Install npm or use a Node.js distribution that includes it.".to_string()),
+            Some(npm_detail(detail, managed_fallback_supported)),
+            Some(npm_suggestion(managed_fallback_supported)),
         ),
+    }
+}
+
+fn node_detail(detail: String, managed_fallback_supported: bool) -> String {
+    if managed_fallback_supported {
+        format!(
+            "{detail}; OCM can install a private Node.js toolchain for official releases on this platform"
+        )
+    } else {
+        detail
+    }
+}
+
+fn node_suggestion(managed_fallback_supported: bool) -> String {
+    if managed_fallback_supported {
+        format!(
+            "Install Node.js {OPENCLAW_MIN_NODE_VERSION} or newer if you want OCM to use your host toolchain; otherwise OCM can manage a private copy for official releases."
+        )
+    } else {
+        format!("Install Node.js {OPENCLAW_MIN_NODE_VERSION} or newer.")
+    }
+}
+
+fn npm_detail(detail: String, managed_fallback_supported: bool) -> String {
+    if managed_fallback_supported {
+        format!(
+            "{detail}; OCM can manage a private Node.js + npm toolchain for official releases on this platform"
+        )
+    } else {
+        detail
+    }
+}
+
+fn npm_suggestion(managed_fallback_supported: bool) -> String {
+    if managed_fallback_supported {
+        "Install npm if you want OCM to use your host toolchain; otherwise OCM can manage a private copy for official releases.".to_string()
+    } else {
+        "Install npm or use a Node.js distribution that includes it.".to_string()
     }
 }
 

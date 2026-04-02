@@ -56,7 +56,8 @@ Inside this repo, use the development wrapper:
 ./bin/ocm help
 ```
 
-Published OpenClaw release flows in `ocm` need Node.js `22.14.0` or newer and `npm` on `PATH`.
+Published OpenClaw release flows in `ocm` prefer host Node.js `22.14.0` or newer and `npm`.
+On supported platforms, `ocm` can manage a private copy for official release installs when those tools are missing.
 Local checkout flows keep using whatever command and toolchain you choose.
 Run `ocm doctor host` on a new machine if you want one quick readiness check before using release flows.
 

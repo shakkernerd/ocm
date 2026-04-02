@@ -225,7 +225,7 @@ fn env_status_reports_release_backed_runtime_details() {
 }
 
 #[test]
-fn env_status_reports_official_runtime_host_requirement_issues() {
+fn env_status_keeps_official_runtime_healthy_when_managed_fallback_is_available() {
     let root = TestDir::new("env-status-official-runtime-host-issue");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -276,19 +276,8 @@ fn env_status_reports_official_runtime_host_requirement_issues() {
     let status = run_ocm(&cwd, &status_env, &["env", "status", "demo", "--json"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let value: Value = serde_json::from_str(&stdout(&status)).unwrap();
-    assert_eq!(value["runtimeHealth"], "broken");
-    assert!(
-        value["issue"]
-            .as_str()
-            .unwrap()
-            .contains("official OpenClaw runtimes require Node.js >= 22.14.0 and npm on PATH")
-    );
-    assert!(
-        value["issue"]
-            .as_str()
-            .unwrap()
-            .contains("node was not found on PATH")
-    );
+    assert_eq!(value["runtimeHealth"], "ok");
+    assert_eq!(value["issue"], Value::Null);
 }
 
 #[test]

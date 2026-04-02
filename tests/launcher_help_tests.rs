@@ -87,7 +87,12 @@ fn doctor_host_help_is_available_from_help_and_flag() {
     assert_eq!(output, stdout(&via_flag));
     assert!(output.contains("Check host readiness"));
     assert!(output.contains("ocm doctor host [--raw] [--json]"));
-    assert!(output.contains("Official release installs need Node.js >= 22.14.0 and npm on PATH."));
+    assert!(output.contains("Official release installs prefer host Node.js >= 22.14.0 and npm."));
+    assert!(
+        output.contains(
+            "On supported platforms, OCM can manage a private copy when they are missing."
+        )
+    );
 }
 
 #[test]
@@ -138,9 +143,9 @@ fn start_help_is_available_from_help_and_flag() {
         "ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
     ));
     assert!(output.contains("Start installs and starts the env service by default."));
-    assert!(
-        output.contains("Official release selectors require Node.js >= 22.14.0 and npm on PATH.")
-    );
+    assert!(output.contains(
+        "Official release selectors prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing."
+    ));
 }
 
 #[test]
@@ -180,9 +185,9 @@ fn setup_help_is_available_from_help_and_flag() {
     assert!(output.contains("Guided setup"));
     assert!(output.contains("ocm setup"));
     assert!(output.contains("Interactive setup"));
-    assert!(
-        output.contains("Official release choices require Node.js >= 22.14.0 and npm on PATH.")
-    );
+    assert!(output.contains(
+        "Official release choices prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing."
+    ));
 }
 
 #[test]
@@ -432,8 +437,11 @@ fn runtime_and_service_leaf_help_are_command_specific() {
     assert!(output.contains("Install a managed runtime"));
     assert!(output.contains("--manifest-url <url>"));
     assert!(output.contains("Exactly one install source must be provided."));
+    assert!(output.contains("Official release installs prefer host Node.js >= 22.14.0 and npm."));
     assert!(
-        output.contains("Official release installs require Node.js >= 22.14.0 and npm on PATH.")
+        output.contains(
+            "On supported platforms, OCM can manage a private copy when they are missing."
+        )
     );
     assert!(output.contains(
         "Run `ocm doctor host` on a new machine before using official release installs."
@@ -457,8 +465,11 @@ fn release_install_help_mentions_doctor_host() {
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
     assert!(output.contains("ocm release install [<name>] (--version <version> | --channel <channel>) [--description <text>] [--force] [--raw] [--json]"));
+    assert!(output.contains("Official release installs prefer host Node.js >= 22.14.0 and npm."));
     assert!(
-        output.contains("Official release installs require Node.js >= 22.14.0 and npm on PATH.")
+        output.contains(
+            "On supported platforms, OCM can manage a private copy when they are missing."
+        )
     );
     assert!(output.contains(
         "Run `ocm doctor host` on a new machine before using official release installs."

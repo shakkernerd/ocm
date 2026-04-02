@@ -180,7 +180,7 @@ fn runtime_verify_reports_checksum_drift_for_release_backed_runtimes() {
 }
 
 #[test]
-fn runtime_verify_reports_missing_node_for_official_runtimes() {
+fn runtime_verify_keeps_official_runtimes_healthy_when_managed_fallback_is_available() {
     let root = TestDir::new("runtime-verify-official-missing-node");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -224,19 +224,8 @@ fn runtime_verify_reports_missing_node_for_official_runtimes() {
         &verify_env,
         &["runtime", "verify", "stable", "--json"],
     );
-    assert_eq!(verify.status.code(), Some(1));
+    assert!(verify.status.success(), "{}", stderr(&verify));
     let value: Value = serde_json::from_str(&stdout(&verify)).unwrap();
-    assert_eq!(value["healthy"], false);
-    assert!(
-        value["issue"]
-            .as_str()
-            .unwrap()
-            .contains("official OpenClaw runtimes require Node.js >= 22.14.0 and npm on PATH")
-    );
-    assert!(
-        value["issue"]
-            .as_str()
-            .unwrap()
-            .contains("node was not found on PATH")
-    );
+    assert_eq!(value["healthy"], true);
+    assert_eq!(value["issue"], Value::Null);
 }

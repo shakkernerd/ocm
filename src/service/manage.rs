@@ -427,7 +427,7 @@ fn prepare_service_with_allowed_busy_port(
     let port_assignment =
         persist_service_gateway_port(name, env, cwd, allowed_busy_port, persist_gateway_port)?;
     let env_meta = port_assignment.env_meta;
-    let launch = resolve_service_launch(&env_meta, env, cwd)?;
+    let launch = resolve_service_launch(&env_meta, env, cwd, true)?;
     let managed_label = managed_service_label(&env_meta.name, env, cwd)?;
     let managed_plist_path = managed_plist_path(&env_meta.name, env, cwd)?;
     let log_dir = service_log_dir(&env_meta);

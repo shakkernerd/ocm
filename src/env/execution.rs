@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use super::{EnvMeta, EnvironmentService};
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
+use crate::runtime::resolve_runtime_launch;
 use crate::store::{get_launcher, get_runtime_verified};
 
 #[derive(Clone, Debug, Serialize)]
@@ -96,7 +97,9 @@ pub enum ResolvedExecution {
         env: EnvMeta,
         runtime_name: String,
         binary_path: String,
-        args: Vec<String>,
+        forwarded_args: Vec<String>,
+        program: String,
+        program_args: Vec<String>,
         run_dir: PathBuf,
     },
 }
@@ -144,10 +147,13 @@ impl<'a> EnvironmentService<'a> {
             }
             ExecutionBinding::Runtime(runtime_name) => {
                 let runtime = get_runtime_verified(&runtime_name, self.env, self.cwd)?;
+                let launch = resolve_runtime_launch(&runtime, &args, self.env, self.cwd, true)?;
                 Ok(ResolvedExecution::Runtime {
                     runtime_name,
-                    binary_path: runtime.binary_path,
-                    args,
+                    binary_path: launch.runtime_binary_path,
+                    forwarded_args: args,
+                    program: launch.program,
+                    program_args: launch.args,
                     run_dir: resolve_runtime_run_dir(self.cwd),
                     env,
                 })
@@ -177,15 +183,16 @@ impl ResolvedExecution {
                 env,
                 runtime_name,
                 binary_path,
-                args,
+                forwarded_args,
                 run_dir,
+                ..
             } => ExecutionSummary {
                 env_name: env.name,
                 binding_kind: "runtime".to_string(),
                 binding_name: runtime_name,
                 command: None,
                 binary_path: Some(binary_path),
-                forwarded_args: args,
+                forwarded_args,
                 run_dir: run_dir.display().to_string(),
             },
         }

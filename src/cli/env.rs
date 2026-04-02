@@ -957,13 +957,13 @@ impl Cli {
             } => run_shell(&command, &build_openclaw_env(&env, &self.env), &run_dir),
             crate::env::ResolvedExecution::Runtime {
                 env,
-                binary_path,
-                args,
+                program,
+                program_args,
                 run_dir,
                 ..
             } => run_direct(
-                &binary_path,
-                &args,
+                &program,
+                &program_args,
                 &build_openclaw_env(&env, &self.env),
                 &run_dir,
             ),

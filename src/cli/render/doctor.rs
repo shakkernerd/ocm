@@ -32,7 +32,17 @@ pub fn host_doctor(
         KeyValueRow::plain("Required issues", summary.required_issues.to_string()),
         KeyValueRow::plain("Recommended gaps", summary.recommended_gaps.to_string()),
     ];
-    if summary.healthy {
+    let host_tool_gaps = summary.official_release_ready
+        && summary
+            .checks
+            .iter()
+            .any(|check| check.category == "official-release" && check.status != "ok");
+    if summary.healthy && host_tool_gaps {
+        overview.push(KeyValueRow::warning(
+            "Status",
+            "OCM can self-manage the missing official release tools on this machine.",
+        ));
+    } else if summary.healthy {
         overview.push(KeyValueRow::success(
             "Status",
             "This machine can install and run official OpenClaw releases.",

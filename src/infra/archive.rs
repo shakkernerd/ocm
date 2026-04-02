@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::Cursor;
+use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
@@ -7,6 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tar::{Archive, Builder, Header};
 use time::OffsetDateTime;
+use zip::ZipArchive;
 
 pub const ENV_ARCHIVE_MANIFEST_PATH: &str = "meta/env.json";
 pub const ENV_ARCHIVE_ROOT_DIR: &str = "root";
@@ -109,6 +110,44 @@ pub fn extract_tar_gz(archive_path: &Path, destination_dir: &Path) -> Result<(),
     archive
         .unpack(destination_dir)
         .map_err(|error| error.to_string())
+}
+
+pub fn extract_zip(archive_path: &Path, destination_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination_dir).map_err(|error| error.to_string())?;
+
+    let file = File::open(archive_path).map_err(|error| error.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let Some(relative_path) = entry.enclosed_name().map(PathBuf::from) else {
+            continue;
+        };
+        let output_path = destination_dir.join(relative_path);
+        if entry.is_dir() {
+            fs::create_dir_all(&output_path).map_err(|error| error.to_string())?;
+            continue;
+        }
+
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+
+        let mut output = File::create(&output_path).map_err(|error| error.to_string())?;
+        io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = output
+                .metadata()
+                .map_err(|error| error.to_string())?
+                .permissions();
+            permissions.set_mode(mode);
+            fs::set_permissions(&output_path, permissions).map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

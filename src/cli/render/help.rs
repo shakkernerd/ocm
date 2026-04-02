@@ -172,7 +172,7 @@ pub fn setup_help(cmd: &str) -> String {
         vec![format!("{cmd} setup")],
         &[
             "Setup asks a few questions, then runs the same env-first flow as `start`.",
-            "Official release choices require Node.js >= 22.14.0 and npm on PATH.",
+            "Official release choices prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing.",
             "Run `ocm doctor host` if you want a full machine check before choosing a release flow.",
             "When run inside an OpenClaw checkout, local mode defaults to `pnpm openclaw` in that folder.",
             "Use `start` when you already know the source you want.",
@@ -248,7 +248,7 @@ pub fn start_help(cmd: &str) -> String {
         &[
             "If an environment already exists, start reuses it and only adjusts binding/protection when you asked for it.",
             "Start installs and starts the env service by default. Use `--no-service` when you do not want a background process.",
-            "Official release selectors require Node.js >= 22.14.0 and npm on PATH.",
+            "Official release selectors prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing.",
             "Run `ocm doctor host` to check the host before using official release selectors.",
             "`--json` requires `--no-onboard` because onboarding is interactive.",
         ],
@@ -624,7 +624,8 @@ pub fn doctor_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             vec![format!("{cmd} doctor host")],
             &[
-                "Official release installs need Node.js >= 22.14.0 and npm on PATH.",
+                "Official release installs prefer host Node.js >= 22.14.0 and npm.",
+                "On supported platforms, OCM can manage a private copy when they are missing.",
                 "Recommended tools are advisory; they do not block local-command or launcher flows.",
             ],
         ),
@@ -1158,7 +1159,8 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             &[
                 "Official installs use canonical runtime names derived from the selector.",
-                "Official release installs require Node.js >= 22.14.0 and npm on PATH.",
+                "Official release installs prefer host Node.js >= 22.14.0 and npm.",
+                "On supported platforms, OCM can manage a private copy when they are missing.",
                 "Run `ocm doctor host` on a new machine before using official release installs.",
             ],
         ),
@@ -1488,7 +1490,8 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Exactly one install source must be provided.",
                 "Official installs use canonical runtime names unless you reuse the same canonical name explicitly.",
-                "Official release installs require Node.js >= 22.14.0 and npm on PATH.",
+                "Official release installs prefer host Node.js >= 22.14.0 and npm.",
+                "On supported platforms, OCM can manage a private copy when they are missing.",
                 "Run `ocm doctor host` on a new machine before using official release installs.",
             ],
         ),

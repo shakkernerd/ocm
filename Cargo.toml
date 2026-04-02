@@ -24,6 +24,7 @@ indicatif = "0.18"
 unicode-width = "0.2"
 terminal_size = "0.4"
 dialoguer = "0.12"
+zip = "2"
 
 [profile.release]
 lto = "thin"

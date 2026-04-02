@@ -1,4 +1,5 @@
 mod install;
+mod launch;
 mod registry;
 pub mod releases;
 mod verify;
@@ -8,6 +9,7 @@ pub use install::{
     InstallRuntimeFromUrlOptions, InstallRuntimeOptions, OfficialRuntimePrepareAction,
     RuntimeUpdateBatchSummary, RuntimeUpdateSummary, UpdateRuntimeFromReleaseOptions,
 };
+pub(crate) use launch::{is_official_openclaw_package_runtime, resolve_runtime_launch};
 pub use registry::{
     AddRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService, RuntimeSourceKind,
 };

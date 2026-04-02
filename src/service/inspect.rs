@@ -19,6 +19,7 @@ use crate::env::{
 };
 use crate::infra::shell::build_openclaw_env;
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
+use crate::runtime::resolve_runtime_launch;
 use crate::store::{
     derive_env_paths, display_path, get_environment, get_launcher, get_runtime_verified,
     list_environments, resolve_ocm_home,
@@ -361,7 +362,7 @@ fn build_service_summary(
     let env_meta = service.apply_effective_gateway_port(meta)?;
     let managed = managed_service_identity(&env_meta.name, process_env, cwd)?;
     let managed_status = inspect_job(&managed.label, &managed.definition_path, process_env);
-    let launch = resolve_service_launch(&env_meta, process_env, cwd);
+    let launch = resolve_service_launch(&env_meta, process_env, cwd, false);
     let probe_spec = resolve_openclaw_probe_spec(&env_meta, process_env, cwd).ok();
     let env_config_path = display_path(&derive_env_paths(Path::new(&env_meta.root)).config_path);
     let global_matches_env = global
@@ -767,6 +768,7 @@ pub(crate) fn resolve_service_launch(
     env: &EnvMeta,
     process_env: &BTreeMap<String, String>,
     cwd: &Path,
+    bootstrap_managed_node: bool,
 ) -> Result<ServiceLaunchSpec, String> {
     let port = env
         .gateway_port
@@ -789,10 +791,17 @@ pub(crate) fn resolve_service_launch(
         }
         crate::env::ExecutionBinding::Runtime(name) => {
             let runtime = get_runtime_verified(&name, process_env, cwd)?;
+            let launch = resolve_runtime_launch(
+                &runtime,
+                &gateway_args,
+                process_env,
+                cwd,
+                bootstrap_managed_node,
+            )?;
             Ok(ServiceLaunchSpec::Runtime {
                 binding_name: name,
-                binary_path: runtime.binary_path,
-                args: gateway_args,
+                binary_path: launch.program,
+                args: launch.args,
                 run_dir: Path::new(&env.root).to_path_buf(),
             })
         }
@@ -821,9 +830,10 @@ fn resolve_openclaw_probe_spec(
         }
         ExecutionBinding::Runtime(name) => {
             let runtime = get_runtime_verified(&name, process_env, cwd)?;
+            let launch = resolve_runtime_launch(&runtime, &health_args, process_env, cwd, false)?;
             Ok(OpenClawProbeSpec::Direct {
-                command: runtime.binary_path,
-                args: health_args,
+                command: launch.program,
+                args: launch.args,
                 run_dir: resolve_runtime_run_dir(cwd),
             })
         }
