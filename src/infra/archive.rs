@@ -16,6 +16,8 @@ pub const ENV_ARCHIVE_ROOT_DIR: &str = "root";
 #[serde(rename_all = "camelCase")]
 pub struct ArchivedEnvMeta {
     pub name: String,
+    #[serde(default)]
+    pub source_root: Option<String>,
     pub gateway_port: Option<u32>,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
@@ -186,6 +188,7 @@ mod tests {
             exported_at,
             env: ArchivedEnvMeta {
                 name: "demo".to_string(),
+                source_root: Some(source_root.display().to_string()),
                 gateway_port: Some(19789),
                 default_runtime: Some("stable".to_string()),
                 default_launcher: Some("shell".to_string()),

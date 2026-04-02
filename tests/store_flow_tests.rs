@@ -497,6 +497,14 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
         &source_root.join(".openclaw/workspace/notes.txt"),
         "hello import",
     );
+    fs::write(
+        source_root.join(".openclaw/openclaw.json"),
+        format!(
+            "{{\n  \"agents\": {{\n    \"defaults\": {{\n      \"workspace\": \"{}\"\n    }}\n  }},\n  \"gateway\": {{\n    \"port\": 19789\n  }}\n}}\n",
+            source_root.join(".openclaw/workspace").display()
+        ),
+    )
+    .unwrap();
 
     let exported = export_environment(
         ExportEnvironmentOptions {
@@ -535,6 +543,21 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
         .unwrap(),
         "hello import"
     );
+    let imported_config =
+        fs::read_to_string(root.child("workspace/imports/target-root/.openclaw/openclaw.json"))
+            .unwrap();
+    let imported_config: serde_json::Value = serde_json::from_str(&imported_config).unwrap();
+    let actual_workspace = fs::canonicalize(std::path::Path::new(
+        imported_config["agents"]["defaults"]["workspace"]
+            .as_str()
+            .unwrap(),
+    ))
+    .unwrap();
+    let expected_workspace = fs::canonicalize(root.child("workspace/imports/target-root"))
+        .unwrap()
+        .join(".openclaw/workspace");
+    assert_eq!(actual_workspace, expected_workspace);
+    assert_eq!(imported_config["gateway"]["port"].as_u64(), Some(19789));
 
     let marker_raw =
         fs::read_to_string(root.child("workspace/imports/target-root/.ocm-env.json")).unwrap();
@@ -689,6 +712,14 @@ fn environment_snapshot_restore_replaces_env_state_from_the_snapshot() {
         &source_root.join(".openclaw/workspace/notes.txt"),
         "before restore",
     );
+    fs::write(
+        source_root.join(".openclaw/openclaw.json"),
+        format!(
+            "{{\n  \"agents\": {{\n    \"defaults\": {{\n      \"workspace\": \"{}\"\n    }}\n  }},\n  \"gateway\": {{\n    \"port\": 19789\n  }}\n}}\n",
+            source_root.join(".openclaw/workspace").display()
+        ),
+    )
+    .unwrap();
 
     let snapshot = create_env_snapshot(
         CreateEnvSnapshotOptions {
@@ -704,6 +735,11 @@ fn environment_snapshot_restore_replaces_env_state_from_the_snapshot() {
         &source_root.join(".openclaw/workspace/notes.txt"),
         "after drift",
     );
+    fs::write(
+        source_root.join(".openclaw/openclaw.json"),
+        "{\n  \"agents\": {\n    \"defaults\": {\n      \"workspace\": \"/tmp/foreign/.openclaw/workspace\"\n    }\n  },\n  \"gateway\": {\n    \"port\": 20000\n  }\n}\n",
+    )
+    .unwrap();
     let mut drifted = get_environment("source", &env, &cwd).unwrap();
     drifted.default_launcher = None;
     drifted.default_runtime = None;
@@ -727,6 +763,19 @@ fn environment_snapshot_restore_replaces_env_state_from_the_snapshot() {
         fs::read_to_string(source_root.join(".openclaw/workspace/notes.txt")).unwrap(),
         "before restore"
     );
+    let restored_config = fs::read_to_string(source_root.join(".openclaw/openclaw.json")).unwrap();
+    let restored_config: serde_json::Value = serde_json::from_str(&restored_config).unwrap();
+    let actual_workspace = fs::canonicalize(std::path::Path::new(
+        restored_config["agents"]["defaults"]["workspace"]
+            .as_str()
+            .unwrap(),
+    ))
+    .unwrap();
+    let expected_workspace = fs::canonicalize(source_root)
+        .unwrap()
+        .join(".openclaw/workspace");
+    assert_eq!(actual_workspace, expected_workspace);
+    assert_eq!(restored_config["gateway"]["port"].as_u64(), Some(19789));
 
     let restored_meta = get_environment("source", &env, &cwd).unwrap();
     assert_eq!(restored_meta.gateway_port, Some(19789));

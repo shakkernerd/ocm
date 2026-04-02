@@ -645,6 +645,7 @@ pub fn env_doctor(doctor: &EnvDoctorSummary, profile: RenderProfile) -> Vec<Stri
         vec![
             doctor_state_row("Root", &doctor.root_status),
             doctor_state_row("Marker", &doctor.marker_status),
+            doctor_state_row("Config", &doctor.config_status),
             doctor_state_row("Runtime", &doctor.runtime_status),
             doctor_state_row("Launcher", &doctor.launcher_status),
             doctor_state_row("Resolution", &doctor.resolution_status),
@@ -672,6 +673,7 @@ fn env_doctor_raw(doctor: &EnvDoctorSummary) -> Vec<String> {
         format!("healthy: {}", doctor.healthy),
         format!("rootStatus: {}", doctor.root_status),
         format!("markerStatus: {}", doctor.marker_status),
+        format!("configStatus: {}", doctor.config_status),
         format!("runtimeStatus: {}", doctor.runtime_status),
         format!("launcherStatus: {}", doctor.launcher_status),
         format!("resolutionStatus: {}", doctor.resolution_status),
@@ -1090,7 +1092,7 @@ fn doctor_state_row(label: &str, status: &str) -> KeyValueRow {
 fn doctor_state_tone(status: &str) -> Tone {
     match status {
         "ok" => Tone::Success,
-        "unbound" => Tone::Muted,
+        "unbound" | "absent" => Tone::Muted,
         "missing" | "mismatch" | "invalid" | "broken" | "error" => Tone::Danger,
         _ => Tone::Warning,
     }
@@ -1338,6 +1340,7 @@ mod tests {
                 healthy: false,
                 root_status: "ok".to_string(),
                 marker_status: "mismatch".to_string(),
+                config_status: "drifted".to_string(),
                 runtime_status: "unbound".to_string(),
                 launcher_status: "ok".to_string(),
                 resolution_status: "ok".to_string(),

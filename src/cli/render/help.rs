@@ -843,7 +843,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "doctor" => render_leaf(
             "Inspect environment health",
-            "Report environment problems without changing anything.",
+            "Report environment problems, binding drift, and env-scoped OpenClaw config issues without changing anything.",
             vec![format!("{cmd} env doctor <name> [--raw] [--json]")],
             &[
                 (
@@ -860,7 +860,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "cleanup" => render_leaf(
             "Repair safe environment issues",
-            "Preview or apply narrow, safe repairs such as marker rewrites and missing binding cleanup.",
+            "Preview or apply narrow, safe repairs such as marker rewrites, missing binding cleanup, and env-scoped OpenClaw config rewrites.",
             vec![format!(
                 "{cmd} env cleanup (<name> | --all) [--yes] [--raw] [--json]"
             )],

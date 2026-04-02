@@ -207,3 +207,46 @@ fn env_cleanup_all_yes_json_applies_repairs_across_envs() {
     assert!(root.child("ocm-home/envs/first/.ocm-env.json").exists());
     assert!(root.child("ocm-home/envs/second/.ocm-env.json").exists());
 }
+
+#[test]
+fn env_cleanup_yes_repairs_env_scoped_config_drift() {
+    let root = TestDir::new("env-cleanup-config-repair");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let source = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(source.status.success(), "{}", stderr(&source));
+    let target = run_ocm(&cwd, &env, &["env", "create", "target", "--port", "19790"]);
+    assert!(target.status.success(), "{}", stderr(&target));
+
+    let source_root = root.child("ocm-home/envs/source");
+    let target_config = root.child("ocm-home/envs/target/.openclaw/openclaw.json");
+    fs::write(
+        &target_config,
+        format!(
+            "{{\n  \"agents\": {{\n    \"defaults\": {{\n      \"workspace\": \"{}\"\n    }}\n  }},\n  \"gateway\": {{\n    \"port\": 19789\n  }}\n}}\n",
+            source_root.join(".openclaw/workspace").display()
+        ),
+    )
+    .unwrap();
+
+    let cleanup = run_ocm(&cwd, &env, &["env", "cleanup", "target", "--yes"]);
+    assert!(cleanup.status.success(), "{}", stderr(&cleanup));
+    let output = stdout(&cleanup);
+    assert!(
+        output
+            .contains("repair-openclaw-config: rewrite env-scoped OpenClaw config paths and ports")
+    );
+
+    let repaired = fs::read_to_string(target_config).unwrap();
+    assert!(
+        repaired.contains(
+            &root
+                .child("ocm-home/envs/target/.openclaw/workspace")
+                .display()
+                .to_string()
+        )
+    );
+    assert!(repaired.contains("\"port\": 19790"));
+}

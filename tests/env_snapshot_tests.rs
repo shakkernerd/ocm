@@ -1,6 +1,8 @@
 mod support;
 
-use std::fs;
+use std::{fs, path::Path};
+
+use serde_json::Value;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_text};
 
@@ -306,6 +308,64 @@ fn env_snapshot_restore_json_reports_the_restored_binding_shape() {
     assert!(output.contains("\"envName\": \"source\""));
     assert!(output.contains("\"snapshotId\":"));
     assert!(output.contains("\"protected\": true"));
+}
+
+#[test]
+fn env_snapshot_restore_rewrites_openclaw_config_for_the_current_root() {
+    let root = TestDir::new("env-snapshot-restore-config");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_root = root.child("ocm-home/envs/source");
+    fs::write(
+        source_root.join(".openclaw/openclaw.json"),
+        format!(
+            "{{\n  \"agents\": {{\n    \"defaults\": {{\n      \"workspace\": \"{}\"\n    }}\n  }},\n  \"gateway\": {{\n    \"port\": 19789\n  }}\n}}\n",
+            source_root.join(".openclaw/workspace").display()
+        ),
+    )
+    .unwrap();
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    fs::write(
+        source_root.join(".openclaw/openclaw.json"),
+        "{\n  \"agents\": {\n    \"defaults\": {\n      \"workspace\": \"/tmp/foreign/.openclaw/workspace\"\n    }\n  },\n  \"gateway\": {\n    \"port\": 20000\n  }\n}\n",
+    )
+    .unwrap();
+
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "restore", "source", &snapshot_id],
+    );
+    assert!(restore.status.success(), "{}", stderr(&restore));
+
+    let raw = fs::read_to_string(source_root.join(".openclaw/openclaw.json")).unwrap();
+    let config: Value = serde_json::from_str(&raw).unwrap();
+    let actual_workspace = fs::canonicalize(Path::new(
+        config["agents"]["defaults"]["workspace"].as_str().unwrap(),
+    ))
+    .unwrap();
+    let expected_workspace = fs::canonicalize(source_root)
+        .unwrap()
+        .join(".openclaw/workspace");
+    assert_eq!(actual_workspace, expected_workspace);
+    assert_eq!(config["gateway"]["port"].as_u64(), Some(19789));
 }
 
 #[test]

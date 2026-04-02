@@ -36,6 +36,7 @@ fn env_doctor_reports_a_healthy_launcher_bound_environment() {
     assert!(output.contains("healthy: true"));
     assert!(output.contains("rootStatus: ok"));
     assert!(output.contains("markerStatus: ok"));
+    assert!(output.contains("configStatus: absent"));
     assert!(output.contains("launcherStatus: ok"));
     assert!(output.contains("resolutionStatus: ok"));
     assert!(output.contains("resolvedKind: launcher"));
@@ -79,6 +80,7 @@ fn env_doctor_json_reports_marker_and_runtime_health_issues() {
     assert_eq!(value["healthy"], false);
     assert_eq!(value["rootStatus"], "ok");
     assert_eq!(value["markerStatus"], "mismatch");
+    assert_eq!(value["configStatus"], "absent");
     assert_eq!(value["runtimeStatus"], "broken");
     assert_eq!(value["launcherStatus"], "unbound");
     assert_eq!(value["resolutionStatus"], "error");
@@ -153,7 +155,50 @@ fn env_doctor_keeps_official_runtime_healthy_when_managed_fallback_is_available(
     assert!(doctor.status.success(), "{}", stderr(&doctor));
     let value: Value = serde_json::from_str(&stdout(&doctor)).unwrap();
     assert_eq!(value["healthy"], true);
+    assert_eq!(value["configStatus"], "absent");
     assert_eq!(value["runtimeStatus"], "ok");
     let issues = value["issues"].as_array().unwrap();
     assert!(issues.is_empty());
+}
+
+#[test]
+fn env_doctor_reports_env_scoped_config_drift() {
+    let root = TestDir::new("env-doctor-config-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create_source = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create_source.status.success(), "{}", stderr(&create_source));
+    let create_target = run_ocm(&cwd, &env, &["env", "create", "target", "--port", "19790"]);
+    assert!(create_target.status.success(), "{}", stderr(&create_target));
+
+    let source_root = root.child("ocm-home/envs/source");
+    fs::write(
+        root.child("ocm-home/envs/target/.openclaw/openclaw.json"),
+        format!(
+            "{{\n  \"agents\": {{\n    \"defaults\": {{\n      \"workspace\": \"{}\"\n    }}\n  }},\n  \"gateway\": {{\n    \"port\": 19789\n  }}\n}}\n",
+            source_root.join(".openclaw/workspace").display()
+        ),
+    )
+    .unwrap();
+
+    let doctor = run_ocm(&cwd, &env, &["env", "doctor", "target", "--json"]);
+    assert!(doctor.status.success(), "{}", stderr(&doctor));
+    let value: Value = serde_json::from_str(&stdout(&doctor)).unwrap();
+    assert_eq!(value["healthy"], false);
+    assert_eq!(value["configStatus"], "drifted");
+    let issues = value["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|issue| {
+        issue
+            .as_str()
+            .unwrap()
+            .contains("OpenClaw config contains 1 path(s) under env \"source\" root")
+    }));
+    assert!(issues.iter().any(|issue| {
+        issue
+            .as_str()
+            .unwrap()
+            .contains("OpenClaw config gateway port 19789 does not match env metadata 19790")
+    }));
 }

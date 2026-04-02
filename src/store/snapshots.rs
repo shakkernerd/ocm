@@ -19,7 +19,7 @@ use super::layout::{
     derive_env_paths, display_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
     validate_name,
 };
-use super::{get_environment, now_utc, save_environment};
+use super::{get_environment, now_utc, rewrite_openclaw_config_for_target, save_environment};
 
 static NEXT_RESTORE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -82,6 +82,7 @@ pub fn create_env_snapshot(
         exported_at: created_at,
         env: ArchivedEnvMeta {
             name: meta.name.clone(),
+            source_root: Some(meta.root.clone()),
             gateway_port: meta.gateway_port,
             default_runtime: meta.default_runtime.clone(),
             default_launcher: meta.default_launcher.clone(),
@@ -216,6 +217,11 @@ pub fn restore_env_snapshot(
 
         let restore_result = (|| {
             copy_dir_recursive(&extracted.root_dir, &current_paths.root)?;
+            rewrite_openclaw_config_for_target(
+                &current_paths,
+                Some(Path::new(&snapshot.source_root)),
+                extracted.manifest.env.gateway_port,
+            )?;
             let marker = EnvMarker {
                 kind: "ocm-env-marker".to_string(),
                 name: env_name.clone(),

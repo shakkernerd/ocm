@@ -2,6 +2,7 @@ mod common;
 mod envs;
 mod launchers;
 mod layout;
+mod openclaw_config;
 mod runtimes;
 mod snapshots;
 
@@ -23,6 +24,10 @@ pub use layout::{
     env_meta_path, launcher_meta_path, resolve_absolute_path, resolve_ocm_home,
     resolve_store_paths, resolve_user_home, runtime_install_files_dir, runtime_install_root,
     runtime_meta_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path, validate_name,
+};
+pub(crate) use openclaw_config::{
+    OpenClawConfigAudit, audit_openclaw_config, repair_openclaw_config,
+    rewrite_openclaw_config_for_target,
 };
 pub use runtimes::{
     add_runtime, get_runtime, get_runtime_verified, install_runtime,
