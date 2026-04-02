@@ -343,6 +343,77 @@ fn clone_environment_assigns_a_new_port_when_the_source_only_had_a_computed_port
 }
 
 #[test]
+fn clone_environment_rewrites_env_scoped_config_paths_and_ports() {
+    let root = TestDir::new("store-env-clone-config-rewrite");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let source = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_runtime: None,
+            default_launcher: Some("stable".to_string()),
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = std::path::Path::new(&source.root);
+    let source_workspace = source_root.join(".openclaw/workspace");
+    write_text(
+        &source_root.join(".openclaw/openclaw.json"),
+        &format!(
+            concat!(
+                "{{\n",
+                "  \"agents\": {{\n",
+                "    \"defaults\": {{\n",
+                "      \"workspace\": \"{}\"\n",
+                "    }}\n",
+                "  }},\n",
+                "  \"gateway\": {{\n",
+                "    \"port\": 19789\n",
+                "  }},\n",
+                "  \"outside\": \"/tmp/keep-me\"\n",
+                "}}\n"
+            ),
+            source_workspace.display()
+        ),
+    );
+
+    let cloned = clone_environment(
+        CloneEnvironmentOptions {
+            source_name: "source".to_string(),
+            name: "target".to_string(),
+            root: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let cloned_root = std::path::Path::new(&cloned.root);
+    let config_raw = fs::read_to_string(cloned_root.join(".openclaw/openclaw.json")).unwrap();
+    let config: serde_json::Value = serde_json::from_str(&config_raw).unwrap();
+    let expected_workspace = cloned_root
+        .join(".openclaw/workspace")
+        .display()
+        .to_string();
+    assert_eq!(
+        config["agents"]["defaults"]["workspace"].as_str(),
+        Some(expected_workspace.as_str())
+    );
+    assert_eq!(
+        config["gateway"]["port"].as_u64(),
+        Some(cloned.gateway_port.unwrap() as u64)
+    );
+    assert_eq!(config["outside"].as_str(), Some("/tmp/keep-me"));
+}
+
+#[test]
 fn environment_export_writes_a_portable_archive() {
     let root = TestDir::new("store-env-export");
     let cwd = root.child("workspace");

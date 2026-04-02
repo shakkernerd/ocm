@@ -749,6 +749,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Clone resets environment identity while preserving the copied state.",
                 "Clone assigns a fresh gateway port to the new env to avoid collisions.",
+                "Clone rewrites env-scoped OpenClaw config paths inside the copied env root.",
                 "Background services are not copied; use `start` or `service install` for the clone.",
             ],
         ),

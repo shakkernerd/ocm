@@ -4,6 +4,8 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use serde_json::Value;
+
 use crate::env::{
     CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
     EnvMarker, EnvMarkerRepairSummary, EnvMeta, ExportEnvironmentOptions, ImportEnvironmentOptions,
@@ -206,6 +208,7 @@ pub fn clone_environment(
             created_at,
         };
         write_json(&target_paths.marker_path, &marker)?;
+        rewrite_cloned_openclaw_config(&source_paths, &target_paths, gateway_port)?;
 
         let meta = EnvMeta {
             kind: "ocm-env".to_string(),
@@ -298,6 +301,92 @@ fn read_config_gateway_port(meta: &EnvMeta) -> Option<u32> {
 
 fn gateway_port_available(port: u32) -> bool {
     TcpListener::bind(("127.0.0.1", port as u16)).is_ok()
+}
+
+fn rewrite_cloned_openclaw_config(
+    source_paths: &super::layout::EnvPaths,
+    target_paths: &super::layout::EnvPaths,
+    gateway_port: u32,
+) -> Result<(), String> {
+    if !path_exists(&target_paths.config_path) {
+        return Ok(());
+    }
+
+    let raw = fs::read_to_string(&target_paths.config_path).map_err(|error| error.to_string())?;
+    let mut value: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => return Ok(()),
+    };
+
+    let mut changed =
+        rewrite_cloned_env_root_paths(&mut value, &source_paths.root, &target_paths.root);
+    changed |= rewrite_cloned_gateway_port(&mut value, gateway_port);
+
+    if !changed {
+        return Ok(());
+    }
+
+    let mut rewritten = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    rewritten.push('\n');
+    fs::write(&target_paths.config_path, rewritten).map_err(|error| error.to_string())
+}
+
+fn rewrite_cloned_env_root_paths(
+    value: &mut Value,
+    source_root: &Path,
+    target_root: &Path,
+) -> bool {
+    match value {
+        Value::String(raw) => rewrite_cloned_env_root_string(raw, source_root, target_root),
+        Value::Array(values) => {
+            let mut changed = false;
+            for nested in values {
+                changed |= rewrite_cloned_env_root_paths(nested, source_root, target_root);
+            }
+            changed
+        }
+        Value::Object(values) => {
+            let mut changed = false;
+            for nested in values.values_mut() {
+                changed |= rewrite_cloned_env_root_paths(nested, source_root, target_root);
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
+fn rewrite_cloned_env_root_string(
+    raw: &mut String,
+    source_root: &Path,
+    target_root: &Path,
+) -> bool {
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return false;
+    }
+
+    let Ok(suffix) = path.strip_prefix(source_root) else {
+        return false;
+    };
+
+    *raw = display_path(&clean_path(&target_root.join(suffix)));
+    true
+}
+
+fn rewrite_cloned_gateway_port(value: &mut Value, gateway_port: u32) -> bool {
+    let Some(root) = value.as_object_mut() else {
+        return false;
+    };
+    let Some(gateway) = root.get_mut("gateway").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    if !matches!(gateway.get("port"), Some(Value::Number(_))) {
+        return false;
+    }
+
+    gateway.insert("port".to_string(), Value::from(gateway_port));
+    true
 }
 
 pub fn export_environment(

@@ -48,3 +48,52 @@ fn env_clone_copies_state_into_a_new_environment() {
         "hello clone"
     );
 }
+
+#[test]
+fn env_clone_rewrites_openclaw_config_for_the_new_env_root() {
+    let root = TestDir::new("env-clone-config-rewrite");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_root = root.child("ocm-home/envs/source");
+    write_text(
+        &source_root.join(".openclaw/openclaw.json"),
+        &format!(
+            concat!(
+                "{{\n",
+                "  \"agents\": {{\n",
+                "    \"defaults\": {{\n",
+                "      \"workspace\": \"{}\"\n",
+                "    }}\n",
+                "  }},\n",
+                "  \"gateway\": {{\n",
+                "    \"port\": 19789\n",
+                "  }}\n",
+                "}}\n"
+            ),
+            source_root.join(".openclaw/workspace").display()
+        ),
+    );
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert!(clone.status.success(), "{}", stderr(&clone));
+
+    let config_raw =
+        fs::read_to_string(root.child("ocm-home/envs/target/.openclaw/openclaw.json")).unwrap();
+    let config: Value = serde_json::from_str(&config_raw).unwrap();
+    let expected_workspace = root
+        .child("ocm-home/envs/target/.openclaw/workspace")
+        .display()
+        .to_string();
+    assert_eq!(
+        config["agents"]["defaults"]["workspace"].as_str(),
+        Some(expected_workspace.as_str())
+    );
+    let cloned_port = config["gateway"]["port"].as_u64().unwrap();
+    assert_ne!(cloned_port, 19_789);
+    assert!(cloned_port >= 19_790);
+}
