@@ -420,7 +420,7 @@ case "$script" in
     fi
 
     /bin/mkdir -p "$prefix/node_modules/openclaw"
-    /usr/bin/tar -xzf "$archive" -C "$prefix/node_modules/openclaw" --strip-components=1 package
+    /usr/bin/tar -xzf "$archive" -C "$prefix/node_modules/openclaw" --strip-components=1
     exit 0
     ;;
 esac
