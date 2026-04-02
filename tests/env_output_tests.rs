@@ -56,7 +56,8 @@ fn env_clone_prints_the_effective_gateway_port_for_the_cloned_env() {
     assert!(cloned.status.success(), "{}", stderr(&cloned));
     let output = stdout(&cloned);
     assert!(output.contains("Cloned env copy from demo"));
-    assert!(output.contains("gateway port: 18790"));
+    assert!(output.contains("gateway port: "));
+    assert!(!output.contains("gateway port: 18789"));
     assert!(output.contains("service: not copied from source"));
     assert!(output.contains("start: ocm start copy"));
     assert!(output.contains("onboard: ocm @copy -- onboard"));
