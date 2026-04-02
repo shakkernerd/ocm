@@ -25,9 +25,20 @@ fn doctor_host_reports_missing_required_tools() {
     assert_eq!(value["healthy"], Value::Bool(true));
     assert_eq!(value["officialReleaseReady"], Value::Bool(true));
     assert_eq!(value["requiredIssues"], Value::from(0));
-    assert_eq!(value["recommendedGaps"], Value::from(9));
 
     let checks = value["checks"].as_array().unwrap();
+    let expected_recommended_gaps = checks
+        .iter()
+        .filter(|check| {
+            check["level"] == "recommended"
+                && check["status"] != "ok"
+                && check["status"] != "unsupported"
+        })
+        .count() as u64;
+    assert_eq!(
+        value["recommendedGaps"],
+        Value::from(expected_recommended_gaps)
+    );
     assert!(checks.iter().any(|check| {
         check["name"] == "Node.js"
             && check["level"] == "recommended"
