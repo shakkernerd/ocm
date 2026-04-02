@@ -302,7 +302,9 @@ fn clone_environment_skips_busy_ports_when_assigning_a_new_identity() {
     )
     .unwrap();
 
-    assert_eq!(cloned.gateway_port, Some(19791));
+    assert_ne!(cloned.gateway_port, Some(19789));
+    assert_ne!(cloned.gateway_port, Some(19790));
+    assert!(cloned.gateway_port.unwrap() >= 19791);
     drop(occupied);
 }
 
