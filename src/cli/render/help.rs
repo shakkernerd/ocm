@@ -108,6 +108,10 @@ pub fn root_help(cmd: &str) -> String {
                 "upgrade",
                 "Update one env or all envs and restart services when needed",
             ),
+            (
+                "doctor",
+                "Check host software for release and feature readiness",
+            ),
             ("self", "Update the installed ocm binary"),
             (
                 "env",
@@ -146,6 +150,8 @@ pub fn root_help(cmd: &str) -> String {
             format!("{cmd} help setup"),
             format!("{cmd} help start"),
             format!("{cmd} help upgrade"),
+            format!("{cmd} help doctor"),
+            format!("{cmd} doctor host"),
             format!("{cmd} help self"),
             format!("{cmd} help env"),
             format!("{cmd} help release"),
@@ -167,6 +173,7 @@ pub fn setup_help(cmd: &str) -> String {
         &[
             "Setup asks a few questions, then runs the same env-first flow as `start`.",
             "Official release choices require Node.js >= 22.14.0 and npm on PATH.",
+            "Run `ocm doctor host` if you want a full machine check before choosing a release flow.",
             "When run inside an OpenClaw checkout, local mode defaults to `pnpm openclaw` in that folder.",
             "Use `start` when you already know the source you want.",
         ],
@@ -242,6 +249,7 @@ pub fn start_help(cmd: &str) -> String {
             "If an environment already exists, start reuses it and only adjusts binding/protection when you asked for it.",
             "Start installs and starts the env service by default. Use `--no-service` when you do not want a background process.",
             "Official release selectors require Node.js >= 22.14.0 and npm on PATH.",
+            "Run `ocm doctor host` to check the host before using official release selectors.",
             "`--json` requires `--no-onboard` because onboarding is interactive.",
         ],
     )
@@ -281,6 +289,23 @@ pub fn upgrade_help(cmd: &str) -> String {
             "Pinned runtimes stay pinned unless you pass --version or --channel explicitly.",
             "Local-command environments are reported clearly instead of being changed behind your back.",
         ],
+    )
+}
+
+pub fn doctor_help(cmd: &str) -> String {
+    render_group(
+        "Doctor commands",
+        "Inspect host-level prerequisites and common software that OpenClaw workflows rely on.",
+        vec![format!("{cmd} doctor <command>")],
+        &[(
+            "Commands",
+            &[(
+                "host",
+                "Check required software for official releases and common optional tools",
+            )],
+        )],
+        vec![format!("{cmd} doctor host")],
+        vec![format!("{cmd} help doctor host")],
     )
 }
 
@@ -582,6 +607,29 @@ pub fn runtime_help(cmd: &str) -> String {
             format!("{cmd} help runtime verify"),
         ],
     )
+}
+
+pub fn doctor_command_help(cmd: &str, action: &str) -> Option<String> {
+    Some(match action {
+        "host" => render_leaf(
+            "Check host readiness",
+            "Show required software for official release installs, plus recommended tools for common OpenClaw features and local workflows.",
+            vec![format!("{cmd} doctor host [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain host-check output instead of TTY card rendering",
+                ),
+                ("--json", "Print the host-check summary as JSON"),
+            ],
+            vec![format!("{cmd} doctor host")],
+            &[
+                "Official release installs need Node.js >= 22.14.0 and npm on PATH.",
+                "Recommended tools are advisory; they do not block local-command or launcher flows.",
+            ],
+        ),
+        _ => return None,
+    })
 }
 
 pub fn service_help(cmd: &str) -> String {
@@ -1111,6 +1159,7 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Official installs use canonical runtime names derived from the selector.",
                 "Official release installs require Node.js >= 22.14.0 and npm on PATH.",
+                "Run `ocm doctor host` on a new machine before using official release installs.",
             ],
         ),
         "list" => render_leaf(
@@ -1440,6 +1489,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 "Exactly one install source must be provided.",
                 "Official installs use canonical runtime names unless you reuse the same canonical name explicitly.",
                 "Official release installs require Node.js >= 22.14.0 and npm on PATH.",
+                "Run `ocm doctor host` on a new machine before using official release installs.",
             ],
         ),
         "update" => render_leaf(

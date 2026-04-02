@@ -23,6 +23,14 @@ impl Cli {
         self.stdout_lines(self.setup_intro_lines(local_defaults.as_ref()));
 
         let mode = self.prompt_setup_mode()?;
+        if matches!(
+            mode,
+            SetupMode::Stable | SetupMode::Beta | SetupMode::Version
+        ) {
+            if let Some(code) = self.ensure_official_release_host_ready(None, false)? {
+                return Ok(code);
+            }
+        }
         let name_default = self.setup_name_default(mode, local_defaults.as_ref());
         let name = loop {
             let raw = self.prompt_with_default("Environment name", &name_default)?;

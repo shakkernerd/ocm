@@ -221,6 +221,11 @@ impl Cli {
                     );
                 }
                 let name = resolve_official_name()?;
+                if let Some(code) =
+                    self.ensure_official_release_host_ready(Some(profile), json_flag)?
+                {
+                    return Ok(code);
+                }
                 let (meta, action) =
                     self.with_progress(format!("Installing runtime {name}"), || {
                         self.runtime_service().prepare_official_openclaw_runtime(

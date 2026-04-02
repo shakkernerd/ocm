@@ -1,3 +1,4 @@
+pub mod doctor;
 pub mod env;
 pub mod help;
 pub mod launcher;

@@ -402,6 +402,25 @@ fn official_runtime_install_produces_a_runnable_env_binding() {
 }
 
 #[test]
+fn official_runtime_install_prints_host_doctor_summary_for_human_output() {
+    let root = TestDir::new("runtime-install-official-host-doctor");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    let empty_path = root.child("empty-path");
+    fs::create_dir_all(&empty_path).unwrap();
+    env.insert("PATH".to_string(), path_string(&empty_path));
+
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert_eq!(install.status.code(), Some(1));
+    let output = stdout(&install);
+    assert!(output.contains("healthy: false"));
+    assert!(output.contains("officialReleaseReady: false"));
+    assert!(output.contains("check: category=official-release  name=Node.js"));
+    assert!(output.contains("check: category=official-release  name=npm"));
+}
+
+#[test]
 fn runtime_install_rejects_non_canonical_names_for_official_releases() {
     let root = TestDir::new("runtime-install-official-canonical-name");
     let cwd = root.child("workspace");
@@ -717,7 +736,11 @@ fn official_runtime_install_fails_early_when_npm_is_missing() {
         path_string(&root.child("missing-npm")),
     );
 
-    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "install", "--channel", "stable", "--json"],
+    );
     assert_eq!(install.status.code(), Some(1));
     let error = stderr(&install);
     assert!(
@@ -754,7 +777,11 @@ fn official_runtime_install_fails_early_when_node_is_too_old() {
         packument_server.url(),
     );
 
-    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "install", "--channel", "stable", "--json"],
+    );
     assert_eq!(install.status.code(), Some(1));
     let error = stderr(&install);
     assert!(

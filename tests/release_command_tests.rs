@@ -9,7 +9,8 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, install_fake_node_and_npm, ocm_env, run_ocm, stderr, stdout,
+    TestDir, TestHttpServer, install_fake_node_and_npm, ocm_env, path_string, run_ocm, stderr,
+    stdout,
 };
 
 fn append_tar_file(
@@ -288,6 +289,25 @@ fn release_install_rejects_non_canonical_runtime_names() {
 }
 
 #[test]
+fn release_install_prints_host_doctor_when_required_tools_are_missing() {
+    let root = TestDir::new("release-install-host-doctor");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    let empty_path = root.child("empty-path");
+    fs::create_dir_all(&empty_path).unwrap();
+    env.insert("PATH".to_string(), path_string(&empty_path));
+
+    let install = run_ocm(&cwd, &env, &["release", "install", "--channel", "stable"]);
+    assert_eq!(install.status.code(), Some(1));
+    let output = stdout(&install);
+    assert!(output.contains("healthy: false"));
+    assert!(output.contains("officialReleaseReady: false"));
+    assert!(output.contains("check: category=official-release  name=Node.js"));
+    assert!(output.contains("check: category=official-release  name=npm"));
+}
+
+#[test]
 fn release_install_reuses_a_matching_installed_runtime() {
     let root = TestDir::new("release-install-reuse");
     let cwd = root.child("workspace");
@@ -309,6 +329,7 @@ fn release_install_reuses_a_matching_installed_runtime() {
     let server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),
@@ -345,6 +366,7 @@ fn release_list_and_show_surface_installed_runtime_names() {
     let server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 3);
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),

@@ -248,6 +248,31 @@ fn start_rejects_json_when_onboarding_would_run() {
 }
 
 #[test]
+fn start_prints_host_doctor_when_official_release_tools_are_missing() {
+    let root = TestDir::new("start-host-doctor-missing");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    let empty_path = root.child("empty-path");
+    fs::create_dir_all(&empty_path).unwrap();
+    env.insert("PATH".to_string(), path_string(&empty_path));
+
+    let start = run_ocm(&cwd, &env, &["start", "--no-onboard"]);
+    assert_eq!(start.status.code(), Some(1));
+    let output = stdout(&start);
+    assert!(output.contains("healthy: false"));
+    assert!(output.contains("officialReleaseReady: false"));
+    assert!(output.contains("check: category=official-release  name=Node.js"));
+    assert!(output.contains("check: category=official-release  name=npm"));
+    assert!(!output.contains("Started env "));
+
+    let list = run_ocm(&cwd, &env, &["env", "list", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let envs: Value = serde_json::from_str(&stdout(&list)).unwrap();
+    assert_eq!(envs.as_array().unwrap().len(), 0);
+}
+
+#[test]
 fn start_reports_recovery_steps_when_onboarding_fails() {
     let root = TestDir::new("start-onboarding-failure");
     let cwd = root.child("workspace");

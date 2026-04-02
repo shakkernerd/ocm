@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod env;
+pub mod host;
 pub mod infra;
 pub mod launcher;
 pub mod runtime;

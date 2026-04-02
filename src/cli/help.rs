@@ -22,6 +22,7 @@ impl Cli {
             ["setup"] => Ok(render::help::setup_help(&cmd)),
             ["start"] => Ok(render::help::start_help(&cmd)),
             ["upgrade"] => Ok(render::help::upgrade_help(&cmd)),
+            ["doctor"] => Ok(render::help::doctor_help(&cmd)),
             ["init"] => Ok(render::help::init_help(&cmd)),
             ["self"] => Ok(render::help::self_help(&cmd)),
             ["env"] => Ok(render::help::env_help(&cmd)),
@@ -41,6 +42,8 @@ impl Cli {
             ["runtime"] => Ok(render::help::runtime_help(&cmd)),
             ["runtime", action] => render::help::runtime_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown runtime command: {action}")),
+            ["doctor", action] => render::help::doctor_command_help(&cmd, action)
+                .ok_or_else(|| format!("unknown doctor command: {action}")),
             ["service"] => Ok(render::help::service_help(&cmd)),
             ["service", action] => render::help::service_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown service command: {action}")),
@@ -50,6 +53,7 @@ impl Cli {
                     "setup"
                         | "start"
                         | "upgrade"
+                        | "doctor"
                         | "self"
                         | "env"
                         | "release"
@@ -83,6 +87,7 @@ impl Cli {
             {
                 Some(vec![group.as_str()])
             }
+            [group] if group == "doctor" => Some(vec!["doctor"]),
             [group, flag] if group == "setup" && Self::is_help_flag(flag) => Some(vec!["setup"]),
             [group, flag] if group == "start" && Self::is_help_flag(flag) => Some(vec!["start"]),
             [group, flag] if group == "upgrade" && Self::is_help_flag(flag) => {
@@ -99,6 +104,11 @@ impl Cli {
                 topic.extend(rest.iter().map(String::as_str));
                 Some(topic)
             }
+            [group, next, rest @ ..] if group == "doctor" && Self::is_help_token(next) => {
+                let mut topic = vec!["doctor"];
+                topic.extend(rest.iter().map(String::as_str));
+                Some(topic)
+            }
             [group, action, flag]
                 if matches!(
                     group.as_str(),
@@ -106,6 +116,9 @@ impl Cli {
                 ) && Self::is_help_flag(flag) =>
             {
                 Some(vec![group.as_str(), action.as_str()])
+            }
+            [group, action, flag] if group == "doctor" && Self::is_help_flag(flag) => {
+                Some(vec!["doctor", action.as_str()])
             }
             [group, subcommand] if group == "env" && subcommand == "snapshot" => {
                 Some(vec!["env", "snapshot"])

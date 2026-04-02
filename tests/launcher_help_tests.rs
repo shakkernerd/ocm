@@ -22,6 +22,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("Fast path: create or reuse an env and keep it running"));
     assert!(output.contains("Guided setup for release and local-dev flows"));
     assert!(output.contains("Update one env or all envs and restart services when needed"));
+    assert!(output.contains("Check host software for release and feature readiness"));
     assert!(output.contains("Update the installed ocm binary"));
     assert!(output.contains("--color <mode>"));
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
@@ -33,6 +34,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("ocm upgrade mybot"));
     assert!(output.contains("ocm help setup"));
     assert!(output.contains("ocm help upgrade"));
+    assert!(output.contains("ocm help doctor"));
     assert!(output.contains("ocm help self"));
     assert!(output.contains("ocm start mybot"));
     assert!(output.contains("ocm start mybot --channel beta"));
@@ -48,6 +50,44 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("ocm --color always env list"));
     assert!(!output.contains("env snapshot restore <name> <snapshot>"));
     assert!(!output.contains("service restore-global <env> [--dry-run] [--json]"));
+}
+
+#[test]
+fn doctor_group_help_is_available_from_help_and_bare_group() {
+    let root = TestDir::new("help-doctor-group");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "doctor"]);
+    let bare = run_ocm(&cwd, &env, &["doctor"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(bare.status.success(), "{}", stderr(&bare));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&bare));
+    assert!(output.contains("Doctor commands"));
+    assert!(output.contains("ocm doctor host"));
+    assert!(output.contains("Check required software for official releases"));
+}
+
+#[test]
+fn doctor_host_help_is_available_from_help_and_flag() {
+    let root = TestDir::new("help-doctor-host");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "doctor", "host"]);
+    let via_flag = run_ocm(&cwd, &env, &["doctor", "host", "--help"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(via_flag.status.success(), "{}", stderr(&via_flag));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&via_flag));
+    assert!(output.contains("Check host readiness"));
+    assert!(output.contains("ocm doctor host [--raw] [--json]"));
+    assert!(output.contains("Official release installs need Node.js >= 22.14.0 and npm on PATH."));
 }
 
 #[test]
@@ -395,12 +435,34 @@ fn runtime_and_service_leaf_help_are_command_specific() {
     assert!(
         output.contains("Official release installs require Node.js >= 22.14.0 and npm on PATH.")
     );
+    assert!(output.contains(
+        "Run `ocm doctor host` on a new machine before using official release installs."
+    ));
 
     let service = run_ocm(&cwd, &env, &["service", "discover", "--help"]);
     assert!(service.status.success(), "{}", stderr(&service));
     let output = stdout(&service);
     assert!(output.contains("Discover OpenClaw services"));
     assert!(output.contains("ocm service discover [--raw] [--json]"));
+}
+
+#[test]
+fn release_install_help_mentions_doctor_host() {
+    let root = TestDir::new("help-release-install");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let help = run_ocm(&cwd, &env, &["help", "release", "install"]);
+    assert!(help.status.success(), "{}", stderr(&help));
+    let output = stdout(&help);
+    assert!(output.contains("ocm release install [<name>] (--version <version> | --channel <channel>) [--description <text>] [--force] [--raw] [--json]"));
+    assert!(
+        output.contains("Official release installs require Node.js >= 22.14.0 and npm on PATH.")
+    );
+    assert!(output.contains(
+        "Run `ocm doctor host` on a new machine before using official release installs."
+    ));
 }
 
 #[test]

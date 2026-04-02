@@ -111,6 +111,9 @@ impl Cli {
                 ));
             }
         }
+        if let Some(code) = self.ensure_official_release_host_ready(Some(profile), json_flag)? {
+            return Ok(code);
+        }
 
         let (meta, action) =
             self.with_progress(format!("Installing runtime {runtime_name}"), || {

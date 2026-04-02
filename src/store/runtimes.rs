@@ -5,6 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::host::{configured_npm_bin, verify_official_openclaw_runtime_host};
 use crate::infra::download::{
     artifact_file_name_from_url, download_to_file, file_sha256, normalize_sha256,
     verify_file_integrity, verify_file_sha256,
@@ -28,138 +29,14 @@ use super::layout::{
 };
 use super::now_utc;
 
-const INTERNAL_NPM_BIN_ENV: &str = "OCM_INTERNAL_NPM_BIN";
-const OPENCLAW_MIN_NODE_VERSION: &str = "22.14.0";
-
 fn trim_description(description: Option<String>) -> Option<String> {
     description
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
 
-fn configured_npm_bin(env: &BTreeMap<String, String>) -> &str {
-    env.get(INTERNAL_NPM_BIN_ENV)
-        .map(String::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("npm")
-}
-
 fn installed_openclaw_binary_path(install_files: &Path) -> PathBuf {
     install_files.join("node_modules/openclaw/openclaw.mjs")
-}
-
-fn command_failure_detail(error: std::io::Error) -> String {
-    match error.kind() {
-        std::io::ErrorKind::NotFound => "was not found on PATH".to_string(),
-        _ => error.to_string(),
-    }
-}
-
-fn official_openclaw_runtime_requirement_message(detail: &str) -> String {
-    format!(
-        "official OpenClaw runtimes require Node.js >= {OPENCLAW_MIN_NODE_VERSION} and npm on PATH; {detail}"
-    )
-}
-
-fn parse_version_like(version: &str) -> Option<Vec<u64>> {
-    let trimmed = version.trim();
-    let trimmed = trimmed.strip_prefix('v').unwrap_or(trimmed);
-    let mut out = Vec::new();
-    for part in trimmed.split('.') {
-        if part.is_empty() {
-            return None;
-        }
-        out.push(part.parse::<u64>().ok()?);
-    }
-    Some(out)
-}
-
-fn compare_version_like(left: &str, right: &str) -> Option<std::cmp::Ordering> {
-    let left = parse_version_like(left)?;
-    let right = parse_version_like(right)?;
-    let max_len = left.len().max(right.len());
-    for index in 0..max_len {
-        let left_value = *left.get(index).unwrap_or(&0);
-        let right_value = *right.get(index).unwrap_or(&0);
-        match left_value.cmp(&right_value) {
-            std::cmp::Ordering::Equal => {}
-            ordering => return Some(ordering),
-        }
-    }
-    Some(std::cmp::Ordering::Equal)
-}
-
-fn npm_bin_version(env: &BTreeMap<String, String>) -> Result<String, String> {
-    let npm_bin = configured_npm_bin(env);
-    let output = Command::new(npm_bin)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| {
-            official_openclaw_runtime_requirement_message(&format!(
-                "{npm_bin} {}",
-                command_failure_detail(error)
-            ))
-        })?;
-    if !output.status.success() {
-        let detail =
-            summarize_command_output(&output.stdout, &output.stderr).unwrap_or_else(|| {
-                format!(
-                    "{npm_bin} exited with code {}",
-                    output.status.code().unwrap_or(1)
-                )
-            });
-        return Err(official_openclaw_runtime_requirement_message(&format!(
-            "{npm_bin} could not be run: {detail}"
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn node_version() -> Result<String, String> {
-    let output = Command::new("node")
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| {
-            official_openclaw_runtime_requirement_message(&format!(
-                "node {}",
-                command_failure_detail(error)
-            ))
-        })?;
-    if !output.status.success() {
-        let detail =
-            summarize_command_output(&output.stdout, &output.stderr).unwrap_or_else(|| {
-                format!(
-                    "node exited with code {}",
-                    output.status.code().unwrap_or(1)
-                )
-            });
-        return Err(official_openclaw_runtime_requirement_message(&format!(
-            "node could not be run: {detail}"
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn verify_official_openclaw_runtime_host(env: &BTreeMap<String, String>) -> Result<(), String> {
-    let _ = npm_bin_version(env)?;
-    let node_version = node_version()?;
-    match compare_version_like(&node_version, OPENCLAW_MIN_NODE_VERSION) {
-        Some(std::cmp::Ordering::Less) => {
-            Err(official_openclaw_runtime_requirement_message(&format!(
-                "found Node.js {node_version}; upgrade to {OPENCLAW_MIN_NODE_VERSION} or newer"
-            )))
-        }
-        Some(_) => Ok(()),
-        None => Err(official_openclaw_runtime_requirement_message(&format!(
-            "node --version returned an unreadable version: {node_version}"
-        ))),
-    }
 }
 
 fn official_openclaw_runtime_issue(

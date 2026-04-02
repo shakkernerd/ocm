@@ -175,3 +175,29 @@ fn setup_defaults_service_install_to_yes_in_raw_mode() {
     assert!(launchctl_log.contains("bootstrap gui/"));
     assert!(launchctl_log.contains("kickstart -k gui/"));
 }
+
+#[test]
+fn setup_prints_host_doctor_before_official_release_flow_when_tools_are_missing() {
+    let root = TestDir::new("setup-host-doctor-missing");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    let empty_path = root.child("empty-path");
+    fs::create_dir_all(&empty_path).unwrap();
+    env.insert("PATH".to_string(), empty_path.to_string_lossy().to_string());
+
+    let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], "1\n");
+    assert_eq!(setup.status.code(), Some(1));
+    let output = stdout(&setup);
+    assert!(output.contains("OpenClaw setup"));
+    assert!(output.contains("healthy: false"));
+    assert!(output.contains("officialReleaseReady: false"));
+    assert!(output.contains("check: category=official-release  name=Node.js"));
+    assert!(output.contains("check: category=official-release  name=npm"));
+    assert!(!output.contains("Started env "));
+
+    let list = run_ocm(&cwd, &env, &["env", "list", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let envs: Value = serde_json::from_str(&stdout(&list)).unwrap();
+    assert_eq!(envs.as_array().unwrap().len(), 0);
+}

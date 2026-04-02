@@ -158,6 +158,11 @@ impl Cli {
                 request.name
             ));
         }
+        if self.start_needs_official_release_host_check(existing.as_ref(), &request) {
+            if let Some(code) = self.ensure_official_release_host_ready(None, json_flag)? {
+                return Ok(code);
+            }
+        }
 
         let desired_binding = self.resolve_start_binding(
             &request.name,
@@ -277,6 +282,28 @@ impl Cli {
         }
 
         Ok(0)
+    }
+
+    fn start_needs_official_release_host_check(
+        &self,
+        existing: Option<&EnvMeta>,
+        request: &StartRequest,
+    ) -> bool {
+        if request.version.is_some() || request.channel.is_some() {
+            return true;
+        }
+
+        if request.runtime_name.is_some()
+            || request.launcher_name.is_some()
+            || request.command.is_some()
+        {
+            return false;
+        }
+
+        match existing {
+            None => true,
+            Some(env) => env.default_runtime.is_none() && env.default_launcher.is_none(),
+        }
     }
 
     fn apply_start_to_existing(
