@@ -87,12 +87,18 @@ fn doctor_host_help_is_available_from_help_and_flag() {
     assert_eq!(output, stdout(&via_flag));
     assert!(output.contains("Check host readiness"));
     assert!(output.contains("ocm doctor host [--raw] [--json]"));
+    assert!(output.contains("ocm doctor host --fix git --yes [--json]"));
+    assert!(output.contains("--fix <tool>"));
+    assert!(output.contains("--yes"));
     assert!(output.contains("Official release installs prefer host Node.js >= 22.14.0 and npm."));
     assert!(
         output.contains(
             "On supported platforms, OCM can manage a private copy when they are missing."
         )
     );
+    assert!(output.contains(
+        "Git is the first supported host fix target; OCM will not install Homebrew automatically."
+    ));
 }
 
 #[test]

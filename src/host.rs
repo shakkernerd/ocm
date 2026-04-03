@@ -11,6 +11,9 @@ use crate::service::{ServiceManagerKind, service_manager_kind};
 use crate::store::resolve_user_home;
 
 const INTERNAL_NPM_BIN_ENV: &str = "OCM_INTERNAL_NPM_BIN";
+const INTERNAL_HOST_PLATFORM_ENV: &str = "OCM_INTERNAL_HOST_PLATFORM";
+const INTERNAL_HOST_PACKAGE_MANAGER_ENV: &str = "OCM_INTERNAL_HOST_PACKAGE_MANAGER";
+const INTERNAL_HOST_IS_ROOT_ENV: &str = "OCM_INTERNAL_HOST_IS_ROOT";
 const CHROME_MCP_MIN_MAJOR: u32 = 144;
 
 #[derive(Clone, Debug, Serialize)]
@@ -35,6 +38,17 @@ pub struct HostCheckSummary {
     pub version: Option<String>,
     pub detail: Option<String>,
     pub suggestion: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostToolFixSummary {
+    pub tool: String,
+    pub ready: bool,
+    pub changed: bool,
+    pub manager: Option<String>,
+    pub version: Option<String>,
+    pub detail: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,6 +94,66 @@ impl HostCheckStatus {
 #[derive(Clone, Debug)]
 struct HostCommandSummary {
     version: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HostPackageManager {
+    Brew,
+    AptGet,
+    Dnf,
+    Yum,
+    Apk,
+}
+
+impl HostPackageManager {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "brew" => Some(Self::Brew),
+            "apt-get" | "apt" => Some(Self::AptGet),
+            "dnf" => Some(Self::Dnf),
+            "yum" => Some(Self::Yum),
+            "apk" => Some(Self::Apk),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Brew => "brew",
+            Self::AptGet => "apt-get",
+            Self::Dnf => "dnf",
+            Self::Yum => "yum",
+            Self::Apk => "apk",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct HostInstallCommand {
+    program: String,
+    args: Vec<String>,
+}
+
+impl HostInstallCommand {
+    fn new(program: impl Into<String>, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            program: program.into(),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    fn display(&self) -> String {
+        std::iter::once(self.program.as_str())
+            .chain(self.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+#[derive(Clone, Debug)]
+struct HostToolFixPlan {
+    manager: HostPackageManager,
+    commands: Vec<HostInstallCommand>,
 }
 
 pub fn doctor_host(env: &BTreeMap<String, String>) -> HostDoctorSummary {
@@ -179,6 +253,51 @@ pub fn configured_npm_bin(env: &BTreeMap<String, String>) -> &str {
         .unwrap_or("npm")
 }
 
+pub fn verify_git_host_tool(env: &BTreeMap<String, String>) -> Result<String, String> {
+    let _ = env;
+    tool_version("git", &["--version"]).map(|summary| summary.version)
+}
+
+pub fn git_host_fix_supported(env: &BTreeMap<String, String>) -> bool {
+    verify_git_host_tool(env).is_ok() || plan_git_host_install(env).is_ok()
+}
+
+pub fn fix_git_host_tool(env: &BTreeMap<String, String>) -> Result<HostToolFixSummary, String> {
+    if let Ok(version) = verify_git_host_tool(env) {
+        return Ok(HostToolFixSummary {
+            tool: "git".to_string(),
+            ready: true,
+            changed: false,
+            manager: None,
+            version: Some(version),
+            detail: "git is already available on PATH".to_string(),
+        });
+    }
+
+    let plan = plan_git_host_install(env)?;
+    for command in &plan.commands {
+        run_host_install_command(command)?;
+    }
+
+    let version = verify_git_host_tool(env).map_err(|detail| {
+        format!("git install completed, but git is still unavailable: {detail}")
+    })?;
+    Ok(HostToolFixSummary {
+        tool: "git".to_string(),
+        ready: true,
+        changed: true,
+        manager: Some(plan.manager.as_str().to_string()),
+        version: Some(version),
+        detail: match plan.manager {
+            HostPackageManager::Brew => "Installed git with Homebrew.".to_string(),
+            HostPackageManager::AptGet => "Installed git with apt-get.".to_string(),
+            HostPackageManager::Dnf => "Installed git with dnf.".to_string(),
+            HostPackageManager::Yum => "Installed git with yum.".to_string(),
+            HostPackageManager::Apk => "Installed git with apk.".to_string(),
+        },
+    })
+}
+
 fn command_example(env: &BTreeMap<String, String>) -> String {
     env.get("OCM_SELF")
         .map(String::as_str)
@@ -203,7 +322,7 @@ fn host_checks(env: &BTreeMap<String, String>) -> Vec<HostCheckSummary> {
         ffmpeg_check(),
         ffprobe_check(),
         openssl_check(),
-        git_check(),
+        git_check(env),
         pnpm_check(),
         bun_check(),
         chrome_check(env),
@@ -404,15 +523,23 @@ fn openssl_check() -> HostCheckSummary {
     )
 }
 
-fn git_check() -> HostCheckSummary {
+fn git_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
+    let suggestion = if git_host_fix_supported(env) {
+        format!(
+            "Run \"{} doctor host --fix git --yes\" to let OCM install git, or install it with your system package manager.",
+            command_example(env)
+        )
+    } else {
+        "Install git if you want repo-aware coding workflows, source installs, or git-channel updates.".to_string()
+    };
     tool_check(
         "local-workflows",
         "git",
-        "Source installs and git-based updates",
+        "Repo-aware coding workflows, source installs, and git-based updates",
         HostCheckLevel::Recommended,
         "git",
         &["--version"],
-        Some("Install git if you want source or git-channel workflows.".to_string()),
+        Some(suggestion),
     )
 }
 
@@ -605,6 +732,155 @@ fn tool_check(
     }
 }
 
+fn plan_git_host_install(env: &BTreeMap<String, String>) -> Result<HostToolFixPlan, String> {
+    match host_platform(env) {
+        "macos" => plan_macos_git_install(env),
+        "linux" => plan_linux_git_install(env),
+        "windows" => Err(
+            "OCM cannot install git automatically on Windows yet; install git manually and rerun your workflow."
+                .to_string(),
+        ),
+        platform => Err(format!(
+            "OCM does not know how to install git automatically on this platform ({platform})."
+        )),
+    }
+}
+
+fn plan_macos_git_install(env: &BTreeMap<String, String>) -> Result<HostToolFixPlan, String> {
+    let manager = detect_host_package_manager(env);
+    if manager != Some(HostPackageManager::Brew) {
+        return Err(
+            "Homebrew is not installed. OCM will not install Homebrew automatically; install git manually or install Homebrew first."
+                .to_string(),
+        );
+    }
+
+    Ok(HostToolFixPlan {
+        manager: HostPackageManager::Brew,
+        commands: vec![HostInstallCommand::new("brew", ["install", "git"])],
+    })
+}
+
+fn plan_linux_git_install(env: &BTreeMap<String, String>) -> Result<HostToolFixPlan, String> {
+    let Some(manager) = detect_host_package_manager(env) else {
+        return Err(
+            "No supported Linux package manager was found. OCM currently supports apt-get, dnf, yum, and apk for automatic git installs."
+                .to_string(),
+        );
+    };
+    let commands = match manager {
+        HostPackageManager::AptGet => vec![
+            privileged_install_command(env, "apt-get", ["update"])?,
+            privileged_install_command(env, "apt-get", ["install", "-y", "git"])?,
+        ],
+        HostPackageManager::Dnf => {
+            vec![privileged_install_command(
+                env,
+                "dnf",
+                ["install", "-y", "git"],
+            )?]
+        }
+        HostPackageManager::Yum => {
+            vec![privileged_install_command(
+                env,
+                "yum",
+                ["install", "-y", "git"],
+            )?]
+        }
+        HostPackageManager::Apk => {
+            vec![privileged_install_command(env, "apk", ["add", "git"])?]
+        }
+        HostPackageManager::Brew => {
+            return plan_macos_git_install(env);
+        }
+    };
+
+    Ok(HostToolFixPlan { manager, commands })
+}
+
+fn host_platform(env: &BTreeMap<String, String>) -> &str {
+    env.get(INTERNAL_HOST_PLATFORM_ENV)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(std::env::consts::OS)
+}
+
+fn detect_host_package_manager(env: &BTreeMap<String, String>) -> Option<HostPackageManager> {
+    if let Some(value) = env.get(INTERNAL_HOST_PACKAGE_MANAGER_ENV) {
+        return HostPackageManager::parse(value);
+    }
+
+    match host_platform(env) {
+        "macos" => command_exists("brew").then_some(HostPackageManager::Brew),
+        "linux" => [
+            HostPackageManager::AptGet,
+            HostPackageManager::Dnf,
+            HostPackageManager::Yum,
+            HostPackageManager::Apk,
+        ]
+        .into_iter()
+        .find(|manager| command_exists(manager.as_str())),
+        _ => None,
+    }
+}
+
+fn privileged_install_command(
+    env: &BTreeMap<String, String>,
+    program: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<HostInstallCommand, String> {
+    let args = args.into_iter().map(Into::into).collect::<Vec<String>>();
+    if host_is_root(env) {
+        return Ok(HostInstallCommand::new(program, args));
+    }
+    if command_exists("sudo") {
+        let mut sudo_args = vec![program.to_string()];
+        sudo_args.extend(args);
+        return Ok(HostInstallCommand::new("sudo", sudo_args));
+    }
+
+    Err(format!(
+        "Installing git requires elevated privileges on Linux. Run as root or install sudo, then retry."
+    ))
+}
+
+fn host_is_root(env: &BTreeMap<String, String>) -> bool {
+    if let Some(value) = env.get(INTERNAL_HOST_IS_ROOT_ENV) {
+        let value = value.trim().to_ascii_lowercase();
+        return matches!(value.as_str(), "1" | "true" | "yes" | "root");
+    }
+
+    env.get("USER").is_some_and(|value| value == "root")
+        || env.get("HOME").is_some_and(|value| value == "/root")
+}
+
+fn command_exists(command: &str) -> bool {
+    Command::new(command)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
+fn run_host_install_command(command: &HostInstallCommand) -> Result<(), String> {
+    let output = Command::new(&command.program)
+        .args(&command.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("{}: {}", command.display(), error))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let detail = summarize_error_output(&output.stderr, &output.stdout)
+        .unwrap_or_else(|| format!("exited with code {}", output.status.code().unwrap_or(1)));
+    Err(format!("{} failed: {detail}", command.display()))
+}
+
 fn check(
     category: &str,
     name: &str,
@@ -786,7 +1062,12 @@ fn find_first_existing(paths: &[PathBuf]) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_version_like, parse_browser_major_version};
+    use std::collections::BTreeMap;
+
+    use super::{
+        HostPackageManager, command_exists, compare_version_like, detect_host_package_manager,
+        host_is_root, parse_browser_major_version,
+    };
 
     #[test]
     fn compare_version_like_orders_semverish_versions() {
@@ -815,5 +1096,38 @@ mod tests {
             Some(145)
         );
         assert_eq!(parse_browser_major_version("unknown"), None);
+    }
+
+    #[test]
+    fn detect_host_package_manager_respects_internal_override() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "OCM_INTERNAL_HOST_PLATFORM".to_string(),
+            "linux".to_string(),
+        );
+        env.insert(
+            "OCM_INTERNAL_HOST_PACKAGE_MANAGER".to_string(),
+            "apt-get".to_string(),
+        );
+
+        assert_eq!(
+            detect_host_package_manager(&env),
+            Some(HostPackageManager::AptGet)
+        );
+    }
+
+    #[test]
+    fn host_is_root_respects_internal_override() {
+        let mut env = BTreeMap::new();
+        env.insert("OCM_INTERNAL_HOST_IS_ROOT".to_string(), "true".to_string());
+        assert!(host_is_root(&env));
+
+        env.insert("OCM_INTERNAL_HOST_IS_ROOT".to_string(), "false".to_string());
+        assert!(!host_is_root(&env));
+    }
+
+    #[test]
+    fn command_exists_returns_false_for_missing_commands() {
+        assert!(!command_exists("ocm-test-command-that-should-not-exist"));
     }
 }

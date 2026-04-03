@@ -48,7 +48,18 @@ impl Cli {
 
     fn handle_doctor_host(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "doctor host")?;
+        let (args, fix_target) = Self::consume_option(args, "--fix")?;
+        let fix_target = Self::require_option_value(fix_target, "--fix")?;
+        let (args, yes_flag) = Self::consume_flag(args, "--yes");
         Self::assert_no_extra_args(&args)?;
+
+        if yes_flag && fix_target.is_none() {
+            return Err("doctor host accepts --yes only with --fix".to_string());
+        }
+
+        if let Some(target) = fix_target.as_deref() {
+            return self.handle_doctor_host_fix(target, yes_flag, json_flag, profile);
+        }
 
         let summary = host::doctor_host(&self.env);
         let code = if summary.healthy { 0 } else { 1 };
@@ -63,6 +74,41 @@ impl Cli {
             &self.command_example(),
         ));
         Ok(code)
+    }
+
+    fn handle_doctor_host_fix(
+        &self,
+        target: &str,
+        yes_flag: bool,
+        json_flag: bool,
+        profile: render::RenderProfile,
+    ) -> Result<i32, String> {
+        if !yes_flag {
+            return Err(format!(
+                "doctor host --fix {target} requires --yes because it changes host software"
+            ));
+        }
+
+        let summary = match target {
+            "git" => self.with_progress("Installing git", || host::fix_git_host_tool(&self.env))?,
+            _ => {
+                return Err(format!(
+                    "doctor host can only fix supported tools; unknown fix target: {target}"
+                ));
+            }
+        };
+
+        if json_flag {
+            self.print_json(&summary)?;
+        } else {
+            self.stdout_lines(render::doctor::host_tool_fixed(
+                &summary,
+                profile,
+                &self.command_example(),
+            ));
+        }
+
+        Ok(if summary.ready { 0 } else { 1 })
     }
 
     fn default_render_profile(&self) -> render::RenderProfile {

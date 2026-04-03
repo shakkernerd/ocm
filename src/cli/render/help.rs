@@ -614,18 +614,27 @@ pub fn doctor_command_help(cmd: &str, action: &str) -> Option<String> {
         "host" => render_leaf(
             "Check host readiness",
             "Show required software for official release installs, plus recommended tools for common OpenClaw features and local workflows.",
-            vec![format!("{cmd} doctor host [--raw] [--json]")],
+            vec![
+                format!("{cmd} doctor host [--raw] [--json]"),
+                format!("{cmd} doctor host --fix git --yes [--json]"),
+            ],
             &[
                 (
                     "--raw",
                     "Force plain host-check output instead of TTY card rendering",
                 ),
                 ("--json", "Print the host-check summary as JSON"),
+                ("--fix <tool>", "Install one supported host tool"),
+                ("--yes", "Allow host changes when used with `--fix`"),
             ],
-            vec![format!("{cmd} doctor host")],
+            vec![
+                format!("{cmd} doctor host"),
+                format!("{cmd} doctor host --fix git --yes"),
+            ],
             &[
                 "Official release installs prefer host Node.js >= 22.14.0 and npm.",
                 "On supported platforms, OCM can manage a private copy when they are missing.",
+                "Git is the first supported host fix target; OCM will not install Homebrew automatically.",
                 "Recommended tools are advisory; they do not block local-command or launcher flows.",
             ],
         ),

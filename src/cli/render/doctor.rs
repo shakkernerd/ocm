@@ -1,4 +1,4 @@
-use crate::host::{HostCheckSummary, HostDoctorSummary};
+use crate::host::{HostCheckSummary, HostDoctorSummary, HostToolFixSummary};
 use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
 
 use super::RenderProfile;
@@ -97,6 +97,56 @@ pub fn host_doctor(
     lines
 }
 
+pub fn host_tool_fixed(
+    summary: &HostToolFixSummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return host_tool_fixed_raw(summary);
+    }
+
+    let title = if summary.changed {
+        format!("{} ready", summary.tool)
+    } else {
+        format!("{} already available", summary.tool)
+    };
+    let mut lines = vec![paint(&title, Tone::Strong, profile.color), String::new()];
+
+    let mut rows = vec![
+        KeyValueRow::plain("Tool", summary.tool.clone()),
+        KeyValueRow::new(
+            "Status",
+            if summary.changed {
+                "installed"
+            } else {
+                "ready"
+            },
+            Tone::Success,
+        ),
+    ];
+    if let Some(manager) = summary.manager.as_deref() {
+        rows.push(KeyValueRow::plain("Manager", manager.to_string()));
+    }
+    if let Some(version) = summary.version.as_deref() {
+        rows.push(KeyValueRow::success("Version", version.to_string()));
+    }
+    rows.push(KeyValueRow::muted("Detail", summary.detail.clone()));
+    lines.extend(render_key_value_card("Overview", &rows, profile.color));
+
+    lines.push(String::new());
+    lines.extend(render_key_value_card(
+        "Next",
+        &[
+            KeyValueRow::accent("Check host", format!("{command_example} doctor host")),
+            KeyValueRow::muted("Start quickly", format!("{command_example} start")),
+        ],
+        profile.color,
+    ));
+
+    lines
+}
+
 fn host_doctor_raw(summary: &HostDoctorSummary) -> Vec<String> {
     let mut lines = vec![
         format!("healthy: {}", summary.healthy),
@@ -125,6 +175,22 @@ fn host_doctor_raw(summary: &HostDoctorSummary) -> Vec<String> {
         lines.push(format!("check: {}", bits.join("  ")));
     }
 
+    lines
+}
+
+fn host_tool_fixed_raw(summary: &HostToolFixSummary) -> Vec<String> {
+    let mut lines = vec![
+        format!("tool: {}", summary.tool),
+        format!("ready: {}", summary.ready),
+        format!("changed: {}", summary.changed),
+        format!("detail: {}", summary.detail),
+    ];
+    if let Some(manager) = summary.manager.as_deref() {
+        lines.push(format!("manager: {manager}"));
+    }
+    if let Some(version) = summary.version.as_deref() {
+        lines.push(format!("version: {version}"));
+    }
     lines
 }
 
