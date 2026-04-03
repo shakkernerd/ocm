@@ -88,7 +88,7 @@ pub fn host_doctor(
     next.push(KeyValueRow::muted(
         "Local fallback",
         format!(
-            "{command_example} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service"
+            "{command_example} start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service"
         ),
     ));
     lines.push(String::new());

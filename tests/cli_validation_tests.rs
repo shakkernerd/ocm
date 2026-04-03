@@ -242,7 +242,7 @@ fn root_at_env_requires_a_target_name() {
 
     let run = run_ocm(&cwd, &env, &["@", "--", "status"]);
     assert_eq!(run.status.code(), Some(1));
-    assert!(stderr(&run).contains("env shorthand requires a target like @demo"));
+    assert!(stderr(&run).contains("env shorthand requires a target like @mira"));
 }
 
 #[test]

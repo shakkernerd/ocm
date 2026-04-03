@@ -36,7 +36,7 @@ pub fn runtime_added(
         vec![
             KeyValueRow::accent(
                 "Use in env",
-                format!("{command_example} env create demo --runtime {}", meta.name),
+                format!("{command_example} env create mira --runtime {}", meta.name),
             ),
             KeyValueRow::accent(
                 "Show",
@@ -53,7 +53,7 @@ fn runtime_added_raw(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
         format!("Added runtime {}", meta.name),
         format!("  binary path: {}", meta.binary_path),
         format!(
-            "  use in env: {command_example} env create demo --runtime {}",
+            "  use in env: {command_example} env create mira --runtime {}",
             meta.name
         ),
     ]
@@ -269,7 +269,7 @@ fn runtime_show_next_steps(meta: &RuntimeMeta, command_example: &str) -> Vec<Key
     let mut rows = vec![
         KeyValueRow::accent(
             "Use in env",
-            format!("{command_example} env create demo --runtime {}", meta.name),
+            format!("{command_example} env create mira --runtime {}", meta.name),
         ),
         KeyValueRow::accent(
             "Verify",
@@ -420,7 +420,7 @@ fn runtime_installed_raw(meta: &RuntimeMeta, command_example: &str) -> Vec<Strin
         lines.push(format!("  install root: {install_root}"));
     }
     lines.push(format!(
-        "  use in env: {command_example} env create demo --runtime {}",
+        "  use in env: {command_example} env create mira --runtime {}",
         meta.name
     ));
     lines
@@ -447,7 +447,7 @@ fn runtime_reused_raw(meta: &RuntimeMeta, command_example: &str) -> Vec<String> 
         lines.push(format!("  install root: {install_root}"));
     }
     lines.push(format!(
-        "  use in env: {command_example} env create demo --runtime {}",
+        "  use in env: {command_example} env create mira --runtime {}",
         meta.name
     ));
     lines
@@ -585,7 +585,7 @@ fn runtime_updated_raw(meta: &RuntimeMeta, command_example: &str) -> Vec<String>
         lines.push(format!("  install root: {install_root}"));
     }
     lines.push(format!(
-        "  use in env: {command_example} env create demo --runtime {}",
+        "  use in env: {command_example} env create mira --runtime {}",
         meta.name
     ));
     lines
@@ -618,7 +618,7 @@ fn runtime_action_receipt(
         vec![
             KeyValueRow::accent(
                 "Use in env",
-                format!("{command_example} env create demo --runtime {}", meta.name),
+                format!("{command_example} env create mira --runtime {}", meta.name),
             ),
             KeyValueRow::accent(
                 "Verify",
@@ -895,7 +895,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("ocm env create demo --runtime stable"))
+                .any(|line| line.contains("ocm env create mira --runtime stable"))
         );
         assert!(
             lines

@@ -378,7 +378,7 @@ impl Cli {
     fn explicit_env_name_from_shorthand(token: &str) -> Option<Result<String, String>> {
         let name = token.strip_prefix('@')?;
         if name.trim().is_empty() {
-            Some(Err("env shorthand requires a target like @demo".to_string()))
+            Some(Err("env shorthand requires a target like @mira".to_string()))
         } else {
             Some(Ok(name.to_string()))
         }

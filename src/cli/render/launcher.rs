@@ -34,7 +34,7 @@ pub fn launcher_added(
         vec![
             KeyValueRow::accent(
                 "Use in env",
-                format!("{command_example} env create demo --launcher {}", meta.name),
+                format!("{command_example} env create mira --launcher {}", meta.name),
             ),
             KeyValueRow::accent(
                 "Show",
@@ -155,7 +155,7 @@ pub fn launcher_show(
         vec![
             KeyValueRow::accent(
                 "Use in env",
-                format!("{command_example} env create demo --launcher {}", meta.name),
+                format!("{command_example} env create mira --launcher {}", meta.name),
             ),
             KeyValueRow::warning(
                 "Remove",

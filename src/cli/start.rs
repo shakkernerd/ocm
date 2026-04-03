@@ -631,9 +631,9 @@ mod tests {
 
     fn sample_summary(onboarding_planned: bool) -> StartSummary {
         StartSummary {
-            env_name: "demo".to_string(),
+            env_name: "mira".to_string(),
             created: true,
-            root: "/tmp/demo".to_string(),
+            root: "/tmp/mira".to_string(),
             gateway_port: 18_789,
             gateway_port_source: "metadata".to_string(),
             default_runtime: Some("stable".to_string()),
@@ -642,10 +642,10 @@ mod tests {
             onboarding_planned,
             service_requested: true,
             service_started: true,
-            activate_command: "eval \"$(ocm env use demo)\"".to_string(),
-            run_command: "ocm @demo -- status".to_string(),
-            onboard_command: "ocm @demo -- onboard".to_string(),
-            service_command: "ocm service install demo".to_string(),
+            activate_command: "eval \"$(ocm env use mira)\"".to_string(),
+            run_command: "ocm @mira -- status".to_string(),
+            onboard_command: "ocm @mira -- onboard".to_string(),
+            service_command: "ocm service install mira".to_string(),
         }
     }
 
@@ -682,7 +682,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("ocm @demo -- status"))
+                .any(|line| line.contains("ocm @mira -- status"))
         );
     }
 
@@ -697,7 +697,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("ocm @demo -- onboard"))
+                .any(|line| line.contains("ocm @mira -- onboard"))
         );
     }
 }
