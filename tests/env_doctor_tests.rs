@@ -202,3 +202,45 @@ fn env_doctor_reports_env_scoped_config_drift() {
             .contains("OpenClaw config gateway port 19789 does not match env metadata 19790")
     }));
 }
+
+#[test]
+fn env_doctor_reports_inferred_env_scoped_config_drift_without_source_metadata() {
+    let root = TestDir::new("env-doctor-inferred-config-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create_target = run_ocm(&cwd, &env, &["env", "create", "target", "--port", "19790"]);
+    assert!(create_target.status.success(), "{}", stderr(&create_target));
+
+    fs::write(
+        root.child("ocm-home/envs/target/.openclaw/openclaw.json"),
+        "{\n  \"agents\": {\n    \"defaults\": {\n      \"workspace\": \"/tmp/external-source/.openclaw/workspace\"\n    }\n  },\n  \"memory\": {\n    \"logPath\": \"/tmp/external-source/.openclaw/logs/gateway.log\"\n  },\n  \"gateway\": {\n    \"port\": 19789\n  }\n}\n",
+    )
+    .unwrap();
+
+    let doctor = run_ocm(&cwd, &env, &["env", "doctor", "target", "--json"]);
+    assert!(doctor.status.success(), "{}", stderr(&doctor));
+    let value: Value = serde_json::from_str(&stdout(&doctor)).unwrap();
+    assert_eq!(value["healthy"], false);
+    assert_eq!(value["configStatus"], "drifted");
+    let issues = value["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|issue| {
+        issue
+            .as_str()
+            .unwrap()
+            .contains("OpenClaw config contains 2 env-scoped path(s) outside the current env root")
+    }));
+    assert!(issues.iter().any(|issue| {
+        issue
+            .as_str()
+            .unwrap()
+            .contains("OpenClaw config workspace points outside env root")
+    }));
+    assert!(issues.iter().any(|issue| {
+        issue
+            .as_str()
+            .unwrap()
+            .contains("OpenClaw config gateway port 19789 does not match env metadata 19790")
+    }));
+}
