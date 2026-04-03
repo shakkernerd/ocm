@@ -4,11 +4,12 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::{EnvMarker, EnvMeta, EnvironmentService, ExecutionBinding, resolve_execution_binding};
+use crate::store::{OpenClawStateAudit, audit_openclaw_state, derive_env_paths, display_path};
 use crate::store::{
     audit_openclaw_config, get_launcher, get_runtime, repair_environment_marker,
-    repair_openclaw_config, runtime_integrity_issue, save_environment,
+    repair_openclaw_config, repair_openclaw_runtime_state, runtime_integrity_issue,
+    save_environment,
 };
-use crate::store::{derive_env_paths, display_path};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,16 +83,18 @@ impl<'a> EnvironmentService<'a> {
     pub fn cleanup_preview(&self, name: &str) -> Result<EnvCleanupSummary, String> {
         let env = self.get(name)?;
         let config_audit = audit_openclaw_config(&env, &self.list()?);
+        let state_audit = audit_openclaw_state(&env, &self.list()?);
         let doctor = self.doctor(name)?;
-        let actions = cleanup_actions(&env, &doctor, &config_audit);
+        let actions = cleanup_actions(&env, &doctor, &config_audit, &state_audit);
         Ok(build_cleanup_summary(&env, doctor, false, actions, None))
     }
 
     pub fn cleanup(&self, name: &str) -> Result<EnvCleanupSummary, String> {
         let mut env = self.get(name)?;
         let config_audit = audit_openclaw_config(&env, &self.list()?);
+        let state_audit = audit_openclaw_state(&env, &self.list()?);
         let doctor_before = self.doctor(name)?;
-        let actions = cleanup_actions(&env, &doctor_before, &config_audit);
+        let actions = cleanup_actions(&env, &doctor_before, &config_audit, &state_audit);
 
         for action in &actions {
             match action.kind {
@@ -107,6 +110,9 @@ impl<'a> EnvironmentService<'a> {
                 "repair-openclaw-config" => {
                     let known_envs = self.list()?;
                     repair_openclaw_config(&env, &known_envs)?;
+                }
+                "reset-openclaw-runtime-state" => {
+                    repair_openclaw_runtime_state(&env)?;
                 }
                 _ => {}
             }
@@ -212,6 +218,10 @@ impl<'a> EnvironmentService<'a> {
             push_issue(&mut issues, issue.clone());
         }
         let config_status = config_audit.status.clone();
+        let state_audit = audit_openclaw_state(&env, &known_envs);
+        for issue in &state_audit.issues {
+            push_issue(&mut issues, issue.clone());
+        }
 
         let runtime_status = if let Some(runtime_name) = env.default_runtime.clone() {
             match get_runtime(&runtime_name, self.env, self.cwd) {
@@ -330,6 +340,7 @@ fn cleanup_actions(
     env: &EnvMeta,
     doctor: &EnvDoctorSummary,
     config_audit: &crate::store::OpenClawConfigAudit,
+    state_audit: &OpenClawStateAudit,
 ) -> Vec<PlannedCleanupAction> {
     let mut actions = Vec::new();
 
@@ -366,6 +377,14 @@ fn cleanup_actions(
         actions.push(PlannedCleanupAction {
             kind: "repair-openclaw-config",
             description: "rewrite env-scoped OpenClaw config paths and ports".to_string(),
+        });
+    }
+
+    if state_audit.repair_runtime_state {
+        actions.push(PlannedCleanupAction {
+            kind: "reset-openclaw-runtime-state",
+            description: "clear copied OpenClaw runtime state outside config and workspace"
+                .to_string(),
         });
     }
 

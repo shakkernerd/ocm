@@ -416,6 +416,74 @@ fn clone_environment_rewrites_env_scoped_config_paths_and_ports() {
 }
 
 #[test]
+fn clone_environment_clears_copied_runtime_state_outside_workspace_and_config() {
+    let root = TestDir::new("store-env-clone-clears-runtime-state");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let source = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_runtime: None,
+            default_launcher: Some("stable".to_string()),
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = std::path::Path::new(&source.root);
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "keep workspace",
+    );
+    write_text(
+        &source_root.join(".openclaw/agents/main/sessions/main.jsonl"),
+        &format!(
+            "{{\"cwd\":\"{}\"}}\n",
+            source_root.join(".openclaw/workspace").display()
+        ),
+    );
+    write_text(
+        &source_root.join(".openclaw/logs/gateway.log"),
+        &format!("root={}\n", source_root.display()),
+    );
+    write_text(
+        &source_root.join(".openclaw/openclaw.json.bak"),
+        &format!(
+            "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}}}}\n",
+            source_root.join(".openclaw/workspace").display()
+        ),
+    );
+
+    let cloned = clone_environment(
+        CloneEnvironmentOptions {
+            source_name: "source".to_string(),
+            name: "target".to_string(),
+            root: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let cloned_root = std::path::Path::new(&cloned.root);
+    assert_eq!(
+        fs::read_to_string(cloned_root.join(".openclaw/workspace/notes.txt")).unwrap(),
+        "keep workspace"
+    );
+    assert!(!cloned_root.join(".openclaw/agents").exists());
+    assert!(!cloned_root.join(".openclaw/logs").exists());
+    assert!(!cloned_root.join(".openclaw/openclaw.json.bak").exists());
+    if let Ok(config_raw) = fs::read_to_string(cloned_root.join(".openclaw/openclaw.json")) {
+        assert!(!config_raw.contains(&source_root.display().to_string()));
+    }
+}
+
+#[test]
 fn environment_export_writes_a_portable_archive() {
     let root = TestDir::new("store-env-export");
     let cwd = root.child("workspace");

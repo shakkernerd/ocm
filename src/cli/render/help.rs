@@ -756,9 +756,10 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             vec![format!("{cmd} env clone mira rowan")],
             &[
-                "Clone resets environment identity while preserving the copied state.",
+                "Clone resets environment identity while preserving the copied workspace and env config.",
                 "Clone assigns a fresh gateway port to the new env to avoid collisions.",
                 "Clone rewrites env-scoped OpenClaw config paths inside the copied env root.",
+                "Clone clears copied OpenClaw runtime residue like sessions, logs, and agent state.",
                 "Background services are not copied; use `start` or `service install` for the clone.",
             ],
         ),

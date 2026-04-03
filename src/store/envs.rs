@@ -20,7 +20,7 @@ use super::layout::{
     resolve_absolute_path, validate_name,
 };
 use super::now_utc;
-use super::rewrite_openclaw_config_for_target;
+use super::{clear_nonportable_runtime_state, rewrite_openclaw_config_for_target};
 
 static NEXT_IMPORT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -212,6 +212,7 @@ pub fn clone_environment(
             Some(&source_paths.root),
             Some(gateway_port),
         )?;
+        clear_nonportable_runtime_state(&target_paths)?;
 
         let meta = EnvMeta {
             kind: "ocm-env".to_string(),

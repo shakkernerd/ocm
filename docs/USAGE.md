@@ -322,7 +322,7 @@ Use this when you want to see:
 ocm env clone mira rowan
 ```
 
-Clone copies the environment state into a new environment, gives the clone its own gateway port, rewrites env-scoped OpenClaw config paths under the new env root, and keeps the background service separate. The usual next step is:
+Clone copies the workspace and env config into a new environment, gives the clone its own gateway port, rewrites env-scoped OpenClaw config paths under the new env root, clears copied OpenClaw runtime residue like sessions and logs, and keeps the background service separate. The usual next step is:
 
 ```bash
 ocm start rowan

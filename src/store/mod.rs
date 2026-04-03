@@ -3,6 +3,7 @@ mod envs;
 mod launchers;
 mod layout;
 mod openclaw_config;
+mod openclaw_state;
 mod runtimes;
 mod snapshots;
 
@@ -28,6 +29,10 @@ pub use layout::{
 pub(crate) use openclaw_config::{
     OpenClawConfigAudit, audit_openclaw_config, repair_openclaw_config,
     rewrite_openclaw_config_for_target, rewrite_openclaw_gateway_port_for_target,
+};
+pub(crate) use openclaw_state::{
+    OpenClawStateAudit, audit_openclaw_state, clear_nonportable_runtime_state,
+    repair_openclaw_runtime_state,
 };
 pub use runtimes::{
     add_runtime, get_runtime, get_runtime_verified, install_runtime,

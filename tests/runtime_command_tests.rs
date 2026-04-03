@@ -168,7 +168,7 @@ fn runtime_install_and_which_use_the_managed_binary_path() {
     );
     assert!(install.status.success(), "{}", stderr(&install));
     assert!(stdout(&install).contains("Installed runtime stable"));
-    assert!(stdout(&install).contains("use in env: ocm env create demo --runtime stable"));
+    assert!(stdout(&install).contains("use in env: ocm env create mira --runtime stable"));
 
     let install_root = runtime_install_root("stable", &env, &cwd).unwrap();
     let expected_binary = install_root.join("files/openclaw");
