@@ -165,3 +165,72 @@ fn env_import_rewrites_openclaw_config_for_the_new_root() {
     assert_eq!(actual_workspace, expected_workspace);
     assert_eq!(config["gateway"]["port"].as_u64(), Some(19789));
 }
+
+#[test]
+fn env_import_keeps_agent_auth_but_drops_live_runtime_state() {
+    let root = TestDir::new("env-import-runtime-cleanup");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    fs::create_dir_all(source_state.join("agents/main/agent")).unwrap();
+    fs::create_dir_all(source_state.join("agents/main/sessions")).unwrap();
+    fs::create_dir_all(source_state.join("logs")).unwrap();
+    write_text(
+        &source_state.join("agents/main/agent/auth-profiles.json"),
+        "{\"default\":\"ok\"}\n",
+    );
+    write_text(
+        &source_state.join("agents/main/agent/models.json"),
+        "{\"primary\":\"gpt-5.4\"}\n",
+    );
+    write_text(
+        &source_state.join("agents/main/sessions/main.jsonl"),
+        "{\"type\":\"session\"}\n",
+    );
+    write_text(&source_state.join("logs/gateway.log"), "copied log\n");
+    write_text(&source_state.join("openclaw.json.bak"), "{}\n");
+
+    let export = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "export",
+            "source",
+            "--output",
+            "./archives/source-runtime.tar",
+        ],
+    );
+    assert!(export.status.success(), "{}", stderr(&export));
+
+    let import = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "import",
+            "./archives/source-runtime.tar",
+            "--name",
+            "target",
+            "--root",
+            "./imports/target-root",
+        ],
+    );
+    assert!(import.status.success(), "{}", stderr(&import));
+
+    let target_state = root.child("workspace/imports/target-root/.openclaw");
+    assert!(
+        target_state
+            .join("agents/main/agent/auth-profiles.json")
+            .exists()
+    );
+    assert!(target_state.join("agents/main/agent/models.json").exists());
+    assert!(!target_state.join("agents/main/sessions").exists());
+    assert!(!target_state.join("logs").exists());
+    assert!(!target_state.join("openclaw.json.bak").exists());
+}

@@ -445,6 +445,7 @@ pub fn import_environment(
                 extracted.manifest.env.source_root.as_deref().map(Path::new),
                 extracted.manifest.env.gateway_port,
             )?;
+            clear_nonportable_runtime_state(&target_paths)?;
 
             let created_at = now_utc();
             let marker = EnvMarker {

@@ -642,6 +642,89 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
 }
 
 #[test]
+fn environment_import_clears_copied_runtime_state_outside_workspace_and_config() {
+    let root = TestDir::new("store-env-import-runtime-cleanup");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_runtime: Some("stable".to_string()),
+            default_launcher: Some("shell".to_string()),
+            protected: true,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = std::path::Path::new(&created.root);
+    fs::create_dir_all(source_root.join(".openclaw/agents/main/agent")).unwrap();
+    fs::create_dir_all(source_root.join(".openclaw/agents/main/sessions")).unwrap();
+    fs::create_dir_all(source_root.join(".openclaw/logs")).unwrap();
+    write_text(
+        &source_root.join(".openclaw/agents/main/agent/auth-profiles.json"),
+        "{\"default\":\"ok\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/agents/main/agent/models.json"),
+        "{\"primary\":\"gpt-5.4\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/agents/main/sessions/main.jsonl"),
+        "{\"type\":\"session\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/logs/gateway.log"),
+        "copied log\n",
+    );
+    write_text(&source_root.join(".openclaw/openclaw.json.bak"), "{}\n");
+
+    let exported = export_environment(
+        ExportEnvironmentOptions {
+            name: "source".to_string(),
+            output: Some("./archives/source-runtime.tar".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let imported = import_environment(
+        ImportEnvironmentOptions {
+            archive: exported.archive_path.clone(),
+            name: Some("target".to_string()),
+            root: Some("./imports/target-root".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let imported_root = std::path::Path::new(&imported.root);
+    assert!(
+        imported_root
+            .join(".openclaw/agents/main/agent/auth-profiles.json")
+            .exists()
+    );
+    assert!(
+        imported_root
+            .join(".openclaw/agents/main/agent/models.json")
+            .exists()
+    );
+    assert!(
+        !imported_root
+            .join(".openclaw/agents/main/sessions")
+            .exists()
+    );
+    assert!(!imported_root.join(".openclaw/logs").exists());
+    assert!(!imported_root.join(".openclaw/openclaw.json.bak").exists());
+}
+
+#[test]
 fn environment_snapshot_captures_a_named_point_in_time() {
     let root = TestDir::new("store-env-snapshot");
     let cwd = root.child("workspace");

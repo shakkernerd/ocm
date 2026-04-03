@@ -381,6 +381,8 @@ Import:
 ocm env import ./mira.tar --name rowan
 ```
 
+Imported environments get a fresh identity, have env-scoped OpenClaw config rewritten for the new root, and keep durable agent settings while clearing copied runtime residue like sessions, logs, and backup files.
+
 ### Inspect and repair
 
 ```bash

@@ -800,7 +800,11 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!(
                 "{cmd} env import ./backups/mira.ocm-env.tar --name rowan"
             )],
-            &["Imported environments get a fresh identity and marker file."],
+            &[
+                "Imported environments get a fresh identity and marker file.",
+                "Import rewrites env-scoped OpenClaw config paths for the new root.",
+                "Import keeps durable agent auth/settings, but clears copied runtime residue like sessions, logs, and backups.",
+            ],
         ),
         "list" => render_leaf(
             "List environments",
