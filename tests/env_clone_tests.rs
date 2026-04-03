@@ -100,7 +100,7 @@ fn env_clone_rewrites_openclaw_config_for_the_new_env_root() {
 }
 
 #[test]
-fn env_clone_does_not_copy_live_openclaw_runtime_state() {
+fn env_clone_keeps_agent_auth_but_drops_live_runtime_state() {
     let root = TestDir::new("env-clone-clears-runtime-state");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -114,6 +114,14 @@ fn env_clone_does_not_copy_live_openclaw_runtime_state() {
     write_text(
         &source_state.join("workspace/notes.txt"),
         "workspace should survive",
+    );
+    write_text(
+        &source_state.join("agents/main/agent/auth-profiles.json"),
+        "{\n  \"profiles\": {\"local\": {\"provider\": \"openai-codex\"}}\n}\n",
+    );
+    write_text(
+        &source_state.join("agents/main/agent/models.json"),
+        "{\n  \"providers\": {\"openai-codex\": {\"models\": []}}\n}\n",
     );
     write_text(
         &source_state.join("agents/main/sessions/main.jsonl"),
@@ -143,7 +151,13 @@ fn env_clone_does_not_copy_live_openclaw_runtime_state() {
         fs::read_to_string(target_state.join("workspace/notes.txt")).unwrap(),
         "workspace should survive"
     );
-    assert!(!target_state.join("agents").exists());
+    assert!(
+        target_state
+            .join("agents/main/agent/auth-profiles.json")
+            .exists()
+    );
+    assert!(target_state.join("agents/main/agent/models.json").exists());
+    assert!(!target_state.join("agents/main/sessions").exists());
     assert!(!target_state.join("logs").exists());
     assert!(!target_state.join("openclaw.json.bak").exists());
 

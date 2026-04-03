@@ -85,8 +85,58 @@ pub(crate) fn clear_nonportable_runtime_state(paths: &EnvPaths) -> Result<bool, 
         if name == OsStr::new("openclaw.json") || name == OsStr::new("workspace") {
             continue;
         }
+        if name == OsStr::new("agents") {
+            if prune_agent_runtime_state(&path)? {
+                changed = true;
+            }
+            continue;
+        }
 
         remove_path(&path)?;
+        changed = true;
+    }
+
+    Ok(changed)
+}
+
+fn prune_agent_runtime_state(agents_root: &Path) -> Result<bool, String> {
+    if !path_exists(agents_root) {
+        return Ok(false);
+    }
+
+    let mut changed = false;
+    let agent_entries = fs::read_dir(agents_root).map_err(|error| error.to_string())?;
+    for entry in agent_entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let agent_root = entry.path();
+        let metadata = fs::symlink_metadata(&agent_root).map_err(|error| error.to_string())?;
+        if !metadata.is_dir() {
+            remove_path(&agent_root)?;
+            changed = true;
+            continue;
+        }
+
+        let child_entries = fs::read_dir(&agent_root).map_err(|error| error.to_string())?;
+        for child in child_entries {
+            let child = child.map_err(|error| error.to_string())?;
+            let child_path = child.path();
+            if child.file_name() == OsStr::new("agent") {
+                continue;
+            }
+            remove_path(&child_path)?;
+            changed = true;
+        }
+
+        let mut remaining = fs::read_dir(&agent_root).map_err(|error| error.to_string())?;
+        if remaining.next().is_none() {
+            remove_path(&agent_root)?;
+            changed = true;
+        }
+    }
+
+    let mut remaining = fs::read_dir(agents_root).map_err(|error| error.to_string())?;
+    if remaining.next().is_none() {
+        remove_path(agents_root)?;
         changed = true;
     }
 
@@ -277,14 +327,20 @@ mod tests {
     }
 
     #[test]
-    fn clear_nonportable_runtime_state_preserves_config_and_workspace_only() {
+    fn clear_nonportable_runtime_state_preserves_config_workspace_and_agent_auth() {
         let temp =
             std::env::temp_dir().join(format!("ocm-openclaw-state-clear-{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp);
         let paths = derive_env_paths(&temp);
         fs::create_dir_all(paths.workspace_dir.join("notes")).unwrap();
         fs::write(&paths.config_path, "{}\n").unwrap();
+        fs::create_dir_all(paths.state_dir.join("agents/main/agent")).unwrap();
         fs::create_dir_all(paths.state_dir.join("agents/main/sessions")).unwrap();
+        fs::write(
+            paths.state_dir.join("agents/main/agent/auth-profiles.json"),
+            "{}\n",
+        )
+        .unwrap();
         fs::write(paths.state_dir.join("logs.txt"), "log\n").unwrap();
         fs::write(paths.workspace_dir.join("notes/todo.txt"), "keep\n").unwrap();
 
@@ -292,7 +348,13 @@ mod tests {
         assert!(changed);
         assert!(paths.config_path.exists());
         assert!(paths.workspace_dir.join("notes/todo.txt").exists());
-        assert!(!paths.state_dir.join("agents").exists());
+        assert!(
+            paths
+                .state_dir
+                .join("agents/main/agent/auth-profiles.json")
+                .exists()
+        );
+        assert!(!paths.state_dir.join("agents/main/sessions").exists());
         assert!(!paths.state_dir.join("logs.txt").exists());
 
         let _ = fs::remove_dir_all(&temp);

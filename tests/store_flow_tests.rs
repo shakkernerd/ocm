@@ -441,6 +441,10 @@ fn clone_environment_clears_copied_runtime_state_outside_workspace_and_config() 
         "keep workspace",
     );
     write_text(
+        &source_root.join(".openclaw/agents/main/agent/auth-profiles.json"),
+        "{\n  \"profiles\": {\"local\": {\"provider\": \"openai-codex\"}}\n}\n",
+    );
+    write_text(
         &source_root.join(".openclaw/agents/main/sessions/main.jsonl"),
         &format!(
             "{{\"cwd\":\"{}\"}}\n",
@@ -475,7 +479,12 @@ fn clone_environment_clears_copied_runtime_state_outside_workspace_and_config() 
         fs::read_to_string(cloned_root.join(".openclaw/workspace/notes.txt")).unwrap(),
         "keep workspace"
     );
-    assert!(!cloned_root.join(".openclaw/agents").exists());
+    assert!(
+        cloned_root
+            .join(".openclaw/agents/main/agent/auth-profiles.json")
+            .exists()
+    );
+    assert!(!cloned_root.join(".openclaw/agents/main/sessions").exists());
     assert!(!cloned_root.join(".openclaw/logs").exists());
     assert!(!cloned_root.join(".openclaw/openclaw.json.bak").exists());
     if let Ok(config_raw) = fs::read_to_string(cloned_root.join(".openclaw/openclaw.json")) {

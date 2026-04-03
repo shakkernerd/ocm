@@ -310,8 +310,14 @@ fn env_cleanup_yes_clears_copied_openclaw_runtime_state() {
 
     let source_root = root.child("ocm-home/envs/source");
     let target_state = root.child("ocm-home/envs/target/.openclaw");
+    fs::create_dir_all(target_state.join("agents/main/agent")).unwrap();
     fs::create_dir_all(target_state.join("agents/main/sessions")).unwrap();
     fs::create_dir_all(target_state.join("logs")).unwrap();
+    fs::write(
+        target_state.join("agents/main/agent/auth-profiles.json"),
+        "{\n  \"profiles\": {\"local\": {\"provider\": \"openai-codex\"}}\n}\n",
+    )
+    .unwrap();
     fs::write(
         target_state.join("agents/main/sessions/main.jsonl"),
         format!(
@@ -343,6 +349,11 @@ fn env_cleanup_yes_clears_copied_openclaw_runtime_state() {
         "reset-openclaw-runtime-state: clear copied OpenClaw runtime state outside config and workspace"
     ));
 
-    assert!(!target_state.join("agents").exists());
+    assert!(
+        target_state
+            .join("agents/main/agent/auth-profiles.json")
+            .exists()
+    );
+    assert!(!target_state.join("agents/main/sessions").exists());
     assert!(!target_state.join("logs").exists());
 }
