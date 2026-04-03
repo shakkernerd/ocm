@@ -1,16 +1,29 @@
 # ocm
 
-`ocm` is OpenClaw Manager.
+**Install, run, update, and manage OpenClaw — properly.**
 
-It gives you one clean way to install, run, update, and keep OpenClaw isolated.
+OCM gives OpenClaw one coherent workflow across stable releases, local checkouts, background services, upgrades, snapshots, and ongoing maintenance.
+
+OpenClaw is easy to start once. It gets messier when you want more than one setup, need stable and local development side by side, or want confidence about what is actually running. `ocm` fixes that.
 
 Once an environment exists, `ocm` can be your normal OpenClaw entrypoint:
 
 ```bash
-ocm @mybot -- tui
-ocm @mybot -- status
-ocm @mybot -- onboard
+ocm @mira -- tui
+ocm @mira -- status
+ocm @mira -- onboard
 ```
+
+## What ocm manages
+
+`ocm` keeps the moving parts separate:
+
+- **envs** — isolated OpenClaw environments
+- **runtimes** — installed and pinned OpenClaw releases
+- **launchers** — named command recipes for local-dev or custom runs
+- **services** — background OpenClaw processes tied to one environment
+
+That split is what makes stable releases, local development, upgrades, and service management fit together cleanly.
 
 ## Why people use it
 
@@ -82,9 +95,9 @@ ocm start
 ### Use the latest stable release
 
 ```bash
-ocm start mybot
-ocm @mybot -- onboard
-ocm @mybot -- tui
+ocm start mira
+ocm @mira -- onboard
+ocm @mira -- tui
 ```
 
 This is the shortest path for most people.
@@ -92,15 +105,15 @@ This is the shortest path for most people.
 ### Update OpenClaw later
 
 ```bash
-ocm upgrade mybot
+ocm upgrade mira
 ocm upgrade --all
 ```
 
 ### Use a local checkout or dev build
 
 ```bash
-ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service
-ocm @hacking -- tui
+ocm start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service
+ocm @luna -- tui
 ```
 
 Use `--no-service` when you want a quick local-dev setup without a background process. If you are already inside an OpenClaw checkout, `ocm setup` can detect that and suggest the local-command path automatically.
@@ -108,17 +121,31 @@ Use `--no-service` when you want a quick local-dev setup without a background pr
 ### Try beta or pin a specific release
 
 ```bash
-ocm start beta-bot --channel beta
-ocm start pinned-bot --version 2026.3.24
+ocm start rowan --channel beta
+ocm start ember --version 2026.3.24
 ```
 
 ### Keep background services visible
 
 ```bash
 ocm service list
-ocm service status mybot
-ocm service logs mybot --tail 50
+ocm service status mira
+ocm service logs mira --tail 50
 ```
+
+## Why not just run OpenClaw directly?
+
+Running OpenClaw directly is fine for the simplest case.
+
+Use `ocm` when you want:
+
+- more than one environment
+- clean runtime and launcher separation
+- stable and local-dev setups side by side
+- inspectable background services
+- safer upgrades, snapshots, and repair flows
+
+Manual setup works. `ocm` is what makes it feel organized.
 
 ## Learn more
 

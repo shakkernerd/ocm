@@ -48,9 +48,9 @@ ocm start
 Or with a specific choice:
 
 ```bash
-ocm start mybot --channel beta
-ocm start mybot --version 2026.3.24
-ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw
+ocm start mira --channel beta
+ocm start mira --version 2026.3.24
+ocm start luna --command 'pnpm openclaw' --cwd /path/to/openclaw
 ```
 
 `start` creates or reuses the environment, prepares the chosen OpenClaw source, and can run onboarding for you.
@@ -67,7 +67,7 @@ ocm start
 Or:
 
 ```bash
-ocm start mybot --channel stable
+ocm start mira --channel stable
 ```
 
 Use this when you want the normal supported path without worrying about local checkout details. `start` keeps the environment running in the background unless you pass `--no-service`.
@@ -75,7 +75,7 @@ Use this when you want the normal supported path without worrying about local ch
 ### 2. Try the beta release
 
 ```bash
-ocm start mybot --channel beta
+ocm start mira --channel beta
 ```
 
 Use this when you want a published prerelease without moving to a local development build.
@@ -83,7 +83,7 @@ Use this when you want a published prerelease without moving to a local developm
 ### 3. Pin to an exact published release
 
 ```bash
-ocm start mybot --version 2026.3.24
+ocm start mira --version 2026.3.24
 ```
 
 Use this when you need repeatability across machines or teams.
@@ -91,7 +91,7 @@ Use this when you need repeatability across machines or teams.
 ### 4. Run a local checkout
 
 ```bash
-ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service
+ocm start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service
 ```
 
 Use this when you are developing OpenClaw locally or want a custom run command.
@@ -101,8 +101,8 @@ If you run `ocm setup` from inside an OpenClaw checkout, local mode can detect t
 ### 5. Keep an environment running in the background
 
 ```bash
-ocm start mybot
-ocm service status mybot
+ocm start mira
+ocm service status mira
 ```
 
 `start` and `setup` already do this by default. Use `service install` directly when you skipped the background service earlier with `--no-service`.
@@ -110,7 +110,7 @@ ocm service status mybot
 ### 6. Update OpenClaw later
 
 ```bash
-ocm upgrade mybot
+ocm upgrade mira
 ocm upgrade --all
 ```
 
@@ -125,9 +125,9 @@ Use this when a newer OpenClaw release is available and you want your environmen
 ### 7. Run OpenClaw without activating the shell first
 
 ```bash
-ocm @mybot -- status
-ocm @mybot -- tui
-ocm @mybot -- onboard
+ocm @mira -- status
+ocm @mira -- tui
+ocm @mira -- onboard
 ```
 
 Use this for quick one-off runs.
@@ -135,7 +135,7 @@ Use this for quick one-off runs.
 ### 8. Activate an environment in your current shell
 
 ```bash
-eval "$(ocm env use mybot)"
+eval "$(ocm env use mira)"
 ocm -- status
 ```
 
@@ -203,7 +203,7 @@ Use a launcher when you want:
 ### Activate the environment
 
 ```bash
-eval "$(ocm env use mybot)"
+eval "$(ocm env use mira)"
 ```
 
 After that:
@@ -218,9 +218,9 @@ This is the shortest interactive path.
 ### Run without activating
 
 ```bash
-ocm @mybot -- status
-ocm @mybot -- tui
-ocm @mybot -- onboard
+ocm @mira -- status
+ocm @mira -- tui
+ocm @mira -- onboard
 ```
 
 This is the shortest non-interactive path.
@@ -228,7 +228,7 @@ This is the shortest non-interactive path.
 ### Run any other command in the environment
 
 ```bash
-ocm env exec mybot -- sh -lc 'echo "$OPENCLAW_HOME"'
+ocm env exec mira -- sh -lc 'echo "$OPENCLAW_HOME"'
 ```
 
 ## Service management
@@ -238,9 +238,9 @@ Use `service` when an environment should run in the background.
 ### Install and inspect
 
 ```bash
-ocm service install mybot
+ocm service install mira
 ocm service list
-ocm service status mybot
+ocm service status mira
 ```
 
 Use `service install` when you want a background service for an environment that was created with `--no-service`, or when you want to bring an older env under background management later.
@@ -248,22 +248,22 @@ Use `service install` when you want a background service for an environment that
 ### Read logs
 
 ```bash
-ocm service logs mybot --tail 50
-ocm service logs mybot --stderr
+ocm service logs mira --tail 50
+ocm service logs mira --stderr
 ```
 
 ### Start, stop, restart
 
 ```bash
-ocm service start mybot
-ocm service stop mybot
-ocm service restart mybot
+ocm service start mira
+ocm service stop mira
+ocm service restart mira
 ```
 
 ### Remove the service
 
 ```bash
-ocm service uninstall mybot
+ocm service uninstall mira
 ```
 
 This removes the background service. It does not remove the environment.
@@ -273,10 +273,10 @@ This removes the background service. It does not remove the environment.
 ### Upgrade one environment
 
 ```bash
-ocm upgrade mybot
+ocm upgrade mira
 ```
 
-This is the normal command when `mybot` tracks a channel like `stable` or `beta`.
+This is the normal command when `mira` tracks a channel like `stable` or `beta`.
 
 ### Upgrade every environment that can be updated safely
 
@@ -289,8 +289,8 @@ This updates channel-tracked environments and restarts their running services wh
 ### Move a pinned or local env to a different published release
 
 ```bash
-ocm upgrade mybot --channel beta
-ocm upgrade mybot --version 2026.3.24
+ocm upgrade mira --channel beta
+ocm upgrade mira --version 2026.3.24
 ```
 
 Use this when you want to deliberately move one environment to a different published release.
@@ -319,13 +319,13 @@ Use this when you want to see:
 ### Clone an environment
 
 ```bash
-ocm env clone mybot mybot-copy
+ocm env clone mira rowan
 ```
 
 Clone copies the environment state into a new environment, gives the clone its own gateway port, rewrites env-scoped OpenClaw config paths under the new env root, and keeps the background service separate. The usual next step is:
 
 ```bash
-ocm start mybot-copy
+ocm start rowan
 ```
 
 ### Snapshots
@@ -333,38 +333,38 @@ ocm start mybot-copy
 Create:
 
 ```bash
-ocm env snapshot create mybot --label before-upgrade
+ocm env snapshot create mira --label before-upgrade
 ```
 
 List:
 
 ```bash
-ocm env snapshot list mybot
+ocm env snapshot list mira
 ocm env snapshot list --all
 ```
 
 Show:
 
 ```bash
-ocm env snapshot show mybot <snapshot>
+ocm env snapshot show mira <snapshot>
 ```
 
 Restore:
 
 ```bash
-ocm env snapshot restore mybot <snapshot>
+ocm env snapshot restore mira <snapshot>
 ```
 
 Remove:
 
 ```bash
-ocm env snapshot remove mybot <snapshot>
+ocm env snapshot remove mira <snapshot>
 ```
 
 Prune:
 
 ```bash
-ocm env snapshot prune mybot --keep 3 --yes
+ocm env snapshot prune mira --keep 3 --yes
 ```
 
 ### Export and import
@@ -372,22 +372,22 @@ ocm env snapshot prune mybot --keep 3 --yes
 Export:
 
 ```bash
-ocm env export mybot
+ocm env export mira
 ```
 
 Import:
 
 ```bash
-ocm env import ./mybot.tar --name restored-mybot
+ocm env import ./mira.tar --name rowan
 ```
 
 ### Inspect and repair
 
 ```bash
-ocm env status mybot
-ocm env doctor mybot
-ocm env cleanup mybot --yes
-ocm env repair-marker mybot
+ocm env status mira
+ocm env doctor mira
+ocm env cleanup mira --yes
+ocm env repair-marker mira
 ```
 
 ### Remove or destroy
@@ -395,14 +395,14 @@ ocm env repair-marker mybot
 Remove only the environment:
 
 ```bash
-ocm env remove mybot
+ocm env remove mira
 ```
 
 Destroy the environment, its OCM-managed service, and its snapshots:
 
 ```bash
-ocm env destroy mybot
-ocm env destroy mybot --yes
+ocm env destroy mira
+ocm env destroy mira --yes
 ```
 
 `destroy` is the stronger cleanup path.
@@ -443,7 +443,7 @@ Examples:
 
 ```bash
 ocm service list --json
-ocm env status mybot --raw
+ocm env status mira --raw
 ocm --color always runtime list
 ```
 

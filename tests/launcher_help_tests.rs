@@ -31,18 +31,20 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("upgrade"));
     assert!(output.contains("setup"));
     assert!(output.contains("ocm start"));
-    assert!(output.contains("ocm upgrade mybot"));
+    assert!(output.contains("ocm upgrade mira"));
     assert!(output.contains("ocm help setup"));
     assert!(output.contains("ocm help upgrade"));
     assert!(output.contains("ocm help doctor"));
     assert!(output.contains("ocm help self"));
-    assert!(output.contains("ocm start mybot"));
-    assert!(output.contains("ocm start mybot --channel beta"));
-    assert!(output.contains(
-        "ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service"
-    ));
-    assert!(output.contains("ocm @mybot -- onboard"));
-    assert!(output.contains("ocm @mybot -- status"));
+    assert!(output.contains("ocm start mira"));
+    assert!(output.contains("ocm start mira --channel beta"));
+    assert!(
+        output.contains(
+            "ocm start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service"
+        )
+    );
+    assert!(output.contains("ocm @mira -- onboard"));
+    assert!(output.contains("ocm @mira -- status"));
     assert!(output.contains("ocm help start"));
     assert!(output.contains("ocm help env"));
     assert!(output.contains("ocm help release"));
@@ -113,7 +115,7 @@ fn help_uses_ocm_self_for_root_and_leaf_examples() {
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
     assert!(output.contains("./bin/ocm [--color <mode>] <command> [args]"));
-    assert!(output.contains("./bin/ocm @mybot -- onboard"));
+    assert!(output.contains("./bin/ocm @mira -- onboard"));
 
     let help = run_ocm(&cwd, &env, &["help", "env", "run"]);
     assert!(help.status.success(), "{}", stderr(&help));
@@ -121,7 +123,7 @@ fn help_uses_ocm_self_for_root_and_leaf_examples() {
     assert!(output.contains(
         "./bin/ocm env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>"
     ));
-    assert!(output.contains("./bin/ocm env run demo -- onboard"));
+    assert!(output.contains("./bin/ocm env run mira -- onboard"));
 }
 
 #[test]
@@ -144,10 +146,12 @@ fn start_help_is_available_from_help_and_flag() {
     assert!(output.contains("--service"));
     assert!(output.contains("--no-service"));
     assert!(output.contains("--onboard | --no-onboard"));
-    assert!(output.contains("ocm start demo --channel stable"));
-    assert!(output.contains(
-        "ocm start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
-    ));
+    assert!(output.contains("ocm start mira --channel stable"));
+    assert!(
+        output.contains(
+            "ocm start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
+        )
+    );
     assert!(output.contains("Start installs and starts the env service by default."));
     assert!(output.contains(
         "Official release selectors prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing."
@@ -255,7 +259,7 @@ fn env_destroy_help_describes_preview_first_teardown() {
     let output = stdout(&help);
     assert!(output.contains("Destroy an environment"));
     assert!(output.contains("ocm env destroy <name> [--yes] [--force] [--raw] [--json]"));
-    assert!(output.contains("ocm env destroy demo --yes"));
+    assert!(output.contains("ocm env destroy mira --yes"));
     assert!(output.contains("Destroy does not remove shared runtimes or launchers."));
     assert!(output.contains("TTY output uses cards by default."));
 }
@@ -275,8 +279,8 @@ fn env_create_help_mentions_release_selectors() {
     ));
     assert!(output.contains("--version <version>"));
     assert!(output.contains("--channel <channel>"));
-    assert!(output.contains("ocm env create demo --channel stable"));
-    assert!(output.contains("ocm env create pinned --version 2026.3.24"));
+    assert!(output.contains("ocm env create rowan --channel stable"));
+    assert!(output.contains("ocm env create ember --version 2026.3.24"));
 }
 
 #[test]
@@ -295,8 +299,8 @@ fn env_set_runtime_help_mentions_release_selectors() {
     );
     assert!(output.contains("--version <version>"));
     assert!(output.contains("--channel <channel>"));
-    assert!(output.contains("ocm env set-runtime demo --channel stable"));
-    assert!(output.contains("ocm env set-runtime demo --version 2026.3.24"));
+    assert!(output.contains("ocm env set-runtime mira --channel stable"));
+    assert!(output.contains("ocm env set-runtime mira --version 2026.3.24"));
 }
 
 #[test]
@@ -338,7 +342,7 @@ fn env_run_help_is_available_through_help_keyword_and_flag() {
         "ocm env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>"
     ));
     assert!(output.contains("ocm -- status"));
-    assert!(output.contains("ocm @demo -- status"));
+    assert!(output.contains("ocm @mira -- status"));
     assert!(output.contains("`--` is required before OpenClaw arguments."));
     assert!(
         output.contains(

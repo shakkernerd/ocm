@@ -133,13 +133,13 @@ pub fn root_help(cmd: &str) -> String {
         &mut lines,
         "Get started",
         format_examples(&[
-            format!("{cmd} start mybot"),
-            format!("{cmd} @mybot -- onboard"),
-            format!("{cmd} @mybot -- status"),
-            format!("{cmd} upgrade mybot"),
-            format!("{cmd} start mybot --channel beta"),
+            format!("{cmd} start mira"),
+            format!("{cmd} @mira -- onboard"),
+            format!("{cmd} @mira -- status"),
+            format!("{cmd} upgrade mira"),
+            format!("{cmd} start mira --channel beta"),
             format!(
-                "{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service"
+                "{cmd} start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service"
             ),
         ]),
     );
@@ -236,13 +236,13 @@ pub fn start_help(cmd: &str) -> String {
         ],
         vec![
             format!("{cmd} start"),
-            format!("{cmd} start demo --channel stable"),
-            format!("{cmd} start demo --version 2026.3.24"),
+            format!("{cmd} start mira --channel stable"),
+            format!("{cmd} start rowan --version 2026.3.24"),
             format!(
-                "{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
+                "{cmd} start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
             ),
             format!(
-                "{cmd} start hacking --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service --no-onboard"
+                "{cmd} start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service --no-onboard"
             ),
         ],
         &[
@@ -279,9 +279,9 @@ pub fn upgrade_help(cmd: &str) -> String {
             ("--json", "Print upgrade summaries as JSON"),
         ],
         vec![
-            format!("{cmd} upgrade mybot"),
-            format!("{cmd} upgrade mybot --channel beta"),
-            format!("{cmd} upgrade mybot --version 2026.3.24"),
+            format!("{cmd} upgrade mira"),
+            format!("{cmd} upgrade mira --channel beta"),
+            format!("{cmd} upgrade mira --version 2026.3.24"),
             format!("{cmd} upgrade --all"),
         ],
         &[
@@ -421,9 +421,9 @@ pub fn env_help(cmd: &str) -> String {
             ),
         ],
         vec![
-            format!("{cmd} env create demo --launcher stable"),
-            format!("{cmd} env run demo -- status"),
-            format!("{cmd} env snapshot create demo --label before-upgrade"),
+            format!("{cmd} env create mira --launcher stable"),
+            format!("{cmd} env run mira -- status"),
+            format!("{cmd} env snapshot create mira --label before-upgrade"),
         ],
         vec![
             format!("{cmd} help env create"),
@@ -453,8 +453,8 @@ pub fn env_snapshot_help(cmd: &str) -> String {
             ],
         )],
         vec![
-            format!("{cmd} env snapshot create demo --label before-upgrade"),
-            format!("{cmd} env snapshot list demo"),
+            format!("{cmd} env snapshot create mira --label before-upgrade"),
+            format!("{cmd} env snapshot list mira"),
             format!("{cmd} env snapshot prune --all --older-than 30 --json"),
         ],
         vec![
@@ -683,8 +683,8 @@ pub fn service_help(cmd: &str) -> String {
         ],
         vec![
             format!("{cmd} service list"),
-            format!("{cmd} service install demo"),
-            format!("{cmd} service adopt-global demo --dry-run"),
+            format!("{cmd} service install mira"),
+            format!("{cmd} service adopt-global mira --dry-run"),
         ],
         vec![
             format!("{cmd} help service install"),
@@ -728,9 +728,9 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the created environment summary as JSON"),
             ],
             vec![
-                format!("{cmd} env create demo --launcher stable"),
-                format!("{cmd} env create demo --channel stable"),
-                format!("{cmd} env create pinned --version 2026.3.24"),
+                format!("{cmd} env create mira --launcher stable"),
+                format!("{cmd} env create rowan --channel stable"),
+                format!("{cmd} env create ember --version 2026.3.24"),
             ],
             &[
                 "Environments are the main isolation unit in OCM.",
@@ -754,7 +754,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print the cloned environment summary as JSON"),
             ],
-            vec![format!("{cmd} env clone demo demo-copy")],
+            vec![format!("{cmd} env clone mira rowan")],
             &[
                 "Clone resets environment identity while preserving the copied state.",
                 "Clone assigns a fresh gateway port to the new env to avoid collisions.",
@@ -777,7 +777,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the export summary as JSON"),
             ],
             vec![format!(
-                "{cmd} env export demo --output ./backups/demo.ocm-env.tar"
+                "{cmd} env export mira --output ./backups/mira.ocm-env.tar"
             )],
             &[],
         ),
@@ -797,7 +797,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the imported environment summary as JSON"),
             ],
             vec![format!(
-                "{cmd} env import ./backups/demo.ocm-env.tar --name restored-demo"
+                "{cmd} env import ./backups/mira.ocm-env.tar --name rowan"
             )],
             &["Imported environments get a fresh identity and marker file."],
         ),
@@ -827,8 +827,8 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the environment metadata as JSON"),
             ],
             vec![
-                format!("{cmd} env show demo"),
-                format!("{cmd} env show demo --raw"),
+                format!("{cmd} env show mira"),
+                format!("{cmd} env show mira --raw"),
             ],
             &["TTY output uses grouped cards by default. Piped output stays plain."],
         ),
@@ -844,9 +844,9 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the status summary as JSON"),
             ],
             vec![
-                format!("{cmd} env status demo"),
-                format!("{cmd} env status demo --raw"),
-                format!("{cmd} env status demo --json"),
+                format!("{cmd} env status mira"),
+                format!("{cmd} env status mira --raw"),
+                format!("{cmd} env status mira --json"),
             ],
             &["TTY output uses grouped cards by default. Piped output stays plain."],
         ),
@@ -862,8 +862,8 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print doctor findings as JSON"),
             ],
             vec![
-                format!("{cmd} env doctor demo"),
-                format!("{cmd} env doctor demo --raw"),
+                format!("{cmd} env doctor mira"),
+                format!("{cmd} env doctor mira --raw"),
             ],
             &["TTY output uses grouped cards by default. Piped output stays plain."],
         ),
@@ -886,8 +886,8 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print cleanup summaries as JSON"),
             ],
             vec![
-                format!("{cmd} env cleanup demo"),
-                format!("{cmd} env cleanup demo --yes"),
+                format!("{cmd} env cleanup mira"),
+                format!("{cmd} env cleanup mira --yes"),
                 format!("{cmd} env cleanup --all --yes"),
             ],
             &["Only a narrow set of safe repairs is applied."],
@@ -903,7 +903,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print the repair summary as JSON"),
             ],
-            vec![format!("{cmd} env repair-marker demo")],
+            vec![format!("{cmd} env repair-marker mira")],
             &[],
         ),
         "use" => render_leaf(
@@ -915,8 +915,8 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 "Override the target shell when rendering activation",
             )],
             vec![
-                format!("eval \"$({cmd} env use demo)\""),
-                format!("{cmd} env use demo --shell zsh"),
+                format!("eval \"$({cmd} env use mira)\""),
+                format!("{cmd} env use mira --shell zsh"),
             ],
             &["This command prints shell code. Use `eval` to apply it."],
         ),
@@ -926,8 +926,8 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!("{cmd} env exec <name> -- <command...>")],
             &[],
             vec![
-                format!("{cmd} env exec demo -- env | rg OPENCLAW"),
-                format!("{cmd} env exec demo -- openclaw status"),
+                format!("{cmd} env exec mira -- env | rg OPENCLAW"),
+                format!("{cmd} env exec mira -- openclaw status"),
             ],
             &["`--` is required before the command to execute."],
         ),
@@ -953,9 +953,9 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the resolution summary as JSON"),
             ],
             vec![
-                format!("{cmd} env resolve demo"),
-                format!("{cmd} env resolve demo --raw"),
-                format!("{cmd} env resolve demo --launcher dev -- onboard"),
+                format!("{cmd} env resolve mira"),
+                format!("{cmd} env resolve mira --raw"),
+                format!("{cmd} env resolve mira --launcher dev -- onboard"),
             ],
             &[
                 "TTY output uses grouped cards by default. Piped output stays plain.",
@@ -979,11 +979,11 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
             ],
             vec![
-                format!("{cmd} env run demo -- onboard"),
-                format!("{cmd} env run demo -- status"),
+                format!("{cmd} env run mira -- onboard"),
+                format!("{cmd} env run mira -- status"),
                 format!("{cmd} -- status"),
-                format!("{cmd} @demo -- status"),
-                format!("{cmd} env run demo --launcher dev -- gateway run"),
+                format!("{cmd} @mira -- status"),
+                format!("{cmd} env run mira --launcher dev -- gateway run"),
             ],
             &[
                 "`--` is required before OpenClaw arguments.",
@@ -1016,10 +1016,10 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the updated environment record as JSON"),
             ],
             vec![
-                format!("{cmd} env set-runtime demo stable"),
-                format!("{cmd} env set-runtime demo --channel stable"),
-                format!("{cmd} env set-runtime demo --version 2026.3.24"),
-                format!("{cmd} env set-runtime demo none"),
+                format!("{cmd} env set-runtime mira stable"),
+                format!("{cmd} env set-runtime mira --channel stable"),
+                format!("{cmd} env set-runtime mira --version 2026.3.24"),
+                format!("{cmd} env set-runtime mira none"),
             ],
             &["Use only one of a runtime name, `--version`, or `--channel`."],
         ),
@@ -1037,8 +1037,8 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the updated environment record as JSON"),
             ],
             vec![
-                format!("{cmd} env set-launcher demo stable"),
-                format!("{cmd} env set-launcher demo none"),
+                format!("{cmd} env set-launcher mira stable"),
+                format!("{cmd} env set-launcher mira none"),
             ],
             &[],
         ),
@@ -1055,7 +1055,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print the updated environment record as JSON"),
             ],
-            vec![format!("{cmd} env protect demo on")],
+            vec![format!("{cmd} env protect mira on")],
             &[],
         ),
         "destroy" => render_leaf(
@@ -1074,9 +1074,9 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the destroy preview or result as JSON"),
             ],
             vec![
-                format!("{cmd} env destroy demo"),
-                format!("{cmd} env destroy demo --yes"),
-                format!("{cmd} env destroy demo --yes --force"),
+                format!("{cmd} env destroy mira"),
+                format!("{cmd} env destroy mira --yes"),
+                format!("{cmd} env destroy mira --yes --force"),
             ],
             &[
                 "Destroy removes env snapshots for that env and uninstalls its OCM-managed service when present.",
@@ -1100,8 +1100,8 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the removed environment record as JSON"),
             ],
             vec![
-                format!("{cmd} env remove demo"),
-                format!("{cmd} env remove demo --force"),
+                format!("{cmd} env remove mira"),
+                format!("{cmd} env remove mira --force"),
             ],
             &["Protected environments require `--force`."],
         ),
@@ -1248,7 +1248,7 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the snapshot summary as JSON"),
             ],
             vec![format!(
-                "{cmd} env snapshot create demo --label before-upgrade"
+                "{cmd} env snapshot create mira --label before-upgrade"
             )],
             &[],
         ),
@@ -1266,8 +1266,8 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the snapshot summary as JSON"),
             ],
             vec![
-                format!("{cmd} env snapshot show demo 1742922000-123456789"),
-                format!("{cmd} env snapshot show demo 1742922000-123456789 --raw"),
+                format!("{cmd} env snapshot show mira 1742922000-123456789"),
+                format!("{cmd} env snapshot show mira 1742922000-123456789 --raw"),
             ],
             &["TTY output uses grouped cards by default. Piped output stays plain."],
         ),
@@ -1286,8 +1286,8 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print snapshot summaries as JSON"),
             ],
             vec![
-                format!("{cmd} env snapshot list demo"),
-                format!("{cmd} env snapshot list demo --raw"),
+                format!("{cmd} env snapshot list mira"),
+                format!("{cmd} env snapshot list mira --raw"),
                 format!("{cmd} env snapshot list --all --json"),
             ],
             &["TTY output renders a table by default. Piped output stays plain."],
@@ -1306,7 +1306,7 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the restore summary as JSON"),
             ],
             vec![format!(
-                "{cmd} env snapshot restore demo 1742922000-123456789"
+                "{cmd} env snapshot restore mira 1742922000-123456789"
             )],
             &["Snapshot restore keeps existing safety rails around foreign directories."],
         ),
@@ -1324,7 +1324,7 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the removal summary as JSON"),
             ],
             vec![format!(
-                "{cmd} env snapshot remove demo 1742922000-123456789"
+                "{cmd} env snapshot remove mira 1742922000-123456789"
             )],
             &[],
         ),
@@ -1352,8 +1352,8 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print prune summaries as JSON"),
             ],
             vec![
-                format!("{cmd} env snapshot prune demo --keep 5"),
-                format!("{cmd} env snapshot prune demo --keep 5 --yes"),
+                format!("{cmd} env snapshot prune mira --keep 5"),
+                format!("{cmd} env snapshot prune mira --keep 5 --yes"),
                 format!("{cmd} env snapshot prune --all --older-than 30 --json"),
             ],
             &["TTY output renders tables for preview and applied removals by default."],
@@ -1676,7 +1676,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print the adoption summary as JSON"),
             ],
-            vec![format!("{cmd} service adopt-global demo --dry-run")],
+            vec![format!("{cmd} service adopt-global mira --dry-run")],
             &["Adoption is intentionally conservative and only targets the legacy global label."],
         ),
         "restore-global" => render_leaf(
@@ -1696,7 +1696,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print the restore summary as JSON"),
             ],
-            vec![format!("{cmd} service restore-global demo --dry-run")],
+            vec![format!("{cmd} service restore-global mira --dry-run")],
             &[],
         ),
         "install" => render_leaf(
@@ -1710,7 +1710,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print the install summary as JSON"),
             ],
-            vec![format!("{cmd} service install demo")],
+            vec![format!("{cmd} service install mira")],
             &["If the preferred port is busy, OCM auto-provisions the next free port and warns."],
         ),
         "list" => render_leaf(
@@ -1740,8 +1740,8 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print service summaries as JSON"),
             ],
             vec![
-                format!("{cmd} service status demo"),
-                format!("{cmd} service status demo --raw"),
+                format!("{cmd} service status mira"),
+                format!("{cmd} service status mira --raw"),
                 format!("{cmd} service status --all"),
             ],
             &["TTY output uses cards for one env and a table for `--all` by default."],
@@ -1758,8 +1758,8 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print log metadata and content as JSON"),
             ],
             vec![
-                format!("{cmd} service logs demo"),
-                format!("{cmd} service logs demo --stderr --tail 50"),
+                format!("{cmd} service logs mira"),
+                format!("{cmd} service logs mira --stderr --tail 50"),
             ],
             &["Plain-text output is intentionally raw so it can be piped directly."],
         ),
@@ -1774,7 +1774,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print the action summary as JSON"),
             ],
-            vec![format!("{cmd} service start demo")],
+            vec![format!("{cmd} service start mira")],
             &[],
         ),
         "stop" => render_leaf(
@@ -1788,7 +1788,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print the action summary as JSON"),
             ],
-            vec![format!("{cmd} service stop demo")],
+            vec![format!("{cmd} service stop mira")],
             &[],
         ),
         "restart" => render_leaf(
@@ -1802,7 +1802,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print the action summary as JSON"),
             ],
-            vec![format!("{cmd} service restart demo")],
+            vec![format!("{cmd} service restart mira")],
             &[],
         ),
         "uninstall" => render_leaf(
@@ -1816,7 +1816,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print the action summary as JSON"),
             ],
-            vec![format!("{cmd} service uninstall demo")],
+            vec![format!("{cmd} service uninstall mira")],
             &[],
         ),
         _ => return None,
