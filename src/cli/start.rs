@@ -158,6 +158,20 @@ impl Cli {
                 request.name
             ));
         }
+        let created = existing.is_none();
+        let onboarding_planned = match request.onboarding_mode {
+            StartOnboardingMode::Always => true,
+            StartOnboardingMode::Never => false,
+            StartOnboardingMode::Auto => created,
+        };
+
+        if json_flag && onboarding_planned {
+            return Err(
+                "start cannot combine --json with interactive onboarding; rerun with --no-onboard"
+                    .to_string(),
+            );
+        }
+
         if self.start_needs_official_release_host_check(existing.as_ref(), &request) {
             if let Some(code) = self.ensure_official_release_host_ready(None, json_flag)? {
                 return Ok(code);
@@ -178,7 +192,6 @@ impl Cli {
             request.cwd.clone(),
         )?;
 
-        let created = existing.is_none();
         let mut meta = match existing {
             None => self
                 .environment_service()
@@ -204,19 +217,6 @@ impl Cli {
         meta = self
             .environment_service()
             .apply_effective_gateway_port(meta)?;
-
-        let onboarding_planned = match request.onboarding_mode {
-            StartOnboardingMode::Always => true,
-            StartOnboardingMode::Never => false,
-            StartOnboardingMode::Auto => created,
-        };
-
-        if json_flag && onboarding_planned {
-            return Err(
-                "start cannot combine --json with interactive onboarding; rerun with --no-onboard"
-                    .to_string(),
-            );
-        }
 
         let mut service_started = false;
         if request.service_requested {
