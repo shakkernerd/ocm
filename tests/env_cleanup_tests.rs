@@ -277,17 +277,21 @@ fn env_cleanup_yes_repairs_inferred_env_scoped_config_drift() {
     );
 
     let repaired = fs::read_to_string(target_config).unwrap();
-    assert!(repaired.contains(
-        &root
-            .child("ocm-home/envs/target/.openclaw/workspace")
-            .display()
-            .to_string()
-    ));
-    assert!(repaired.contains(
-        &root
-            .child("ocm-home/envs/target/.openclaw/logs/gateway.log")
-            .display()
-            .to_string()
-    ));
+    assert!(
+        repaired.contains(
+            &root
+                .child("ocm-home/envs/target/.openclaw/workspace")
+                .display()
+                .to_string()
+        )
+    );
+    assert!(
+        repaired.contains(
+            &root
+                .child("ocm-home/envs/target/.openclaw/logs/gateway.log")
+                .display()
+                .to_string()
+        )
+    );
     assert!(repaired.contains("\"port\": 19790"));
 }
