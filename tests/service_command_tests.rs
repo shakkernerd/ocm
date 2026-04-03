@@ -1318,6 +1318,68 @@ fn service_restore_global_restores_the_latest_matching_backup() {
 }
 
 #[test]
+fn service_restore_global_persists_the_restored_gateway_port_into_env_state() {
+    let root = TestDir::new("service-restore-global-port-sync");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let restored_port = allocate_free_port();
+    let config_path = root.child("ocm-home/envs/demo/.openclaw/openclaw.json");
+    write_text(&config_path, "{\"gateway\":{\"port\":19999}}\n");
+    write_text(
+        &root.child("ocm-home/services/backups/ai.openclaw.gateway.123.plist"),
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+  <dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>OPENCLAW_CONFIG_PATH</key>
+      <string>{}</string>
+      <key>OPENCLAW_GATEWAY_PORT</key>
+      <string>{}</string>
+    </dict>
+  </dict>
+</plist>
+"#,
+            path_string(&config_path),
+            restored_port
+        ),
+    );
+
+    let restored = run_ocm(&cwd, &env, &["service", "restore-global", "demo", "--json"]);
+    assert!(restored.status.success(), "{}", stderr(&restored));
+    let summary: Value = serde_json::from_str(&stdout(&restored)).unwrap();
+    assert_eq!(summary["gatewayPort"], restored_port);
+
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_meta: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    assert_eq!(env_meta["gatewayPort"].as_u64(), Some(restored_port as u64));
+
+    let config: Value = serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(
+        config["gateway"]["port"].as_u64(),
+        Some(restored_port as u64)
+    );
+}
+
+#[test]
 fn service_restore_global_dry_run_reports_the_latest_matching_backup_without_mutation() {
     let root = TestDir::new("service-restore-global-dry-run");
     let cwd = root.child("workspace");

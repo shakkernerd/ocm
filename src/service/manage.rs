@@ -236,6 +236,7 @@ pub fn restore_global_service(
     ensure_launchd_only("service restore-global", env)?;
     let restore = prepare_global_restore(name, env, cwd)?;
     if !dry_run {
+        persist_restored_gateway_port(&restore.env_meta, restore.gateway_port, env, cwd)?;
         restore_global_plist(&restore.backup_plist_path, &restore.global_plist_path)?;
         bootout_managed_service(&restore.managed_label)?;
         activate_launch_agent(GLOBAL_GATEWAY_LABEL, &restore.global_plist_path)?;
@@ -257,6 +258,20 @@ pub fn restore_global_service(
         restored: !dry_run,
         warnings: restore.warnings,
     })
+}
+
+fn persist_restored_gateway_port(
+    env_meta: &EnvMeta,
+    gateway_port: u32,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
+    let mut updated = env_meta.clone();
+    updated.gateway_port = Some(gateway_port);
+    let saved = save_environment(updated, env, cwd)?;
+    let paths = derive_env_paths(Path::new(&saved.root));
+    let _ = rewrite_openclaw_gateway_port_for_target(&paths, gateway_port)?;
+    Ok(saved)
 }
 
 pub fn start_service(
