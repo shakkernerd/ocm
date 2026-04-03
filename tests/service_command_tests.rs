@@ -780,6 +780,10 @@ fn service_install_persists_a_gateway_port_and_writes_a_launch_agent() {
     assert!(env_show.status.success(), "{}", stderr(&env_show));
     let env_meta: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
     assert_eq!(env_meta["gatewayPort"], assigned_port);
+    let config =
+        fs::read_to_string(root.child("ocm-home/envs/demo/.openclaw/openclaw.json")).unwrap();
+    let config: Value = serde_json::from_str(&config).unwrap();
+    assert_eq!(config["gateway"]["port"], assigned_port);
 
     let managed_label = managed_service_label(&env, &cwd, "demo");
     let plist_path = managed_service_definition_path(&env, &cwd, "demo");
@@ -842,6 +846,10 @@ fn service_install_auto_provisions_the_next_free_port_when_needed() {
     assert!(env_show.status.success(), "{}", stderr(&env_show));
     let env_meta: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
     assert_eq!(env_meta["gatewayPort"], assigned_port);
+    let config =
+        fs::read_to_string(root.child("ocm-home/envs/demo/.openclaw/openclaw.json")).unwrap();
+    let config: Value = serde_json::from_str(&config).unwrap();
+    assert_eq!(config["gateway"]["port"], assigned_port);
 }
 
 #[test]
