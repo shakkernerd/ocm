@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -135,11 +135,28 @@ fn audit_openclaw_config_value(
 ) -> OpenClawConfigAudit {
     let mut issues = Vec::new();
     let foreign_roots = collect_foreign_env_roots(meta, known_envs, value);
+    let inferred_roots = collect_inferred_foreign_env_roots(&paths.root, value);
+    let known_roots = foreign_roots
+        .values()
+        .map(|(root, _)| root.clone())
+        .collect::<BTreeSet<_>>();
     for (env_name, (root, count)) in &foreign_roots {
         push_issue(
             &mut issues,
             format!(
                 "OpenClaw config contains {count} path(s) under env \"{env_name}\" root: {}",
+                display_path(root)
+            ),
+        );
+    }
+    for (root, count) in &inferred_roots {
+        if known_roots.contains(root) {
+            continue;
+        }
+        push_issue(
+            &mut issues,
+            format!(
+                "OpenClaw config contains {count} env-scoped path(s) outside the current env root: {}",
                 display_path(root)
             ),
         );
@@ -179,8 +196,10 @@ fn audit_openclaw_config_value(
         );
     }
 
-    let repair_source_root = if foreign_roots.len() == 1 {
-        foreign_roots.values().next().map(|(root, _)| root.clone())
+    let mut repair_roots = known_roots;
+    repair_roots.extend(inferred_roots.keys().cloned());
+    let repair_source_root = if repair_roots.len() == 1 {
+        repair_roots.into_iter().next()
     } else {
         None
     };
@@ -221,6 +240,15 @@ fn collect_foreign_env_roots(
     refs
 }
 
+fn collect_inferred_foreign_env_roots(
+    current_root: &Path,
+    value: &Value,
+) -> BTreeMap<PathBuf, usize> {
+    let mut refs = BTreeMap::<PathBuf, usize>::new();
+    collect_inferred_foreign_env_roots_inner(current_root, value, &mut refs);
+    refs
+}
+
 fn collect_foreign_env_roots_inner(
     current: &EnvMeta,
     known_envs: &[EnvMeta],
@@ -253,6 +281,33 @@ fn collect_foreign_env_roots_inner(
     }
 }
 
+fn collect_inferred_foreign_env_roots_inner(
+    current_root: &Path,
+    value: &Value,
+    refs: &mut BTreeMap<PathBuf, usize>,
+) {
+    match value {
+        Value::String(raw) => {
+            let path = Path::new(raw);
+            let Some(env_root) = inferred_foreign_env_root(current_root, path) else {
+                return;
+            };
+            *refs.entry(env_root).or_insert(0) += 1;
+        }
+        Value::Array(values) => {
+            for nested in values {
+                collect_inferred_foreign_env_roots_inner(current_root, nested, refs);
+            }
+        }
+        Value::Object(values) => {
+            for nested in values.values() {
+                collect_inferred_foreign_env_roots_inner(current_root, nested, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn matching_foreign_env_root(
     current: &EnvMeta,
     known_envs: &[EnvMeta],
@@ -271,6 +326,30 @@ fn matching_foreign_env_root(
             return Some((env.name.clone(), env_root));
         }
     }
+    None
+}
+
+fn inferred_foreign_env_root(current_root: &Path, path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+
+    let path = clean_path(path);
+    if path.starts_with(current_root) {
+        return None;
+    }
+
+    let mut prefix = PathBuf::new();
+    for component in path.components() {
+        if component.as_os_str() == ".openclaw" {
+            if prefix.as_os_str().is_empty() {
+                return None;
+            }
+            return Some(clean_path(&prefix));
+        }
+        prefix.push(component.as_os_str());
+    }
+
     None
 }
 
@@ -408,5 +487,69 @@ fn looks_env_scoped_workspace(path: &Path) -> bool {
 fn push_issue(issues: &mut Vec<String>, issue: String) {
     if !issues.iter().any(|current| current == &issue) {
         issues.push(issue);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use time::OffsetDateTime;
+
+    use super::*;
+
+    fn meta(name: &str, root: &str, gateway_port: Option<u32>) -> EnvMeta {
+        EnvMeta {
+            kind: "ocm-env".to_string(),
+            name: name.to_string(),
+            root: root.to_string(),
+            gateway_port,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            last_used_at: None,
+        }
+    }
+
+    #[test]
+    fn inferred_foreign_env_root_uses_the_openclaw_home_prefix() {
+        let current_root = Path::new("/tmp/ocm/envs/target");
+        let inferred = inferred_foreign_env_root(
+            current_root,
+            Path::new("/tmp/ocm/envs/source/.openclaw/workspace/notes.txt"),
+        );
+        assert_eq!(inferred, Some(PathBuf::from("/tmp/ocm/envs/source")));
+    }
+
+    #[test]
+    fn audit_can_repair_one_inferred_foreign_env_root_without_metadata() {
+        let current = meta("target", "/tmp/ocm/envs/target", Some(19790));
+        let paths = derive_env_paths(Path::new(&current.root));
+        let value = json!({
+            "agents": {
+                "defaults": {
+                    "workspace": "/tmp/ocm/envs/source/.openclaw/workspace"
+                }
+            },
+            "memory": {
+                "logPath": "/tmp/ocm/envs/source/.openclaw/logs/gateway.log"
+            },
+            "gateway": {
+                "port": 19789
+            }
+        });
+
+        let audit = audit_openclaw_config_value(&current, &[], &paths, &value);
+        assert_eq!(audit.status, "drifted");
+        assert_eq!(
+            audit.repair_source_root,
+            Some(PathBuf::from("/tmp/ocm/envs/source"))
+        );
+        assert!(audit.repair_workspace);
+        assert!(audit.repair_gateway_port);
+        assert!(audit.issues.iter().any(|issue| issue.contains(
+            "OpenClaw config contains 2 env-scoped path(s) outside the current env root"
+        )));
     }
 }
