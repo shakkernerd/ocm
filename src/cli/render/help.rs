@@ -173,7 +173,7 @@ pub fn setup_help(cmd: &str) -> String {
         &[
             "Setup asks a few questions, then runs the same env-first flow as `start`.",
             "Official release choices prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing.",
-            "Run `ocm doctor host` if you want a full machine check before choosing a release flow.",
+            "If git is missing, setup can offer to install it for repo-aware coding workflows.",
             "When run inside an OpenClaw checkout, local mode defaults to `pnpm openclaw` in that folder.",
             "Use `start` when you already know the source you want.",
         ],
@@ -249,7 +249,7 @@ pub fn start_help(cmd: &str) -> String {
             "If an environment already exists, start reuses it and only adjusts binding/protection when you asked for it.",
             "Start installs and starts the env service by default. Use `--no-service` when you do not want a background process.",
             "Official release selectors prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing.",
-            "Run `ocm doctor host` to check the host before using official release selectors.",
+            "When start creates a new official-release env interactively, it can offer to install git for repo-aware coding workflows.",
             "`--json` requires `--no-onboard` because onboarding is interactive.",
         ],
     )
@@ -1171,7 +1171,7 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
                 "Official installs use canonical runtime names derived from the selector.",
                 "Official release installs prefer host Node.js >= 22.14.0 and npm.",
                 "On supported platforms, OCM can manage a private copy when they are missing.",
-                "Run `ocm doctor host` on a new machine before using official release installs.",
+                "Use `ocm doctor host` only if you want a full machine check or an explicit host-tool fix like git.",
             ],
         ),
         "list" => render_leaf(
@@ -1502,7 +1502,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 "Official installs use canonical runtime names unless you reuse the same canonical name explicitly.",
                 "Official release installs prefer host Node.js >= 22.14.0 and npm.",
                 "On supported platforms, OCM can manage a private copy when they are missing.",
-                "Run `ocm doctor host` on a new machine before using official release installs.",
+                "Use `ocm doctor host` only if you want a full machine check or an explicit host-tool fix like git.",
             ],
         ),
         "update" => render_leaf(

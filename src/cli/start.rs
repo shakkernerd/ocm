@@ -162,6 +162,9 @@ impl Cli {
             if let Some(code) = self.ensure_official_release_host_ready(None, json_flag)? {
                 return Ok(code);
             }
+            self.maybe_offer_git_install_for_repo_workflows(
+                existing.is_none() && !json_flag && self.stdin_is_terminal(),
+            )?;
         }
 
         let desired_binding = self.resolve_start_binding(

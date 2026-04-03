@@ -30,6 +30,7 @@ impl Cli {
             if let Some(code) = self.ensure_official_release_host_ready(None, false)? {
                 return Ok(code);
             }
+            self.maybe_offer_git_install_for_repo_workflows(true)?;
         }
         let name_default = self.setup_name_default(mode, local_defaults.as_ref());
         let name = loop {
@@ -174,7 +175,7 @@ impl Cli {
         }
     }
 
-    fn prompt_yes_no(&self, label: &str, default: bool) -> Result<bool, String> {
+    pub(super) fn prompt_yes_no(&self, label: &str, default: bool) -> Result<bool, String> {
         if self.use_pretty_setup_prompts() {
             let items = ["Yes", "No"];
             let selection = Select::with_theme(&Self::setup_theme())

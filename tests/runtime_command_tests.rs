@@ -402,7 +402,7 @@ fn official_runtime_install_produces_a_runnable_env_binding() {
 }
 
 #[test]
-fn official_runtime_install_prints_host_doctor_summary_for_human_output() {
+fn official_runtime_install_stays_quiet_when_managed_node_fallback_is_available() {
     let root = TestDir::new("runtime-install-official-host-doctor");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -434,10 +434,10 @@ fn official_runtime_install_prints_host_doctor_summary_for_human_output() {
     let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
     assert!(install.status.success(), "{}", stderr(&install));
     let output = stdout(&install);
-    assert!(output.contains("healthy: true"));
-    assert!(output.contains("officialReleaseReady: true"));
-    assert!(output.contains("check: category=official-release  name=Node.js"));
-    assert!(output.contains("check: category=official-release  name=npm"));
+    assert!(output.contains("Installed runtime stable"));
+    assert!(!output.contains("healthy: true"));
+    assert!(!output.contains("officialReleaseReady: true"));
+    assert!(!output.contains("check: category=official-release"));
 }
 
 #[test]

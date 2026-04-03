@@ -289,7 +289,7 @@ fn release_install_rejects_non_canonical_runtime_names() {
 }
 
 #[test]
-fn release_install_prints_host_doctor_when_required_tools_are_missing() {
+fn release_install_stays_quiet_when_managed_node_fallback_is_available() {
     let root = TestDir::new("release-install-host-doctor");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -321,10 +321,10 @@ fn release_install_prints_host_doctor_when_required_tools_are_missing() {
     let install = run_ocm(&cwd, &env, &["release", "install", "--channel", "stable"]);
     assert!(install.status.success(), "{}", stderr(&install));
     let output = stdout(&install);
-    assert!(output.contains("healthy: true"));
-    assert!(output.contains("officialReleaseReady: true"));
-    assert!(output.contains("check: category=official-release  name=Node.js"));
-    assert!(output.contains("check: category=official-release  name=npm"));
+    assert!(output.contains("Installed runtime stable"));
+    assert!(!output.contains("healthy: true"));
+    assert!(!output.contains("officialReleaseReady: true"));
+    assert!(!output.contains("check: category=official-release"));
 }
 
 #[test]

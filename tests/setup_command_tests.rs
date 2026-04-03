@@ -9,8 +9,9 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, install_fake_launchctl, install_fake_managed_node_archive,
-    install_fake_node_and_npm, ocm_env, run_ocm, run_ocm_with_stdin, stderr, stdout,
+    TestDir, TestHttpServer, install_fake_git_package_manager, install_fake_launchctl,
+    install_fake_managed_node_archive, install_fake_node_and_npm, ocm_env, run_ocm,
+    run_ocm_with_stdin, stderr, stdout,
 };
 
 fn append_tar_file(
@@ -177,7 +178,7 @@ fn setup_defaults_service_install_to_yes_in_raw_mode() {
 }
 
 #[test]
-fn setup_prints_host_doctor_before_official_release_flow_when_tools_are_missing() {
+fn setup_can_offer_git_install_before_using_managed_node_fallback() {
     let root = TestDir::new("setup-host-doctor-missing");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -201,20 +202,36 @@ fn setup_prints_host_doctor_before_official_release_flow_when_tools_are_missing(
     fs::create_dir_all(&empty_path).unwrap();
     env.insert("PATH".to_string(), empty_path.to_string_lossy().to_string());
     env.insert(
+        "OCM_INTERNAL_HOST_PLATFORM".to_string(),
+        "linux".to_string(),
+    );
+    env.insert(
+        "OCM_INTERNAL_HOST_PACKAGE_MANAGER".to_string(),
+        "apt-get".to_string(),
+    );
+    env.insert("OCM_INTERNAL_HOST_IS_ROOT".to_string(), "false".to_string());
+    env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
     );
     let _managed_node = install_fake_managed_node_archive(&root, &mut env, "22.14.0");
+    let log_path = install_fake_git_package_manager(&root, &mut env, "apt-get");
 
-    let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], "1\n\nn\nn\n");
+    let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], "1\ny\n\nn\nn\n");
     assert!(setup.status.success(), "{}", stderr(&setup));
     let output = stdout(&setup);
     assert!(output.contains("OpenClaw setup"));
-    assert!(output.contains("healthy: true"));
-    assert!(output.contains("officialReleaseReady: true"));
-    assert!(output.contains("check: category=official-release  name=Node.js"));
-    assert!(output.contains("check: category=official-release  name=npm"));
+    assert!(output.contains("tool: git"));
+    assert!(output.contains("changed: true"));
+    assert!(output.contains("manager: apt-get"));
     assert!(output.contains("Started env "));
+    assert!(!output.contains("healthy: true"));
+    assert!(!output.contains("officialReleaseReady: true"));
+    assert!(!output.contains("check: category=official-release"));
+
+    let log = fs::read_to_string(log_path).unwrap();
+    assert!(log.contains("update"));
+    assert!(log.contains("install -y git"));
 
     let list = run_ocm(&cwd, &env, &["env", "list", "--json"]);
     assert!(list.status.success(), "{}", stderr(&list));

@@ -19,20 +19,8 @@ impl Cli {
         profile: Option<render::RenderProfile>,
         json_output: bool,
     ) -> Result<Option<i32>, String> {
-        let host_ready = host::verify_official_openclaw_runtime_host(&self.env);
         match host::verify_official_openclaw_runtime_support(&self.env) {
-            Ok(()) if host_ready.is_ok() => Ok(None),
-            Ok(()) => {
-                if !json_output {
-                    let summary = host::doctor_host(&self.env);
-                    self.stdout_lines(render::doctor::host_doctor(
-                        &summary,
-                        profile.unwrap_or_else(|| self.default_render_profile()),
-                        &self.command_example(),
-                    ));
-                }
-                Ok(None)
-            }
+            Ok(()) => Ok(None),
             Err(error) if json_output => Err(error),
             Err(_) => {
                 let summary = host::doctor_host(&self.env);
@@ -44,6 +32,61 @@ impl Cli {
                 Ok(Some(1))
             }
         }
+    }
+
+    pub(super) fn maybe_offer_git_install_for_repo_workflows(
+        &self,
+        interactive: bool,
+    ) -> Result<(), String> {
+        if host::verify_git_host_tool(&self.env).is_ok() {
+            return Ok(());
+        }
+
+        if !interactive {
+            return Ok(());
+        }
+
+        if !host::git_host_fix_supported(&self.env) {
+            self.stdout_line(
+                "Git is not installed. OpenClaw can still run, but repo-aware coding workflows will stay limited until git is installed manually.",
+            );
+            self.stdout_line("");
+            return Ok(());
+        }
+
+        if !self.prompt_yes_no(
+            "Git is not installed. Install it now for repo-aware coding workflows?",
+            true,
+        )? {
+            self.stdout_line(
+                "Skipping git install. OpenClaw can still run, but repo-aware coding workflows will stay limited until git is installed.",
+            );
+            self.stdout_line("");
+            return Ok(());
+        }
+
+        match self.with_progress("Installing git", || host::fix_git_host_tool(&self.env)) {
+            Ok(summary) => {
+                self.stdout_lines(render::doctor::host_tool_fixed(
+                    &summary,
+                    self.default_render_profile(),
+                    &self.command_example(),
+                ));
+                self.stdout_line("");
+            }
+            Err(error) => {
+                self.stderr_line(
+                    "ocm: git install failed; OpenClaw can still run, but repo-aware coding workflows will stay limited.",
+                );
+                self.stderr_line(format!("  problem: {error}"));
+                self.stderr_line(format!(
+                    "  fix later: {} doctor host --fix git --yes",
+                    self.command_example()
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     fn handle_doctor_host(&self, args: Vec<String>) -> Result<i32, String> {

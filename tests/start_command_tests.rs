@@ -249,7 +249,7 @@ fn start_rejects_json_when_onboarding_would_run() {
 }
 
 #[test]
-fn start_prints_host_doctor_when_official_release_tools_are_missing() {
+fn start_uses_managed_node_fallback_without_host_doctor_noise() {
     let root = TestDir::new("start-host-doctor-missing");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -281,11 +281,11 @@ fn start_prints_host_doctor_when_official_release_tools_are_missing() {
     let start = run_ocm(&cwd, &env, &["start", "--no-service", "--no-onboard"]);
     assert!(start.status.success(), "{}", stderr(&start));
     let output = stdout(&start);
-    assert!(output.contains("healthy: true"));
-    assert!(output.contains("officialReleaseReady: true"));
-    assert!(output.contains("check: category=official-release  name=Node.js"));
-    assert!(output.contains("check: category=official-release  name=npm"));
     assert!(output.contains("Started env "));
+    assert!(!output.contains("healthy: true"));
+    assert!(!output.contains("officialReleaseReady: true"));
+    assert!(!output.contains("check: category=official-release"));
+    assert!(!output.contains("tool: git"));
 
     let list = run_ocm(&cwd, &env, &["env", "list", "--json"]);
     assert!(list.status.success(), "{}", stderr(&list));
