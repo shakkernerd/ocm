@@ -16,7 +16,8 @@ use super::platform::{ServiceManagerKind, service_manager_kind};
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::infra::shell::build_openclaw_env;
 use crate::store::{
-    derive_env_paths, display_path, list_environments, now_utc, resolve_ocm_home, save_environment,
+    derive_env_paths, display_path, list_environments, now_utc, resolve_ocm_home,
+    rewrite_openclaw_gateway_port_for_target, save_environment,
 };
 
 const DEFAULT_SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
@@ -554,7 +555,10 @@ fn persist_service_gateway_port(
     let mut updated = original;
     updated.gateway_port = Some(chosen_port);
     let env_meta = if persist_gateway_port {
-        save_environment(updated, env, cwd)?
+        let env_meta = save_environment(updated, env, cwd)?;
+        let paths = derive_env_paths(Path::new(&env_meta.root));
+        let _ = rewrite_openclaw_gateway_port_for_target(&paths, chosen_port)?;
+        env_meta
     } else {
         updated
     };

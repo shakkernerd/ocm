@@ -27,7 +27,7 @@ pub use layout::{
 };
 pub(crate) use openclaw_config::{
     OpenClawConfigAudit, audit_openclaw_config, repair_openclaw_config,
-    rewrite_openclaw_config_for_target,
+    rewrite_openclaw_config_for_target, rewrite_openclaw_gateway_port_for_target,
 };
 pub use runtimes::{
     add_runtime, get_runtime, get_runtime_verified, install_runtime,

@@ -127,6 +127,23 @@ pub(crate) fn rewrite_openclaw_config_for_target(
     write_config_value(&target_paths.config_path, &value)
 }
 
+pub(crate) fn rewrite_openclaw_gateway_port_for_target(
+    target_paths: &EnvPaths,
+    gateway_port: u32,
+) -> Result<bool, String> {
+    let Some(mut value) = read_config_value(&target_paths.config_path)? else {
+        return Ok(false);
+    };
+
+    let changed = rewrite_gateway_port(&mut value, gateway_port);
+    if !changed {
+        return Ok(false);
+    }
+
+    write_config_value(&target_paths.config_path, &value)?;
+    Ok(true)
+}
+
 fn audit_openclaw_config_value(
     meta: &EnvMeta,
     known_envs: &[EnvMeta],
