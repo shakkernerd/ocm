@@ -1,7 +1,11 @@
+mod discovery;
+
 use std::fs;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
+pub use discovery::{MANIFEST_FILE_NAME, find_manifest_path};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
