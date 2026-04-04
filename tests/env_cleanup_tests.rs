@@ -357,3 +357,60 @@ fn env_cleanup_yes_clears_copied_openclaw_runtime_state() {
     assert!(!target_state.join("agents/main/sessions").exists());
     assert!(!target_state.join("logs").exists());
 }
+
+#[test]
+fn env_cleanup_yes_clears_inferred_foreign_runtime_state_without_source_metadata() {
+    let root = TestDir::new("env-cleanup-inferred-runtime-state-repair");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let target = run_ocm(&cwd, &env, &["env", "create", "target", "--port", "19790"]);
+    assert!(target.status.success(), "{}", stderr(&target));
+
+    let target_state = root.child("ocm-home/envs/target/.openclaw");
+    fs::create_dir_all(target_state.join("agents/main/agent")).unwrap();
+    fs::create_dir_all(target_state.join("agents/main/sessions")).unwrap();
+    fs::create_dir_all(target_state.join("logs")).unwrap();
+    fs::write(
+        target_state.join("agents/main/agent/auth-profiles.json"),
+        "{\n  \"profiles\": {\"local\": {\"provider\": \"openai-codex\"}}\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        target_state.join("agents/main/sessions/main.jsonl"),
+        "{\"cwd\":\"/tmp/external-source/.openclaw/workspace\"}\n",
+    )
+    .unwrap();
+    fs::write(
+        target_state.join("logs/gateway.log"),
+        "root=/tmp/external-source/.openclaw/logs\n",
+    )
+    .unwrap();
+
+    let doctor = run_ocm(&cwd, &env, &["env", "doctor", "target", "--json"]);
+    assert!(doctor.status.success(), "{}", stderr(&doctor));
+    let doctor_value: Value = serde_json::from_str(&stdout(&doctor)).unwrap();
+    assert_eq!(doctor_value["healthy"], false);
+    let issues = doctor_value["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|issue| {
+        let issue = issue.as_str().unwrap();
+        issue.contains("OpenClaw runtime state contains")
+            && issue.contains("env-scoped path reference(s) outside the current env root")
+    }));
+
+    let cleanup = run_ocm(&cwd, &env, &["env", "cleanup", "target", "--yes"]);
+    assert!(cleanup.status.success(), "{}", stderr(&cleanup));
+    let output = stdout(&cleanup);
+    assert!(output.contains(
+        "reset-openclaw-runtime-state: clear copied OpenClaw runtime state outside config and workspace"
+    ));
+
+    assert!(
+        target_state
+            .join("agents/main/agent/auth-profiles.json")
+            .exists()
+    );
+    assert!(!target_state.join("agents/main/sessions").exists());
+    assert!(!target_state.join("logs").exists());
+}
