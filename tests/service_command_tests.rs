@@ -1106,6 +1106,20 @@ fn service_adopt_global_migrates_a_matching_global_launch_agent() {
     assert!(launchctl_log.contains("ai.openclaw.gateway"));
     assert!(launchctl_log.contains("bootstrap gui/"));
     assert!(launchctl_log.contains(&format!("{managed_label}.plist")));
+
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_meta: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    assert_eq!(env_meta["gatewayPort"].as_u64(), Some(assigned_port as u64));
+
+    let config: Value = serde_json::from_str(
+        &fs::read_to_string(root.child("ocm-home/envs/demo/.openclaw/openclaw.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        config["gateway"]["port"].as_u64(),
+        Some(assigned_port as u64)
+    );
 }
 
 #[test]
