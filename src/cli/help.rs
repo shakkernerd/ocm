@@ -26,6 +26,7 @@ impl Cli {
             ["init"] => Ok(render::help::init_help(&cmd)),
             ["self"] => Ok(render::help::self_help(&cmd)),
             ["env"] => Ok(render::help::env_help(&cmd)),
+            ["manifest"] => Ok(render::help::manifest_help(&cmd)),
             ["release"] => Ok(render::help::release_help(&cmd)),
             ["self", action] => render::help::self_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown self command: {action}")),
@@ -34,6 +35,8 @@ impl Cli {
                 .ok_or_else(|| format!("unknown env command: {action}")),
             ["release", action] => render::help::release_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown release command: {action}")),
+            ["manifest", action] => render::help::manifest_command_help(&cmd, action)
+                .ok_or_else(|| format!("unknown manifest command: {action}")),
             ["env", "snapshot", action] => render::help::env_snapshot_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown env snapshot command: {action}")),
             ["launcher"] => Ok(render::help::launcher_help(&cmd)),
@@ -56,6 +59,7 @@ impl Cli {
                         | "doctor"
                         | "self"
                         | "env"
+                        | "manifest"
                         | "release"
                         | "launcher"
                         | "runtime"
@@ -82,7 +86,7 @@ impl Cli {
             [group]
                 if matches!(
                     group.as_str(),
-                    "self" | "env" | "release" | "launcher" | "runtime" | "service"
+                    "self" | "env" | "manifest" | "release" | "launcher" | "runtime" | "service"
                 ) =>
             {
                 Some(vec![group.as_str()])
@@ -97,7 +101,7 @@ impl Cli {
             [group, next, rest @ ..]
                 if matches!(
                     group.as_str(),
-                    "self" | "env" | "release" | "launcher" | "runtime" | "service"
+                    "self" | "env" | "manifest" | "release" | "launcher" | "runtime" | "service"
                 ) && Self::is_help_token(next) =>
             {
                 let mut topic = vec![group.as_str()];
@@ -112,7 +116,7 @@ impl Cli {
             [group, action, flag]
                 if matches!(
                     group.as_str(),
-                    "self" | "env" | "release" | "launcher" | "runtime" | "service"
+                    "self" | "env" | "manifest" | "release" | "launcher" | "runtime" | "service"
                 ) && Self::is_help_flag(flag) =>
             {
                 Some(vec![group.as_str(), action.as_str()])

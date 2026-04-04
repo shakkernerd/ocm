@@ -117,6 +117,10 @@ pub fn root_help(cmd: &str) -> String {
                 "env",
                 "Environment lifecycle, binding, execution, snapshots, and repair",
             ),
+            (
+                "manifest",
+                "Inspect optional ocm.yaml manifests without changing env state",
+            ),
             ("release", "Published OpenClaw releases and release details"),
             ("launcher", "Named command recipes for running OpenClaw"),
             (
@@ -154,6 +158,7 @@ pub fn root_help(cmd: &str) -> String {
             format!("{cmd} doctor host"),
             format!("{cmd} help self"),
             format!("{cmd} help env"),
+            format!("{cmd} help manifest"),
             format!("{cmd} help release"),
             format!("{cmd} help service"),
             format!("{cmd} help runtime install"),
@@ -178,6 +183,48 @@ pub fn setup_help(cmd: &str) -> String {
             "Use `start` when you already know the source you want.",
         ],
     )
+}
+
+pub fn manifest_help(cmd: &str) -> String {
+    render_group(
+        "Manifest commands",
+        "Inspect optional ocm.yaml manifests discovered from the current working directory or an explicit path.",
+        vec![format!("{cmd} manifest <command> [args]")],
+        &[(
+            "Commands",
+            &[("path", "Show the discovered manifest path, if one exists")],
+        )],
+        vec![
+            format!("{cmd} manifest path"),
+            format!("{cmd} manifest path /path/to/workspace"),
+        ],
+        vec![format!("{cmd} help manifest path")],
+    )
+}
+
+pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
+    match action {
+        "path" => Some(render_leaf(
+            "Show the discovered manifest path",
+            "Search upward from the current working directory or one explicit path and report the nearest ocm.yaml without changing any environment state.",
+            vec![format!("{cmd} manifest path [<path>] [--raw] [--json]")],
+            &[
+                ("[path]", "Optional directory or file path to search from"),
+                ("--raw", "Print machine-friendly key/value output"),
+                ("--json", "Print JSON output"),
+            ],
+            vec![
+                format!("{cmd} manifest path"),
+                format!("{cmd} manifest path /path/to/workspace"),
+                format!("{cmd} manifest path --json"),
+            ],
+            &[
+                "If no manifest is present, the command still succeeds and reports that nothing was found.",
+                "This is a read-only inspection command.",
+            ],
+        )),
+        _ => None,
+    }
 }
 
 pub fn start_help(cmd: &str) -> String {
