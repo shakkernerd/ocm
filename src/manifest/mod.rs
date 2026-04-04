@@ -1,4 +1,5 @@
 mod discovery;
+mod plan;
 mod resolution;
 
 use std::fs;
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub use discovery::{MANIFEST_FILE_NAME, find_manifest_path};
+pub use plan::{ManifestApplyPlan, plan_manifest_application};
 pub use resolution::resolve_manifest;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
