@@ -195,6 +195,10 @@ pub fn manifest_help(cmd: &str) -> String {
             &[
                 ("path", "Show the discovered manifest path, if one exists"),
                 (
+                    "drift",
+                    "Show whether the discovered manifest already matches env bindings",
+                ),
+                (
                     "resolve",
                     "Show the env a discovered manifest resolves to right now",
                 ),
@@ -206,12 +210,14 @@ pub fn manifest_help(cmd: &str) -> String {
         )],
         vec![
             format!("{cmd} manifest path"),
+            format!("{cmd} manifest drift"),
             format!("{cmd} manifest resolve"),
             format!("{cmd} manifest show"),
             format!("{cmd} manifest path /path/to/workspace"),
         ],
         vec![
             format!("{cmd} help manifest path"),
+            format!("{cmd} help manifest drift"),
             format!("{cmd} help manifest resolve"),
             format!("{cmd} help manifest show"),
         ],
@@ -252,6 +258,25 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} manifest resolve"),
                 format!("{cmd} manifest resolve /path/to/workspace"),
                 format!("{cmd} manifest resolve --json"),
+            ],
+            &[
+                "If no manifest is present, the command still succeeds and reports that nothing was found.",
+                "This is a read-only inspection command.",
+            ],
+        )),
+        "drift" => Some(render_leaf(
+            "Show manifest binding drift",
+            "Search upward from the current working directory or one explicit path, load the nearest ocm.yaml, and compare its desired runtime and launcher selectors against the current env state.",
+            vec![format!("{cmd} manifest drift [<path>] [--raw] [--json]")],
+            &[
+                ("[path]", "Optional directory or file path to search from"),
+                ("--raw", "Print machine-friendly key/value output"),
+                ("--json", "Print JSON output"),
+            ],
+            vec![
+                format!("{cmd} manifest drift"),
+                format!("{cmd} manifest drift /path/to/workspace"),
+                format!("{cmd} manifest drift --json"),
             ],
             &[
                 "If no manifest is present, the command still succeeds and reports that nothing was found.",

@@ -36,6 +36,21 @@ pub struct ManifestResolveSummary {
     pub desired_service_install: Option<bool>,
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct ManifestDriftSummary {
+    pub found: bool,
+    pub path: Option<String>,
+    pub search_root: String,
+    pub env_name: Option<String>,
+    pub env_exists: bool,
+    pub current_runtime: Option<String>,
+    pub current_launcher: Option<String>,
+    pub desired_runtime: Option<String>,
+    pub desired_launcher: Option<String>,
+    pub aligned: bool,
+    pub issues: Vec<String>,
+}
+
 pub fn manifest_path(summary: &ManifestPathSummary, profile: RenderProfile) -> Vec<String> {
     if profile.pretty {
         return manifest_path_pretty(summary);
@@ -275,5 +290,106 @@ fn manifest_resolve_raw(summary: &ManifestResolveSummary) -> Vec<String> {
             .map(|value| value.to_string())
             .unwrap_or_else(|| "none".to_string()),
     );
+    format_key_value_lines(lines)
+}
+
+pub fn manifest_drift(summary: &ManifestDriftSummary, profile: RenderProfile) -> Vec<String> {
+    if profile.pretty {
+        return manifest_drift_pretty(summary);
+    }
+    manifest_drift_raw(summary)
+}
+
+fn manifest_drift_pretty(summary: &ManifestDriftSummary) -> Vec<String> {
+    let Some(env_name) = summary.env_name.as_deref() else {
+        return vec![
+            "Manifest drift".to_string(),
+            String::new(),
+            format!("No ocm.yaml found from {}", summary.search_root),
+        ];
+    };
+
+    let mut lines = vec![
+        "Manifest drift".to_string(),
+        String::new(),
+        format!("Path: {}", summary.path.as_deref().unwrap_or("none")),
+        format!("Env: {env_name}"),
+        format!("Aligned: {}", summary.aligned),
+        format!("Env exists: {}", summary.env_exists),
+        format!(
+            "Desired runtime: {}",
+            summary.desired_runtime.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Current runtime: {}",
+            summary.current_runtime.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Desired launcher: {}",
+            summary.desired_launcher.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Current launcher: {}",
+            summary.current_launcher.as_deref().unwrap_or("none")
+        ),
+    ];
+    if !summary.issues.is_empty() {
+        lines.push(String::new());
+        lines.push("Issues:".to_string());
+        lines.extend(summary.issues.iter().map(|issue| format!("  - {issue}")));
+    }
+    lines
+}
+
+fn manifest_drift_raw(summary: &ManifestDriftSummary) -> Vec<String> {
+    let mut lines = BTreeMap::new();
+    lines.insert("found".to_string(), summary.found.to_string());
+    lines.insert(
+        "path".to_string(),
+        summary.path.clone().unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert("searchRoot".to_string(), summary.search_root.clone());
+    lines.insert(
+        "env".to_string(),
+        summary
+            .env_name
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert("envExists".to_string(), summary.env_exists.to_string());
+    lines.insert("aligned".to_string(), summary.aligned.to_string());
+    lines.insert(
+        "desiredRuntime".to_string(),
+        summary
+            .desired_runtime
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert(
+        "currentRuntime".to_string(),
+        summary
+            .current_runtime
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert(
+        "desiredLauncher".to_string(),
+        summary
+            .desired_launcher
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert(
+        "currentLauncher".to_string(),
+        summary
+            .current_launcher
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    if summary.issues.is_empty() {
+        lines.insert("issues".to_string(), "none".to_string());
+    } else {
+        lines.insert("issues".to_string(), summary.issues.join(" | "));
+    }
     format_key_value_lines(lines)
 }

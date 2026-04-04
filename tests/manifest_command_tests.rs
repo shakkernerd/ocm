@@ -173,3 +173,55 @@ fn manifest_resolve_reports_when_no_manifest_exists() {
     assert!(stdout.contains("\"found\": false"));
     assert!(stdout.contains("\"env_name\": null"));
 }
+
+#[test]
+fn manifest_drift_reports_missing_envs() {
+    let root = TestDir::new("manifest-drift-missing");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        root.child("workspace").join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["manifest", "drift", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.contains("\"found\": true"));
+    assert!(stdout.contains("\"env_exists\": false"));
+    assert!(stdout.contains("\"aligned\": false"));
+    assert!(stdout.contains("env is missing"));
+}
+
+#[test]
+fn manifest_drift_reports_alignment_for_matching_bindings() {
+    let root = TestDir::new("manifest-drift-aligned");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        root.child("workspace").join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let set_launcher = run_ocm(&cwd, &env, &["env", "set-launcher", "mira", "dev"]);
+    assert!(set_launcher.status.success(), "{}", stderr(&set_launcher));
+
+    let output = run_ocm(&cwd, &env, &["manifest", "drift", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.contains("\"aligned\": true"));
+    assert!(stdout.contains("\"issues\": []"));
+    assert!(stdout.contains("\"desired_runtime\": null"));
+}

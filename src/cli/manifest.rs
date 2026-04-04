@@ -15,6 +15,7 @@ impl Cli {
                 self.dispatch_help_command(vec!["manifest".to_string()])
             }
             "path" => self.handle_manifest_path(args),
+            "drift" => self.handle_manifest_drift(args),
             "show" => self.handle_manifest_show(args),
             "resolve" => self.handle_manifest_resolve(args),
             _ => Err(format!("unknown manifest command: {action}")),
@@ -47,6 +48,99 @@ impl Cli {
             self.print_json(&summary)?;
         } else {
             self.stdout_lines(render::manifest::manifest_path(&summary, profile));
+        }
+
+        Ok(0)
+    }
+
+    fn handle_manifest_drift(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "manifest drift")?;
+        if args.len() > 1 {
+            return Err(format!("unexpected arguments: {}", args.join(" ")));
+        }
+
+        let search_root = args
+            .first()
+            .map(|value| self.resolve_manifest_search_root(value))
+            .transpose()?
+            .unwrap_or_else(|| self.cwd.clone());
+
+        let resolved = resolve_manifest(&search_root)?;
+        let summary = if let Some(resolution) = resolved {
+            let env_name = resolution.manifest.env.name.clone();
+            let current_env = get_environment(&env_name, &self.env, &self.cwd).ok();
+            let desired_runtime = resolution.manifest.runtime.as_ref().and_then(|runtime| {
+                runtime
+                    .name
+                    .clone()
+                    .or(runtime.version.clone())
+                    .or(runtime.channel.clone())
+            });
+            let desired_launcher = resolution
+                .manifest
+                .launcher
+                .as_ref()
+                .and_then(|launcher| launcher.name.clone());
+            let current_runtime = current_env
+                .as_ref()
+                .and_then(|meta| meta.default_runtime.clone());
+            let current_launcher = current_env
+                .as_ref()
+                .and_then(|meta| meta.default_launcher.clone());
+
+            let mut issues = Vec::new();
+            if current_env.is_none() {
+                issues.push("env is missing".to_string());
+            } else {
+                if desired_runtime != current_runtime {
+                    issues.push(format!(
+                        "runtime differs (desired {}, current {})",
+                        desired_runtime.as_deref().unwrap_or("none"),
+                        current_runtime.as_deref().unwrap_or("none")
+                    ));
+                }
+                if desired_launcher != current_launcher {
+                    issues.push(format!(
+                        "launcher differs (desired {}, current {})",
+                        desired_launcher.as_deref().unwrap_or("none"),
+                        current_launcher.as_deref().unwrap_or("none")
+                    ));
+                }
+            }
+
+            render::manifest::ManifestDriftSummary {
+                found: true,
+                path: Some(resolution.path.to_string_lossy().into_owned()),
+                search_root: search_root.to_string_lossy().into_owned(),
+                env_name: Some(env_name),
+                env_exists: current_env.is_some(),
+                current_runtime,
+                current_launcher,
+                desired_runtime,
+                desired_launcher,
+                aligned: issues.is_empty(),
+                issues,
+            }
+        } else {
+            render::manifest::ManifestDriftSummary {
+                found: false,
+                path: None,
+                search_root: search_root.to_string_lossy().into_owned(),
+                env_name: None,
+                env_exists: false,
+                current_runtime: None,
+                current_launcher: None,
+                desired_runtime: None,
+                desired_launcher: None,
+                aligned: false,
+                issues: Vec::new(),
+            }
+        };
+
+        if json_flag {
+            self.print_json(&summary)?;
+        } else {
+            self.stdout_lines(render::manifest::manifest_drift(&summary, profile));
         }
 
         Ok(0)
