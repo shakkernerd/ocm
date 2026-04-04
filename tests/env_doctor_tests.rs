@@ -244,3 +244,39 @@ fn env_doctor_reports_inferred_env_scoped_config_drift_without_source_metadata()
             .contains("OpenClaw config gateway port 19789 does not match env metadata 19790")
     }));
 }
+
+#[test]
+fn env_doctor_reports_copied_openclaw_runtime_state_drift() {
+    let root = TestDir::new("env-doctor-runtime-state-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let source = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(source.status.success(), "{}", stderr(&source));
+    let target = run_ocm(&cwd, &env, &["env", "create", "target"]);
+    assert!(target.status.success(), "{}", stderr(&target));
+
+    let target_state = root.child("ocm-home/envs/target/.openclaw/agents/main/sessions");
+    fs::create_dir_all(&target_state).unwrap();
+    fs::write(
+        target_state.join("main.jsonl"),
+        format!(
+            "{{\"cwd\":\"{}\"}}\n",
+            root.child("ocm-home/envs/source/.openclaw/workspace")
+                .display()
+        ),
+    )
+    .unwrap();
+
+    let doctor = run_ocm(&cwd, &env, &["env", "doctor", "target", "--json"]);
+    assert!(doctor.status.success(), "{}", stderr(&doctor));
+    let value: Value = serde_json::from_str(&stdout(&doctor)).unwrap();
+    assert_eq!(value["healthy"], false);
+    let issues = value["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|issue| {
+        issue.as_str().unwrap().contains(
+            "OpenClaw runtime state contains 1 copied path reference(s) under env \"source\" root",
+        )
+    }));
+}
