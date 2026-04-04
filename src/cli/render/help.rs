@@ -192,13 +192,23 @@ pub fn manifest_help(cmd: &str) -> String {
         vec![format!("{cmd} manifest <command> [args]")],
         &[(
             "Commands",
-            &[("path", "Show the discovered manifest path, if one exists")],
+            &[
+                ("path", "Show the discovered manifest path, if one exists"),
+                (
+                    "show",
+                    "Show the discovered manifest contents, if one exists",
+                ),
+            ],
         )],
         vec![
             format!("{cmd} manifest path"),
+            format!("{cmd} manifest show"),
             format!("{cmd} manifest path /path/to/workspace"),
         ],
-        vec![format!("{cmd} help manifest path")],
+        vec![
+            format!("{cmd} help manifest path"),
+            format!("{cmd} help manifest show"),
+        ],
     )
 }
 
@@ -217,6 +227,25 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} manifest path"),
                 format!("{cmd} manifest path /path/to/workspace"),
                 format!("{cmd} manifest path --json"),
+            ],
+            &[
+                "If no manifest is present, the command still succeeds and reports that nothing was found.",
+                "This is a read-only inspection command.",
+            ],
+        )),
+        "show" => Some(render_leaf(
+            "Show the discovered manifest",
+            "Search upward from the current working directory or one explicit path, load the nearest ocm.yaml, and print its resolved contents without changing any environment state.",
+            vec![format!("{cmd} manifest show [<path>] [--raw] [--json]")],
+            &[
+                ("[path]", "Optional directory or file path to search from"),
+                ("--raw", "Print machine-friendly key/value output"),
+                ("--json", "Print JSON output"),
+            ],
+            vec![
+                format!("{cmd} manifest show"),
+                format!("{cmd} manifest show /path/to/workspace"),
+                format!("{cmd} manifest show --json"),
             ],
             &[
                 "If no manifest is present, the command still succeeds and reports that nothing was found.",

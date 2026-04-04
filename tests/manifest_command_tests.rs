@@ -95,4 +95,40 @@ fn manifest_group_help_is_available() {
     let stdout = stdout(&output);
     assert!(stdout.contains("Manifest commands"));
     assert!(stdout.contains("ocm manifest path"));
+    assert!(stdout.contains("ocm manifest show"));
+}
+
+#[test]
+fn manifest_show_prints_the_discovered_manifest() {
+    let root = TestDir::new("manifest-show");
+    let cwd = root.child("workspace").join("deep");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        root.child("workspace").join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nruntime:\n  channel: stable\nservice:\n  install: true\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["manifest", "show", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.contains("\"found\": true"));
+    assert!(stdout.contains("\"schema\": \"ocm/v1\""));
+    assert!(stdout.contains("\"name\": \"mira\""));
+    assert!(stdout.contains("\"channel\": \"stable\""));
+}
+
+#[test]
+fn manifest_show_reports_when_no_manifest_exists() {
+    let root = TestDir::new("manifest-show-missing");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["manifest", "show", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.contains("\"found\": false"));
+    assert!(stdout.contains("\"manifest\": null"));
 }
