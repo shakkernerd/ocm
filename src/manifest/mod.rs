@@ -1,11 +1,13 @@
 mod discovery;
+mod resolution;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 pub use discovery::{MANIFEST_FILE_NAME, find_manifest_path};
+pub use resolution::resolve_manifest;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -49,6 +51,12 @@ pub struct ManifestLauncher {
 pub struct ManifestService {
     #[serde(default)]
     pub install: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManifestResolution {
+    pub path: PathBuf,
+    pub manifest: OcmManifest,
 }
 
 pub fn load_manifest(path: &Path) -> Result<OcmManifest, String> {
