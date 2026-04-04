@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::{Cli, render};
 use crate::manifest::{find_manifest_path, resolve_manifest};
+use crate::store::get_environment;
 
 impl Cli {
     pub(super) fn dispatch_manifest_command(
@@ -15,6 +16,7 @@ impl Cli {
             }
             "path" => self.handle_manifest_path(args),
             "show" => self.handle_manifest_show(args),
+            "resolve" => self.handle_manifest_resolve(args),
             _ => Err(format!("unknown manifest command: {action}")),
         }
     }
@@ -76,6 +78,79 @@ impl Cli {
             self.print_json(&summary)?;
         } else {
             self.stdout_lines(render::manifest::manifest_show(&summary, profile));
+        }
+
+        Ok(0)
+    }
+
+    fn handle_manifest_resolve(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "manifest resolve")?;
+        if args.len() > 1 {
+            return Err(format!("unexpected arguments: {}", args.join(" ")));
+        }
+
+        let search_root = args
+            .first()
+            .map(|value| self.resolve_manifest_search_root(value))
+            .transpose()?
+            .unwrap_or_else(|| self.cwd.clone());
+
+        let resolved = resolve_manifest(&search_root)?;
+        let summary = if let Some(resolution) = resolved {
+            let env_name = resolution.manifest.env.name.clone();
+            let current_env = get_environment(&env_name, &self.env, &self.cwd).ok();
+            render::manifest::ManifestResolveSummary {
+                found: true,
+                path: Some(resolution.path.to_string_lossy().into_owned()),
+                search_root: search_root.to_string_lossy().into_owned(),
+                env_name: Some(env_name),
+                env_exists: current_env.is_some(),
+                env_root: current_env.as_ref().map(|meta| meta.root.clone()),
+                current_runtime: current_env
+                    .as_ref()
+                    .and_then(|meta| meta.default_runtime.clone()),
+                current_launcher: current_env
+                    .as_ref()
+                    .and_then(|meta| meta.default_launcher.clone()),
+                desired_runtime: resolution.manifest.runtime.as_ref().and_then(|runtime| {
+                    runtime
+                        .name
+                        .clone()
+                        .or(runtime.version.clone())
+                        .or(runtime.channel.clone())
+                }),
+                desired_launcher: resolution
+                    .manifest
+                    .launcher
+                    .as_ref()
+                    .and_then(|launcher| launcher.name.clone()),
+                desired_service_install: resolution
+                    .manifest
+                    .service
+                    .as_ref()
+                    .and_then(|service| service.install),
+            }
+        } else {
+            render::manifest::ManifestResolveSummary {
+                found: false,
+                path: None,
+                search_root: search_root.to_string_lossy().into_owned(),
+                env_name: None,
+                env_exists: false,
+                env_root: None,
+                current_runtime: None,
+                current_launcher: None,
+                desired_runtime: None,
+                desired_launcher: None,
+                desired_service_install: None,
+            }
+        };
+
+        if json_flag {
+            self.print_json(&summary)?;
+        } else {
+            self.stdout_lines(render::manifest::manifest_resolve(&summary, profile));
         }
 
         Ok(0)

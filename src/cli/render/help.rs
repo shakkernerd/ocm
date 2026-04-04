@@ -195,6 +195,10 @@ pub fn manifest_help(cmd: &str) -> String {
             &[
                 ("path", "Show the discovered manifest path, if one exists"),
                 (
+                    "resolve",
+                    "Show the env a discovered manifest resolves to right now",
+                ),
+                (
                     "show",
                     "Show the discovered manifest contents, if one exists",
                 ),
@@ -202,11 +206,13 @@ pub fn manifest_help(cmd: &str) -> String {
         )],
         vec![
             format!("{cmd} manifest path"),
+            format!("{cmd} manifest resolve"),
             format!("{cmd} manifest show"),
             format!("{cmd} manifest path /path/to/workspace"),
         ],
         vec![
             format!("{cmd} help manifest path"),
+            format!("{cmd} help manifest resolve"),
             format!("{cmd} help manifest show"),
         ],
     )
@@ -227,6 +233,25 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} manifest path"),
                 format!("{cmd} manifest path /path/to/workspace"),
                 format!("{cmd} manifest path --json"),
+            ],
+            &[
+                "If no manifest is present, the command still succeeds and reports that nothing was found.",
+                "This is a read-only inspection command.",
+            ],
+        )),
+        "resolve" => Some(render_leaf(
+            "Resolve a manifest into env state",
+            "Search upward from the current working directory or one explicit path, load the nearest ocm.yaml, and show which env it points at plus whether that env already exists.",
+            vec![format!("{cmd} manifest resolve [<path>] [--raw] [--json]")],
+            &[
+                ("[path]", "Optional directory or file path to search from"),
+                ("--raw", "Print machine-friendly key/value output"),
+                ("--json", "Print JSON output"),
+            ],
+            vec![
+                format!("{cmd} manifest resolve"),
+                format!("{cmd} manifest resolve /path/to/workspace"),
+                format!("{cmd} manifest resolve --json"),
             ],
             &[
                 "If no manifest is present, the command still succeeds and reports that nothing was found.",

@@ -21,6 +21,21 @@ pub struct ManifestShowSummary {
     pub manifest: Option<OcmManifest>,
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct ManifestResolveSummary {
+    pub found: bool,
+    pub path: Option<String>,
+    pub search_root: String,
+    pub env_name: Option<String>,
+    pub env_exists: bool,
+    pub env_root: Option<String>,
+    pub current_runtime: Option<String>,
+    pub current_launcher: Option<String>,
+    pub desired_runtime: Option<String>,
+    pub desired_launcher: Option<String>,
+    pub desired_service_install: Option<bool>,
+}
+
 pub fn manifest_path(summary: &ManifestPathSummary, profile: RenderProfile) -> Vec<String> {
     if profile.pretty {
         return manifest_path_pretty(summary);
@@ -147,5 +162,118 @@ fn manifest_show_raw(summary: &ManifestShowSummary) -> Vec<String> {
                 .unwrap_or_else(|| "none".to_string()),
         );
     }
+    format_key_value_lines(lines)
+}
+
+pub fn manifest_resolve(summary: &ManifestResolveSummary, profile: RenderProfile) -> Vec<String> {
+    if profile.pretty {
+        return manifest_resolve_pretty(summary);
+    }
+    manifest_resolve_raw(summary)
+}
+
+fn manifest_resolve_pretty(summary: &ManifestResolveSummary) -> Vec<String> {
+    let Some(env_name) = summary.env_name.as_deref() else {
+        return vec![
+            "Manifest resolution".to_string(),
+            String::new(),
+            format!("No ocm.yaml found from {}", summary.search_root),
+        ];
+    };
+
+    vec![
+        "Manifest resolution".to_string(),
+        String::new(),
+        format!("Path: {}", summary.path.as_deref().unwrap_or("none")),
+        format!("Env: {env_name}"),
+        format!("Env exists: {}", summary.env_exists),
+        format!(
+            "Env root: {}",
+            summary.env_root.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Current runtime: {}",
+            summary.current_runtime.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Current launcher: {}",
+            summary.current_launcher.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Desired runtime: {}",
+            summary.desired_runtime.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Desired launcher: {}",
+            summary.desired_launcher.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Desired service install: {}",
+            summary
+                .desired_service_install
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+    ]
+}
+
+fn manifest_resolve_raw(summary: &ManifestResolveSummary) -> Vec<String> {
+    let mut lines = BTreeMap::new();
+    lines.insert("found".to_string(), summary.found.to_string());
+    lines.insert(
+        "path".to_string(),
+        summary.path.clone().unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert("searchRoot".to_string(), summary.search_root.clone());
+    lines.insert(
+        "env".to_string(),
+        summary
+            .env_name
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert("envExists".to_string(), summary.env_exists.to_string());
+    lines.insert(
+        "envRoot".to_string(),
+        summary
+            .env_root
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert(
+        "currentRuntime".to_string(),
+        summary
+            .current_runtime
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert(
+        "currentLauncher".to_string(),
+        summary
+            .current_launcher
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert(
+        "desiredRuntime".to_string(),
+        summary
+            .desired_runtime
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert(
+        "desiredLauncher".to_string(),
+        summary
+            .desired_launcher
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert(
+        "desiredServiceInstall".to_string(),
+        summary
+            .desired_service_install
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+    );
     format_key_value_lines(lines)
 }
