@@ -78,6 +78,12 @@ pub fn validate_manifest(manifest: OcmManifest) -> Result<OcmManifest, String> {
         return Err("manifest env.name is required".to_string());
     }
 
+    let launcher_selected = manifest
+        .launcher
+        .as_ref()
+        .and_then(|launcher| launcher.name.as_deref())
+        .is_some_and(|value| !value.trim().is_empty());
+
     if let Some(runtime) = manifest.runtime.as_ref() {
         let selectors = [
             runtime
@@ -100,6 +106,12 @@ pub fn validate_manifest(manifest: OcmManifest) -> Result<OcmManifest, String> {
         if selectors > 1 {
             return Err(
                 "manifest runtime accepts only one of name, version, or channel".to_string(),
+            );
+        }
+        if selectors == 1 && launcher_selected {
+            return Err(
+                "manifest accepts either a runtime selector or a launcher selector, not both"
+                    .to_string(),
             );
         }
     }
@@ -151,6 +163,19 @@ mod tests {
         assert_eq!(
             error,
             "manifest runtime accepts only one of name, version, or channel"
+        );
+    }
+
+    #[test]
+    fn parse_manifest_rejects_runtime_and_launcher_together() {
+        let error = parse_manifest(
+            "schema: ocm/v1\nenv:\n  name: mira\nruntime:\n  channel: stable\nlauncher:\n  name: dev\n",
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "manifest accepts either a runtime selector or a launcher selector, not both"
         );
     }
 

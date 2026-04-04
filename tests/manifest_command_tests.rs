@@ -140,15 +140,13 @@ fn manifest_resolve_reports_the_target_env_and_current_state() {
     fs::create_dir_all(&cwd).unwrap();
     fs::write(
         root.child("workspace").join("ocm.yaml"),
-        "schema: ocm/v1\nenv:\n  name: mira\nruntime:\n  channel: stable\nlauncher:\n  name: dev\nservice:\n  install: true\n",
+        "schema: ocm/v1\nenv:\n  name: mira\nruntime:\n  channel: stable\nservice:\n  install: true\n",
     )
     .unwrap();
     let env = ocm_env(&root);
 
     let create = run_ocm(&cwd, &env, &["env", "create", "mira"]);
     assert!(create.status.success(), "{}", stderr(&create));
-    let bind = run_ocm(&cwd, &env, &["env", "set-launcher", "mira", "none"]);
-    assert!(bind.status.success(), "{}", stderr(&bind));
 
     let output = run_ocm(&cwd, &env, &["manifest", "resolve", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
@@ -157,7 +155,7 @@ fn manifest_resolve_reports_the_target_env_and_current_state() {
     assert!(stdout.contains("\"env_name\": \"mira\""));
     assert!(stdout.contains("\"env_exists\": true"));
     assert!(stdout.contains("\"desired_runtime\": \"stable\""));
-    assert!(stdout.contains("\"desired_launcher\": \"dev\""));
+    assert!(stdout.contains("\"desired_launcher\": null"));
 }
 
 #[test]
