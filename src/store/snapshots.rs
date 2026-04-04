@@ -19,7 +19,10 @@ use super::layout::{
     derive_env_paths, display_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
     validate_name,
 };
-use super::{get_environment, now_utc, rewrite_openclaw_config_for_target, save_environment};
+use super::{
+    audit_openclaw_state, clear_nonportable_runtime_state, get_environment, list_environments,
+    now_utc, rewrite_openclaw_config_for_target, save_environment,
+};
 
 static NEXT_RESTORE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -241,6 +244,11 @@ pub fn restore_env_snapshot(
                 updated_at: current.updated_at,
                 last_used_at: current.last_used_at,
             };
+            let known_envs = list_environments(env, cwd)?;
+            let audit = audit_openclaw_state(&restored, &known_envs);
+            if audit.repair_runtime_state {
+                clear_nonportable_runtime_state(&current_paths)?;
+            }
             save_environment(restored, env, cwd)
         })();
 

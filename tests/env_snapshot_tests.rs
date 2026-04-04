@@ -369,6 +369,77 @@ fn env_snapshot_restore_rewrites_openclaw_config_for_the_current_root() {
 }
 
 #[test]
+fn env_snapshot_restore_repairs_foreign_runtime_state_in_the_restored_snapshot() {
+    let root = TestDir::new("env-snapshot-restore-runtime-repair");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let foreign = run_ocm(&cwd, &env, &["env", "create", "foreign"]);
+    assert!(foreign.status.success(), "{}", stderr(&foreign));
+
+    let source = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(source.status.success(), "{}", stderr(&source));
+
+    let source_root = root.child("ocm-home/envs/source");
+    fs::create_dir_all(source_root.join(".openclaw/agents/main/agent")).unwrap();
+    fs::create_dir_all(source_root.join(".openclaw/agents/main/sessions")).unwrap();
+    write_text(
+        &source_root.join(".openclaw/agents/main/agent/auth-profiles.json"),
+        "{\"ok\":true}",
+    );
+    write_text(
+        &source_root.join(".openclaw/agents/main/sessions/main.jsonl"),
+        &format!(
+            "{{\"cwd\":\"{}\"}}\n",
+            root.child("ocm-home/envs/foreign/.openclaw/workspace")
+                .display()
+        ),
+    );
+
+    let snapshot = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "create",
+            "source",
+            "--label",
+            "before-repair",
+        ],
+    );
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "restore", "source", &snapshot_id],
+    );
+    assert!(restore.status.success(), "{}", stderr(&restore));
+
+    assert!(
+        source_root
+            .join(".openclaw/agents/main/agent/auth-profiles.json")
+            .exists()
+    );
+    assert!(
+        !source_root
+            .join(".openclaw/agents/main/sessions/main.jsonl")
+            .exists()
+    );
+}
+
+#[test]
 fn env_snapshot_remove_deletes_the_named_snapshot() {
     let root = TestDir::new("env-snapshot-remove");
     let cwd = root.child("workspace");

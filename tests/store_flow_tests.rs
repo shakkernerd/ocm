@@ -945,6 +945,93 @@ fn environment_snapshot_restore_replaces_env_state_from_the_snapshot() {
 }
 
 #[test]
+fn environment_snapshot_restore_clears_broken_foreign_runtime_state_but_keeps_agent_auth() {
+    let root = TestDir::new("store-env-snapshot-restore-runtime-cleanup");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let foreign = create_environment(
+        CreateEnvironmentOptions {
+            name: "foreign".to_string(),
+            root: None,
+            gateway_port: None,
+            default_runtime: None,
+            default_launcher: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            default_runtime: Some("stable".to_string()),
+            default_launcher: Some("shell".to_string()),
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let source_root = std::path::Path::new(&created.root);
+    let agent_dir = source_root.join(".openclaw/agents/main/agent");
+    let sessions_dir = source_root.join(".openclaw/agents/main/sessions");
+    fs::create_dir_all(&agent_dir).unwrap();
+    fs::create_dir_all(&sessions_dir).unwrap();
+    write_text(&agent_dir.join("auth-profiles.json"), "{\"ok\":true}");
+    write_text(
+        &sessions_dir.join("main.jsonl"),
+        &format!("{{\"cwd\":\"{}/.openclaw/workspace\"}}\n", foreign.root),
+    );
+
+    let snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: Some("before-repair".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "after drift",
+    );
+
+    let restored = restore_env_snapshot(
+        RestoreEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            snapshot_id: snapshot.id.clone(),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(restored.snapshot_id, snapshot.id);
+    assert!(
+        source_root
+            .join(".openclaw/agents/main/agent/auth-profiles.json")
+            .exists()
+    );
+    assert!(
+        !source_root
+            .join(".openclaw/agents/main/sessions/main.jsonl")
+            .exists()
+    );
+    assert!(
+        !source_root.join(".openclaw/logs").exists(),
+        "restore should clear only broken non-portable runtime residue"
+    );
+}
+
+#[test]
 fn environment_snapshot_remove_deletes_snapshot_artifacts_and_metadata() {
     let root = TestDir::new("store-env-snapshot-remove");
     let cwd = root.child("workspace");
