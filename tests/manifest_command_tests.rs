@@ -223,3 +223,54 @@ fn manifest_drift_reports_alignment_for_matching_bindings() {
     assert!(stdout.contains("\"issues\": []"));
     assert!(stdout.contains("\"desired_runtime\": null"));
 }
+
+#[test]
+fn manifest_plan_reports_create_work_for_missing_envs() {
+    let root = TestDir::new("manifest-plan-missing");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        root.child("workspace").join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\nservice:\n  install: true\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["manifest", "plan", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.contains("\"found\": true"));
+    assert!(stdout.contains("\"create_env\": true"));
+    assert!(stdout.contains("\"desired_launcher\": \"dev\""));
+    assert!(stdout.contains("\"desired_service_install\": true"));
+}
+
+#[test]
+fn manifest_plan_reports_no_binding_change_when_launcher_matches() {
+    let root = TestDir::new("manifest-plan-matching");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        root.child("workspace").join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let set_launcher = run_ocm(&cwd, &env, &["env", "set-launcher", "mira", "dev"]);
+    assert!(set_launcher.status.success(), "{}", stderr(&set_launcher));
+
+    let output = run_ocm(&cwd, &env, &["manifest", "plan", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let stdout = stdout(&output);
+    assert!(stdout.contains("\"create_env\": false"));
+    assert!(stdout.contains("\"launcher_changed\": false"));
+}

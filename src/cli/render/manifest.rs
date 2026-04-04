@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::manifest::OcmManifest;
+use crate::manifest::{ManifestApplyPlan, OcmManifest};
 
 use super::{RenderProfile, format_key_value_lines};
 
@@ -49,6 +49,16 @@ pub struct ManifestDriftSummary {
     pub desired_launcher: Option<String>,
     pub aligned: bool,
     pub issues: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct ManifestPlanSummary {
+    pub found: bool,
+    pub path: Option<String>,
+    pub search_root: String,
+    pub env_exists: bool,
+    pub env_root: Option<String>,
+    pub plan: Option<ManifestApplyPlan>,
 }
 
 pub fn manifest_path(summary: &ManifestPathSummary, profile: RenderProfile) -> Vec<String> {
@@ -390,6 +400,97 @@ fn manifest_drift_raw(summary: &ManifestDriftSummary) -> Vec<String> {
         lines.insert("issues".to_string(), "none".to_string());
     } else {
         lines.insert("issues".to_string(), summary.issues.join(" | "));
+    }
+    format_key_value_lines(lines)
+}
+
+pub fn manifest_plan(summary: &ManifestPlanSummary, profile: RenderProfile) -> Vec<String> {
+    if profile.pretty {
+        return manifest_plan_pretty(summary);
+    }
+    manifest_plan_raw(summary)
+}
+
+fn manifest_plan_pretty(summary: &ManifestPlanSummary) -> Vec<String> {
+    let Some(plan) = summary.plan.as_ref() else {
+        return vec![
+            "Manifest plan".to_string(),
+            String::new(),
+            format!("No ocm.yaml found from {}", summary.search_root),
+        ];
+    };
+
+    vec![
+        "Manifest plan".to_string(),
+        String::new(),
+        format!("Path: {}", summary.path.as_deref().unwrap_or("none")),
+        format!("Env: {}", plan.env_name),
+        format!("Env exists: {}", summary.env_exists),
+        format!("Create env: {}", plan.create_env),
+        format!(
+            "Desired runtime: {}",
+            plan.desired_runtime.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Desired launcher: {}",
+            plan.desired_launcher.as_deref().unwrap_or("none")
+        ),
+        format!("Runtime changed: {}", plan.runtime_changed),
+        format!("Launcher changed: {}", plan.launcher_changed),
+        format!(
+            "Desired service install: {}",
+            plan.desired_service_install
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+    ]
+}
+
+fn manifest_plan_raw(summary: &ManifestPlanSummary) -> Vec<String> {
+    let mut lines = BTreeMap::new();
+    lines.insert("found".to_string(), summary.found.to_string());
+    lines.insert(
+        "path".to_string(),
+        summary.path.clone().unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert("searchRoot".to_string(), summary.search_root.clone());
+    lines.insert("envExists".to_string(), summary.env_exists.to_string());
+    lines.insert(
+        "envRoot".to_string(),
+        summary
+            .env_root
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    if let Some(plan) = summary.plan.as_ref() {
+        lines.insert("env".to_string(), plan.env_name.clone());
+        lines.insert("createEnv".to_string(), plan.create_env.to_string());
+        lines.insert(
+            "desiredRuntime".to_string(),
+            plan.desired_runtime
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        );
+        lines.insert(
+            "desiredLauncher".to_string(),
+            plan.desired_launcher
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        );
+        lines.insert(
+            "runtimeChanged".to_string(),
+            plan.runtime_changed.to_string(),
+        );
+        lines.insert(
+            "launcherChanged".to_string(),
+            plan.launcher_changed.to_string(),
+        );
+        lines.insert(
+            "desiredServiceInstall".to_string(),
+            plan.desired_service_install
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        );
     }
     format_key_value_lines(lines)
 }

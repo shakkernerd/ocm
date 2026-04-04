@@ -1,8 +1,10 @@
+use serde::Serialize;
+
 use crate::env::EnvMeta;
 
 use super::OcmManifest;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ManifestApplyPlan {
     pub env_name: String,
     pub create_env: bool,

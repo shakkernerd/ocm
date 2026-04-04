@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::{Cli, render};
-use crate::manifest::{find_manifest_path, resolve_manifest};
+use crate::manifest::{find_manifest_path, plan_manifest_application, resolve_manifest};
 use crate::store::get_environment;
 
 impl Cli {
@@ -16,6 +16,7 @@ impl Cli {
             }
             "path" => self.handle_manifest_path(args),
             "drift" => self.handle_manifest_drift(args),
+            "plan" => self.handle_manifest_plan(args),
             "show" => self.handle_manifest_show(args),
             "resolve" => self.handle_manifest_resolve(args),
             _ => Err(format!("unknown manifest command: {action}")),
@@ -141,6 +142,51 @@ impl Cli {
             self.print_json(&summary)?;
         } else {
             self.stdout_lines(render::manifest::manifest_drift(&summary, profile));
+        }
+
+        Ok(0)
+    }
+
+    fn handle_manifest_plan(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "manifest plan")?;
+        if args.len() > 1 {
+            return Err(format!("unexpected arguments: {}", args.join(" ")));
+        }
+
+        let search_root = args
+            .first()
+            .map(|value| self.resolve_manifest_search_root(value))
+            .transpose()?
+            .unwrap_or_else(|| self.cwd.clone());
+
+        let resolved = resolve_manifest(&search_root)?;
+        let summary = if let Some(resolution) = resolved {
+            let env_name = resolution.manifest.env.name.clone();
+            let current_env = get_environment(&env_name, &self.env, &self.cwd).ok();
+            let plan = plan_manifest_application(&resolution.manifest, current_env.as_ref());
+            render::manifest::ManifestPlanSummary {
+                found: true,
+                path: Some(resolution.path.to_string_lossy().into_owned()),
+                search_root: search_root.to_string_lossy().into_owned(),
+                env_exists: current_env.is_some(),
+                env_root: current_env.as_ref().map(|meta| meta.root.clone()),
+                plan: Some(plan),
+            }
+        } else {
+            render::manifest::ManifestPlanSummary {
+                found: false,
+                path: None,
+                search_root: search_root.to_string_lossy().into_owned(),
+                env_exists: false,
+                env_root: None,
+                plan: None,
+            }
+        };
+
+        if json_flag {
+            self.print_json(&summary)?;
+        } else {
+            self.stdout_lines(render::manifest::manifest_plan(&summary, profile));
         }
 
         Ok(0)

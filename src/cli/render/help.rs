@@ -199,6 +199,10 @@ pub fn manifest_help(cmd: &str) -> String {
                     "Show whether the discovered manifest already matches env bindings",
                 ),
                 (
+                    "plan",
+                    "Show the apply plan a discovered manifest would need right now",
+                ),
+                (
                     "resolve",
                     "Show the env a discovered manifest resolves to right now",
                 ),
@@ -211,6 +215,7 @@ pub fn manifest_help(cmd: &str) -> String {
         vec![
             format!("{cmd} manifest path"),
             format!("{cmd} manifest drift"),
+            format!("{cmd} manifest plan"),
             format!("{cmd} manifest resolve"),
             format!("{cmd} manifest show"),
             format!("{cmd} manifest path /path/to/workspace"),
@@ -218,6 +223,7 @@ pub fn manifest_help(cmd: &str) -> String {
         vec![
             format!("{cmd} help manifest path"),
             format!("{cmd} help manifest drift"),
+            format!("{cmd} help manifest plan"),
             format!("{cmd} help manifest resolve"),
             format!("{cmd} help manifest show"),
         ],
@@ -258,6 +264,25 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} manifest resolve"),
                 format!("{cmd} manifest resolve /path/to/workspace"),
                 format!("{cmd} manifest resolve --json"),
+            ],
+            &[
+                "If no manifest is present, the command still succeeds and reports that nothing was found.",
+                "This is a read-only inspection command.",
+            ],
+        )),
+        "plan" => Some(render_leaf(
+            "Show the manifest apply plan",
+            "Search upward from the current working directory or one explicit path, load the nearest ocm.yaml, and show the create-or-reconcile work that would be needed without applying it.",
+            vec![format!("{cmd} manifest plan [<path>] [--raw] [--json]")],
+            &[
+                ("[path]", "Optional directory or file path to search from"),
+                ("--raw", "Print machine-friendly key/value output"),
+                ("--json", "Print JSON output"),
+            ],
+            vec![
+                format!("{cmd} manifest plan"),
+                format!("{cmd} manifest plan /path/to/workspace"),
+                format!("{cmd} manifest plan --json"),
             ],
             &[
                 "If no manifest is present, the command still succeeds and reports that nothing was found.",
