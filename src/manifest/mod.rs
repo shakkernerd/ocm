@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub use apply::{
-    ManifestEnvApplySummary, ManifestRuntimeApplySummary, apply_manifest_runtime_binding,
-    ensure_manifest_env,
+    ManifestEnvApplySummary, ManifestLauncherApplySummary, ManifestRuntimeApplySummary,
+    apply_manifest_launcher_binding, apply_manifest_runtime_binding, ensure_manifest_env,
 };
 pub use discovery::{MANIFEST_FILE_NAME, find_manifest_path};
 pub use plan::{ManifestApplyPlan, plan_manifest_application};

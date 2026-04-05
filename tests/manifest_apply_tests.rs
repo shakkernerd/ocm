@@ -2,7 +2,10 @@ mod support;
 
 use std::fs;
 
-use ocm::manifest::{apply_manifest_runtime_binding, ensure_manifest_env, parse_manifest};
+use ocm::manifest::{
+    apply_manifest_launcher_binding, apply_manifest_runtime_binding, ensure_manifest_env,
+    parse_manifest,
+};
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
 
@@ -102,4 +105,63 @@ fn apply_manifest_runtime_binding_reuses_a_matching_runtime_binding() {
     assert!(!summary.changed);
     assert_eq!(summary.desired_runtime.as_deref(), Some("stable"));
     assert_eq!(summary.env.default_runtime.as_deref(), Some("stable"));
+}
+
+#[test]
+fn apply_manifest_launcher_binding_sets_a_registered_launcher() {
+    let root = TestDir::new("manifest-apply-launcher");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "printf launcher"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let manifest =
+        parse_manifest("schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n").unwrap();
+    let current = ensure_manifest_env(&manifest, &env, &cwd).unwrap().env;
+
+    let summary = apply_manifest_launcher_binding(&manifest, &current, &env, &cwd).unwrap();
+    assert!(summary.changed);
+    assert_eq!(summary.desired_launcher.as_deref(), Some("dev"));
+    assert_eq!(summary.env.default_launcher.as_deref(), Some("dev"));
+    assert_eq!(summary.env.default_runtime, None);
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "mira"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    assert!(stdout(&show).contains("defaultLauncher: dev"));
+}
+
+#[test]
+fn apply_manifest_launcher_binding_reuses_a_matching_launcher_binding() {
+    let root = TestDir::new("manifest-apply-launcher-reuse");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "printf launcher"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let manifest =
+        parse_manifest("schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n").unwrap();
+    let current = ensure_manifest_env(&manifest, &env, &cwd).unwrap().env;
+
+    let summary = apply_manifest_launcher_binding(&manifest, &current, &env, &cwd).unwrap();
+    assert!(!summary.changed);
+    assert_eq!(summary.desired_launcher.as_deref(), Some("dev"));
+    assert_eq!(summary.env.default_launcher.as_deref(), Some("dev"));
 }

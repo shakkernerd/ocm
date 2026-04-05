@@ -20,6 +20,13 @@ pub struct ManifestRuntimeApplySummary {
     pub desired_runtime: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct ManifestLauncherApplySummary {
+    pub env: EnvMeta,
+    pub changed: bool,
+    pub desired_launcher: Option<String>,
+}
+
 pub fn ensure_manifest_env(
     manifest: &OcmManifest,
     env: &BTreeMap<String, String>,
@@ -73,6 +80,39 @@ pub fn apply_manifest_runtime_binding(
         env: updated,
         changed: true,
         desired_runtime,
+    })
+}
+
+pub fn apply_manifest_launcher_binding(
+    manifest: &OcmManifest,
+    current: &EnvMeta,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ManifestLauncherApplySummary, String> {
+    let service = EnvironmentService::new(env, cwd);
+    let desired_launcher = manifest
+        .launcher
+        .as_ref()
+        .and_then(|launcher| launcher.name.clone())
+        .filter(|name| !name.trim().is_empty());
+
+    if desired_launcher == current.default_launcher {
+        return Ok(ManifestLauncherApplySummary {
+            env: current.clone(),
+            changed: false,
+            desired_launcher,
+        });
+    }
+
+    let updated = match desired_launcher.as_deref() {
+        Some(launcher_name) => service.set_launcher(&current.name, launcher_name)?,
+        None => current.clone(),
+    };
+
+    Ok(ManifestLauncherApplySummary {
+        env: updated,
+        changed: true,
+        desired_launcher,
     })
 }
 
