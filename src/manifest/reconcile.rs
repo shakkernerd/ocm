@@ -3,6 +3,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::env::{CreateEnvSnapshotOptions, EnvironmentService};
+
 use super::{
     OcmManifest, apply_manifest_launcher_binding, apply_manifest_runtime_binding,
     apply_manifest_service_install, ensure_manifest_env,
@@ -58,6 +60,16 @@ pub fn reconcile_manifest_with_options(
 ) -> Result<ManifestReconcileSummary, String> {
     let env_summary = ensure_manifest_env(manifest, env, cwd)?;
     let mut current = env_summary.env;
+    let snapshot_id = if !env_summary.created && _options.snapshot_existing_env {
+        let snapshot =
+            EnvironmentService::new(env, cwd).create_snapshot(CreateEnvSnapshotOptions {
+                env_name: current.name.clone(),
+                label: Some("manifest-apply".to_string()),
+            })?;
+        Some(snapshot.id)
+    } else {
+        None
+    };
 
     let runtime_summary = apply_manifest_runtime_binding(manifest, &current, env, cwd)?;
     current = runtime_summary.env;
@@ -79,7 +91,7 @@ pub fn reconcile_manifest_with_options(
         desired_runtime: runtime_summary.desired_runtime,
         desired_launcher: launcher_summary.desired_launcher,
         desired_service_install: service_summary.desired_service_install,
-        snapshot_id: None,
+        snapshot_id,
         rolled_back: false,
         service_installed: service_summary.service.installed,
         service_loaded: service_summary.service.loaded,

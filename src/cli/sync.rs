@@ -1,5 +1,8 @@
 use super::{Cli, render};
-use crate::manifest::{plan_manifest_application, reconcile_manifest, resolve_manifest};
+use crate::manifest::{
+    ManifestReconcileOptions, plan_manifest_application, reconcile_manifest_with_options,
+    resolve_manifest,
+};
 use crate::store::get_environment;
 
 impl Cli {
@@ -51,7 +54,18 @@ impl Cli {
 
         let result = self.with_progress(
             format!("Synchronizing manifest env {}", resolved.manifest.env.name),
-            || reconcile_manifest(&resolved.path, &resolved.manifest, &self.env, &self.cwd),
+            || {
+                reconcile_manifest_with_options(
+                    &resolved.path,
+                    &resolved.manifest,
+                    &self.env,
+                    &self.cwd,
+                    ManifestReconcileOptions {
+                        snapshot_existing_env: true,
+                        rollback_on_failure: false,
+                    },
+                )
+            },
         )?;
 
         let summary = render::manifest::UpSummary {

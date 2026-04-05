@@ -150,6 +150,10 @@ fn up_summary_pretty(title: &str, summary: &UpSummary) -> Vec<String> {
         format!("Env: {}", result.env_name),
         format!("Env root: {}", result.env_root),
         format!("Env created: {}", result.env_created),
+        format!(
+            "Snapshot: {}",
+            result.snapshot_id.as_deref().unwrap_or("none")
+        ),
         format!("Runtime changed: {}", result.runtime_changed),
         format!("Launcher changed: {}", result.launcher_changed),
         format!("Service changed: {}", result.service_changed),
@@ -201,6 +205,13 @@ fn up_summary_raw(summary: &UpSummary) -> Vec<String> {
     if let Some(result) = summary.result.as_ref() {
         lines.insert("env".to_string(), result.env_name.clone());
         lines.insert("envCreated".to_string(), result.env_created.to_string());
+        lines.insert(
+            "snapshotId".to_string(),
+            result
+                .snapshot_id
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        );
         lines.insert(
             "runtimeChanged".to_string(),
             result.runtime_changed.to_string(),

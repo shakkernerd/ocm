@@ -2,7 +2,9 @@ mod support;
 
 use std::fs;
 
-use ocm::manifest::{parse_manifest, reconcile_manifest};
+use ocm::manifest::{
+    ManifestReconcileOptions, parse_manifest, reconcile_manifest, reconcile_manifest_with_options,
+};
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, write_executable_script};
 
@@ -87,4 +89,44 @@ fn reconcile_manifest_reuses_existing_runtime_binding() {
     assert!(!summary.runtime_changed);
     assert!(!summary.launcher_changed);
     assert_eq!(summary.desired_runtime.as_deref(), Some("stable"));
+}
+
+#[test]
+fn reconcile_manifest_can_snapshot_an_existing_env_before_apply() {
+    let root = TestDir::new("manifest-reconcile-snapshot");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_executable_script(&bin_dir.join("stable"), "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add_runtime = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add_runtime.status.success(), "{}", stderr(&add_runtime));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let manifest_path = cwd.join("ocm.yaml");
+    let manifest =
+        parse_manifest("schema: ocm/v1\nenv:\n  name: mira\nruntime:\n  name: stable\n").unwrap();
+
+    let summary = reconcile_manifest_with_options(
+        &manifest_path,
+        &manifest,
+        &env,
+        &cwd,
+        ManifestReconcileOptions {
+            snapshot_existing_env: true,
+            rollback_on_failure: false,
+        },
+    )
+    .unwrap();
+
+    let snapshot_id = summary.snapshot_id.as_deref().unwrap();
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "mira", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert!(crate::support::stdout(&list).contains(snapshot_id));
 }
