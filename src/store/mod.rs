@@ -14,6 +14,7 @@ use time::OffsetDateTime;
 
 use crate::env::EnvMeta;
 use crate::env::EnvSummary;
+pub(crate) use common::copy_dir_recursive;
 use common::ensure_dir;
 pub use envs::{
     clone_environment, create_environment, export_environment, get_environment, import_environment,
