@@ -130,9 +130,10 @@ ocm start ember --version 2026.3.24
 ```bash
 ocm up --dry-run
 ocm up
+ocm sync --dry-run
 ```
 
-If a folder has an optional `ocm.yaml`, `up` can preview and apply the env, binding, and service changes it declares. This is project mode, not a requirement for normal `setup` or `start` usage.
+If a folder has an optional `ocm.yaml`, `up` can create or apply the env, binding, and service changes it declares, and `sync` can reconcile an env that already exists. This is project mode, not a requirement for normal `setup` or `start` usage.
 
 ### Keep background services visible
 

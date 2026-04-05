@@ -83,24 +83,32 @@ pub fn manifest_path(summary: &ManifestPathSummary, profile: RenderProfile) -> V
 }
 
 pub fn up_summary(summary: &UpSummary, profile: RenderProfile) -> Vec<String> {
+    manifest_apply_summary("Manifest up", summary, profile)
+}
+
+pub fn sync_summary(summary: &UpSummary, profile: RenderProfile) -> Vec<String> {
+    manifest_apply_summary("Manifest sync", summary, profile)
+}
+
+fn manifest_apply_summary(title: &str, summary: &UpSummary, profile: RenderProfile) -> Vec<String> {
     if profile.pretty {
-        return up_summary_pretty(summary);
+        return up_summary_pretty(title, summary);
     }
     up_summary_raw(summary)
 }
 
-fn up_summary_pretty(summary: &UpSummary) -> Vec<String> {
+fn up_summary_pretty(title: &str, summary: &UpSummary) -> Vec<String> {
     if summary.dry_run {
         let Some(plan) = summary.plan.as_ref() else {
             return vec![
-                "Manifest up".to_string(),
+                title.to_string(),
                 String::new(),
                 format!("No ocm.yaml found from {}", summary.search_root),
             ];
         };
 
         return vec![
-            "Manifest up".to_string(),
+            title.to_string(),
             String::new(),
             format!("Path: {}", summary.path.as_deref().unwrap_or("none")),
             format!(
@@ -128,14 +136,14 @@ fn up_summary_pretty(summary: &UpSummary) -> Vec<String> {
 
     let Some(result) = summary.result.as_ref() else {
         return vec![
-            "Manifest up".to_string(),
+            title.to_string(),
             String::new(),
             format!("No ocm.yaml found from {}", summary.search_root),
         ];
     };
 
     vec![
-        "Manifest up".to_string(),
+        title.to_string(),
         String::new(),
         format!("Path: {}", summary.path.as_deref().unwrap_or("none")),
         "Mode: apply".to_string(),

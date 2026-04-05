@@ -21,6 +21,7 @@ impl Cli {
             ["help"] | ["--help"] | ["-h"] => Ok(render::help::root_help(&cmd)),
             ["setup"] => Ok(render::help::setup_help(&cmd)),
             ["start"] => Ok(render::help::start_help(&cmd)),
+            ["sync"] => Ok(render::help::sync_help(&cmd)),
             ["up"] => Ok(render::help::up_help(&cmd)),
             ["upgrade"] => Ok(render::help::upgrade_help(&cmd)),
             ["doctor"] => Ok(render::help::doctor_help(&cmd)),
@@ -56,6 +57,7 @@ impl Cli {
                     *group,
                     "setup"
                         | "start"
+                        | "sync"
                         | "up"
                         | "upgrade"
                         | "doctor"
@@ -95,6 +97,7 @@ impl Cli {
                         | "launcher"
                         | "runtime"
                         | "service"
+                        | "sync"
                         | "up"
                 ) =>
             {
@@ -103,6 +106,7 @@ impl Cli {
             [group] if group == "doctor" => Some(vec!["doctor"]),
             [group, flag] if group == "setup" && Self::is_help_flag(flag) => Some(vec!["setup"]),
             [group, flag] if group == "start" && Self::is_help_flag(flag) => Some(vec!["start"]),
+            [group, flag] if group == "sync" && Self::is_help_flag(flag) => Some(vec!["sync"]),
             [group, flag] if group == "up" && Self::is_help_flag(flag) => Some(vec!["up"]),
             [group, flag] if group == "upgrade" && Self::is_help_flag(flag) => {
                 Some(vec!["upgrade"])
@@ -118,6 +122,7 @@ impl Cli {
                         | "launcher"
                         | "runtime"
                         | "service"
+                        | "sync"
                         | "up"
                 ) && Self::is_help_token(next) =>
             {
@@ -140,6 +145,7 @@ impl Cli {
                         | "launcher"
                         | "runtime"
                         | "service"
+                        | "sync"
                         | "up"
                 ) && Self::is_help_flag(flag) =>
             {
