@@ -2,8 +2,10 @@ use std::path::Path;
 
 use super::{Cli, render};
 use crate::migrate::{
-    MigrateHomeOptions, inspect_migration_source, migrate_plain_openclaw_home, plan_migration,
+    MigrateHomeOptions, inspect_migration_source, migrate_plain_openclaw_home_with_manifest,
+    plan_migration,
 };
+use crate::store::resolve_absolute_path;
 
 impl Cli {
     pub(super) fn dispatch_migrate_command(
@@ -24,6 +26,8 @@ impl Cli {
 
     fn handle_migrate_import(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "migrate import")?;
+        let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
+        let manifest_value = Self::require_option_value(manifest_value, "--manifest")?;
         let (args, root_value) = Self::consume_option(args, "--root")?;
         let root_value = Self::require_option_value(root_value, "--root")?;
         let (args, name_value) = Self::consume_option(args, "--name")?;
@@ -34,13 +38,18 @@ impl Cli {
         }
 
         let source_home = args.first().cloned();
+        let manifest_path = manifest_value
+            .as_deref()
+            .map(|path| resolve_absolute_path(path, &self.env, &self.cwd))
+            .transpose()?;
         let summary = self.with_progress("Migrating plain OpenClaw home", || {
-            migrate_plain_openclaw_home(
+            migrate_plain_openclaw_home_with_manifest(
                 MigrateHomeOptions {
                     source_home,
                     name: env_name.clone(),
                     root: root_value.clone(),
                 },
+                manifest_path.as_deref(),
                 &self.env,
                 &self.cwd,
             )
@@ -51,7 +60,7 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::env::env_imported(
+        self.stdout_lines(render::migrate::migration_import(
             &summary,
             &self.command_example(),
             profile,

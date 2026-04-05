@@ -229,3 +229,37 @@ fn migrate_import_requires_name() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("--name is required"));
 }
+
+#[test]
+fn migrate_import_can_write_a_manifest() {
+    let root = TestDir::new("migrate-import-manifest");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let manifest_path = cwd.join("ocm.yaml");
+    fs::create_dir_all(source_home.join("workspace")).unwrap();
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "import",
+            "--name",
+            "mira",
+            "--manifest",
+            manifest_path.to_string_lossy().as_ref(),
+            source_home.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"manifestPath\":"));
+    assert!(manifest_path.exists());
+    let manifest_raw = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest_raw.contains("schema: ocm/v1"));
+    assert!(manifest_raw.contains("name: mira"));
+}

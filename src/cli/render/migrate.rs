@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::migrate::{MigrationPlanSummary, MigrationSourceSummary};
+use crate::migrate::{MigrationImportSummary, MigrationPlanSummary, MigrationSourceSummary};
 
 use super::{RenderProfile, format_key_value_lines};
+use crate::cli::render::env;
 
 pub fn migration_source(summary: &MigrationSourceSummary, profile: RenderProfile) -> Vec<String> {
     if profile.pretty {
@@ -57,4 +58,24 @@ pub fn migration_plan(summary: &MigrationPlanSummary, profile: RenderProfile) ->
     lines.insert("envExists".to_string(), summary.env_exists.to_string());
     lines.insert("targetRoot".to_string(), summary.target_root.clone());
     format_key_value_lines(lines)
+}
+
+pub fn migration_import(
+    summary: &MigrationImportSummary,
+    command_example: &str,
+    profile: RenderProfile,
+) -> Vec<String> {
+    let mut lines = env::env_imported(&summary.import, command_example, profile);
+    if profile.pretty {
+        if let Some(path) = summary.manifest_path.as_deref() {
+            lines.push(String::new());
+            lines.push(format!("Manifest: {path}"));
+        }
+        return lines;
+    }
+
+    if let Some(path) = summary.manifest_path.as_deref() {
+        lines.push(format!("  manifest: {path}"));
+    }
+    lines
 }
