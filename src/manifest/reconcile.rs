@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::env::{CreateEnvSnapshotOptions, EnvironmentService};
+use crate::env::{CreateEnvSnapshotOptions, EnvironmentService, RestoreEnvSnapshotOptions};
 
 use super::{
     OcmManifest, apply_manifest_launcher_binding, apply_manifest_runtime_binding,
@@ -71,13 +71,42 @@ pub fn reconcile_manifest_with_options(
         None
     };
 
-    let runtime_summary = apply_manifest_runtime_binding(manifest, &current, env, cwd)?;
-    current = runtime_summary.env;
+    let apply_result = (|| {
+        let runtime_summary = apply_manifest_runtime_binding(manifest, &current, env, cwd)?;
+        current = runtime_summary.env.clone();
 
-    let launcher_summary = apply_manifest_launcher_binding(manifest, &current, env, cwd)?;
-    current = launcher_summary.env;
+        let launcher_summary = apply_manifest_launcher_binding(manifest, &current, env, cwd)?;
+        current = launcher_summary.env.clone();
 
-    let service_summary = apply_manifest_service_install(manifest, &current, env, cwd)?;
+        let service_summary = apply_manifest_service_install(manifest, &current, env, cwd)?;
+
+        Ok((runtime_summary, launcher_summary, service_summary))
+    })();
+
+    let (runtime_summary, launcher_summary, service_summary) = match apply_result {
+        Ok(summaries) => summaries,
+        Err(error) => {
+            if _options.rollback_on_failure
+                && let Some(snapshot_id) = snapshot_id.as_deref()
+            {
+                let rollback =
+                    EnvironmentService::new(env, cwd).restore_snapshot(RestoreEnvSnapshotOptions {
+                        env_name: current.name.clone(),
+                        snapshot_id: snapshot_id.to_string(),
+                    });
+                return match rollback {
+                    Ok(_) => Err(format!(
+                        "{error} (rolled back env \"{}\" from snapshot {snapshot_id})",
+                        current.name
+                    )),
+                    Err(rollback_error) => Err(format!(
+                        "{error} (rollback from snapshot {snapshot_id} failed: {rollback_error})"
+                    )),
+                };
+            }
+            return Err(error);
+        }
+    };
 
     Ok(ManifestReconcileSummary {
         manifest_path: manifest_path.display().to_string(),

@@ -62,7 +62,7 @@ impl Cli {
                     &self.cwd,
                     ManifestReconcileOptions {
                         snapshot_existing_env: true,
-                        rollback_on_failure: false,
+                        rollback_on_failure: true,
                     },
                 )
             },
