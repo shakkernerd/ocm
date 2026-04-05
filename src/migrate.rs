@@ -157,6 +157,12 @@ pub fn manifest_for_migration_env(env_name: &str) -> OcmManifest {
 }
 
 pub fn write_migration_manifest(path: &Path, env_name: &str) -> Result<(), String> {
+    if path.exists() {
+        return Err(format!(
+            "refusing to overwrite existing manifest: {}",
+            display_path(path)
+        ));
+    }
     let manifest = manifest_for_migration_env(env_name);
     write_manifest(path, &manifest)
 }
@@ -167,6 +173,14 @@ pub fn migrate_plain_openclaw_home_with_manifest(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<MigrationImportSummary, String> {
+    if let Some(path) = manifest_path {
+        if path.exists() {
+            return Err(format!(
+                "refusing to overwrite existing manifest: {}",
+                display_path(path)
+            ));
+        }
+    }
     let import = migrate_plain_openclaw_home(options, env, cwd)?;
     let manifest_path = if let Some(path) = manifest_path {
         write_migration_manifest(path, &import.name)?;
@@ -352,6 +366,20 @@ mod tests {
     }
 
     #[test]
+    fn write_migration_manifest_rejects_existing_files() {
+        let root = std::env::temp_dir().join("ocm-migrate-tests-manifest-existing");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("ocm.yaml");
+        fs::write(&path, "schema: ocm/v1\nenv:\n  name: ember\n").unwrap();
+
+        let error = write_migration_manifest(&path, "mira").unwrap_err();
+        assert!(error.contains("refusing to overwrite existing manifest"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn migrate_plain_openclaw_home_with_manifest_writes_ocm_yaml() {
         let root = std::env::temp_dir().join("ocm-migrate-tests-manifest-import");
         let cwd = root.join("cwd");
@@ -390,6 +418,44 @@ mod tests {
         let manifest_raw = fs::read_to_string(&manifest_path).unwrap();
         assert!(manifest_raw.contains("schema: ocm/v1"));
         assert!(manifest_raw.contains("name: mira"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migrate_plain_openclaw_home_with_manifest_checks_manifest_conflicts_before_importing() {
+        let root = std::env::temp_dir().join("ocm-migrate-tests-manifest-conflict");
+        let cwd = root.join("cwd");
+        let source_home = root.join("legacy-home/.openclaw");
+        let manifest_path = root.join("workspace/ocm.yaml");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(source_home.join("workspace")).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+        fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+        fs::write(&manifest_path, "schema: ocm/v1\nenv:\n  name: ember\n").unwrap();
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), root.join("home").display().to_string());
+        env.insert(
+            "OCM_HOME".to_string(),
+            root.join("ocm-home").display().to_string(),
+        );
+
+        let error = migrate_plain_openclaw_home_with_manifest(
+            MigrateHomeOptions {
+                source_home: Some(source_home.display().to_string()),
+                name: "mira".to_string(),
+                root: None,
+            },
+            Some(&manifest_path),
+            &env,
+            &cwd,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("refusing to overwrite existing manifest"));
+        assert!(!root.join("ocm-home/envs/mira").exists());
 
         let _ = fs::remove_dir_all(&root);
     }
