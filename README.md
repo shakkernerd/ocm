@@ -141,9 +141,12 @@ If a folder has an optional `ocm.yaml`, `up` can create or apply the env, bindin
 ocm migrate inspect
 ocm migrate inspect /path/to/.openclaw
 ocm migrate plan --name mira
+ocm migrate import --name mira
 ```
 
-This is read-only. `inspect` shows the plain OpenClaw home OCM would inspect, and `plan` shows what env name and target root a migration would use before any import work happens.
+`inspect` and `plan` are read-only. They show the plain OpenClaw home OCM would inspect and the env target it would use before any import work happens.
+
+`migrate import` creates the managed env from a plain OpenClaw home, preserves durable config and agent auth, and clears copied runtime residue like sessions and logs.
 
 ### Keep background services visible
 
