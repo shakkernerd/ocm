@@ -310,6 +310,7 @@ pub fn migrate_help(cmd: &str) -> String {
             format!("{cmd} migrate inspect"),
             format!("{cmd} migrate plan --name mira"),
             format!("{cmd} migrate import --name mira"),
+            format!("{cmd} migrate import --name mira --manifest ./ocm.yaml"),
             format!("{cmd} migrate inspect /path/to/.openclaw"),
         ],
         vec![
@@ -427,7 +428,7 @@ pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
             "Import a plain OpenClaw home",
             "Create a managed env from a plain OpenClaw home, preserve durable config and agent auth, and clear copied runtime residue like sessions and logs.",
             vec![format!(
-                "{cmd} migrate import --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
+                "{cmd} migrate import --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
             )],
             &[
                 ("--name <env>", "Target env name OCM should create"),
@@ -436,6 +437,10 @@ pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
                     "Optional explicit .openclaw home path to import",
                 ),
                 ("--root <path>", "Optional explicit target env root"),
+                (
+                    "--manifest <path>",
+                    "Optional ocm.yaml path to write after importing",
+                ),
                 ("--raw", "Print machine-friendly key/value output"),
                 ("--json", "Print JSON output"),
             ],
@@ -443,6 +448,7 @@ pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} migrate import --name mira"),
                 format!("{cmd} migrate import --name mira /path/to/.openclaw"),
                 format!("{cmd} migrate import --name mira --root /tmp/mira"),
+                format!("{cmd} migrate import --name mira --manifest ./ocm.yaml"),
             ],
             &[
                 "Without an explicit source path, OCM imports from the default plain OpenClaw home under the current user home.",

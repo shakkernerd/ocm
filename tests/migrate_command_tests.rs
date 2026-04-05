@@ -16,6 +16,7 @@ fn migrate_group_help_is_available() {
     let body = stdout(&output);
     assert!(body.contains("Migration commands"));
     assert!(body.contains("ocm migrate import --name mira"));
+    assert!(body.contains("ocm migrate import --name mira --manifest ./ocm.yaml"));
     assert!(body.contains("ocm migrate inspect"));
     assert!(body.contains("ocm migrate plan --name mira"));
 }
@@ -88,8 +89,9 @@ fn help_migrate_import_is_available() {
     let body = stdout(&output);
     assert!(body.contains("Import a plain OpenClaw home"));
     assert!(body.contains(
-        "ocm migrate import --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
+        "ocm migrate import --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
     ));
+    assert!(body.contains("--manifest <path>"));
 }
 
 #[test]
