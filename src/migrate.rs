@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService};
+use crate::manifest::{ManifestEnv, OcmManifest};
 use crate::store::{
     clear_nonportable_runtime_state, copy_dir_recursive, default_env_root, derive_env_paths,
     display_path, get_environment, resolve_absolute_path, resolve_user_home,
@@ -136,6 +137,18 @@ pub fn migrate_plain_openclaw_home(
     })
 }
 
+pub fn manifest_for_migration_env(env_name: &str) -> OcmManifest {
+    OcmManifest {
+        schema: "ocm/v1".to_string(),
+        env: ManifestEnv {
+            name: env_name.to_string(),
+        },
+        runtime: None,
+        launcher: None,
+        service: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -146,7 +159,7 @@ mod tests {
 
     use super::{
         MigrateHomeOptions, default_migration_source_home, inspect_migration_source,
-        migrate_plain_openclaw_home, plan_migration,
+        manifest_for_migration_env, migrate_plain_openclaw_home, plan_migration,
     };
 
     #[test]
@@ -276,5 +289,16 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn manifest_for_migration_env_builds_a_minimal_manifest() {
+        let manifest = manifest_for_migration_env("mira");
+
+        assert_eq!(manifest.schema, "ocm/v1");
+        assert_eq!(manifest.env.name, "mira");
+        assert!(manifest.runtime.is_none());
+        assert!(manifest.launcher.is_none());
+        assert!(manifest.service.is_none());
     }
 }
