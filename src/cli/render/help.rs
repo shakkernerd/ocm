@@ -301,6 +301,7 @@ pub fn migrate_help(cmd: &str) -> String {
         &[(
             "Commands",
             &[
+                ("import", "Import a plain OpenClaw home into a managed env"),
                 ("inspect", "Show what plain OpenClaw home OCM would inspect"),
                 ("plan", "Show the target env and root a migration would use"),
             ],
@@ -308,9 +309,11 @@ pub fn migrate_help(cmd: &str) -> String {
         vec![
             format!("{cmd} migrate inspect"),
             format!("{cmd} migrate plan --name mira"),
+            format!("{cmd} migrate import --name mira"),
             format!("{cmd} migrate inspect /path/to/.openclaw"),
         ],
         vec![
+            format!("{cmd} help migrate import"),
             format!("{cmd} help migrate inspect"),
             format!("{cmd} help migrate plan"),
         ],
@@ -420,6 +423,32 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
 
 pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
     match action {
+        "import" => Some(render_leaf(
+            "Import a plain OpenClaw home",
+            "Create a managed env from a plain OpenClaw home, preserve durable config and agent auth, and clear copied runtime residue like sessions and logs.",
+            vec![format!(
+                "{cmd} migrate import --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
+            )],
+            &[
+                ("--name <env>", "Target env name OCM should create"),
+                (
+                    "[source-home]",
+                    "Optional explicit .openclaw home path to import",
+                ),
+                ("--root <path>", "Optional explicit target env root"),
+                ("--raw", "Print machine-friendly key/value output"),
+                ("--json", "Print JSON output"),
+            ],
+            vec![
+                format!("{cmd} migrate import --name mira"),
+                format!("{cmd} migrate import --name mira /path/to/.openclaw"),
+                format!("{cmd} migrate import --name mira --root /tmp/mira"),
+            ],
+            &[
+                "Without an explicit source path, OCM imports from the default plain OpenClaw home under the current user home.",
+                "This creates a managed env and rewrites env-scoped OpenClaw paths for the new target.",
+            ],
+        )),
         "inspect" => Some(render_leaf(
             "Inspect a migration source",
             "Report the plain OpenClaw home OCM would inspect before any import or migration work happens.",

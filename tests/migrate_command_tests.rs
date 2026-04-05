@@ -15,6 +15,7 @@ fn migrate_group_help_is_available() {
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     assert!(body.contains("Migration commands"));
+    assert!(body.contains("ocm migrate import --name mira"));
     assert!(body.contains("ocm migrate inspect"));
     assert!(body.contains("ocm migrate plan --name mira"));
 }
@@ -73,6 +74,22 @@ fn help_migrate_inspect_is_available() {
     let body = stdout(&output);
     assert!(body.contains("Inspect a migration source"));
     assert!(body.contains("ocm migrate inspect [<source-home>] [--raw] [--json]"));
+}
+
+#[test]
+fn help_migrate_import_is_available() {
+    let root = TestDir::new("migrate-help-import");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["help", "migrate", "import"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("Import a plain OpenClaw home"));
+    assert!(body.contains(
+        "ocm migrate import --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
+    ));
 }
 
 #[test]
