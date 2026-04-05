@@ -135,6 +135,15 @@ ocm sync --dry-run
 
 If a folder has an optional `ocm.yaml`, `up` can create or apply the env, binding, and service changes it declares, and `sync` can reconcile an env that already exists. Existing env applies are snapshotted first and rolled back if a later reconcile step fails. This is project mode, not a requirement for normal `setup` or `start` usage.
 
+### Inspect an existing plain OpenClaw home before migrating it
+
+```bash
+ocm migrate inspect
+ocm migrate inspect /path/to/.openclaw
+```
+
+This is read-only. It shows the plain OpenClaw home OCM would inspect before any import or migration work happens.
+
 ### Keep background services visible
 
 ```bash

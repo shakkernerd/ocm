@@ -3,6 +3,7 @@ pub mod env;
 pub mod help;
 pub mod launcher;
 pub mod manifest;
+pub mod migrate;
 pub mod release;
 pub mod runtime;
 pub mod self_update;

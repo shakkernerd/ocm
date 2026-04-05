@@ -129,6 +129,10 @@ pub fn root_help(cmd: &str) -> String {
                 "manifest",
                 "Inspect optional ocm.yaml manifests without changing env state",
             ),
+            (
+                "migrate",
+                "Inspect existing plain OpenClaw homes before importing them",
+            ),
             ("release", "Published OpenClaw releases and release details"),
             ("launcher", "Named command recipes for running OpenClaw"),
             (
@@ -146,6 +150,7 @@ pub fn root_help(cmd: &str) -> String {
         "Get started",
         format_examples(&[
             format!("{cmd} start mira"),
+            format!("{cmd} migrate inspect"),
             format!("{cmd} sync --dry-run"),
             format!("{cmd} up --dry-run"),
             format!("{cmd} @mira -- onboard"),
@@ -163,6 +168,7 @@ pub fn root_help(cmd: &str) -> String {
         format_examples(&[
             format!("{cmd} help setup"),
             format!("{cmd} help start"),
+            format!("{cmd} help migrate"),
             format!("{cmd} help sync"),
             format!("{cmd} help up"),
             format!("{cmd} help upgrade"),
@@ -287,6 +293,23 @@ pub fn manifest_help(cmd: &str) -> String {
     )
 }
 
+pub fn migrate_help(cmd: &str) -> String {
+    render_group(
+        "Migration commands",
+        "Inspect existing plain OpenClaw homes before importing them into OCM-managed environments.",
+        vec![format!("{cmd} migrate <command> [args]")],
+        &[(
+            "Commands",
+            &[("inspect", "Show what plain OpenClaw home OCM would inspect")],
+        )],
+        vec![
+            format!("{cmd} migrate inspect"),
+            format!("{cmd} migrate inspect /path/to/.openclaw"),
+        ],
+        vec![format!("{cmd} help migrate inspect")],
+    )
+}
+
 pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
     match action {
         "path" => Some(render_leaf(
@@ -382,6 +405,36 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "If no manifest is present, the command still succeeds and reports that nothing was found.",
                 "This is a read-only inspection command.",
+            ],
+        )),
+        _ => None,
+    }
+}
+
+pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
+    match action {
+        "inspect" => Some(render_leaf(
+            "Inspect a migration source",
+            "Report the plain OpenClaw home OCM would inspect before any import or migration work happens.",
+            vec![format!(
+                "{cmd} migrate inspect [<source-home>] [--raw] [--json]"
+            )],
+            &[
+                (
+                    "[source-home]",
+                    "Optional explicit .openclaw home path to inspect",
+                ),
+                ("--raw", "Print machine-friendly key/value output"),
+                ("--json", "Print JSON output"),
+            ],
+            vec![
+                format!("{cmd} migrate inspect"),
+                format!("{cmd} migrate inspect /path/to/.openclaw"),
+                format!("{cmd} migrate inspect --json"),
+            ],
+            &[
+                "Without an explicit path, OCM inspects the default plain OpenClaw home under the current user home.",
+                "This command is read-only. It does not create, import, or modify any env.",
             ],
         )),
         _ => None,

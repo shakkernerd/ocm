@@ -29,7 +29,10 @@ impl Cli {
             ["self"] => Ok(render::help::self_help(&cmd)),
             ["env"] => Ok(render::help::env_help(&cmd)),
             ["manifest"] => Ok(render::help::manifest_help(&cmd)),
+            ["migrate"] => Ok(render::help::migrate_help(&cmd)),
             ["release"] => Ok(render::help::release_help(&cmd)),
+            ["migrate", action] => render::help::migrate_command_help(&cmd, action)
+                .ok_or_else(|| format!("unknown migrate command: {action}")),
             ["self", action] => render::help::self_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown self command: {action}")),
             ["env", "snapshot"] => Ok(render::help::env_snapshot_help(&cmd)),
@@ -64,6 +67,7 @@ impl Cli {
                         | "self"
                         | "env"
                         | "manifest"
+                        | "migrate"
                         | "release"
                         | "launcher"
                         | "runtime"
@@ -93,6 +97,7 @@ impl Cli {
                     "self"
                         | "env"
                         | "manifest"
+                        | "migrate"
                         | "release"
                         | "launcher"
                         | "runtime"
@@ -118,6 +123,7 @@ impl Cli {
                     "self"
                         | "env"
                         | "manifest"
+                        | "migrate"
                         | "release"
                         | "launcher"
                         | "runtime"
@@ -141,6 +147,7 @@ impl Cli {
                     "self"
                         | "env"
                         | "manifest"
+                        | "migrate"
                         | "release"
                         | "launcher"
                         | "runtime"

@@ -4,6 +4,7 @@ mod help;
 mod init;
 mod launcher;
 mod manifest;
+mod migrate;
 mod release;
 mod render;
 mod runtime;
@@ -492,6 +493,7 @@ impl Cli {
             "doctor" => cli.dispatch_doctor_command(action.as_str(), rest),
             "env" => cli.dispatch_env_command(action.as_str(), rest),
             "manifest" => cli.dispatch_manifest_command(action.as_str(), rest),
+            "migrate" => cli.dispatch_migrate_command(action.as_str(), rest),
             "release" => cli.dispatch_release_command(action.as_str(), rest),
             "launcher" => cli.dispatch_launcher_command(action.as_str(), rest),
             "runtime" => cli.dispatch_runtime_command(action.as_str(), rest),
