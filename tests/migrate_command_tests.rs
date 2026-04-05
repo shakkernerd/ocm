@@ -265,3 +265,34 @@ fn migrate_import_can_write_a_manifest() {
     assert!(manifest_raw.contains("schema: ocm/v1"));
     assert!(manifest_raw.contains("name: mira"));
 }
+
+#[test]
+fn migrate_import_resolves_relative_manifest_paths_from_cwd() {
+    let root = TestDir::new("migrate-import-manifest-relative");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let manifest_path = cwd.join("ocm.yaml");
+    fs::create_dir_all(source_home.join("workspace")).unwrap();
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "import",
+            "--name",
+            "mira",
+            "--manifest",
+            "ocm.yaml",
+            source_home.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(manifest_path.exists());
+    let body = stdout(&output);
+    assert!(body.contains("\"manifestPath\":"));
+}
