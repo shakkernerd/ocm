@@ -125,6 +125,15 @@ ocm start rowan --channel beta
 ocm start ember --version 2026.3.24
 ```
 
+### Apply an optional project manifest
+
+```bash
+ocm up --dry-run
+ocm up
+```
+
+If a folder has an optional `ocm.yaml`, `up` can preview and apply the env, binding, and service changes it declares. This is project mode, not a requirement for normal `setup` or `start` usage.
+
 ### Keep background services visible
 
 ```bash

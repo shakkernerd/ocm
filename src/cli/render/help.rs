@@ -105,6 +105,10 @@ pub fn root_help(cmd: &str) -> String {
                 "Fast path: create or reuse an env and keep it running",
             ),
             (
+                "up",
+                "Apply an optional ocm.yaml manifest from the current directory",
+            ),
+            (
                 "upgrade",
                 "Update one env or all envs and restart services when needed",
             ),
@@ -138,6 +142,7 @@ pub fn root_help(cmd: &str) -> String {
         "Get started",
         format_examples(&[
             format!("{cmd} start mira"),
+            format!("{cmd} up --dry-run"),
             format!("{cmd} @mira -- onboard"),
             format!("{cmd} @mira -- status"),
             format!("{cmd} upgrade mira"),
@@ -153,6 +158,7 @@ pub fn root_help(cmd: &str) -> String {
         format_examples(&[
             format!("{cmd} help setup"),
             format!("{cmd} help start"),
+            format!("{cmd} help up"),
             format!("{cmd} help upgrade"),
             format!("{cmd} help doctor"),
             format!("{cmd} doctor host"),
@@ -166,6 +172,28 @@ pub fn root_help(cmd: &str) -> String {
         ]),
     );
     finish(lines)
+}
+
+pub fn up_help(cmd: &str) -> String {
+    render_leaf(
+        "Apply a manifest",
+        "Discover an optional ocm.yaml from the current directory or an explicit path, preview its plan, or reconcile the target environment to match it.",
+        vec![format!("{cmd} up [path] [--dry-run] [--raw] [--json]")],
+        &[
+            (
+                "--dry-run",
+                "Show the manifest plan without changing the environment",
+            ),
+            ("--raw", "Print raw key=value style output"),
+            ("--json", "Print a machine-readable up summary"),
+        ],
+        vec![format!("{cmd} up --dry-run"), format!("{cmd} up")],
+        &[
+            "`up` is optional project-mode behavior. Normal personal flows still start with `setup` or `start`.",
+            "When a manifest is found, `up` can create the env, reconcile its runtime or launcher binding, and apply service install intent.",
+            "Use `--dry-run` first when you want to preview what `up` would change.",
+        ],
+    )
 }
 
 pub fn setup_help(cmd: &str) -> String {

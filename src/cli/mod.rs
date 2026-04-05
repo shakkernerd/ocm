@@ -11,6 +11,7 @@ mod self_cmd;
 mod service;
 mod setup;
 mod start;
+mod up;
 mod upgrade;
 
 use std::collections::BTreeMap;
@@ -484,6 +485,7 @@ impl Cli {
             "init" => cli.handle_init_command(&action, rest),
             "setup" => cli.handle_setup_command(args[1..].to_vec()),
             "start" => cli.handle_start_command(args[1..].to_vec()),
+            "up" => cli.handle_up_command(args[1..].to_vec()),
             "upgrade" => cli.handle_upgrade_command(args[1..].to_vec()),
             "doctor" => cli.dispatch_doctor_command(action.as_str(), rest),
             "env" => cli.dispatch_env_command(action.as_str(), rest),

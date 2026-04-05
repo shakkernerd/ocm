@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::manifest::{ManifestApplyPlan, OcmManifest};
+use crate::manifest::{ManifestApplyPlan, ManifestReconcileSummary, OcmManifest};
 
 use super::{RenderProfile, format_key_value_lines};
 
@@ -61,11 +61,155 @@ pub struct ManifestPlanSummary {
     pub plan: Option<ManifestApplyPlan>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct UpSummary {
+    pub found: bool,
+    pub path: Option<String>,
+    pub search_root: String,
+    pub dry_run: bool,
+    pub env_exists: bool,
+    pub env_root: Option<String>,
+    pub plan: Option<ManifestApplyPlan>,
+    pub result: Option<ManifestReconcileSummary>,
+}
+
 pub fn manifest_path(summary: &ManifestPathSummary, profile: RenderProfile) -> Vec<String> {
     if profile.pretty {
         return manifest_path_pretty(summary);
     }
     manifest_path_raw(summary)
+}
+
+pub fn up_summary(summary: &UpSummary, profile: RenderProfile) -> Vec<String> {
+    if profile.pretty {
+        return up_summary_pretty(summary);
+    }
+    up_summary_raw(summary)
+}
+
+fn up_summary_pretty(summary: &UpSummary) -> Vec<String> {
+    if summary.dry_run {
+        let Some(plan) = summary.plan.as_ref() else {
+            return vec![
+                "Manifest up".to_string(),
+                String::new(),
+                format!("No ocm.yaml found from {}", summary.search_root),
+            ];
+        };
+
+        return vec![
+            "Manifest up".to_string(),
+            String::new(),
+            format!("Path: {}", summary.path.as_deref().unwrap_or("none")),
+            format!(
+                "Mode: {}",
+                if summary.dry_run { "dry-run" } else { "apply" }
+            ),
+            format!("Env: {}", plan.env_name),
+            format!("Create env: {}", plan.create_env),
+            format!(
+                "Desired runtime: {}",
+                plan.desired_runtime.as_deref().unwrap_or("none")
+            ),
+            format!(
+                "Desired launcher: {}",
+                plan.desired_launcher.as_deref().unwrap_or("none")
+            ),
+            format!(
+                "Desired service install: {}",
+                plan.desired_service_install
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            ),
+        ];
+    }
+
+    let Some(result) = summary.result.as_ref() else {
+        return vec![
+            "Manifest up".to_string(),
+            String::new(),
+            format!("No ocm.yaml found from {}", summary.search_root),
+        ];
+    };
+
+    vec![
+        "Manifest up".to_string(),
+        String::new(),
+        format!("Path: {}", summary.path.as_deref().unwrap_or("none")),
+        "Mode: apply".to_string(),
+        format!("Env: {}", result.env_name),
+        format!("Env root: {}", result.env_root),
+        format!("Env created: {}", result.env_created),
+        format!("Runtime changed: {}", result.runtime_changed),
+        format!("Launcher changed: {}", result.launcher_changed),
+        format!("Service changed: {}", result.service_changed),
+        format!("Service installed: {}", result.service_installed),
+    ]
+}
+
+fn up_summary_raw(summary: &UpSummary) -> Vec<String> {
+    let mut lines = BTreeMap::new();
+    lines.insert("found".to_string(), summary.found.to_string());
+    lines.insert(
+        "path".to_string(),
+        summary.path.clone().unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert("searchRoot".to_string(), summary.search_root.clone());
+    lines.insert("dryRun".to_string(), summary.dry_run.to_string());
+    lines.insert("envExists".to_string(), summary.env_exists.to_string());
+    lines.insert(
+        "envRoot".to_string(),
+        summary
+            .env_root
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+
+    if let Some(plan) = summary.plan.as_ref() {
+        lines.insert("env".to_string(), plan.env_name.clone());
+        lines.insert("createEnv".to_string(), plan.create_env.to_string());
+        lines.insert(
+            "desiredRuntime".to_string(),
+            plan.desired_runtime
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        );
+        lines.insert(
+            "desiredLauncher".to_string(),
+            plan.desired_launcher
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        );
+        lines.insert(
+            "desiredServiceInstall".to_string(),
+            plan.desired_service_install
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        );
+    }
+
+    if let Some(result) = summary.result.as_ref() {
+        lines.insert("env".to_string(), result.env_name.clone());
+        lines.insert("envCreated".to_string(), result.env_created.to_string());
+        lines.insert(
+            "runtimeChanged".to_string(),
+            result.runtime_changed.to_string(),
+        );
+        lines.insert(
+            "launcherChanged".to_string(),
+            result.launcher_changed.to_string(),
+        );
+        lines.insert(
+            "serviceChanged".to_string(),
+            result.service_changed.to_string(),
+        );
+        lines.insert(
+            "serviceInstalled".to_string(),
+            result.service_installed.to_string(),
+        );
+    }
+
+    format_key_value_lines(lines)
 }
 
 fn manifest_path_pretty(summary: &ManifestPathSummary) -> Vec<String> {

@@ -296,7 +296,7 @@ impl Cli {
         Ok(0)
     }
 
-    fn resolve_manifest_search_root(&self, raw: &str) -> Result<PathBuf, String> {
+    pub(super) fn resolve_manifest_search_root(&self, raw: &str) -> Result<PathBuf, String> {
         let value = raw.trim();
         if value.is_empty() {
             return Err("manifest path requires a non-empty path".to_string());
