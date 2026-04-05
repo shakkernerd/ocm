@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService};
-use crate::manifest::{ManifestEnv, OcmManifest};
+use crate::manifest::{ManifestEnv, OcmManifest, write_manifest};
 use crate::store::{
     clear_nonportable_runtime_state, copy_dir_recursive, default_env_root, derive_env_paths,
     display_path, get_environment, resolve_absolute_path, resolve_user_home,
@@ -149,6 +149,11 @@ pub fn manifest_for_migration_env(env_name: &str) -> OcmManifest {
     }
 }
 
+pub fn write_migration_manifest(path: &Path, env_name: &str) -> Result<(), String> {
+    let manifest = manifest_for_migration_env(env_name);
+    write_manifest(path, &manifest)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -160,6 +165,7 @@ mod tests {
     use super::{
         MigrateHomeOptions, default_migration_source_home, inspect_migration_source,
         manifest_for_migration_env, migrate_plain_openclaw_home, plan_migration,
+        write_migration_manifest,
     };
 
     #[test]
@@ -300,5 +306,21 @@ mod tests {
         assert!(manifest.runtime.is_none());
         assert!(manifest.launcher.is_none());
         assert!(manifest.service.is_none());
+    }
+
+    #[test]
+    fn write_migration_manifest_writes_a_minimal_ocm_yaml() {
+        let root = std::env::temp_dir().join("ocm-migrate-tests-manifest");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("ocm.yaml");
+
+        write_migration_manifest(&path, "mira").unwrap();
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("schema: ocm/v1"));
+        assert!(raw.contains("name: mira"));
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
