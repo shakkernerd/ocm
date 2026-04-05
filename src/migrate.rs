@@ -121,7 +121,8 @@ pub fn migrate_plain_openclaw_home(
     }
 
     copy_dir_recursive(&source_home, &target_paths.state_dir)?;
-    rewrite_openclaw_config_for_target(&target_paths, Some(&source_home), created.gateway_port)?;
+    let legacy_root = source_home.parent().unwrap_or(source_home.as_path());
+    rewrite_openclaw_config_for_target(&target_paths, Some(legacy_root), created.gateway_port)?;
     clear_nonportable_runtime_state(&target_paths)?;
 
     Ok(EnvImportSummary {

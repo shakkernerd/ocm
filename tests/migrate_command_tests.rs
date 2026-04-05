@@ -132,3 +132,83 @@ fn help_migrate_plan_is_available() {
         "ocm migrate plan --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
     ));
 }
+
+#[test]
+fn migrate_import_creates_a_clean_env_from_plain_openclaw_home() {
+    let root = TestDir::new("migrate-import");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    fs::create_dir_all(source_home.join("workspace")).unwrap();
+    fs::create_dir_all(source_home.join("logs")).unwrap();
+    fs::create_dir_all(source_home.join("agents/main/agent")).unwrap();
+    fs::create_dir_all(source_home.join("agents/main/sessions")).unwrap();
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        source_home.join("openclaw.json"),
+        format!(
+            "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}}}}\n",
+            source_home.join("workspace").display()
+        ),
+    )
+    .unwrap();
+    fs::write(source_home.join("workspace/notes.txt"), "hello\n").unwrap();
+    fs::write(source_home.join("logs/app.log"), "runtime residue\n").unwrap();
+    fs::write(
+        source_home.join("agents/main/agent/auth-profiles.json"),
+        "{}\n",
+    )
+    .unwrap();
+    fs::write(
+        source_home.join("agents/main/sessions/main.jsonl"),
+        "stale session\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "import",
+            "--name",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"name\": \"mira\""));
+    assert!(body.contains("\"sourceName\": \"plain-openclaw\""));
+
+    let imported_state = root.child("ocm-home/envs/mira/.openclaw");
+    assert!(imported_state.join("workspace/notes.txt").exists());
+    assert!(
+        imported_state
+            .join("agents/main/agent/auth-profiles.json")
+            .exists()
+    );
+    assert!(!imported_state.join("logs").exists());
+    assert!(
+        !imported_state
+            .join("agents/main/sessions/main.jsonl")
+            .exists()
+    );
+
+    let config_text = fs::read_to_string(imported_state.join("openclaw.json")).unwrap();
+    assert!(config_text.contains(&imported_state.join("workspace").display().to_string()));
+    assert!(!config_text.contains(&source_home.display().to_string()));
+}
+
+#[test]
+fn migrate_import_requires_name() {
+    let root = TestDir::new("migrate-import-name");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["migrate", "import"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("--name is required"));
+}
