@@ -70,6 +70,7 @@ fn help_up_is_available() {
     let body = stdout(&output);
     assert!(body.contains("Apply a manifest"));
     assert!(body.contains("ocm up [path] [--dry-run] [--raw] [--json]"));
+    assert!(body.contains("snapshots that env first and rolls it back"));
 }
 
 #[test]

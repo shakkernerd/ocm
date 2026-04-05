@@ -197,6 +197,7 @@ pub fn up_help(cmd: &str) -> String {
         &[
             "`up` is optional project-mode behavior. Normal personal flows still start with `setup` or `start`.",
             "When a manifest is found, `up` can create the env, reconcile its runtime or launcher binding, and apply service install intent.",
+            "When `up` applies changes to an existing env, it snapshots that env first and rolls it back if a later reconcile step fails.",
             "Use `--dry-run` first when you want to preview what `up` would change.",
         ],
     )
@@ -219,6 +220,7 @@ pub fn sync_help(cmd: &str) -> String {
         &[
             "`sync` expects the manifest env to already exist. Use `up` first when the env has not been created yet.",
             "When a manifest is found, `sync` reuses the same reconcile path as `up` but does not create missing envs.",
+            "When `sync` applies changes to an existing env, it snapshots that env first and rolls it back if a later reconcile step fails.",
         ],
     )
 }

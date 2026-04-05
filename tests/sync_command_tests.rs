@@ -95,4 +95,5 @@ fn help_sync_is_available() {
     let body = stdout(&output);
     assert!(body.contains("Synchronize an existing env from a manifest"));
     assert!(body.contains("ocm sync [path] [--dry-run] [--raw] [--json]"));
+    assert!(body.contains("snapshots that env first and rolls it back"));
 }
