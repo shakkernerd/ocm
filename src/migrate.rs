@@ -32,6 +32,13 @@ pub struct MigrationPlanSummary {
     pub target_root: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationImportSummary {
+    pub import: EnvImportSummary,
+    pub manifest_path: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct MigrateHomeOptions {
     pub source_home: Option<String>,
@@ -154,6 +161,26 @@ pub fn write_migration_manifest(path: &Path, env_name: &str) -> Result<(), Strin
     write_manifest(path, &manifest)
 }
 
+pub fn migrate_plain_openclaw_home_with_manifest(
+    options: MigrateHomeOptions,
+    manifest_path: Option<&Path>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<MigrationImportSummary, String> {
+    let import = migrate_plain_openclaw_home(options, env, cwd)?;
+    let manifest_path = if let Some(path) = manifest_path {
+        write_migration_manifest(path, &import.name)?;
+        Some(display_path(path))
+    } else {
+        None
+    };
+
+    Ok(MigrationImportSummary {
+        import,
+        manifest_path,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -164,8 +191,8 @@ mod tests {
 
     use super::{
         MigrateHomeOptions, default_migration_source_home, inspect_migration_source,
-        manifest_for_migration_env, migrate_plain_openclaw_home, plan_migration,
-        write_migration_manifest,
+        manifest_for_migration_env, migrate_plain_openclaw_home,
+        migrate_plain_openclaw_home_with_manifest, plan_migration, write_migration_manifest,
     };
 
     #[test]
@@ -320,6 +347,49 @@ mod tests {
         let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.contains("schema: ocm/v1"));
         assert!(raw.contains("name: mira"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migrate_plain_openclaw_home_with_manifest_writes_ocm_yaml() {
+        let root = std::env::temp_dir().join("ocm-migrate-tests-manifest-import");
+        let cwd = root.join("cwd");
+        let source_home = root.join("legacy-home/.openclaw");
+        let manifest_path = root.join("workspace/ocm.yaml");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(source_home.join("workspace")).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+        fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), root.join("home").display().to_string());
+        env.insert(
+            "OCM_HOME".to_string(),
+            root.join("ocm-home").display().to_string(),
+        );
+
+        let summary = migrate_plain_openclaw_home_with_manifest(
+            MigrateHomeOptions {
+                source_home: Some(source_home.display().to_string()),
+                name: "mira".to_string(),
+                root: None,
+            },
+            Some(&manifest_path),
+            &env,
+            &cwd,
+        )
+        .unwrap();
+
+        assert_eq!(summary.import.name, "mira");
+        assert_eq!(
+            summary.manifest_path,
+            Some(manifest_path.display().to_string())
+        );
+        let manifest_raw = fs::read_to_string(&manifest_path).unwrap();
+        assert!(manifest_raw.contains("schema: ocm/v1"));
+        assert!(manifest_raw.contains("name: mira"));
 
         let _ = fs::remove_dir_all(&root);
     }
