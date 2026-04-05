@@ -246,3 +246,37 @@ fn apply_manifest_service_install_reuses_an_installed_service() {
     assert_eq!(summary.desired_service_install, Some(true));
     assert!(summary.service.installed);
 }
+
+#[test]
+fn apply_manifest_service_install_uninstalls_when_manifest_disables_it() {
+    let root = TestDir::new("manifest-apply-service-uninstall");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "printf launcher"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let install = run_ocm(&cwd, &env, &["service", "install", "mira"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let manifest = parse_manifest(
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\nservice:\n  install: false\n",
+    )
+    .unwrap();
+    let current = ensure_manifest_env(&manifest, &env, &cwd).unwrap().env;
+
+    let summary = apply_manifest_service_install(&manifest, &current, &env, &cwd).unwrap();
+    assert!(summary.changed);
+    assert_eq!(summary.desired_service_install, Some(false));
+    assert!(!summary.service.installed);
+    assert!(!summary.service.loaded);
+    assert!(!summary.service.running);
+}

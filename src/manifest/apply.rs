@@ -148,6 +148,16 @@ pub fn apply_manifest_service_install(
                 service.status_fast(&current.name)?
             }
         }
+        Some(false) => {
+            let status = service.status_fast(&current.name)?;
+            if status.installed || status.loaded || status.running {
+                service.uninstall(&current.name)?;
+                changed = true;
+                service.status_fast(&current.name)?
+            } else {
+                status
+            }
+        }
         _ => service.status_fast(&current.name)?,
     };
 
