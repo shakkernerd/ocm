@@ -4,6 +4,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::env::{CreateEnvironmentOptions, EnvMeta, EnvironmentService};
+use crate::service::{ServiceService, ServiceSummary};
 
 use super::{ManifestRuntime, OcmManifest};
 
@@ -25,6 +26,13 @@ pub struct ManifestLauncherApplySummary {
     pub env: EnvMeta,
     pub changed: bool,
     pub desired_launcher: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ManifestServiceApplySummary {
+    pub service: ServiceSummary,
+    pub changed: bool,
+    pub desired_service_install: Option<bool>,
 }
 
 pub fn ensure_manifest_env(
@@ -113,6 +121,40 @@ pub fn apply_manifest_launcher_binding(
         env: updated,
         changed: true,
         desired_launcher,
+    })
+}
+
+pub fn apply_manifest_service_install(
+    manifest: &OcmManifest,
+    current: &EnvMeta,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ManifestServiceApplySummary, String> {
+    let desired_service_install = manifest
+        .service
+        .as_ref()
+        .and_then(|service| service.install);
+    let service = ServiceService::new(env, cwd);
+    let mut changed = false;
+
+    let summary = match desired_service_install {
+        Some(true) => {
+            let status = service.status_fast(&current.name)?;
+            if status.installed {
+                status
+            } else {
+                service.install(&current.name)?;
+                changed = true;
+                service.status_fast(&current.name)?
+            }
+        }
+        _ => service.status_fast(&current.name)?,
+    };
+
+    Ok(ManifestServiceApplySummary {
+        service: summary,
+        changed,
+        desired_service_install,
     })
 }
 
