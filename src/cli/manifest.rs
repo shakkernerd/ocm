@@ -70,6 +70,14 @@ impl Cli {
         let summary = if let Some(resolution) = resolved {
             let env_name = resolution.manifest.env.name.clone();
             let current_env = get_environment(&env_name, &self.env, &self.cwd).ok();
+            let current_service_installed = if current_env.is_some() {
+                self.service_service()
+                    .status_fast(&env_name)
+                    .map(|summary| summary.installed)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
             let desired_runtime = resolution.manifest.runtime.as_ref().and_then(|runtime| {
                 runtime
                     .name
@@ -107,6 +115,18 @@ impl Cli {
                         current_launcher.as_deref().unwrap_or("none")
                     ));
                 }
+                match resolution
+                    .manifest
+                    .service
+                    .as_ref()
+                    .and_then(|service| service.install)
+                {
+                    Some(true) if !current_service_installed => issues
+                        .push("service differs (desired installed, current absent)".to_string()),
+                    Some(false) if current_service_installed => issues
+                        .push("service differs (desired absent, current installed)".to_string()),
+                    _ => {}
+                }
             }
 
             render::manifest::ManifestDriftSummary {
@@ -117,6 +137,7 @@ impl Cli {
                 env_exists: current_env.is_some(),
                 current_runtime,
                 current_launcher,
+                current_service_installed,
                 desired_runtime,
                 desired_launcher,
                 aligned: issues.is_empty(),
@@ -131,6 +152,7 @@ impl Cli {
                 env_exists: false,
                 current_runtime: None,
                 current_launcher: None,
+                current_service_installed: false,
                 desired_runtime: None,
                 desired_launcher: None,
                 aligned: false,
@@ -240,6 +262,14 @@ impl Cli {
         let summary = if let Some(resolution) = resolved {
             let env_name = resolution.manifest.env.name.clone();
             let current_env = get_environment(&env_name, &self.env, &self.cwd).ok();
+            let current_service_installed = if current_env.is_some() {
+                self.service_service()
+                    .status_fast(&env_name)
+                    .map(|summary| summary.installed)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
             render::manifest::ManifestResolveSummary {
                 found: true,
                 path: Some(resolution.path.to_string_lossy().into_owned()),
@@ -253,6 +283,7 @@ impl Cli {
                 current_launcher: current_env
                     .as_ref()
                     .and_then(|meta| meta.default_launcher.clone()),
+                current_service_installed,
                 desired_runtime: resolution.manifest.runtime.as_ref().and_then(|runtime| {
                     runtime
                         .name
@@ -281,6 +312,7 @@ impl Cli {
                 env_root: None,
                 current_runtime: None,
                 current_launcher: None,
+                current_service_installed: false,
                 desired_runtime: None,
                 desired_launcher: None,
                 desired_service_install: None,

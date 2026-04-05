@@ -4,6 +4,33 @@ use std::fs;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
+fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<String, String>) {
+    let bin_dir = root.child("fake-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(bin_dir.join("launchctl"), "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(bin_dir.join("launchctl"))
+            .unwrap()
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(bin_dir.join("launchctl"), permissions).unwrap();
+    }
+
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let combined_path = if existing_path.is_empty() {
+        bin_dir.display().to_string()
+    } else {
+        format!("{}:{existing_path}", bin_dir.display())
+    };
+    env.insert("PATH".to_string(), combined_path);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+}
+
 #[test]
 fn manifest_path_finds_the_nearest_manifest_from_the_current_directory() {
     let root = TestDir::new("manifest-path-current");
@@ -154,6 +181,7 @@ fn manifest_resolve_reports_the_target_env_and_current_state() {
     assert!(stdout.contains("\"found\": true"));
     assert!(stdout.contains("\"env_name\": \"mira\""));
     assert!(stdout.contains("\"env_exists\": true"));
+    assert!(stdout.contains("\"current_service_installed\": false"));
     assert!(stdout.contains("\"desired_runtime\": \"stable\""));
     assert!(stdout.contains("\"desired_launcher\": null"));
 }
@@ -222,6 +250,37 @@ fn manifest_drift_reports_alignment_for_matching_bindings() {
     assert!(stdout.contains("\"aligned\": true"));
     assert!(stdout.contains("\"issues\": []"));
     assert!(stdout.contains("\"desired_runtime\": null"));
+}
+
+#[test]
+fn manifest_drift_reports_service_install_mismatch() {
+    let root = TestDir::new("manifest-drift-service");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        root.child("workspace").join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\nservice:\n  install: false\n",
+    )
+    .unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let install = run_ocm(&cwd, &env, &["service", "install", "mira"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let output = run_ocm(&cwd, &env, &["manifest", "drift", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"current_service_installed\": true"));
+    assert!(body.contains("service differs (desired absent, current installed)"));
 }
 
 #[test]

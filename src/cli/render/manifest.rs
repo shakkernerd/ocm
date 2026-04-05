@@ -31,6 +31,7 @@ pub struct ManifestResolveSummary {
     pub env_root: Option<String>,
     pub current_runtime: Option<String>,
     pub current_launcher: Option<String>,
+    pub current_service_installed: bool,
     pub desired_runtime: Option<String>,
     pub desired_launcher: Option<String>,
     pub desired_service_install: Option<bool>,
@@ -45,6 +46,7 @@ pub struct ManifestDriftSummary {
     pub env_exists: bool,
     pub current_runtime: Option<String>,
     pub current_launcher: Option<String>,
+    pub current_service_installed: bool,
     pub desired_runtime: Option<String>,
     pub desired_launcher: Option<String>,
     pub aligned: bool,
@@ -369,6 +371,10 @@ fn manifest_resolve_pretty(summary: &ManifestResolveSummary) -> Vec<String> {
             summary.current_launcher.as_deref().unwrap_or("none")
         ),
         format!(
+            "Current service installed: {}",
+            summary.current_service_installed
+        ),
+        format!(
             "Desired runtime: {}",
             summary.desired_runtime.as_deref().unwrap_or("none")
         ),
@@ -422,6 +428,10 @@ fn manifest_resolve_raw(summary: &ManifestResolveSummary) -> Vec<String> {
             .current_launcher
             .clone()
             .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert(
+        "currentServiceInstalled".to_string(),
+        summary.current_service_installed.to_string(),
     );
     lines.insert(
         "desiredRuntime".to_string(),
@@ -486,6 +496,10 @@ fn manifest_drift_pretty(summary: &ManifestDriftSummary) -> Vec<String> {
             "Current launcher: {}",
             summary.current_launcher.as_deref().unwrap_or("none")
         ),
+        format!(
+            "Current service installed: {}",
+            summary.current_service_installed
+        ),
     ];
     if !summary.issues.is_empty() {
         lines.push(String::new());
@@ -539,6 +553,10 @@ fn manifest_drift_raw(summary: &ManifestDriftSummary) -> Vec<String> {
             .current_launcher
             .clone()
             .unwrap_or_else(|| "none".to_string()),
+    );
+    lines.insert(
+        "currentServiceInstalled".to_string(),
+        summary.current_service_installed.to_string(),
     );
     if summary.issues.is_empty() {
         lines.insert("issues".to_string(), "none".to_string());
