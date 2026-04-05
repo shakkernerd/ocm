@@ -78,6 +78,20 @@ pub fn load_manifest(path: &Path) -> Result<OcmManifest, String> {
     parse_manifest(&raw).map_err(|error| format!("failed to parse {}: {error}", path.display()))
 }
 
+pub fn render_manifest_yaml(manifest: &OcmManifest) -> Result<String, String> {
+    let mut rendered = serde_yaml::to_string(manifest).map_err(|error| error.to_string())?;
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    Ok(rendered)
+}
+
+pub fn write_manifest(path: &Path, manifest: &OcmManifest) -> Result<(), String> {
+    let rendered = render_manifest_yaml(manifest)?;
+    fs::write(path, rendered)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
 pub fn parse_manifest(raw: &str) -> Result<OcmManifest, String> {
     let manifest: OcmManifest = serde_yaml::from_str(raw).map_err(|error| error.to_string())?;
     validate_manifest(manifest)
@@ -137,7 +151,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{load_manifest, parse_manifest};
+    use super::{load_manifest, parse_manifest, render_manifest_yaml, write_manifest};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -205,6 +219,33 @@ mod tests {
         let manifest = load_manifest(&path).unwrap();
         assert_eq!(manifest.schema, "ocm/v1");
         assert_eq!(manifest.env.name, "mira");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn render_manifest_yaml_keeps_a_trailing_newline() {
+        let manifest = parse_manifest("schema: ocm/v1\nenv:\n  name: mira\n").unwrap();
+
+        let rendered = render_manifest_yaml(&manifest).unwrap();
+        assert!(rendered.ends_with('\n'));
+        assert!(rendered.contains("schema: ocm/v1"));
+        assert!(rendered.contains("name: mira"));
+    }
+
+    #[test]
+    fn write_manifest_round_trips() {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir()
+            .join("ocm-manifest-tests")
+            .join(format!("manifest-write-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path: PathBuf = root.join("ocm.yaml");
+        let manifest = parse_manifest("schema: ocm/v1\nenv:\n  name: mira\n").unwrap();
+
+        write_manifest(&path, &manifest).unwrap();
+        let loaded = load_manifest(&path).unwrap();
+        assert_eq!(loaded, manifest);
 
         let _ = std::fs::remove_dir_all(&root);
     }
