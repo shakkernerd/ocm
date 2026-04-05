@@ -1,6 +1,7 @@
 mod apply;
 mod discovery;
 mod plan;
+mod reconcile;
 mod resolution;
 
 use std::fs;
@@ -15,6 +16,7 @@ pub use apply::{
 };
 pub use discovery::{MANIFEST_FILE_NAME, find_manifest_path};
 pub use plan::{ManifestApplyPlan, plan_manifest_application};
+pub use reconcile::{ManifestReconcileSummary, reconcile_manifest};
 pub use resolution::resolve_manifest;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
