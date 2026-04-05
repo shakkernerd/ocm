@@ -5,6 +5,7 @@ pub mod infra;
 pub mod launcher;
 pub mod managed_node;
 pub mod manifest;
+pub mod migrate;
 pub mod runtime;
 pub mod service;
 pub mod store;
