@@ -29,6 +29,10 @@ fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<S
         format!("{}:{existing_path}", path_string(&bin_dir))
     };
     env.insert("PATH".to_string(), combined_path);
+    env.insert(
+        "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
+        path_string(&bin_dir.join("launchctl")),
+    );
 }
 
 fn install_fake_systemd_tools(root: &TestDir, env: &mut BTreeMap<String, String>) {
@@ -57,6 +61,14 @@ fn install_fake_systemd_tools(root: &TestDir, env: &mut BTreeMap<String, String>
     env.insert(
         "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
         "systemd-user".to_string(),
+    );
+    env.insert(
+        "OCM_INTERNAL_SYSTEMCTL_BIN".to_string(),
+        path_string(&bin_dir.join("systemctl")),
+    );
+    env.insert(
+        "OCM_INTERNAL_JOURNALCTL_BIN".to_string(),
+        path_string(&bin_dir.join("journalctl")),
     );
 }
 

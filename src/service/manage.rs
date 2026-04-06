@@ -203,7 +203,7 @@ pub fn adopt_global_service(
     if !dry_run {
         write_service_definition(&adoption.prepared, env)?;
         backup_global_plist(&adoption.global.plist_path, &adoption.backup_plist_path)?;
-        bootout_global_service()?;
+        bootout_global_service(env)?;
         activate_managed_service(
             &adoption.prepared.managed_label,
             &adoption.prepared.managed_plist_path,
@@ -238,8 +238,8 @@ pub fn restore_global_service(
     if !dry_run {
         persist_restored_gateway_port(&restore.env_meta, restore.gateway_port, env, cwd)?;
         restore_global_plist(&restore.backup_plist_path, &restore.global_plist_path)?;
-        bootout_managed_service(&restore.managed_label)?;
-        activate_launch_agent(GLOBAL_GATEWAY_LABEL, &restore.global_plist_path)?;
+        bootout_managed_service(&restore.managed_label, env)?;
+        activate_launch_agent(GLOBAL_GATEWAY_LABEL, &restore.global_plist_path, env)?;
         if restore.managed_plist_path.exists() {
             fs::remove_file(&restore.managed_plist_path).map_err(|error| error.to_string())?;
         }
@@ -374,7 +374,7 @@ pub fn service_logs(
     if service_manager_kind(env) == ServiceManagerKind::SystemdUser {
         let label = managed_service_label(&env_meta.name, env, cwd)?;
         let path = format!("journalctl --user --unit {label}");
-        let content = read_systemd_service_logs(&label, tail_lines)?;
+        let content = read_systemd_service_logs(&label, tail_lines, env)?;
         return Ok(ServiceLogSummary {
             env_name: env_meta.name,
             service_kind: "gateway".to_string(),
@@ -981,14 +981,18 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
     }
 }
 
-fn activate_launch_agent(label: &str, plist_path: &Path) -> Result<(), String> {
+fn activate_launch_agent(
+    label: &str,
+    plist_path: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
     let domain = gui_domain();
     let plist_path = display_path(plist_path);
-    let _ = run_launchctl(["bootout", domain.as_str(), plist_path.as_str()]);
-    let _ = run_launchctl(["unload", plist_path.as_str()]);
+    let _ = run_launchctl(env, ["bootout", domain.as_str(), plist_path.as_str()]);
+    let _ = run_launchctl(env, ["unload", plist_path.as_str()]);
     let target = format!("{domain}/{label}");
-    let _ = run_launchctl(["enable", target.as_str()]);
-    let bootstrap = run_launchctl(["bootstrap", domain.as_str(), plist_path.as_str()])?;
+    let _ = run_launchctl(env, ["enable", target.as_str()]);
+    let bootstrap = run_launchctl(env, ["bootstrap", domain.as_str(), plist_path.as_str()])?;
     if !bootstrap.status.success() {
         return Err(format!(
             "launchctl bootstrap failed: {}",
@@ -1004,10 +1008,10 @@ fn activate_managed_service(
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => activate_launch_agent(label, service_path),
+        ServiceManagerKind::Launchd => activate_launch_agent(label, service_path, env),
         ServiceManagerKind::SystemdUser => {
-            run_systemctl(["--user", "daemon-reload"])?;
-            let enable = run_systemctl(["--user", "enable", "--now", label])?;
+            run_systemctl(env, ["--user", "daemon-reload"])?;
+            let enable = run_systemctl(env, ["--user", "enable", "--now", label])?;
             if !enable.status.success() {
                 return Err(format!(
                     "systemctl --user enable --now failed: {}",
@@ -1113,9 +1117,9 @@ fn read_service_binding(plist_path: &Path) -> Result<GlobalServiceBinding, Strin
     })
 }
 
-fn bootout_global_service() -> Result<(), String> {
+fn bootout_global_service(env: &BTreeMap<String, String>) -> Result<(), String> {
     let target = format!("{}/{}", gui_domain(), GLOBAL_GATEWAY_LABEL);
-    let bootout = run_launchctl(["bootout", target.as_str()])?;
+    let bootout = run_launchctl(env, ["bootout", target.as_str()])?;
     if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
         return Err(format!(
             "launchctl bootout failed: {}",
@@ -1125,9 +1129,9 @@ fn bootout_global_service() -> Result<(), String> {
     Ok(())
 }
 
-fn bootout_managed_service(label: &str) -> Result<(), String> {
+fn bootout_managed_service(label: &str, env: &BTreeMap<String, String>) -> Result<(), String> {
     let target = format!("{}/{}", gui_domain(), label);
-    let bootout = run_launchctl(["bootout", target.as_str()])?;
+    let bootout = run_launchctl(env, ["bootout", target.as_str()])?;
     if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
         return Err(format!(
             "launchctl bootout failed: {}",
@@ -1146,7 +1150,7 @@ fn start_managed_service(
             let domain = gui_domain();
             let target = format!("{domain}/{}", prepared.managed_label);
 
-            let start = run_launchctl(["kickstart", "-k", target.as_str()])?;
+            let start = run_launchctl(env, ["kickstart", "-k", target.as_str()])?;
             if !start.status.success() {
                 if !launchctl_not_loaded(&start) {
                     return Err(format!(
@@ -1160,7 +1164,7 @@ fn start_managed_service(
                         prepared.env_meta.name
                     ));
                 }
-                activate_launch_agent(&prepared.managed_label, &prepared.managed_plist_path)?;
+                activate_launch_agent(&prepared.managed_label, &prepared.managed_plist_path, env)?;
             }
             Ok(())
         }
@@ -1171,7 +1175,7 @@ fn start_managed_service(
                     prepared.env_meta.name
                 ));
             }
-            let start = run_systemctl(["--user", "start", prepared.managed_label.as_str()])?;
+            let start = run_systemctl(env, ["--user", "start", prepared.managed_label.as_str()])?;
             if !start.status.success() {
                 return Err(format!(
                     "systemctl --user start failed: {}",
@@ -1190,7 +1194,7 @@ fn stop_managed_service(
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => {
             let target = format!("{}/{}", gui_domain(), prepared.managed_label);
-            let bootout = run_launchctl(["bootout", target.as_str()])?;
+            let bootout = run_launchctl(env, ["bootout", target.as_str()])?;
             if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
                 return Err(format!(
                     "launchctl bootout failed: {}",
@@ -1200,7 +1204,7 @@ fn stop_managed_service(
             Ok(())
         }
         ServiceManagerKind::SystemdUser => {
-            let stop = run_systemctl(["--user", "stop", prepared.managed_label.as_str()])?;
+            let stop = run_systemctl(env, ["--user", "stop", prepared.managed_label.as_str()])?;
             if !stop.status.success() && !systemctl_not_loaded(&stop) {
                 return Err(format!(
                     "systemctl --user stop failed: {}",
@@ -1220,7 +1224,7 @@ fn restart_managed_service(
         ServiceManagerKind::Launchd => {
             let target = format!("{}/{}", gui_domain(), prepared.managed_label);
 
-            let restart = run_launchctl(["kickstart", "-k", target.as_str()])?;
+            let restart = run_launchctl(env, ["kickstart", "-k", target.as_str()])?;
             if !restart.status.success() {
                 if !launchctl_not_loaded(&restart) {
                     return Err(format!(
@@ -1234,8 +1238,8 @@ fn restart_managed_service(
                         prepared.env_meta.name
                     ));
                 }
-                activate_launch_agent(&prepared.managed_label, &prepared.managed_plist_path)?;
-                let retry = run_launchctl(["kickstart", "-k", target.as_str()])?;
+                activate_launch_agent(&prepared.managed_label, &prepared.managed_plist_path, env)?;
+                let retry = run_launchctl(env, ["kickstart", "-k", target.as_str()])?;
                 if !retry.status.success() {
                     return Err(format!(
                         "launchctl kickstart failed: {}",
@@ -1252,7 +1256,8 @@ fn restart_managed_service(
                     prepared.env_meta.name
                 ));
             }
-            let restart = run_systemctl(["--user", "restart", prepared.managed_label.as_str()])?;
+            let restart =
+                run_systemctl(env, ["--user", "restart", prepared.managed_label.as_str()])?;
             if !restart.status.success() {
                 return Err(format!(
                     "systemctl --user restart failed: {}",
@@ -1272,13 +1277,13 @@ fn uninstall_managed_service_by_label(
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => {
             let target = format!("{}/{}", gui_domain(), label);
-            let _ = run_launchctl(["bootout", target.as_str()]);
+            let _ = run_launchctl(env, ["bootout", target.as_str()]);
             Ok(())
         }
         ServiceManagerKind::SystemdUser => {
             if service_path.exists() {
-                let _ = run_systemctl(["--user", "disable", "--now", label]);
-                let reload = run_systemctl(["--user", "daemon-reload"])?;
+                let _ = run_systemctl(env, ["--user", "disable", "--now", label]);
+                let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
                 if !reload.status.success() {
                     return Err(format!(
                         "systemctl --user daemon-reload failed: {}",
@@ -1338,15 +1343,39 @@ fn gui_domain() -> String {
         .unwrap_or_else(|| "gui/501".to_string())
 }
 
-fn run_launchctl<const N: usize>(args: [&str; N]) -> Result<std::process::Output, String> {
-    Command::new("launchctl")
+fn launchctl_binary(env: &BTreeMap<String, String>) -> String {
+    env.get("OCM_INTERNAL_LAUNCHCTL_BIN")
+        .cloned()
+        .unwrap_or_else(|| "launchctl".to_string())
+}
+
+fn systemctl_binary(env: &BTreeMap<String, String>) -> String {
+    env.get("OCM_INTERNAL_SYSTEMCTL_BIN")
+        .cloned()
+        .unwrap_or_else(|| "systemctl".to_string())
+}
+
+fn journalctl_binary(env: &BTreeMap<String, String>) -> String {
+    env.get("OCM_INTERNAL_JOURNALCTL_BIN")
+        .cloned()
+        .unwrap_or_else(|| "journalctl".to_string())
+}
+
+fn run_launchctl<const N: usize>(
+    env: &BTreeMap<String, String>,
+    args: [&str; N],
+) -> Result<std::process::Output, String> {
+    Command::new(launchctl_binary(env))
         .args(args)
         .output()
         .map_err(|error| format!("failed to run \"launchctl\": {error}"))
 }
 
-fn run_systemctl<const N: usize>(args: [&str; N]) -> Result<std::process::Output, String> {
-    Command::new("systemctl")
+fn run_systemctl<const N: usize>(
+    env: &BTreeMap<String, String>,
+    args: [&str; N],
+) -> Result<std::process::Output, String> {
+    Command::new(systemctl_binary(env))
         .args(args)
         .output()
         .map_err(|error| format!("failed to run \"systemctl\": {error}"))
@@ -1380,8 +1409,12 @@ fn systemctl_not_loaded(output: &std::process::Output) -> bool {
     detail.contains("not loaded") || detail.contains("not found") || detail.contains("no such file")
 }
 
-fn read_systemd_service_logs(label: &str, tail_lines: Option<usize>) -> Result<String, String> {
-    let mut command = Command::new("journalctl");
+fn read_systemd_service_logs(
+    label: &str,
+    tail_lines: Option<usize>,
+    env: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    let mut command = Command::new(journalctl_binary(env));
     command.args(["--user", "--unit", label, "--no-pager", "-o", "cat"]);
     if let Some(tail_lines) = tail_lines {
         command.args(["-n", &tail_lines.to_string()]);

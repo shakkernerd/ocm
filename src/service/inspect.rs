@@ -27,6 +27,18 @@ use crate::store::{
 
 pub(crate) const GLOBAL_GATEWAY_LABEL: &str = "ai.openclaw.gateway";
 
+fn launchctl_binary(env: &BTreeMap<String, String>) -> String {
+    env.get("OCM_INTERNAL_LAUNCHCTL_BIN")
+        .cloned()
+        .unwrap_or_else(|| "launchctl".to_string())
+}
+
+fn systemctl_binary(env: &BTreeMap<String, String>) -> String {
+    env.get("OCM_INTERNAL_SYSTEMCTL_BIN")
+        .cloned()
+        .unwrap_or_else(|| "systemctl".to_string())
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceSummary {
@@ -895,7 +907,9 @@ pub(crate) fn inspect_job(
                 return status;
             };
             let target = format!("gui/{uid}/{label}");
-            let output = Command::new("launchctl").args(["print", &target]).output();
+            let output = Command::new(launchctl_binary(env))
+                .args(["print", &target])
+                .output();
             let Ok(output) = output else {
                 return status;
             };
@@ -908,7 +922,7 @@ pub(crate) fn inspect_job(
             parse_launchctl_print(&text, &mut status);
         }
         ServiceManagerKind::SystemdUser => {
-            let output = Command::new("systemctl")
+            let output = Command::new(systemctl_binary(env))
                 .args([
                     "--user",
                     "show",
