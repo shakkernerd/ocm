@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService};
-use crate::manifest::{ManifestEnv, OcmManifest, write_manifest};
+use crate::manifest::{ManifestEnv, OcmManifest, render_manifest_yaml, write_manifest};
 use crate::store::{
     clear_nonportable_runtime_state, copy_dir_recursive, default_env_root, derive_env_paths,
     display_path, get_environment, resolve_absolute_path, resolve_user_home,
@@ -30,6 +30,8 @@ pub struct MigrationPlanSummary {
     pub env_name: String,
     pub env_exists: bool,
     pub target_root: String,
+    pub manifest_path: Option<String>,
+    pub manifest_preview: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -79,6 +81,7 @@ pub fn inspect_migration_source(
 
 pub fn plan_migration(
     explicit_source_home: Option<&Path>,
+    explicit_manifest_path: Option<&Path>,
     env_name: &str,
     explicit_root: Option<&str>,
     env: &BTreeMap<String, String>,
@@ -94,6 +97,10 @@ pub fn plan_migration(
     Ok(MigrationPlanSummary {
         source: inspect_migration_source(explicit_source_home, env),
         env_exists: get_environment(&env_name, env, cwd).is_ok(),
+        manifest_path: explicit_manifest_path.map(display_path),
+        manifest_preview: explicit_manifest_path
+            .map(|_| render_manifest_yaml(&manifest_for_migration_env(&env_name)))
+            .transpose()?,
         env_name,
         target_root: display_path(&target_root),
     })
@@ -259,10 +266,12 @@ mod tests {
             root.join("ocm-home").display().to_string(),
         );
 
-        let plan = plan_migration(None, "mira", None, &env, &cwd).unwrap();
+        let plan = plan_migration(None, None, "mira", None, &env, &cwd).unwrap();
         assert_eq!(plan.env_name, "mira");
         assert!(plan.target_root.ends_with("/ocm-home/envs/mira"));
         assert!(!plan.env_exists);
+        assert!(plan.manifest_path.is_none());
+        assert!(plan.manifest_preview.is_none());
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -334,6 +343,33 @@ mod tests {
                 .join("agents/main/sessions/main.jsonl")
                 .exists()
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plan_migration_can_preview_a_manifest_write() {
+        let root = std::env::temp_dir().join("ocm-migrate-tests-plan-manifest");
+        let cwd = root.join("cwd");
+        let manifest_path = root.join("workspace/ocm.yaml");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&cwd).unwrap();
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), root.join("home").display().to_string());
+        env.insert(
+            "OCM_HOME".to_string(),
+            root.join("ocm-home").display().to_string(),
+        );
+
+        let plan = plan_migration(None, Some(&manifest_path), "mira", None, &env, &cwd).unwrap();
+        assert_eq!(
+            plan.manifest_path,
+            Some(manifest_path.display().to_string())
+        );
+        let preview = plan.manifest_preview.unwrap();
+        assert!(preview.contains("schema: ocm/v1"));
+        assert!(preview.contains("name: mira"));
 
         let _ = fs::remove_dir_all(&root);
     }

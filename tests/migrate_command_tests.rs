@@ -137,6 +137,36 @@ fn migrate_plan_accepts_an_explicit_target_root() {
 }
 
 #[test]
+fn migrate_plan_can_preview_a_manifest_write() {
+    let root = TestDir::new("migrate-plan-manifest");
+    let cwd = root.child("workspace");
+    let manifest_path = cwd.join("ocm.yaml");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "plan",
+            "--name",
+            "mira",
+            "--manifest",
+            "ocm.yaml",
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"manifestPath\":"));
+    assert!(body.contains(&manifest_path.to_string_lossy().to_string()));
+    assert!(body.contains("\"manifestPreview\":"));
+    assert!(body.contains("schema: ocm/v1"));
+    assert!(body.contains("name: mira"));
+}
+
+#[test]
 fn help_migrate_plan_is_available() {
     let root = TestDir::new("migrate-help-plan");
     let cwd = root.child("workspace");

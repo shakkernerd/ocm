@@ -37,7 +37,7 @@ pub fn migration_source(summary: &MigrationSourceSummary, profile: RenderProfile
 
 pub fn migration_plan(summary: &MigrationPlanSummary, profile: RenderProfile) -> Vec<String> {
     if profile.pretty {
-        return vec![
+        let mut lines = vec![
             "Migration plan".to_string(),
             String::new(),
             format!("Source home: {}", summary.source.source_home),
@@ -46,6 +46,14 @@ pub fn migration_plan(summary: &MigrationPlanSummary, profile: RenderProfile) ->
             format!("Target exists: {}", summary.env_exists),
             format!("Target root: {}", summary.target_root),
         ];
+        if let Some(path) = summary.manifest_path.as_deref() {
+            lines.push(format!("Manifest path: {path}"));
+        }
+        if let Some(preview) = summary.manifest_preview.as_deref() {
+            lines.push("Manifest preview:".to_string());
+            lines.extend(preview.lines().map(|line| format!("  {line}")));
+        }
+        return lines;
     }
 
     let mut lines = BTreeMap::new();
@@ -57,6 +65,12 @@ pub fn migration_plan(summary: &MigrationPlanSummary, profile: RenderProfile) ->
     lines.insert("env".to_string(), summary.env_name.clone());
     lines.insert("envExists".to_string(), summary.env_exists.to_string());
     lines.insert("targetRoot".to_string(), summary.target_root.clone());
+    if let Some(path) = summary.manifest_path.as_deref() {
+        lines.insert("manifestPath".to_string(), path.to_string());
+    }
+    if let Some(preview) = summary.manifest_preview.as_deref() {
+        lines.insert("manifestPreview".to_string(), preview.to_string());
+    }
     format_key_value_lines(lines)
 }
 

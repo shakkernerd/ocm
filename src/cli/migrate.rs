@@ -89,6 +89,8 @@ impl Cli {
 
     fn handle_migrate_plan(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "migrate plan")?;
+        let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
+        let manifest_value = Self::require_option_value(manifest_value, "--manifest")?;
         let (args, root_value) = Self::consume_option(args, "--root")?;
         let root_value = Self::require_option_value(root_value, "--root")?;
         let (args, name_value) = Self::consume_option(args, "--name")?;
@@ -99,8 +101,13 @@ impl Cli {
         }
 
         let explicit = args.first().map(|value| Path::new(value.as_str()));
+        let manifest_path = manifest_value
+            .as_deref()
+            .map(|path| resolve_absolute_path(path, &self.env, &self.cwd))
+            .transpose()?;
         let summary = plan_migration(
             explicit,
+            manifest_path.as_deref(),
             &env_name,
             root_value.as_deref(),
             &self.env,
