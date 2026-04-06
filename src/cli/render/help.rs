@@ -309,6 +309,7 @@ pub fn migrate_help(cmd: &str) -> String {
         vec![
             format!("{cmd} migrate inspect"),
             format!("{cmd} migrate plan --name mira"),
+            format!("{cmd} migrate plan --name mira --manifest ./ocm.yaml"),
             format!("{cmd} migrate import --name mira"),
             format!("{cmd} migrate import --name mira --manifest ./ocm.yaml"),
             format!("{cmd} migrate inspect /path/to/.openclaw"),
@@ -481,9 +482,9 @@ pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
         )),
         "plan" => Some(render_leaf(
             "Plan a migration target",
-            "Show the env name and target root OCM would use for a migration without creating or importing anything.",
+            "Show the env name and target root OCM would use for a migration without creating or importing anything, and optionally preview a minimal manifest write.",
             vec![format!(
-                "{cmd} migrate plan --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
+                "{cmd} migrate plan --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
             )],
             &[
                 ("--name <env>", "Target env name OCM would create or update"),
@@ -492,6 +493,10 @@ pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
                     "Optional explicit .openclaw home path to inspect",
                 ),
                 ("--root <path>", "Optional explicit target env root"),
+                (
+                    "--manifest <path>",
+                    "Optional ocm.yaml path to preview without writing",
+                ),
                 ("--raw", "Print machine-friendly key/value output"),
                 ("--json", "Print JSON output"),
             ],
@@ -499,10 +504,11 @@ pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} migrate plan --name mira"),
                 format!("{cmd} migrate plan --name mira /path/to/.openclaw"),
                 format!("{cmd} migrate plan --name mira --root /tmp/mira"),
+                format!("{cmd} migrate plan --name mira --manifest ./ocm.yaml"),
             ],
             &[
                 "Without an explicit source path, OCM plans from the default plain OpenClaw home under the current user home.",
-                "This command is read-only. It does not create, import, or modify any env.",
+                "This command is read-only. It does not create, import, write manifests, or modify any env.",
             ],
         )),
         _ => None,
