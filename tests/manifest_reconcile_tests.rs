@@ -7,25 +7,9 @@ use ocm::manifest::{
 };
 use ocm::store::get_environment;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, write_executable_script};
-
-fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<String, String>) {
-    let bin_dir = root.child("fake-bin");
-    fs::create_dir_all(&bin_dir).unwrap();
-    write_executable_script(&bin_dir.join("launchctl"), "#!/bin/sh\nexit 0\n");
-
-    let existing_path = env.get("PATH").cloned().unwrap_or_default();
-    let combined_path = if existing_path.is_empty() {
-        bin_dir.display().to_string()
-    } else {
-        format!("{}:{existing_path}", bin_dir.display())
-    };
-    env.insert("PATH".to_string(), combined_path);
-    env.insert(
-        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
-        "launchd".to_string(),
-    );
-}
+use crate::support::{
+    TestDir, install_fake_service_manager, ocm_env, run_ocm, stderr, write_executable_script,
+};
 
 #[test]
 fn reconcile_manifest_creates_binds_launcher_and_installs_service() {
@@ -33,7 +17,7 @@ fn reconcile_manifest_creates_binds_launcher_and_installs_service() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let mut env = ocm_env(&root);
-    install_fake_launchctl(&root, &mut env);
+    install_fake_service_manager(&root, &mut env);
 
     let add_launcher = run_ocm(
         &cwd,
