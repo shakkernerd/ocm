@@ -273,6 +273,47 @@ pub fn install_fake_launchctl(root: &TestDir, env: &mut BTreeMap<String, String>
     env.insert("PATH".to_string(), combined_path);
 }
 
+pub fn install_fake_systemd_tools(root: &TestDir, env: &mut BTreeMap<String, String>) {
+    let bin_dir = root.child("fake-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let log_path = root.child("systemctl.log");
+    let journal_log_path = root.child("journalctl.log");
+    let systemctl_script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"show\" ]; then\n  unit=\"$3\"\n  home=\"${{HOME:-$PWD}}\"\n  unit_path=\"$home/.config/systemd/user/$unit.service\"\n  if [ -f \"$unit_path\" ]; then\n    printf 'LoadState=loaded\\nUnitFileState=enabled\\nActiveState=active\\nSubState=running\\nMainPID=4242\\nFragmentPath=%s\\n' \"$unit_path\"\n    exit 0\n  fi\n  printf 'Unit %s could not be found\\n' \"$unit\" >&2\n  exit 1\nfi\nexit 0\n",
+        path_string(&log_path)
+    );
+    let journalctl_script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nprintf 'gateway ok\\n'\n",
+        path_string(&journal_log_path)
+    );
+    write_executable_script(&bin_dir.join("systemctl"), &systemctl_script);
+    write_executable_script(&bin_dir.join("journalctl"), &journalctl_script);
+
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let combined_path = if existing_path.is_empty() {
+        path_string(&bin_dir)
+    } else {
+        format!("{}:{existing_path}", path_string(&bin_dir))
+    };
+    env.insert("PATH".to_string(), combined_path);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "systemd-user".to_string(),
+    );
+}
+
+pub fn install_fake_service_manager(root: &TestDir, env: &mut BTreeMap<String, String>) {
+    if cfg!(target_os = "macos") {
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "launchd".to_string(),
+        );
+        install_fake_launchctl(root, env);
+    } else {
+        install_fake_systemd_tools(root, env);
+    }
+}
+
 pub fn install_fake_git_package_manager(
     root: &TestDir,
     env: &mut BTreeMap<String, String>,

@@ -756,25 +756,36 @@ fn service_install_persists_a_gateway_port_and_writes_a_launch_agent() {
         &["env", "create", "demo", "--launcher", "stable"],
     );
     assert!(created.status.success(), "{}", stderr(&created));
-    let assigned_port = allocate_free_port();
+    let preferred_port = allocate_free_port();
     write_text(
         &root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
-        &format!("{{\"gateway\":{{\"port\":{assigned_port}}}}}\n"),
+        &format!("{{\"gateway\":{{\"port\":{preferred_port}}}}}\n"),
     );
 
     let output = run_ocm(&cwd, &env, &["service", "install", "demo", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    let assigned_port = summary["gatewayPort"].as_u64().unwrap() as u16;
     assert_eq!(summary["envName"], "demo");
     assert_eq!(summary["gatewayPort"], assigned_port);
     assert_eq!(summary["persistedGatewayPort"], true);
-    assert_eq!(summary["previousGatewayPort"], Value::Null);
-    assert_eq!(
-        summary["warnings"],
-        serde_json::json!([format!(
-            "assigned gateway port {assigned_port} to env \"demo\" and saved it to env metadata for service stability"
-        )])
-    );
+    if assigned_port == preferred_port {
+        assert_eq!(summary["previousGatewayPort"], Value::Null);
+        assert_eq!(
+            summary["warnings"],
+            serde_json::json!([format!(
+                "assigned gateway port {assigned_port} to env \"demo\" and saved it to env metadata for service stability"
+            )])
+        );
+    } else {
+        assert_eq!(summary["previousGatewayPort"], preferred_port);
+        assert_eq!(
+            summary["warnings"],
+            serde_json::json!([format!(
+                "gateway port {preferred_port} was unavailable; assigned {assigned_port} to env \"demo\" and saved it to env metadata"
+            )])
+        );
+    }
 
     let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
     assert!(env_show.status.success(), "{}", stderr(&env_show));
