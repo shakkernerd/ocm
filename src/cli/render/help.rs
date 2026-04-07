@@ -2212,7 +2212,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "start" => render_leaf(
             "Start a service",
-            "Start an installed env-scoped service.",
+            "Start an installed env-scoped service after refreshing it from the env's current binding.",
             vec![format!("{cmd} service start <env> [--raw] [--json]")],
             &[
                 (
@@ -2222,7 +2222,9 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the action summary as JSON"),
             ],
             vec![format!("{cmd} service start mira")],
-            &[],
+            &[
+                "Use this after changing an env's launcher or runtime so the installed service picks up the new command.",
+            ],
         ),
         "stop" => render_leaf(
             "Stop a service",
@@ -2240,7 +2242,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "restart" => render_leaf(
             "Restart a service",
-            "Restart an installed env-scoped service.",
+            "Restart an installed env-scoped service after refreshing it from the env's current binding.",
             vec![format!("{cmd} service restart <env> [--raw] [--json]")],
             &[
                 (
@@ -2250,7 +2252,9 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the action summary as JSON"),
             ],
             vec![format!("{cmd} service restart mira")],
-            &[],
+            &[
+                "Restart rewrites the managed service definition before reloading it, so launcher or runtime changes take effect.",
+            ],
         ),
         "uninstall" => render_leaf(
             "Uninstall a service",

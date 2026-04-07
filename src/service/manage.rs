@@ -280,7 +280,7 @@ pub fn start_service(
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
     let prepared = prepare_existing_service(name, env, cwd)?;
-    start_managed_service(&prepared, env)?;
+    refresh_managed_service(&prepared, env)?;
 
     Ok(ServiceActionSummary {
         env_name: prepared.env_meta.name,
@@ -320,7 +320,7 @@ pub fn restart_service(
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
     let prepared = prepare_existing_service(name, env, cwd)?;
-    restart_managed_service(&prepared, env)?;
+    refresh_managed_service(&prepared, env)?;
 
     Ok(ServiceActionSummary {
         env_name: prepared.env_meta.name,
@@ -1141,50 +1141,18 @@ fn bootout_managed_service(label: &str, env: &BTreeMap<String, String>) -> Resul
     Ok(())
 }
 
-fn start_managed_service(
+fn refresh_managed_service(
     prepared: &PreparedService,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => {
-            let domain = gui_domain();
-            let target = format!("{domain}/{}", prepared.managed_label);
-
-            let start = run_launchctl(env, ["kickstart", "-k", target.as_str()])?;
-            if !start.status.success() {
-                if !launchctl_not_loaded(&start) {
-                    return Err(format!(
-                        "launchctl kickstart failed: {}",
-                        launchctl_detail(&start)
-                    ));
-                }
-                if !prepared.managed_plist_path.exists() {
-                    return Err(format!(
-                        "service for env \"{}\" is not installed; run service install first",
-                        prepared.env_meta.name
-                    ));
-                }
-                activate_launch_agent(&prepared.managed_label, &prepared.managed_plist_path, env)?;
-            }
-            Ok(())
-        }
-        ServiceManagerKind::SystemdUser => {
-            if !prepared.managed_plist_path.exists() {
-                return Err(format!(
-                    "service for env \"{}\" is not installed; run service install first",
-                    prepared.env_meta.name
-                ));
-            }
-            let start = run_systemctl(env, ["--user", "start", prepared.managed_label.as_str()])?;
-            if !start.status.success() {
-                return Err(format!(
-                    "systemctl --user start failed: {}",
-                    systemctl_detail(&start)
-                ));
-            }
-            Ok(())
-        }
+    if !prepared.managed_plist_path.exists() {
+        return Err(format!(
+            "service for env \"{}\" is not installed; run service install first",
+            prepared.env_meta.name
+        ));
     }
+    write_service_definition(prepared, env)?;
+    activate_managed_service(&prepared.managed_label, &prepared.managed_plist_path, env)
 }
 
 fn stop_managed_service(
@@ -1209,59 +1177,6 @@ fn stop_managed_service(
                 return Err(format!(
                     "systemctl --user stop failed: {}",
                     systemctl_detail(&stop)
-                ));
-            }
-            Ok(())
-        }
-    }
-}
-
-fn restart_managed_service(
-    prepared: &PreparedService,
-    env: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => {
-            let target = format!("{}/{}", gui_domain(), prepared.managed_label);
-
-            let restart = run_launchctl(env, ["kickstart", "-k", target.as_str()])?;
-            if !restart.status.success() {
-                if !launchctl_not_loaded(&restart) {
-                    return Err(format!(
-                        "launchctl kickstart failed: {}",
-                        launchctl_detail(&restart)
-                    ));
-                }
-                if !prepared.managed_plist_path.exists() {
-                    return Err(format!(
-                        "service for env \"{}\" is not installed; run service install first",
-                        prepared.env_meta.name
-                    ));
-                }
-                activate_launch_agent(&prepared.managed_label, &prepared.managed_plist_path, env)?;
-                let retry = run_launchctl(env, ["kickstart", "-k", target.as_str()])?;
-                if !retry.status.success() {
-                    return Err(format!(
-                        "launchctl kickstart failed: {}",
-                        launchctl_detail(&retry)
-                    ));
-                }
-            }
-            Ok(())
-        }
-        ServiceManagerKind::SystemdUser => {
-            if !prepared.managed_plist_path.exists() {
-                return Err(format!(
-                    "service for env \"{}\" is not installed; run service install first",
-                    prepared.env_meta.name
-                ));
-            }
-            let restart =
-                run_systemctl(env, ["--user", "restart", prepared.managed_label.as_str()])?;
-            if !restart.status.success() {
-                return Err(format!(
-                    "systemctl --user restart failed: {}",
-                    systemctl_detail(&restart)
                 ));
             }
             Ok(())

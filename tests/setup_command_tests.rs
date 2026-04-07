@@ -193,7 +193,7 @@ fn setup_defaults_service_install_to_yes_in_raw_mode() {
 
     let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
     assert!(launchctl_log.contains("bootstrap gui/"));
-    assert!(launchctl_log.contains("kickstart -k gui/"));
+    assert!(launchctl_log.contains("bootout gui/"));
 }
 
 #[test]
