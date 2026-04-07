@@ -395,7 +395,8 @@ impl Cli {
         if !service.installed {
             return Ok((None, None));
         }
-        if !binding_changed && !runtime_changed {
+        let definition_changed = service.definition_drift;
+        if !binding_changed && !runtime_changed && !definition_changed {
             return Ok((None, None));
         }
 
@@ -408,7 +409,7 @@ impl Cli {
             return Ok((Some("restarted".to_string()), note));
         }
 
-        if binding_changed || runtime_changed {
+        if binding_changed || runtime_changed || definition_changed {
             let start = self.with_progress(format!("Starting service for {env_name}"), || {
                 self.service_service().start(env_name)
             })?;
