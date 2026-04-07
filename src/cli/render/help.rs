@@ -349,6 +349,7 @@ pub fn migrate_help(cmd: &str) -> String {
         &[
             "Without an explicit source path, OCM imports from the default plain OpenClaw home under the current user home.",
             "Migrate preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets.",
+            "If `openclaw` is already available on PATH, migrate also binds the imported env to an env-local migrated launcher so you can keep going through OCM immediately.",
             "Use `adopt inspect` or `adopt plan` if you want read-only preview commands before importing.",
             "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
         ],
@@ -556,6 +557,7 @@ pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Without an explicit source path, OCM imports from the default plain OpenClaw home under the current user home.",
                 "This creates a managed env and rewrites env-scoped OpenClaw paths for the new target.",
+                "If `openclaw` is already available on PATH, import also binds the env to an env-local migrated launcher so it is immediately runnable through OCM.",
                 "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
             ],
         )),

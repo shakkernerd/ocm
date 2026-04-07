@@ -150,7 +150,7 @@ ocm adopt plan --name mira
 
 `migrate` is the simple front door for existing OpenClaw users. It imports a plain OpenClaw home into a managed env in one step.
 
-`migrate` preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets. Add `--manifest <path>` if you also want OCM to write a minimal `ocm.yaml` after the import.
+`migrate` preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets. If `openclaw` is already available on `PATH`, it also binds the imported env to an env-local migrated launcher so you can keep using it through OCM immediately. Add `--manifest <path>` if you also want OCM to write a minimal `ocm.yaml` after the import.
 
 `adopt inspect` and `adopt plan` are the explicit read-only preview tools. Use them when you want to inspect the plain OpenClaw home OCM would read or preview the target env/root before importing.
 Relative manifest file paths passed through `--manifest` are resolved from your current working directory.

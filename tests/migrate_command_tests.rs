@@ -1,8 +1,33 @@
 mod support;
 
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
+
+fn install_fake_openclaw_on_path(
+    root: &TestDir,
+    env: &mut std::collections::BTreeMap<String, String>,
+) {
+    let bin_dir = root.child("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let openclaw = bin_dir.join("openclaw");
+    fs::write(&openclaw, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&openclaw).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&openclaw, permissions).unwrap();
+    }
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let path = if existing_path.is_empty() {
+        bin_dir.display().to_string()
+    } else {
+        format!("{}:{existing_path}", bin_dir.display())
+    };
+    env.insert("PATH".to_string(), path);
+}
 
 #[test]
 fn migrate_help_is_available() {
@@ -18,6 +43,7 @@ fn migrate_help_is_available() {
     assert!(body.contains("ocm migrate <env> [<source-home>]"));
     assert!(body.contains("ocm migrate mira"));
     assert!(body.contains("ocm migrate mira --manifest ./ocm.yaml"));
+    assert!(body.contains("migrated launcher"));
     assert!(body.contains("Use `adopt inspect` or `adopt plan`"));
 }
 
@@ -111,6 +137,7 @@ fn help_adopt_import_is_available() {
         "ocm adopt import --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
     ));
     assert!(body.contains("--manifest <path>"));
+    assert!(body.contains("migrated launcher"));
     assert!(body.contains(
         "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
     ));
@@ -295,7 +322,8 @@ fn migrate_preserves_history_and_logs_from_plain_openclaw_home() {
     let source_home = root.child("legacy-home/.openclaw");
     fs::create_dir_all(&cwd).unwrap();
     seed_plain_openclaw_home(&source_home);
-    let env = ocm_env(&root);
+    let mut env = ocm_env(&root);
+    install_fake_openclaw_on_path(&root, &mut env);
 
     let output = run_ocm(
         &cwd,
@@ -311,6 +339,7 @@ fn migrate_preserves_history_and_logs_from_plain_openclaw_home() {
     let body = stdout(&output);
     assert!(body.contains("\"name\": \"mira\""));
     assert!(body.contains("\"sourceName\": \"plain-openclaw\""));
+    assert!(body.contains("\"defaultLauncher\": \"mira.migrated\""));
 
     let imported_state = root.child("ocm-home/envs/mira/.openclaw");
     assert_imported_plain_openclaw_home(&imported_state, &source_home);
@@ -323,7 +352,8 @@ fn adopt_import_preserves_history_and_logs_from_plain_openclaw_home() {
     let source_home = root.child("legacy-home/.openclaw");
     fs::create_dir_all(&cwd).unwrap();
     seed_plain_openclaw_home(&source_home);
-    let env = ocm_env(&root);
+    let mut env = ocm_env(&root);
+    install_fake_openclaw_on_path(&root, &mut env);
 
     let output = run_ocm(
         &cwd,
@@ -338,6 +368,7 @@ fn adopt_import_preserves_history_and_logs_from_plain_openclaw_home() {
         ],
     );
     assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("\"defaultLauncher\": \"mira.migrated\""));
 
     let imported_state = root.child("ocm-home/envs/mira/.openclaw");
     assert_imported_plain_openclaw_home(&imported_state, &source_home);

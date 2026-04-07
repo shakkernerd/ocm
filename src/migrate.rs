@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService};
+use crate::launcher::{AddLauncherOptions, LauncherService};
 use crate::manifest::{ManifestEnv, OcmManifest, render_manifest_yaml, write_manifest};
 use crate::store::{
     copy_dir_recursive, default_env_root, derive_env_paths, display_path, get_environment,
@@ -139,6 +140,7 @@ pub fn migrate_plain_openclaw_home(
     let legacy_root = source_home.parent().unwrap_or(source_home.as_path());
     rewrite_openclaw_config_for_target(&target_paths, Some(legacy_root), created.gateway_port)?;
     prepare_migrated_runtime_state(&target_paths, &source_home)?;
+    let created = bind_migrated_env_if_openclaw_available(created, env, cwd)?;
 
     Ok(EnvImportSummary {
         name: created.name,
@@ -149,6 +151,51 @@ pub fn migrate_plain_openclaw_home(
         default_launcher: created.default_launcher,
         protected: created.protected,
     })
+}
+
+fn bind_migrated_env_if_openclaw_available(
+    created: crate::env::EnvMeta,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<crate::env::EnvMeta, String> {
+    if !command_available_on_path("openclaw", env) {
+        return Ok(created);
+    }
+
+    let launcher_name = format!("{}.migrated", created.name);
+    let launcher_service = LauncherService::new(env, cwd);
+    match launcher_service.show(&launcher_name) {
+        Ok(existing) => {
+            if existing.command != "openclaw" || existing.cwd.is_some() {
+                return Err(format!(
+                    "launcher \"{launcher_name}\" already exists with different settings; choose another env name or remove the conflicting launcher"
+                ));
+            }
+        }
+        Err(error) if error.contains("does not exist") => {
+            launcher_service.add(AddLauncherOptions {
+                name: launcher_name.clone(),
+                command: "openclaw".to_string(),
+                cwd: None,
+                description: Some(format!(
+                    "Imported plain OpenClaw command for env {}",
+                    created.name
+                )),
+            })?;
+        }
+        Err(error) => return Err(error),
+    }
+
+    EnvironmentService::new(env, cwd).set_launcher(&created.name, &launcher_name)
+}
+
+fn command_available_on_path(command: &str, env: &BTreeMap<String, String>) -> bool {
+    let Some(path_value) = env.get("PATH") else {
+        return false;
+    };
+    std::env::split_paths(path_value)
+        .map(|dir| dir.join(command))
+        .any(|candidate| candidate.is_file())
 }
 
 pub fn manifest_for_migration_env(env_name: &str) -> OcmManifest {
@@ -219,6 +266,28 @@ mod tests {
         manifest_for_migration_env, migrate_plain_openclaw_home,
         migrate_plain_openclaw_home_with_manifest, plan_migration, write_migration_manifest,
     };
+
+    fn install_fake_openclaw_on_path(root: &Path, env: &mut BTreeMap<String, String>) {
+        let bin_dir = root.join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let openclaw = bin_dir.join("openclaw");
+        fs::write(&openclaw, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&openclaw).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&openclaw, permissions).unwrap();
+        }
+
+        let existing_path = env.get("PATH").cloned().unwrap_or_default();
+        let path = if existing_path.is_empty() {
+            bin_dir.display().to_string()
+        } else {
+            format!("{}:{existing_path}", bin_dir.display())
+        };
+        env.insert("PATH".to_string(), path);
+    }
 
     #[test]
     fn inspect_migration_source_defaults_to_user_openclaw_home() {
@@ -334,6 +403,7 @@ mod tests {
             "OCM_HOME".to_string(),
             root.join("ocm-home").display().to_string(),
         );
+        install_fake_openclaw_on_path(&root, &mut env);
 
         let summary = migrate_plain_openclaw_home(
             MigrateHomeOptions {
@@ -348,6 +418,7 @@ mod tests {
 
         let target_root = PathBuf::from(summary.root);
         let target_paths = derive_env_paths(&target_root);
+        assert_eq!(summary.default_launcher.as_deref(), Some("mira.migrated"));
         assert!(target_paths.config_path.exists());
         assert!(target_paths.workspace_dir.join("notes.txt").exists());
         assert!(
@@ -391,6 +462,43 @@ mod tests {
         assert!(!logs_raw.contains(&source_home.display().to_string()));
         assert!(backup_raw.contains(&target_paths.state_dir.display().to_string()));
         assert!(!backup_raw.contains(&source_home.display().to_string()));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migrate_plain_openclaw_home_stays_unbound_when_openclaw_is_not_on_path() {
+        let root = std::env::temp_dir().join("ocm-migrate-tests-unbound");
+        let cwd = root.join("cwd");
+        let source_home = root.join("legacy-home");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(source_home.join("workspace")).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), root.join("home").display().to_string());
+        env.insert(
+            "OCM_HOME".to_string(),
+            root.join("ocm-home").display().to_string(),
+        );
+        env.insert(
+            "PATH".to_string(),
+            root.join("empty-bin").display().to_string(),
+        );
+
+        let summary = migrate_plain_openclaw_home(
+            MigrateHomeOptions {
+                source_home: Some(source_home.display().to_string()),
+                name: "mira".to_string(),
+                root: None,
+            },
+            &env,
+            &cwd,
+        )
+        .unwrap();
+
+        assert_eq!(summary.default_launcher, None);
 
         let _ = fs::remove_dir_all(&root);
     }
