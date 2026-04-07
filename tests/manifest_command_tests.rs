@@ -136,9 +136,9 @@ fn manifest_path_rejects_path_and_manifest_together() {
         &["manifest", "path", ".", "--manifest", "./ocm.yaml"],
     );
     assert!(!output.status.success());
-    assert!(stderr(&output).contains(
-        "manifest path accepts only one of [path] or --manifest <path>"
-    ));
+    assert!(
+        stderr(&output).contains("manifest path accepts only one of [path] or --manifest <path>")
+    );
 }
 
 #[test]
@@ -213,9 +213,7 @@ fn help_manifest_resolve_mentions_explicit_manifest_path_rules() {
     let output = run_ocm(&cwd, &env, &["help", "manifest", "resolve"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
-    assert!(body.contains(
-        "ocm manifest resolve [<path>] [--manifest <path>] [--raw] [--json]"
-    ));
+    assert!(body.contains("ocm manifest resolve [<path>] [--manifest <path>] [--raw] [--json]"));
     assert!(body.contains(
         "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
     ));
@@ -231,9 +229,7 @@ fn help_manifest_plan_mentions_explicit_manifest_path_rules() {
     let output = run_ocm(&cwd, &env, &["help", "manifest", "plan"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
-    assert!(body.contains(
-        "ocm manifest plan [<path>] [--manifest <path>] [--raw] [--json]"
-    ));
+    assert!(body.contains("ocm manifest plan [<path>] [--manifest <path>] [--raw] [--json]"));
     assert!(body.contains(
         "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
     ));
@@ -249,9 +245,7 @@ fn help_manifest_drift_mentions_explicit_manifest_path_rules() {
     let output = run_ocm(&cwd, &env, &["help", "manifest", "drift"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
-    assert!(body.contains(
-        "ocm manifest drift [<path>] [--manifest <path>] [--raw] [--json]"
-    ));
+    assert!(body.contains("ocm manifest drift [<path>] [--manifest <path>] [--raw] [--json]"));
     assert!(body.contains(
         "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
     ));
@@ -323,9 +317,9 @@ fn manifest_show_rejects_path_and_manifest_together() {
         &["manifest", "show", ".", "--manifest", "./ocm.yaml"],
     );
     assert!(!output.status.success());
-    assert!(stderr(&output).contains(
-        "manifest show accepts only one of [path] or --manifest <path>"
-    ));
+    assert!(
+        stderr(&output).contains("manifest show accepts only one of [path] or --manifest <path>")
+    );
 }
 
 #[test]
@@ -430,9 +424,10 @@ fn manifest_resolve_rejects_path_and_manifest_together() {
         &["manifest", "resolve", ".", "--manifest", "./ocm.yaml"],
     );
     assert!(!output.status.success());
-    assert!(stderr(&output).contains(
-        "manifest resolve accepts only one of [path] or --manifest <path>"
-    ));
+    assert!(
+        stderr(&output)
+            .contains("manifest resolve accepts only one of [path] or --manifest <path>")
+    );
 }
 
 #[test]
@@ -532,9 +527,9 @@ fn manifest_drift_rejects_path_and_manifest_together() {
         &["manifest", "drift", ".", "--manifest", "./ocm.yaml"],
     );
     assert!(!output.status.success());
-    assert!(stderr(&output).contains(
-        "manifest drift accepts only one of [path] or --manifest <path>"
-    ));
+    assert!(
+        stderr(&output).contains("manifest drift accepts only one of [path] or --manifest <path>")
+    );
 }
 
 #[test]
@@ -681,9 +676,9 @@ fn manifest_plan_rejects_path_and_manifest_together() {
         &["manifest", "plan", ".", "--manifest", "./ocm.yaml"],
     );
     assert!(!output.status.success());
-    assert!(stderr(&output).contains(
-        "manifest plan accepts only one of [path] or --manifest <path>"
-    ));
+    assert!(
+        stderr(&output).contains("manifest plan accepts only one of [path] or --manifest <path>")
+    );
 }
 
 #[test]
