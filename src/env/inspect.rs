@@ -28,6 +28,10 @@ pub struct EnvStatusSummary {
     pub managed_service_state: Option<String>,
     pub openclaw_state: Option<String>,
     pub global_service_state: Option<String>,
+    pub service_definition_drift: Option<bool>,
+    pub service_live_exec_unverified: Option<bool>,
+    pub service_orphaned_live: Option<bool>,
+    pub service_issue: Option<String>,
     pub issue: Option<String>,
 }
 
@@ -54,6 +58,10 @@ impl<'a> EnvironmentService<'a> {
             managed_service_state: None,
             openclaw_state: None,
             global_service_state: None,
+            service_definition_drift: None,
+            service_live_exec_unverified: None,
+            service_orphaned_live: None,
+            service_issue: None,
             issue: None,
         };
 
@@ -61,6 +69,10 @@ impl<'a> EnvironmentService<'a> {
             summary.managed_service_state = Some(service_managed_state(&service));
             summary.openclaw_state = Some(service.openclaw_state.clone());
             summary.global_service_state = Some(service_global_state(&service));
+            summary.service_definition_drift = Some(service.definition_drift);
+            summary.service_live_exec_unverified = Some(service.live_exec_unverified);
+            summary.service_orphaned_live = Some(service.orphaned_live_service);
+            summary.service_issue = service.issue.clone();
         }
 
         match resolve_execution_binding(&env, None, None) {

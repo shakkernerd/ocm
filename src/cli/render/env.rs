@@ -1224,6 +1224,10 @@ mod tests {
                 managed_service_state: Some("running".to_string()),
                 openclaw_state: Some("healthy".to_string()),
                 global_service_state: Some("absent".to_string()),
+                service_definition_drift: None,
+                service_live_exec_unverified: None,
+                service_orphaned_live: None,
+                service_issue: None,
                 issue: None,
             },
             RenderProfile::pretty(false),
@@ -1260,6 +1264,10 @@ mod tests {
                 managed_service_state: Some("absent".to_string()),
                 openclaw_state: Some("stopped".to_string()),
                 global_service_state: Some("absent".to_string()),
+                service_definition_drift: None,
+                service_live_exec_unverified: None,
+                service_orphaned_live: None,
+                service_issue: None,
                 issue: Some("missing binding".to_string()),
             },
             RenderProfile::pretty(false),
@@ -1292,6 +1300,10 @@ mod tests {
                 managed_service_state: Some("loaded".to_string()),
                 openclaw_state: Some("unreachable".to_string()),
                 global_service_state: Some("absent".to_string()),
+                service_definition_drift: None,
+                service_live_exec_unverified: None,
+                service_orphaned_live: None,
+                service_issue: None,
                 issue: None,
             },
             RenderProfile::pretty(false),
@@ -1689,16 +1701,40 @@ pub fn env_status(
             optional_value_row("Port source", status.gateway_port_source.clone()),
             optional_state_row("OCM service", status.managed_service_state.clone()),
             optional_state_row("OpenClaw", status.openclaw_state.clone()),
+            optional_state_row(
+                "Service drift",
+                status
+                    .service_definition_drift
+                    .and_then(|value| value.then_some("definition-drift".to_string())),
+            ),
+            optional_state_row(
+                "Service live state",
+                status
+                    .service_live_exec_unverified
+                    .and_then(|value| value.then_some("unverified".to_string()))
+                    .or_else(|| {
+                        status
+                            .service_orphaned_live
+                            .and_then(|value| value.then_some("orphaned-live".to_string()))
+                    }),
+            ),
             KeyValueRow::plain("Root", status.root.clone()),
         ],
         profile.color,
     );
 
+    let mut issues = Vec::new();
     if let Some(issue) = status.issue.as_ref() {
+        issues.push(KeyValueRow::danger("Problem", issue.clone()));
+    }
+    if let Some(service_issue) = status.service_issue.as_ref() {
+        issues.push(KeyValueRow::warning("Service", service_issue.clone()));
+    }
+    if !issues.is_empty() {
         push_card(
             &mut lines,
             "Issue",
-            vec![KeyValueRow::danger("Problem", issue.clone())],
+            issues,
             profile.color,
         );
     }
@@ -1716,6 +1752,26 @@ fn env_status_next_steps(status: &EnvStatusSummary, command_example: &str) -> Ve
         return vec![KeyValueRow::accent(
             "Start",
             format!("{command_example} start {}", status.env_name),
+        )];
+    }
+
+    if status.service_definition_drift == Some(true) || status.service_orphaned_live == Some(true) {
+        return vec![
+            KeyValueRow::warning(
+                "Refresh service",
+                format!("{command_example} service restart {}", status.env_name),
+            ),
+            KeyValueRow::accent(
+                "Inspect service",
+                format!("{command_example} service status {}", status.env_name),
+            ),
+        ];
+    }
+
+    if status.service_live_exec_unverified == Some(true) {
+        return vec![KeyValueRow::accent(
+            "Inspect service",
+            format!("{command_example} service status {}", status.env_name),
         )];
     }
 
@@ -1886,6 +1942,18 @@ fn env_status_raw(status: &EnvStatusSummary) -> Vec<String> {
     }
     if let Some(state) = status.global_service_state.as_deref() {
         lines.push(format!("globalServiceState: {state}"));
+    }
+    if let Some(value) = status.service_definition_drift {
+        lines.push(format!("serviceDefinitionDrift: {value}"));
+    }
+    if let Some(value) = status.service_live_exec_unverified {
+        lines.push(format!("serviceLiveExecUnverified: {value}"));
+    }
+    if let Some(value) = status.service_orphaned_live {
+        lines.push(format!("serviceOrphanedLive: {value}"));
+    }
+    if let Some(service_issue) = status.service_issue.as_deref() {
+        lines.push(format!("serviceIssue: {service_issue}"));
     }
     if let Some(issue) = status.issue.as_deref() {
         lines.push(format!("issue: {issue}"));
