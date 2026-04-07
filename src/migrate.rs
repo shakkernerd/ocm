@@ -113,6 +113,7 @@ pub fn migrate_plain_openclaw_home(
     cwd: &Path,
 ) -> Result<EnvImportSummary, String> {
     let service = EnvironmentService::new(env, cwd);
+    let migrated_launcher_name = preflight_migrated_launcher_name(&options.name, env, cwd)?;
     let source_home =
         resolve_migration_source_home(options.source_home.as_deref().map(Path::new), env);
     if !source_home.exists() {
@@ -130,17 +131,23 @@ pub fn migrate_plain_openclaw_home(
         default_launcher: None,
         protected: false,
     })?;
+    let created_name = created.name.clone();
     let target_paths = derive_env_paths(Path::new(&created.root));
 
-    if target_paths.state_dir.exists() {
-        fs::remove_dir_all(&target_paths.state_dir).map_err(|error| error.to_string())?;
-    }
-
-    copy_dir_recursive(&source_home, &target_paths.state_dir)?;
-    let legacy_root = source_home.parent().unwrap_or(source_home.as_path());
-    rewrite_openclaw_config_for_target(&target_paths, Some(legacy_root), created.gateway_port)?;
-    prepare_migrated_runtime_state(&target_paths, &source_home)?;
-    let created = bind_migrated_env_if_openclaw_available(created, env, cwd)?;
+    let created = match complete_migration_import(
+        created,
+        &target_paths,
+        &source_home,
+        migrated_launcher_name.as_deref(),
+        env,
+        cwd,
+    ) {
+        Ok(created) => created,
+        Err(error) => {
+            let _ = service.remove(&created_name, true);
+            return Err(error);
+        }
+    };
 
     Ok(EnvImportSummary {
         name: created.name,
@@ -153,28 +160,33 @@ pub fn migrate_plain_openclaw_home(
     })
 }
 
-fn bind_migrated_env_if_openclaw_available(
+fn complete_migration_import(
     created: crate::env::EnvMeta,
+    target_paths: &crate::store::EnvPaths,
+    source_home: &Path,
+    migrated_launcher_name: Option<&str>,
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<crate::env::EnvMeta, String> {
-    if !command_available_on_path("openclaw", env) {
-        return Ok(created);
+    if target_paths.state_dir.exists() {
+        fs::remove_dir_all(&target_paths.state_dir).map_err(|error| error.to_string())?;
     }
 
-    let launcher_name = format!("{}.migrated", created.name);
+    copy_dir_recursive(source_home, &target_paths.state_dir)?;
+    let legacy_root = source_home.parent().unwrap_or(source_home);
+    rewrite_openclaw_config_for_target(target_paths, Some(legacy_root), created.gateway_port)?;
+    prepare_migrated_runtime_state(target_paths, source_home)?;
+
+    let Some(launcher_name) = migrated_launcher_name else {
+        return Ok(created);
+    };
+
     let launcher_service = LauncherService::new(env, cwd);
     match launcher_service.show(&launcher_name) {
-        Ok(existing) => {
-            if existing.command != "openclaw" || existing.cwd.is_some() {
-                return Err(format!(
-                    "launcher \"{launcher_name}\" already exists with different settings; choose another env name or remove the conflicting launcher"
-                ));
-            }
-        }
+        Ok(_) => {}
         Err(error) if error.contains("does not exist") => {
             launcher_service.add(AddLauncherOptions {
-                name: launcher_name.clone(),
+                name: launcher_name.to_string(),
                 command: "openclaw".to_string(),
                 cwd: None,
                 description: Some(format!(
@@ -187,6 +199,31 @@ fn bind_migrated_env_if_openclaw_available(
     }
 
     EnvironmentService::new(env, cwd).set_launcher(&created.name, &launcher_name)
+}
+
+fn preflight_migrated_launcher_name(
+    env_name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<Option<String>, String> {
+    if !command_available_on_path("openclaw", env) {
+        return Ok(None);
+    }
+
+    let launcher_name = format!("{env_name}.migrated");
+    match LauncherService::new(env, cwd).show(&launcher_name) {
+        Ok(existing) => {
+            if existing.command != "openclaw" || existing.cwd.is_some() {
+                Err(format!(
+                    "launcher \"{launcher_name}\" already exists with different settings; choose another env name or remove the conflicting launcher"
+                ))
+            } else {
+                Ok(Some(launcher_name))
+            }
+        }
+        Err(error) if error.contains("does not exist") => Ok(Some(launcher_name)),
+        Err(error) => Err(error),
+    }
 }
 
 fn command_available_on_path(command: &str, env: &BTreeMap<String, String>) -> bool {
@@ -259,6 +296,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use crate::launcher::{AddLauncherOptions, LauncherService};
     use crate::store::derive_env_paths;
 
     use super::{
@@ -499,6 +537,52 @@ mod tests {
         .unwrap();
 
         assert_eq!(summary.default_launcher, None);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migrate_plain_openclaw_home_fails_before_creating_the_env_when_the_migrated_launcher_conflicts()
+    {
+        let root = std::env::temp_dir().join("ocm-migrate-tests-launcher-conflict");
+        let cwd = root.join("cwd");
+        let source_home = root.join("legacy-home");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(source_home.join("workspace")).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), root.join("home").display().to_string());
+        env.insert(
+            "OCM_HOME".to_string(),
+            root.join("ocm-home").display().to_string(),
+        );
+        install_fake_openclaw_on_path(&root, &mut env);
+
+        LauncherService::new(&env, &cwd)
+            .add(AddLauncherOptions {
+                name: "mira.migrated".to_string(),
+                command: "pnpm openclaw".to_string(),
+                cwd: None,
+                description: None,
+            })
+            .unwrap();
+
+        let error = migrate_plain_openclaw_home(
+            MigrateHomeOptions {
+                source_home: Some(source_home.display().to_string()),
+                name: "mira".to_string(),
+                root: None,
+            },
+            &env,
+            &cwd,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("launcher \"mira.migrated\" already exists"));
+        assert!(!root.join("ocm-home/envs/mira.json").exists());
+        assert!(!root.join("ocm-home/envs/mira").exists());
 
         let _ = fs::remove_dir_all(&root);
     }
