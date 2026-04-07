@@ -3,29 +3,13 @@ use crate::manifest::{
     ManifestReconcileOptions, plan_manifest_application, reconcile_manifest_with_options,
     resolve_manifest,
 };
-use crate::store::{get_environment, resolve_absolute_path};
+use crate::store::get_environment;
 
 impl Cli {
     pub(super) fn handle_sync_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "sync")?;
         let (args, dry_run) = Self::consume_flag(args, "--dry-run");
-        let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
-        let explicit_manifest = Self::require_option_value(manifest_value, "--manifest")?;
-        if explicit_manifest.is_some() && !args.is_empty() {
-            return Err("sync accepts only one of [path] or --manifest <path>".to_string());
-        }
-        if args.len() > 1 {
-            return Err(format!("unexpected arguments: {}", args.join(" ")));
-        }
-
-        let search_root = if let Some(path) = explicit_manifest.as_ref() {
-            resolve_absolute_path(path, &self.env, &self.cwd)?
-        } else {
-            args.first()
-                .map(|value| self.resolve_manifest_search_root(value))
-                .transpose()?
-                .unwrap_or_else(|| self.cwd.clone())
-        };
+        let search_root = self.resolve_manifest_input(args, "sync")?;
 
         let resolved = resolve_manifest(&search_root)?
             .ok_or_else(|| format!("no ocm.yaml found from {}", search_root.to_string_lossy()))?;

@@ -28,7 +28,7 @@ use crate::env::EnvironmentService;
 use crate::launcher::LauncherService;
 use crate::runtime::RuntimeService;
 use crate::service::ServiceService;
-use crate::store::ensure_store;
+use crate::store::{ensure_store, resolve_absolute_path};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const INTERNAL_COLOR_MODE_ENV: &str = "OCM_INTERNAL_COLOR_MODE";
@@ -371,6 +371,29 @@ impl Cli {
                     "no active environment; run eval \"$({command} env use <name>)\" or use \"{command} env run <name> -- ...\""
                 )
             })
+    }
+
+    fn resolve_manifest_input(&self, args: Vec<String>, command: &str) -> Result<PathBuf, String> {
+        let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
+        let explicit_manifest = Self::require_option_value(manifest_value, "--manifest")?;
+        if explicit_manifest.is_some() && !args.is_empty() {
+            return Err(format!(
+                "{command} accepts only one of [path] or --manifest <path>"
+            ));
+        }
+        if args.len() > 1 {
+            return Err(format!("unexpected arguments: {}", args.join(" ")));
+        }
+
+        if let Some(path) = explicit_manifest.as_ref() {
+            resolve_absolute_path(path, &self.env, &self.cwd)
+        } else {
+            Ok(args
+                .first()
+                .map(|value| self.resolve_manifest_search_root(value))
+                .transpose()?
+                .unwrap_or_else(|| self.cwd.clone()))
+        }
     }
 
     fn handle_active_env_run_shorthand(&self, openclaw_args: Vec<String>) -> Result<i32, String> {
