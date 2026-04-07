@@ -214,6 +214,7 @@ pub fn up_help(cmd: &str) -> String {
             "`up` is optional project-mode behavior. Normal personal flows still start with `setup` or `start`.",
             "When a manifest is found, `up` can create the env, reconcile its runtime or launcher binding, and apply service install intent.",
             "When `up` applies changes to an existing env, it snapshots that env first and rolls it back if a later reconcile step fails.",
+            "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
             "Use `--dry-run` first when you want to preview what `up` would change.",
         ],
     )
@@ -247,6 +248,7 @@ pub fn sync_help(cmd: &str) -> String {
             "`sync` expects the manifest env to already exist. Use `up` first when the env has not been created yet.",
             "When a manifest is found, `sync` reuses the same reconcile path as `up` but does not create missing envs.",
             "When `sync` applies changes to an existing env, it snapshots that env first and rolls it back if a later reconcile step fails.",
+            "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
         ],
     )
 }
@@ -368,6 +370,7 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "If no manifest is present, the command still succeeds and reports that nothing was found.",
                 "This is a read-only inspection command.",
+                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
             ],
         )),
         "resolve" => Some(render_leaf(
@@ -394,6 +397,7 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "If no manifest is present, the command still succeeds and reports that nothing was found.",
                 "This is a read-only inspection command.",
+                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
             ],
         )),
         "plan" => Some(render_leaf(
@@ -420,6 +424,7 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "If no manifest is present, the command still succeeds and reports that nothing was found.",
                 "This is a read-only inspection command.",
+                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
             ],
         )),
         "drift" => Some(render_leaf(
@@ -446,6 +451,7 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "If no manifest is present, the command still succeeds and reports that nothing was found.",
                 "This is a read-only inspection command.",
+                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
             ],
         )),
         "show" => Some(render_leaf(
@@ -472,6 +478,7 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "If no manifest is present, the command still succeeds and reports that nothing was found.",
                 "This is a read-only inspection command.",
+                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
             ],
         )),
         _ => None,

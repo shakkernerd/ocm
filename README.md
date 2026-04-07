@@ -134,6 +134,7 @@ ocm sync --dry-run
 ```
 
 If a folder has an optional `ocm.yaml`, `up` can create or apply the env, binding, and service changes it declares, and `sync` can reconcile an env that already exists. Existing env applies are snapshotted first and rolled back if a later reconcile step fails. This is project mode, not a requirement for normal `setup` or `start` usage.
+When you pass `--manifest <path>`, relative file paths are resolved from your current working directory.
 
 ### Inspect an existing plain OpenClaw home before migrating it
 

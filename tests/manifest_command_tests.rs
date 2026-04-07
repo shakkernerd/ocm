@@ -188,6 +188,22 @@ fn manifest_group_help_is_available() {
 }
 
 #[test]
+fn help_manifest_path_mentions_explicit_manifest_path_rules() {
+    let root = TestDir::new("manifest-help-path");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["help", "manifest", "path"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("ocm manifest path [<path>] [--manifest <path>] [--raw] [--json]"));
+    assert!(body.contains(
+        "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
+    ));
+}
+
+#[test]
 fn manifest_show_prints_the_discovered_manifest() {
     let root = TestDir::new("manifest-show");
     let cwd = root.child("workspace").join("deep");

@@ -202,4 +202,7 @@ fn help_sync_is_available() {
     assert!(body.contains("ocm sync [path] [--manifest <path>] [--dry-run] [--raw] [--json]"));
     assert!(body.contains("--manifest <path>"));
     assert!(body.contains("snapshots that env first and rolls it back"));
+    assert!(body.contains(
+        "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
+    ));
 }
