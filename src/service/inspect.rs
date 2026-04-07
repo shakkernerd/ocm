@@ -144,6 +144,8 @@ pub(crate) struct LaunchdJobStatus {
     pub(crate) state_dir: Option<String>,
     pub(crate) openclaw_home: Option<String>,
     pub(crate) gateway_port: Option<u32>,
+    pub(crate) program_arguments: Vec<String>,
+    pub(crate) working_directory: Option<String>,
 }
 
 const GATEWAY_PROBE_TIMEOUT_MS: u64 = 120;
@@ -305,16 +307,34 @@ pub fn discover_services(
                     .map(|value| value.to_string())
             })
             .unwrap_or_else(|| display_path(&plist_path));
-        let config_path = read_service_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH", env)?;
-        let state_dir = read_service_environment_value(&plist_path, "OPENCLAW_STATE_DIR", env)?;
-        let openclaw_home = read_service_environment_value(&plist_path, "OPENCLAW_HOME", env)?;
-        let program_arguments = read_service_program_arguments(&plist_path, env)?;
-        let program =
-            read_service_program(&plist_path, env)?.or_else(|| program_arguments.first().cloned());
-        let working_directory = read_service_working_directory(&plist_path, env)?;
-        let gateway_port =
+        let status = inspect_job(&label, &plist_path, env);
+        let config_path = status
+            .config_path
+            .clone()
+            .or(read_service_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH", env)?);
+        let state_dir = status
+            .state_dir
+            .clone()
+            .or(read_service_environment_value(&plist_path, "OPENCLAW_STATE_DIR", env)?);
+        let openclaw_home = status
+            .openclaw_home
+            .clone()
+            .or(read_service_environment_value(&plist_path, "OPENCLAW_HOME", env)?);
+        let program_arguments = if status.program_arguments.is_empty() {
+            read_service_program_arguments(&plist_path, env)?
+        } else {
+            status.program_arguments.clone()
+        };
+        let program = read_service_program(&plist_path, env)?
+            .or_else(|| program_arguments.first().cloned());
+        let working_directory = status
+            .working_directory
+            .clone()
+            .or(read_service_working_directory(&plist_path, env)?);
+        let gateway_port = status.gateway_port.or(
             read_service_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT", env)?
-                .and_then(|value| value.parse::<u32>().ok());
+                .and_then(|value| value.parse::<u32>().ok()),
+        );
 
         if !looks_like_openclaw_service(
             &label,
@@ -328,9 +348,6 @@ pub fn discover_services(
             continue;
         }
 
-        let status = inspect_job(&label, &plist_path, env);
-        let config_path = config_path.or(status.config_path.clone());
-        let gateway_port = gateway_port.or(status.gateway_port);
         let matched_env_name = config_path
             .as_deref()
             .and_then(|value| env_config_paths.get(value))
@@ -441,11 +458,13 @@ fn build_service_summary(
         Err(error) => (None, None, None, Some(error)),
     };
     let installed_exec = if managed_status.installed {
-        read_service_execution(
-            &managed.definition_path,
-            process_env,
-            Path::new(&env_meta.root),
-        )?
+        service_execution_from_status(&managed_status, Path::new(&env_meta.root)).or(
+            read_service_execution(
+                &managed.definition_path,
+                process_env,
+                Path::new(&env_meta.root),
+            )?,
+        )
     } else {
         None
     };
@@ -641,6 +660,50 @@ fn read_service_execution(
         program_arguments,
         run_dir,
     }))
+}
+
+fn service_execution_from_status(
+    status: &LaunchdJobStatus,
+    fallback_run_dir: &Path,
+) -> Option<ServiceExecutionDetails> {
+    if status.program_arguments.is_empty() {
+        return None;
+    }
+
+    let run_dir = status
+        .working_directory
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| fallback_run_dir.to_path_buf());
+    let program_arguments = status.program_arguments.clone();
+
+    if program_arguments.len() == 3
+        && program_arguments[0] == "/bin/sh"
+        && program_arguments[1] == "-lc"
+    {
+        return Some(ServiceExecutionDetails {
+            command: Some(program_arguments[2].clone()),
+            binary_path: None,
+            args: Vec::new(),
+            program_arguments,
+            run_dir,
+        });
+    }
+
+    let binary_path = program_arguments.first().cloned();
+    let args = program_arguments
+        .iter()
+        .skip(1)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Some(ServiceExecutionDetails {
+        command: None,
+        binary_path,
+        args,
+        program_arguments,
+        run_dir,
+    })
 }
 
 fn service_execution_health_probe_spec(
@@ -1108,7 +1171,7 @@ pub(crate) fn inspect_job(
                     "--user",
                     "show",
                     label,
-                    "--property=LoadState,UnitFileState,ActiveState,SubState,MainPID,FragmentPath",
+                    "--property=LoadState,UnitFileState,ActiveState,SubState,MainPID,FragmentPath,ExecStart,WorkingDirectory,Environment",
                 ])
                 .output();
             let Ok(output) = output else {
@@ -1184,6 +1247,21 @@ fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
         if let Some(value) = line.strip_prefix("MainPID=") {
             let pid = value.trim().parse::<u32>().ok().filter(|pid| *pid > 0);
             status.pid = pid;
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("ExecStart=") {
+            status.program_arguments = parse_systemctl_exec_start(value.trim());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("WorkingDirectory=") {
+            let value = value.trim();
+            if !value.is_empty() {
+                status.working_directory = Some(value.to_string());
+            }
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("Environment=") {
+            parse_systemctl_environment(value.trim(), status);
         }
     }
 
@@ -1193,6 +1271,39 @@ fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
             .is_some_and(|value| !matches!(value, "not-found" | "masked"));
     status.running = active_state.as_deref() == Some("active");
     status.state = sub_state.or(active_state);
+}
+
+fn parse_systemctl_exec_start(raw: &str) -> Vec<String> {
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    if !raw.starts_with('{') {
+        return parse_systemd_words(raw).unwrap_or_default();
+    }
+    let Some(argv_index) = raw.find("argv[]=") else {
+        return Vec::new();
+    };
+    let argv = &raw[argv_index + "argv[]=".len()..];
+    let end = argv.find(" ;").unwrap_or(argv.len());
+    parse_systemd_words(argv[..end].trim()).unwrap_or_default()
+}
+
+fn parse_systemctl_environment(raw: &str, status: &mut LaunchdJobStatus) {
+    for entry in parse_systemd_words(raw).unwrap_or_default() {
+        let unquoted = systemd_unquote(&entry);
+        let Some((key, value)) = unquoted.split_once('=') else {
+            continue;
+        };
+        match key {
+            "OPENCLAW_CONFIG_PATH" => status.config_path = Some(value.to_string()),
+            "OPENCLAW_STATE_DIR" => status.state_dir = Some(value.to_string()),
+            "OPENCLAW_HOME" => status.openclaw_home = Some(value.to_string()),
+            "OPENCLAW_GATEWAY_PORT" => {
+                status.gateway_port = value.parse::<u32>().ok();
+            }
+            _ => {}
+        }
+    }
 }
 
 fn latest_matching_global_backup_path(
@@ -1726,6 +1837,30 @@ environment = {
         assert!(status.running);
         assert_eq!(status.pid, Some(4242));
         assert_eq!(status.state.as_deref(), Some("running"));
+    }
+
+    #[test]
+    fn parse_systemctl_show_extracts_live_launch_details() {
+        let mut status = LaunchdJobStatus::default();
+        parse_systemctl_show(
+            "LoadState=loaded\nUnitFileState=enabled\nActiveState=active\nSubState=running\nMainPID=4242\nExecStart=/bin/sh -lc \"/bin/true gateway run --port 18790\"\nWorkingDirectory=/tmp/live\nEnvironment=\"OPENCLAW_CONFIG_PATH=/tmp/live/.openclaw/openclaw.json\" \"OPENCLAW_STATE_DIR=/tmp/live/.openclaw\" \"OPENCLAW_HOME=/tmp/live\" \"OPENCLAW_GATEWAY_PORT=18790\"\n",
+            &mut status,
+        );
+
+        assert_eq!(
+            status.program_arguments,
+            vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "/bin/true gateway run --port 18790".to_string(),
+            ]
+        );
+        assert_eq!(status.working_directory.as_deref(), Some("/tmp/live"));
+        assert_eq!(
+            status.config_path.as_deref(),
+            Some("/tmp/live/.openclaw/openclaw.json")
+        );
+        assert_eq!(status.gateway_port, Some(18790));
     }
 
     #[test]

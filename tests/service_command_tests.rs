@@ -2600,6 +2600,112 @@ fn systemd_service_status_and_discover_use_units() {
 }
 
 #[test]
+fn systemd_status_and_discover_prefer_live_show_details_when_the_loaded_unit_is_stale() {
+    let root = TestDir::new("service-status-systemd-live-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_systemd_tools(&root, &mut env);
+
+    let stable = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "/bin/true"],
+    );
+    assert!(stable.status.success(), "{}", stderr(&stable));
+
+    let dev_dir = root.child("openclaw-dev");
+    fs::create_dir_all(&dev_dir).unwrap();
+    let dev = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "dev",
+            "--command",
+            "pnpm openclaw",
+            "--cwd",
+            &path_string(&dev_dir),
+        ],
+    );
+    assert!(dev.status.success(), "{}", stderr(&dev));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let rebound = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "dev"]);
+    assert!(rebound.status.success(), "{}", stderr(&rebound));
+
+    let restart = run_ocm(&cwd, &env, &["service", "restart", "demo"]);
+    assert!(restart.status.success(), "{}", stderr(&restart));
+
+    let managed_label = managed_service_label(&env, &cwd, "demo");
+    let managed_path = managed_service_definition_path(&env, &cwd, "demo");
+    let live_port = 18795_u16;
+    let live_root = path_string(&root.child("ocm-home/envs/demo"));
+    let live_state_dir = format!("{live_root}/.openclaw");
+    let live_config_path = format!("{live_state_dir}/openclaw.json");
+    write_text(
+        &managed_path.with_extension("show"),
+        &format!(
+            "LoadState=loaded\nUnitFileState=enabled\nActiveState=active\nSubState=running\nMainPID=4242\nFragmentPath={}\nExecStart=/bin/sh -lc \"/bin/true gateway run --port {}\"\nWorkingDirectory={}\nEnvironment=\"OPENCLAW_CONFIG_PATH={}\" \"OPENCLAW_STATE_DIR={}\" \"OPENCLAW_HOME={}\" \"OPENCLAW_GATEWAY_PORT={}\"\n",
+            path_string(&managed_path),
+            live_port,
+            live_root,
+            live_config_path,
+            live_state_dir,
+            live_root,
+            live_port,
+        ),
+    );
+
+    let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let summary: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    assert_eq!(summary["definitionDrift"], true);
+    assert_eq!(summary["gatewayPort"], live_port);
+    assert!(
+        summary["command"]
+            .as_str()
+            .unwrap()
+            .contains("/bin/true gateway run --port 18795")
+    );
+    assert!(
+        summary["issue"]
+            .as_str()
+            .unwrap()
+            .contains("service restart demo")
+    );
+
+    let discover = run_ocm(&cwd, &env, &["service", "discover", "--json"]);
+    assert!(discover.status.success(), "{}", stderr(&discover));
+    let discovered: Value = serde_json::from_str(&stdout(&discover)).unwrap();
+    let service = discovered["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|service| service["label"] == managed_label)
+        .unwrap();
+    assert_eq!(service["gatewayPort"], live_port);
+    assert_eq!(service["workingDirectory"], live_root);
+    assert!(
+        service["programArguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "/bin/true gateway run --port 18795")
+    );
+}
+
+#[test]
 fn systemd_service_logs_use_journalctl() {
     let root = TestDir::new("service-logs-systemd");
     let cwd = root.child("workspace");
