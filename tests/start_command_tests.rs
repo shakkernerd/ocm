@@ -161,6 +161,32 @@ fn start_without_a_name_generates_a_new_env_each_time() {
 }
 
 #[test]
+fn start_rejects_services_on_unsupported_backends() {
+    let root = TestDir::new("start-unsupported-service-backend");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "unsupported".to_string(),
+    );
+
+    let start = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "start",
+            "demo",
+            "--command",
+            "openclaw",
+            "--no-onboard",
+        ],
+    );
+    assert_eq!(start.status.code(), Some(1));
+    assert!(stderr(&start).contains("managed services are not supported on this platform yet"));
+}
+
+#[test]
 fn start_can_create_a_local_command_launcher() {
     let root = TestDir::new("start-command-launcher");
     let cwd = root.child("workspace");

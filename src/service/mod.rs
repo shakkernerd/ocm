@@ -11,7 +11,9 @@ pub use manage::{
     ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary, ServiceLogSummary,
     ServiceRestoreSummary,
 };
-pub(crate) use platform::{ServiceManagerKind, service_manager_kind};
+pub(crate) use platform::{
+    ServiceManagerKind, service_manager_kind, unsupported_service_manager_message,
+};
 
 pub struct ServiceService<'a> {
     env: &'a BTreeMap<String, String>,

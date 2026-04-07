@@ -1183,6 +1183,7 @@ pub(crate) fn inspect_job(
 
             parse_systemctl_show(&String::from_utf8_lossy(&output.stdout), &mut status);
         }
+        ServiceManagerKind::Unsupported => {}
     }
 
     status
@@ -1441,6 +1442,10 @@ fn read_service_label(
             .file_stem()
             .and_then(|value| value.to_str())
             .map(|value| value.to_string())),
+        ServiceManagerKind::Unsupported => Ok(service_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_string())),
     }
 }
 
@@ -1452,6 +1457,7 @@ pub(crate) fn read_service_environment_value(
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => read_launch_agent_environment_value(service_path, key),
         ServiceManagerKind::SystemdUser => read_systemd_environment_value(service_path, key),
+        ServiceManagerKind::Unsupported => Ok(None),
     }
 }
 
@@ -1464,6 +1470,7 @@ fn read_service_program(
         ServiceManagerKind::SystemdUser => {
             Ok(read_systemd_exec_start(service_path)?.first().cloned())
         }
+        ServiceManagerKind::Unsupported => Ok(None),
     }
 }
 
@@ -1474,6 +1481,7 @@ fn read_service_program_arguments(
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => read_plist_array_values(service_path, "ProgramArguments"),
         ServiceManagerKind::SystemdUser => read_systemd_exec_start(service_path),
+        ServiceManagerKind::Unsupported => Ok(Vec::new()),
     }
 }
 
@@ -1484,6 +1492,7 @@ fn read_service_working_directory(
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => read_plist_string_value(service_path, "WorkingDirectory"),
         ServiceManagerKind::SystemdUser => read_systemd_directive(service_path, "WorkingDirectory"),
+        ServiceManagerKind::Unsupported => Ok(None),
     }
 }
 

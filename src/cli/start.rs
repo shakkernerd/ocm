@@ -5,6 +5,9 @@ use crate::env::{CreateEnvironmentOptions, EnvMeta};
 use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
 use crate::launcher::AddLauncherOptions;
 use crate::migrate::inspect_migration_source;
+use crate::service::{
+    ServiceManagerKind, service_manager_kind, unsupported_service_manager_message,
+};
 use crate::store::validate_name;
 
 #[derive(Clone, Debug, Serialize)]
@@ -223,6 +226,9 @@ impl Cli {
 
         let mut service_started = false;
         if request.service_requested {
+            if service_manager_kind(&self.env) == ServiceManagerKind::Unsupported {
+                return Err(unsupported_service_manager_message().to_string());
+            }
             self.with_progress(format!("Installing service for {}", request.name), || {
                 self.service_service().install(&request.name)
             })?;

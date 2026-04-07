@@ -731,6 +731,21 @@ fn service_manager_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
                 ),
             ),
         },
+        ServiceManagerKind::Unsupported => check(
+            "background-services",
+            "managed services",
+            "Keep envs running in the background",
+            HostCheckLevel::Recommended,
+            HostCheckStatus::Missing,
+            HostCheckNotes::new(
+                None,
+                Some("managed services are not supported on this platform yet".to_string()),
+                Some(
+                    "Use --no-service and run OpenClaw directly inside the env for now."
+                        .to_string(),
+                ),
+            ),
+        ),
     }
 }
 

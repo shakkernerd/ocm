@@ -23,6 +23,11 @@ pub(crate) struct ManagedServiceIdentity {
 pub(crate) enum ServiceManagerKind {
     Launchd,
     SystemdUser,
+    Unsupported,
+}
+
+pub(crate) fn unsupported_service_manager_message() -> &'static str {
+    "managed services are not supported on this platform yet; use --no-service and run OpenClaw directly inside the env for now"
 }
 
 pub(crate) fn service_manager_kind(env: &BTreeMap<String, String>) -> ServiceManagerKind {
@@ -32,14 +37,17 @@ pub(crate) fn service_manager_kind(env: &BTreeMap<String, String>) -> ServiceMan
             "systemd" | "systemd-user" | "systemd_user" => {
                 return ServiceManagerKind::SystemdUser;
             }
+            "unsupported" => return ServiceManagerKind::Unsupported,
             _ => {}
         }
     }
 
     if cfg!(target_os = "linux") {
         ServiceManagerKind::SystemdUser
-    } else {
+    } else if cfg!(target_os = "macos") {
         ServiceManagerKind::Launchd
+    } else {
+        ServiceManagerKind::Unsupported
     }
 }
 
@@ -97,6 +105,7 @@ pub(crate) fn service_definition_dir(env: &BTreeMap<String, String>) -> PathBuf 
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => home.join("Library").join("LaunchAgents"),
         ServiceManagerKind::SystemdUser => home.join(".config").join("systemd").join("user"),
+        ServiceManagerKind::Unsupported => home.join(".ocm").join("unsupported-services"),
     }
 }
 
@@ -104,6 +113,7 @@ pub(crate) fn service_definition_extension(kind: ServiceManagerKind) -> &'static
     match kind {
         ServiceManagerKind::Launchd => "plist",
         ServiceManagerKind::SystemdUser => "service",
+        ServiceManagerKind::Unsupported => "service",
     }
 }
 
@@ -114,8 +124,7 @@ mod tests {
 
     use super::{
         ManagedServiceIdentity, ServiceManagerKind, global_service_definition_path,
-        managed_service_identity, managed_service_label, service_definition_dir,
-        service_manager_kind,
+        managed_service_identity, managed_service_label, service_definition_dir, service_manager_kind,
     };
 
     #[test]
@@ -126,6 +135,16 @@ mod tests {
             "systemd-user".to_string(),
         );
         assert_eq!(service_manager_kind(&env), ServiceManagerKind::SystemdUser);
+    }
+
+    #[test]
+    fn manager_override_supports_unsupported_backends() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "unsupported".to_string(),
+        );
+        assert_eq!(service_manager_kind(&env), ServiceManagerKind::Unsupported);
     }
 
     #[test]

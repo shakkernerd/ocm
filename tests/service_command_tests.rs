@@ -2356,6 +2356,36 @@ fn unknown_service_commands_use_service_specific_errors() {
 }
 
 #[test]
+fn service_install_rejects_unsupported_backends() {
+    let root = TestDir::new("service-install-unsupported");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "unsupported".to_string(),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "/bin/true"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert_eq!(install.status.code(), Some(1));
+    assert!(stderr(&install).contains("managed services are not supported on this platform yet"));
+}
+
+#[test]
 fn systemd_service_install_writes_unit_and_restarts_it() {
     let root = TestDir::new("service-install-systemd");
     let cwd = root.child("workspace");

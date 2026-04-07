@@ -12,7 +12,9 @@ use super::inspect::{
     GLOBAL_GATEWAY_LABEL, ServiceLaunchSpec, current_uid, global_plist_path, managed_plist_path,
     managed_service_label, resolve_service_launch, service_status,
 };
-use super::platform::{ServiceManagerKind, service_manager_kind};
+use super::platform::{
+    ServiceManagerKind, service_manager_kind, unsupported_service_manager_message,
+};
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::infra::shell::build_openclaw_env;
 use crate::store::{
@@ -744,6 +746,9 @@ fn write_service_definition(
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => write_plist_file(prepared, env),
         ServiceManagerKind::SystemdUser => write_systemd_unit_file(prepared, env),
+        ServiceManagerKind::Unsupported => {
+            Err(unsupported_service_manager_message().to_string())
+        }
     }
 }
 
@@ -906,6 +911,7 @@ fn build_service_environment(
                 launchd_label.to_string(),
             );
         }
+        ServiceManagerKind::Unsupported => {}
     }
     service_env
 }
@@ -1052,6 +1058,9 @@ fn activate_managed_service(
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => activate_launch_agent(label, service_path, env),
         ServiceManagerKind::SystemdUser => activate_systemd_user_service(label, env),
+        ServiceManagerKind::Unsupported => {
+            Err(unsupported_service_manager_message().to_string())
+        }
     }
 }
 
@@ -1251,6 +1260,9 @@ fn stop_managed_service(
             }
             Ok(())
         }
+        ServiceManagerKind::Unsupported => {
+            Err(unsupported_service_manager_message().to_string())
+        }
     }
 }
 
@@ -1275,6 +1287,9 @@ fn uninstall_managed_service_by_label(
                 ));
             }
             Ok(())
+        }
+        ServiceManagerKind::Unsupported => {
+            Err(unsupported_service_manager_message().to_string())
         }
     }
 }
