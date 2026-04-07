@@ -516,6 +516,7 @@ pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Without an explicit source path, OCM imports from the default plain OpenClaw home under the current user home.",
                 "This creates a managed env and rewrites env-scoped OpenClaw paths for the new target.",
+                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
             ],
         )),
         "inspect" => Some(render_leaf(
@@ -571,6 +572,7 @@ pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Without an explicit source path, OCM plans from the default plain OpenClaw home under the current user home.",
                 "This command is read-only. It does not create, import, write manifests, or modify any env.",
+                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
             ],
         )),
         _ => None,

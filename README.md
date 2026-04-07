@@ -149,6 +149,7 @@ ocm migrate import --name mira --manifest ./ocm.yaml
 `inspect` and `plan` are read-only. They show the plain OpenClaw home OCM would inspect and the env target it would use before any import work happens.
 
 `migrate import` creates the managed env from a plain OpenClaw home, preserves durable config and agent auth, and clears copied runtime residue like sessions and logs. Add `--manifest <path>` if you also want OCM to write a minimal `ocm.yaml` after the import.
+Relative manifest file paths passed through `--manifest` are resolved from your current working directory.
 
 ### Keep background services visible
 

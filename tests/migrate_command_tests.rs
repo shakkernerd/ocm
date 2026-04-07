@@ -93,6 +93,9 @@ fn help_migrate_import_is_available() {
         "ocm migrate import --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
     ));
     assert!(body.contains("--manifest <path>"));
+    assert!(body.contains(
+        "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
+    ));
 }
 
 #[test]
@@ -182,6 +185,9 @@ fn help_migrate_plan_is_available() {
         "ocm migrate plan --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
     ));
     assert!(body.contains("--manifest <path>"));
+    assert!(body.contains(
+        "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
+    ));
 }
 
 #[test]
