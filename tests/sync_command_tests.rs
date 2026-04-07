@@ -189,6 +189,19 @@ fn sync_reports_missing_explicit_manifest_files() {
 }
 
 #[test]
+fn sync_reports_invalid_manifest_schema() {
+    let root = TestDir::new("sync-invalid-schema");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(cwd.join("ocm.yaml"), "schema: ocm/v2\nenv:\n  name: mira\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["sync", "--dry-run"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("manifest schema must be ocm/v1"));
+}
+
+#[test]
 fn sync_applies_runtime_binding_to_an_existing_env() {
     let root = TestDir::new("sync-runtime");
     let cwd = root.child("workspace");

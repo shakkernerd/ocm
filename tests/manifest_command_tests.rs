@@ -340,6 +340,19 @@ fn manifest_show_reports_missing_explicit_manifest_files() {
 }
 
 #[test]
+fn manifest_show_reports_invalid_schema() {
+    let root = TestDir::new("manifest-show-invalid-schema");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(cwd.join("ocm.yaml"), "schema: ocm/v2\nenv:\n  name: mira\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["manifest", "show"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("manifest schema must be ocm/v1"));
+}
+
+#[test]
 fn manifest_show_reports_when_no_manifest_exists() {
     let root = TestDir::new("manifest-show-missing");
     let cwd = root.child("workspace");

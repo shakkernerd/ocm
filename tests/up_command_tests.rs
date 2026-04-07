@@ -149,6 +149,19 @@ fn up_reports_missing_explicit_manifest_files() {
 }
 
 #[test]
+fn up_reports_invalid_manifest_schema() {
+    let root = TestDir::new("up-invalid-schema");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(cwd.join("ocm.yaml"), "schema: ocm/v2\nenv:\n  name: mira\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["up", "--dry-run"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("manifest schema must be ocm/v1"));
+}
+
+#[test]
 fn up_creates_the_env_and_applies_the_launcher_binding() {
     let root = TestDir::new("up-apply-launcher");
     let cwd = root.child("workspace");
