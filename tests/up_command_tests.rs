@@ -28,6 +28,31 @@ fn up_dry_run_reports_the_manifest_plan_without_creating_the_env() {
 }
 
 #[test]
+fn up_dry_run_accepts_an_explicit_manifest_path() {
+    let root = TestDir::new("up-dry-run-manifest-path");
+    let repo = root.child("workspace");
+    let cwd = repo.join("deep");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        repo.join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["up", "--manifest", "./ocm.yaml", "--dry-run", "--json"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"dry_run\": true"));
+    assert!(body.contains("\"path\":"));
+    assert!(body.contains("ocm.yaml"));
+}
+
+#[test]
 fn up_creates_the_env_and_applies_the_launcher_binding() {
     let root = TestDir::new("up-apply-launcher");
     let cwd = root.child("workspace");
@@ -69,7 +94,8 @@ fn help_up_is_available() {
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     assert!(body.contains("Apply a manifest"));
-    assert!(body.contains("ocm up [path] [--dry-run] [--raw] [--json]"));
+    assert!(body.contains("ocm up [path] [--manifest <path>] [--dry-run] [--raw] [--json]"));
+    assert!(body.contains("--manifest <path>"));
     assert!(body.contains("snapshots that env first and rolls it back"));
 }
 

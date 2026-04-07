@@ -190,8 +190,14 @@ pub fn up_help(cmd: &str) -> String {
     render_leaf(
         "Apply a manifest",
         "Discover an optional ocm.yaml from the current directory or an explicit path, preview its plan, or reconcile the target environment to match it.",
-        vec![format!("{cmd} up [path] [--dry-run] [--raw] [--json]")],
+        vec![format!(
+            "{cmd} up [path] [--manifest <path>] [--dry-run] [--raw] [--json]"
+        )],
         &[
+            (
+                "--manifest <path>",
+                "Use a specific manifest file or search root",
+            ),
             (
                 "--dry-run",
                 "Show the manifest plan without changing the environment",
@@ -199,7 +205,11 @@ pub fn up_help(cmd: &str) -> String {
             ("--raw", "Print raw key=value style output"),
             ("--json", "Print a machine-readable up summary"),
         ],
-        vec![format!("{cmd} up --dry-run"), format!("{cmd} up")],
+        vec![
+            format!("{cmd} up --dry-run"),
+            format!("{cmd} up"),
+            format!("{cmd} up --manifest ./ocm.yaml --dry-run"),
+        ],
         &[
             "`up` is optional project-mode behavior. Normal personal flows still start with `setup` or `start`.",
             "When a manifest is found, `up` can create the env, reconcile its runtime or launcher binding, and apply service install intent.",
@@ -213,8 +223,14 @@ pub fn sync_help(cmd: &str) -> String {
     render_leaf(
         "Synchronize an existing env from a manifest",
         "Discover an optional ocm.yaml from the current directory or an explicit path and reconcile an already existing environment to match it.",
-        vec![format!("{cmd} sync [path] [--dry-run] [--raw] [--json]")],
+        vec![format!(
+            "{cmd} sync [path] [--manifest <path>] [--dry-run] [--raw] [--json]"
+        )],
         &[
+            (
+                "--manifest <path>",
+                "Use a specific manifest file or search root",
+            ),
             (
                 "--dry-run",
                 "Show the manifest plan without changing the environment",
@@ -222,7 +238,11 @@ pub fn sync_help(cmd: &str) -> String {
             ("--raw", "Print raw key=value style output"),
             ("--json", "Print a machine-readable sync summary"),
         ],
-        vec![format!("{cmd} sync --dry-run"), format!("{cmd} sync")],
+        vec![
+            format!("{cmd} sync --dry-run"),
+            format!("{cmd} sync"),
+            format!("{cmd} sync --manifest ./ocm.yaml --dry-run"),
+        ],
         &[
             "`sync` expects the manifest env to already exist. Use `up` first when the env has not been created yet.",
             "When a manifest is found, `sync` reuses the same reconcile path as `up` but does not create missing envs.",
