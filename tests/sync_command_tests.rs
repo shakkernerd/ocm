@@ -85,6 +85,47 @@ fn sync_dry_run_accepts_an_explicit_manifest_path() {
 }
 
 #[test]
+fn sync_dry_run_accepts_an_explicit_custom_manifest_file() {
+    let root = TestDir::new("sync-dry-run-manifest-file");
+    let repo = root.child("workspace");
+    let cwd = repo.join("deep");
+    let manifest_path = repo.join("mira.yaml");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        &manifest_path,
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "printf launcher"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "sync",
+            "--manifest",
+            manifest_path.to_string_lossy().as_ref(),
+            "--dry-run",
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"dry_run\": true"));
+    assert!(body.contains(&manifest_path.to_string_lossy().to_string()));
+    assert!(body.contains("\"desired_launcher\": \"dev\""));
+}
+
+#[test]
 fn sync_rejects_path_and_manifest_together() {
     let root = TestDir::new("sync-manifest-conflict");
     let cwd = root.child("workspace");
