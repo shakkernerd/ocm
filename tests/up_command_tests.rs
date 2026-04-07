@@ -53,6 +53,23 @@ fn up_dry_run_accepts_an_explicit_manifest_path() {
 }
 
 #[test]
+fn up_rejects_path_and_manifest_together() {
+    let root = TestDir::new("up-manifest-conflict");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        cwd.join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["up", ".", "--manifest", "./ocm.yaml"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("up accepts only one of [path] or --manifest <path>"));
+}
+
+#[test]
 fn up_creates_the_env_and_applies_the_launcher_binding() {
     let root = TestDir::new("up-apply-launcher");
     let cwd = root.child("workspace");

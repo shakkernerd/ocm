@@ -85,6 +85,23 @@ fn sync_dry_run_accepts_an_explicit_manifest_path() {
 }
 
 #[test]
+fn sync_rejects_path_and_manifest_together() {
+    let root = TestDir::new("sync-manifest-conflict");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        cwd.join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["sync", ".", "--manifest", "./ocm.yaml"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("sync accepts only one of [path] or --manifest <path>"));
+}
+
+#[test]
 fn sync_applies_runtime_binding_to_an_existing_env() {
     let root = TestDir::new("sync-runtime");
     let cwd = root.child("workspace");

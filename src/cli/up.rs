@@ -11,6 +11,9 @@ impl Cli {
         let (args, dry_run) = Self::consume_flag(args, "--dry-run");
         let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
         let explicit_manifest = Self::require_option_value(manifest_value, "--manifest")?;
+        if explicit_manifest.is_some() && !args.is_empty() {
+            return Err("up accepts only one of [path] or --manifest <path>".to_string());
+        }
         if args.len() > 1 {
             return Err(format!("unexpected arguments: {}", args.join(" ")));
         }
