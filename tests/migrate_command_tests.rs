@@ -5,8 +5,8 @@ use std::fs;
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
 #[test]
-fn migrate_group_help_is_available() {
-    let root = TestDir::new("migrate-help-group");
+fn migrate_help_is_available() {
+    let root = TestDir::new("migrate-help");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
@@ -14,22 +14,37 @@ fn migrate_group_help_is_available() {
     let output = run_ocm(&cwd, &env, &["help", "migrate"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
-    assert!(body.contains("Migration commands"));
-    assert!(body.contains("ocm migrate import --name mira"));
-    assert!(body.contains("ocm migrate import --name mira --manifest ./ocm.yaml"));
-    assert!(body.contains("ocm migrate plan --name mira --manifest ./ocm.yaml"));
-    assert!(body.contains("ocm migrate inspect"));
-    assert!(body.contains("ocm migrate plan --name mira"));
+    assert!(body.contains("Migrate an existing OpenClaw home"));
+    assert!(body.contains("ocm migrate <env> [<source-home>]"));
+    assert!(body.contains("ocm migrate mira"));
+    assert!(body.contains("ocm migrate mira --manifest ./ocm.yaml"));
+    assert!(body.contains("Use `adopt inspect` or `adopt plan`"));
 }
 
 #[test]
-fn migrate_inspect_defaults_to_the_plain_openclaw_home() {
-    let root = TestDir::new("migrate-inspect-default");
+fn adopt_group_help_is_available() {
+    let root = TestDir::new("adopt-help-group");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let output = run_ocm(&cwd, &env, &["migrate", "inspect", "--json"]);
+    let output = run_ocm(&cwd, &env, &["help", "adopt"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("Adoption commands"));
+    assert!(body.contains("ocm adopt inspect"));
+    assert!(body.contains("ocm adopt plan --name mira"));
+    assert!(body.contains("ocm adopt import --name mira"));
+}
+
+#[test]
+fn adopt_inspect_defaults_to_the_plain_openclaw_home() {
+    let root = TestDir::new("adopt-inspect-default");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["adopt", "inspect", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     assert!(body.contains("\"sourceHome\":"));
@@ -38,8 +53,8 @@ fn migrate_inspect_defaults_to_the_plain_openclaw_home() {
 }
 
 #[test]
-fn migrate_inspect_can_use_an_explicit_source_home() {
-    let root = TestDir::new("migrate-inspect-explicit");
+fn adopt_inspect_can_use_an_explicit_source_home() {
+    let root = TestDir::new("adopt-inspect-explicit");
     let cwd = root.child("workspace");
     let source_home = root.child("legacy-openclaw");
     fs::create_dir_all(source_home.join("workspace")).unwrap();
@@ -51,7 +66,7 @@ fn migrate_inspect_can_use_an_explicit_source_home() {
         &cwd,
         &env,
         &[
-            "migrate",
+            "adopt",
             "inspect",
             source_home.to_string_lossy().as_ref(),
             "--raw",
@@ -65,27 +80,27 @@ fn migrate_inspect_can_use_an_explicit_source_home() {
 }
 
 #[test]
-fn help_migrate_inspect_is_available() {
-    let root = TestDir::new("migrate-help-inspect");
+fn help_adopt_inspect_is_available() {
+    let root = TestDir::new("adopt-help-inspect");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let output = run_ocm(&cwd, &env, &["help", "migrate", "inspect"]);
+    let output = run_ocm(&cwd, &env, &["help", "adopt", "inspect"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     assert!(body.contains("Inspect a migration source"));
-    assert!(body.contains("ocm migrate inspect [<source-home>] [--raw] [--json]"));
+    assert!(body.contains("ocm adopt inspect [<source-home>] [--raw] [--json]"));
 }
 
 #[test]
-fn help_migrate_import_is_available() {
-    let root = TestDir::new("migrate-help-import");
+fn help_adopt_import_is_available() {
+    let root = TestDir::new("adopt-help-import");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let output = run_ocm(&cwd, &env, &["help", "migrate", "import"]);
+    let output = run_ocm(&cwd, &env, &["help", "adopt", "import"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     assert!(body.contains("Import a plain OpenClaw home"));
@@ -93,7 +108,7 @@ fn help_migrate_import_is_available() {
         "preserve config, auth, sessions, and logs, and clear only live runtime residue like locks, pid files, and sockets."
     ));
     assert!(body.contains(
-        "ocm migrate import --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
+        "ocm adopt import --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
     ));
     assert!(body.contains("--manifest <path>"));
     assert!(body.contains(
@@ -102,13 +117,13 @@ fn help_migrate_import_is_available() {
 }
 
 #[test]
-fn migrate_plan_reports_the_target_env_and_root() {
-    let root = TestDir::new("migrate-plan");
+fn adopt_plan_reports_the_target_env_and_root() {
+    let root = TestDir::new("adopt-plan");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let output = run_ocm(&cwd, &env, &["migrate", "plan", "--name", "mira", "--json"]);
+    let output = run_ocm(&cwd, &env, &["adopt", "plan", "--name", "mira", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     assert!(body.contains("\"envName\": \"mira\""));
@@ -117,8 +132,8 @@ fn migrate_plan_reports_the_target_env_and_root() {
 }
 
 #[test]
-fn migrate_plan_accepts_an_explicit_target_root() {
-    let root = TestDir::new("migrate-plan-root");
+fn adopt_plan_accepts_an_explicit_target_root() {
+    let root = TestDir::new("adopt-plan-root");
     let cwd = root.child("workspace");
     let target_root = root.child("custom-root");
     fs::create_dir_all(&cwd).unwrap();
@@ -128,7 +143,7 @@ fn migrate_plan_accepts_an_explicit_target_root() {
         &cwd,
         &env,
         &[
-            "migrate",
+            "adopt",
             "plan",
             "--name",
             "mira",
@@ -144,8 +159,8 @@ fn migrate_plan_accepts_an_explicit_target_root() {
 }
 
 #[test]
-fn migrate_plan_can_preview_a_manifest_write() {
-    let root = TestDir::new("migrate-plan-manifest");
+fn adopt_plan_can_preview_a_manifest_write() {
+    let root = TestDir::new("adopt-plan-manifest");
     let cwd = root.child("workspace");
     let manifest_path = cwd.join("ocm.yaml");
     fs::create_dir_all(&cwd).unwrap();
@@ -155,7 +170,7 @@ fn migrate_plan_can_preview_a_manifest_write() {
         &cwd,
         &env,
         &[
-            "migrate",
+            "adopt",
             "plan",
             "--name",
             "mira",
@@ -174,18 +189,18 @@ fn migrate_plan_can_preview_a_manifest_write() {
 }
 
 #[test]
-fn help_migrate_plan_is_available() {
-    let root = TestDir::new("migrate-help-plan");
+fn help_adopt_plan_is_available() {
+    let root = TestDir::new("adopt-help-plan");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let output = run_ocm(&cwd, &env, &["help", "migrate", "plan"]);
+    let output = run_ocm(&cwd, &env, &["help", "adopt", "plan"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     assert!(body.contains("Plan a migration target"));
     assert!(body.contains(
-        "ocm migrate plan --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
+        "ocm adopt plan --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
     ));
     assert!(body.contains("--manifest <path>"));
     assert!(body.contains(
@@ -193,17 +208,12 @@ fn help_migrate_plan_is_available() {
     ));
 }
 
-#[test]
-fn migrate_import_preserves_history_and_logs_from_plain_openclaw_home() {
-    let root = TestDir::new("migrate-import");
-    let cwd = root.child("workspace");
-    let source_home = root.child("legacy-home/.openclaw");
+fn seed_plain_openclaw_home(source_home: &std::path::Path) {
     fs::create_dir_all(source_home.join("workspace")).unwrap();
     fs::create_dir_all(source_home.join("logs")).unwrap();
     fs::create_dir_all(source_home.join("run")).unwrap();
     fs::create_dir_all(source_home.join("agents/main/agent")).unwrap();
     fs::create_dir_all(source_home.join("agents/main/sessions")).unwrap();
-    fs::create_dir_all(&cwd).unwrap();
     fs::write(
         source_home.join("openclaw.json"),
         format!(
@@ -239,26 +249,12 @@ fn migrate_import_preserves_history_and_logs_from_plain_openclaw_home() {
     .unwrap();
     fs::write(source_home.join("gateway.pid"), "4242\n").unwrap();
     fs::write(source_home.join("run/live.sock"), "sock\n").unwrap();
-    let env = ocm_env(&root);
+}
 
-    let output = run_ocm(
-        &cwd,
-        &env,
-        &[
-            "migrate",
-            "import",
-            "--name",
-            "mira",
-            source_home.to_string_lossy().as_ref(),
-            "--json",
-        ],
-    );
-    assert!(output.status.success(), "{}", stderr(&output));
-    let body = stdout(&output);
-    assert!(body.contains("\"name\": \"mira\""));
-    assert!(body.contains("\"sourceName\": \"plain-openclaw\""));
-
-    let imported_state = root.child("ocm-home/envs/mira/.openclaw");
+fn assert_imported_plain_openclaw_home(
+    imported_state: &std::path::Path,
+    source_home: &std::path::Path,
+) {
     assert!(imported_state.join("workspace/notes.txt").exists());
     assert!(
         imported_state
@@ -293,26 +289,12 @@ fn migrate_import_preserves_history_and_logs_from_plain_openclaw_home() {
 }
 
 #[test]
-fn migrate_import_requires_name() {
-    let root = TestDir::new("migrate-import-name");
-    let cwd = root.child("workspace");
-    fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
-
-    let output = run_ocm(&cwd, &env, &["migrate", "import"]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("--name is required"));
-}
-
-#[test]
-fn migrate_import_can_write_a_manifest() {
-    let root = TestDir::new("migrate-import-manifest");
+fn migrate_preserves_history_and_logs_from_plain_openclaw_home() {
+    let root = TestDir::new("migrate-direct");
     let cwd = root.child("workspace");
     let source_home = root.child("legacy-home/.openclaw");
-    let manifest_path = cwd.join("ocm.yaml");
-    fs::create_dir_all(source_home.join("workspace")).unwrap();
     fs::create_dir_all(&cwd).unwrap();
-    fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+    seed_plain_openclaw_home(&source_home);
     let env = ocm_env(&root);
 
     let output = run_ocm(
@@ -320,12 +302,92 @@ fn migrate_import_can_write_a_manifest() {
         &env,
         &[
             "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"name\": \"mira\""));
+    assert!(body.contains("\"sourceName\": \"plain-openclaw\""));
+
+    let imported_state = root.child("ocm-home/envs/mira/.openclaw");
+    assert_imported_plain_openclaw_home(&imported_state, &source_home);
+}
+
+#[test]
+fn adopt_import_preserves_history_and_logs_from_plain_openclaw_home() {
+    let root = TestDir::new("adopt-import");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "adopt",
             "import",
             "--name",
             "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let imported_state = root.child("ocm-home/envs/mira/.openclaw");
+    assert_imported_plain_openclaw_home(&imported_state, &source_home);
+}
+
+#[test]
+fn migrate_requires_name() {
+    let root = TestDir::new("migrate-name");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["migrate"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("migrate requires <env> or --name <env>"));
+}
+
+#[test]
+fn migrate_rejects_multiple_env_names() {
+    let root = TestDir::new("migrate-name-conflict");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["migrate", "mira", "--name", "ember"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("migrate accepts only one env name from <env> or --name <env>")
+    );
+}
+
+#[test]
+fn migrate_can_write_a_manifest() {
+    let root = TestDir::new("migrate-direct-manifest");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let manifest_path = cwd.join("ocm.yaml");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
             "--manifest",
             manifest_path.to_string_lossy().as_ref(),
-            source_home.to_string_lossy().as_ref(),
             "--json",
         ],
     );
@@ -339,14 +401,13 @@ fn migrate_import_can_write_a_manifest() {
 }
 
 #[test]
-fn migrate_import_can_write_a_nested_manifest_path() {
-    let root = TestDir::new("migrate-import-nested-manifest");
+fn migrate_can_write_a_nested_manifest_path() {
+    let root = TestDir::new("migrate-direct-nested-manifest");
     let cwd = root.child("workspace");
     let source_home = root.child("legacy-home/.openclaw");
     let manifest_path = cwd.join("nested/project/ocm.yaml");
-    fs::create_dir_all(source_home.join("workspace")).unwrap();
     fs::create_dir_all(&cwd).unwrap();
-    fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+    seed_plain_openclaw_home(&source_home);
     let env = ocm_env(&root);
 
     let output = run_ocm(
@@ -354,8 +415,6 @@ fn migrate_import_can_write_a_nested_manifest_path() {
         &env,
         &[
             "migrate",
-            "import",
-            "--name",
             "mira",
             source_home.to_string_lossy().as_ref(),
             "--manifest",
@@ -374,14 +433,13 @@ fn migrate_import_can_write_a_nested_manifest_path() {
 }
 
 #[test]
-fn migrate_import_resolves_relative_manifest_paths_from_cwd() {
-    let root = TestDir::new("migrate-import-manifest-relative");
+fn migrate_resolves_relative_manifest_paths_from_cwd() {
+    let root = TestDir::new("migrate-direct-manifest-relative");
     let cwd = root.child("workspace");
     let source_home = root.child("legacy-home/.openclaw");
     let manifest_path = cwd.join("ocm.yaml");
-    fs::create_dir_all(source_home.join("workspace")).unwrap();
     fs::create_dir_all(&cwd).unwrap();
-    fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+    seed_plain_openclaw_home(&source_home);
     let env = ocm_env(&root);
 
     let output = run_ocm(
@@ -389,12 +447,10 @@ fn migrate_import_resolves_relative_manifest_paths_from_cwd() {
         &env,
         &[
             "migrate",
-            "import",
-            "--name",
             "mira",
+            source_home.to_string_lossy().as_ref(),
             "--manifest",
             "ocm.yaml",
-            source_home.to_string_lossy().as_ref(),
             "--json",
         ],
     );

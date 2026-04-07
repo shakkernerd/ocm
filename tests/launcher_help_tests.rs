@@ -24,6 +24,8 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("Update one env or all envs and restart services when needed"));
     assert!(output.contains("Check host software for release and feature readiness"));
     assert!(output.contains("Update the installed ocm binary"));
+    assert!(output.contains("Bring an existing plain OpenClaw home into OCM"));
+    assert!(output.contains("Inspect and control the explicit OpenClaw adoption flow"));
     assert!(output.contains("--color <mode>"));
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
@@ -31,8 +33,11 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("upgrade"));
     assert!(output.contains("setup"));
     assert!(output.contains("ocm start"));
+    assert!(output.contains("ocm migrate mira"));
+    assert!(output.contains("ocm adopt inspect"));
     assert!(output.contains("ocm upgrade mira"));
     assert!(output.contains("ocm help setup"));
+    assert!(output.contains("ocm help adopt"));
     assert!(output.contains("ocm help upgrade"));
     assert!(output.contains("ocm help doctor"));
     assert!(output.contains("ocm help self"));

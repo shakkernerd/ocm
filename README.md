@@ -139,16 +139,18 @@ When you pass `--manifest <path>`, relative file paths are resolved from your cu
 ### Inspect an existing plain OpenClaw home before migrating it
 
 ```bash
-ocm migrate inspect
-ocm migrate inspect /path/to/.openclaw
-ocm migrate plan --name mira
-ocm migrate import --name mira
-ocm migrate import --name mira --manifest ./ocm.yaml
+ocm migrate mira
+ocm migrate mira /path/to/.openclaw
+ocm migrate mira --manifest ./ocm.yaml
+ocm adopt inspect
+ocm adopt plan --name mira
 ```
 
-`inspect` and `plan` are read-only. They show the plain OpenClaw home OCM would inspect and the env target it would use before any import work happens.
+`migrate` is the simple front door for existing OpenClaw users. It imports a plain OpenClaw home into a managed env in one step.
 
-`migrate import` creates the managed env from a plain OpenClaw home, preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets. Add `--manifest <path>` if you also want OCM to write a minimal `ocm.yaml` after the import.
+`migrate` preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets. Add `--manifest <path>` if you also want OCM to write a minimal `ocm.yaml` after the import.
+
+`adopt inspect` and `adopt plan` are the explicit read-only preview tools. Use them when you want to inspect the plain OpenClaw home OCM would read or preview the target env/root before importing.
 Relative manifest file paths passed through `--manifest` are resolved from your current working directory.
 
 ### Keep background services visible
