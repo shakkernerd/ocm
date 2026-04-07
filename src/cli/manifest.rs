@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use super::{Cli, render};
-use crate::manifest::{find_manifest_path, plan_manifest_application, resolve_manifest};
+use crate::manifest::{
+    find_manifest_path, plan_manifest_application_with_service, resolve_manifest,
+};
 use crate::store::get_environment;
 
 impl Cli {
@@ -161,7 +163,17 @@ impl Cli {
         let summary = if let Some(resolution) = resolved {
             let env_name = resolution.manifest.env.name.clone();
             let current_env = get_environment(&env_name, &self.env, &self.cwd).ok();
-            let plan = plan_manifest_application(&resolution.manifest, current_env.as_ref());
+            let current_service_installed = current_env.as_ref().and_then(|_| {
+                self.service_service()
+                    .status_fast(&env_name)
+                    .ok()
+                    .map(|summary| summary.installed)
+            });
+            let plan = plan_manifest_application_with_service(
+                &resolution.manifest,
+                current_env.as_ref(),
+                current_service_installed,
+            );
             render::manifest::ManifestPlanSummary {
                 found: true,
                 path: Some(resolution.path.to_string_lossy().into_owned()),

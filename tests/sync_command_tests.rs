@@ -2,7 +2,10 @@ mod support;
 
 use std::fs;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
+use crate::support::{
+    TestDir, install_fake_service_manager, ocm_env, run_ocm, stderr, stdout,
+    write_executable_script,
+};
 
 #[test]
 fn sync_dry_run_requires_an_existing_env() {
@@ -48,6 +51,7 @@ fn sync_dry_run_reports_the_existing_env_plan() {
     assert!(body.contains("\"dry_run\": true"));
     assert!(body.contains("\"create_env\": false"));
     assert!(body.contains("\"desired_launcher\": \"dev\""));
+    assert!(body.contains("\"service_changed\": false"));
 }
 
 #[test]
@@ -123,6 +127,35 @@ fn sync_dry_run_accepts_an_explicit_custom_manifest_file() {
     assert!(body.contains("\"dry_run\": true"));
     assert!(body.contains(&manifest_path.to_string_lossy().to_string()));
     assert!(body.contains("\"desired_launcher\": \"dev\""));
+}
+
+#[test]
+fn sync_dry_run_reports_service_drift_when_install_state_differs() {
+    let root = TestDir::new("sync-dry-run-service-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        cwd.join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\nservice:\n  install: true\n",
+    )
+    .unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_service_manager(&root, &mut env);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "printf launcher"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let output = run_ocm(&cwd, &env, &["sync", "--dry-run", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"desired_service_install\": true"));
+    assert!(body.contains("\"service_changed\": true"));
 }
 
 #[test]

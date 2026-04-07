@@ -2,7 +2,10 @@ mod support;
 
 use std::fs;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
+use crate::support::{
+    TestDir, install_fake_service_manager, ocm_env, run_ocm, stderr, stdout,
+    write_executable_script,
+};
 
 #[test]
 fn up_dry_run_reports_the_manifest_plan_without_creating_the_env() {
@@ -22,6 +25,7 @@ fn up_dry_run_reports_the_manifest_plan_without_creating_the_env() {
     assert!(body.contains("\"dry_run\": true"));
     assert!(body.contains("\"create_env\": true"));
     assert!(body.contains("\"desired_launcher\": \"dev\""));
+    assert!(body.contains("\"service_changed\": true"));
 
     let show = run_ocm(&cwd, &env, &["env", "show", "mira", "--json"]);
     assert!(!show.status.success());
@@ -82,6 +86,36 @@ fn up_dry_run_accepts_an_explicit_custom_manifest_file() {
     assert!(body.contains("\"dry_run\": true"));
     assert!(body.contains(&manifest_path.to_string_lossy().to_string()));
     assert!(body.contains("\"desired_launcher\": \"dev\""));
+}
+
+#[test]
+fn up_dry_run_reports_no_service_change_when_install_state_matches() {
+    let root = TestDir::new("up-dry-run-service-matching");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        cwd.join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\nservice:\n  install: true\n",
+    )
+    .unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_service_manager(&root, &mut env);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "printf launcher"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let install = run_ocm(&cwd, &env, &["service", "install", "mira"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let output = run_ocm(&cwd, &env, &["up", "--dry-run", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"service_changed\": false"));
 }
 
 #[test]

@@ -630,6 +630,7 @@ fn manifest_plan_reports_create_work_for_missing_envs() {
     assert!(stdout.contains("\"create_env\": true"));
     assert!(stdout.contains("\"desired_launcher\": \"dev\""));
     assert!(stdout.contains("\"desired_service_install\": true"));
+    assert!(stdout.contains("\"service_changed\": true"));
 }
 
 #[test]
@@ -726,4 +727,36 @@ fn manifest_plan_reports_no_binding_change_when_launcher_matches() {
     let stdout = stdout(&output);
     assert!(stdout.contains("\"create_env\": false"));
     assert!(stdout.contains("\"launcher_changed\": false"));
+    assert!(stdout.contains("\"service_changed\": false"));
+}
+
+#[test]
+fn manifest_plan_reports_no_service_change_when_install_state_matches() {
+    let root = TestDir::new("manifest-plan-service-matching");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        root.child("workspace").join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\nservice:\n  install: true\n",
+    )
+    .unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let install = run_ocm(&cwd, &env, &["service", "install", "mira"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let output = run_ocm(&cwd, &env, &["manifest", "plan", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"desired_service_install\": true"));
+    assert!(body.contains("\"service_changed\": false"));
 }

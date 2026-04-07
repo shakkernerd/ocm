@@ -13,11 +13,20 @@ pub struct ManifestApplyPlan {
     pub runtime_changed: bool,
     pub launcher_changed: bool,
     pub desired_service_install: Option<bool>,
+    pub service_changed: bool,
 }
 
 pub fn plan_manifest_application(
     manifest: &OcmManifest,
     current: Option<&EnvMeta>,
+) -> ManifestApplyPlan {
+    plan_manifest_application_with_service(manifest, current, None)
+}
+
+pub fn plan_manifest_application_with_service(
+    manifest: &OcmManifest,
+    current: Option<&EnvMeta>,
+    current_service_installed: Option<bool>,
 ) -> ManifestApplyPlan {
     let desired_runtime = manifest.runtime.as_ref().and_then(|runtime| {
         runtime
@@ -32,6 +41,14 @@ pub fn plan_manifest_application(
         .and_then(|launcher| launcher.name.clone());
     let current_runtime = current.and_then(|meta| meta.default_runtime.clone());
     let current_launcher = current.and_then(|meta| meta.default_launcher.clone());
+    let desired_service_install = manifest
+        .service
+        .as_ref()
+        .and_then(|service| service.install);
+    let service_changed = match desired_service_install {
+        Some(desired) => current_service_installed != Some(desired),
+        None => false,
+    };
 
     ManifestApplyPlan {
         env_name: manifest.env.name.clone(),
@@ -40,10 +57,8 @@ pub fn plan_manifest_application(
         launcher_changed: desired_launcher != current_launcher,
         desired_runtime,
         desired_launcher,
-        desired_service_install: manifest
-            .service
-            .as_ref()
-            .and_then(|service| service.install),
+        desired_service_install,
+        service_changed,
     }
 }
 
@@ -54,7 +69,7 @@ mod tests {
     use crate::env::EnvMeta;
     use crate::manifest::{
         ManifestEnv, ManifestLauncher, ManifestRuntime, ManifestService, OcmManifest,
-        plan_manifest_application,
+        plan_manifest_application, plan_manifest_application_with_service,
     };
 
     fn manifest_with_launcher() -> OcmManifest {
@@ -115,15 +130,21 @@ mod tests {
         assert!(!plan.runtime_changed);
         assert_eq!(plan.desired_launcher.as_deref(), Some("dev"));
         assert_eq!(plan.desired_service_install, Some(true));
+        assert!(plan.service_changed);
     }
 
     #[test]
     fn plan_manifest_application_detects_matching_launcher_bindings() {
         let current = env_meta();
-        let plan = plan_manifest_application(&manifest_with_launcher(), Some(&current));
+        let plan = plan_manifest_application_with_service(
+            &manifest_with_launcher(),
+            Some(&current),
+            Some(true),
+        );
         assert!(!plan.create_env);
         assert!(!plan.launcher_changed);
         assert!(!plan.runtime_changed);
+        assert!(!plan.service_changed);
     }
 
     #[test]
@@ -135,5 +156,17 @@ mod tests {
         assert!(plan.launcher_changed);
         assert_eq!(plan.desired_runtime.as_deref(), Some("stable"));
         assert_eq!(plan.desired_launcher, None);
+        assert!(plan.service_changed);
+    }
+
+    #[test]
+    fn plan_manifest_application_tracks_matching_service_installs() {
+        let current = env_meta();
+        let plan = plan_manifest_application_with_service(
+            &manifest_with_launcher(),
+            Some(&current),
+            Some(true),
+        );
+        assert!(!plan.service_changed);
     }
 }

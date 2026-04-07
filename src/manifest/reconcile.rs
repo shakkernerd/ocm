@@ -8,7 +8,7 @@ use crate::service::ServiceService;
 
 use super::{
     OcmManifest, apply_manifest_launcher_binding, apply_manifest_runtime_binding,
-    apply_manifest_service_install, ensure_manifest_env, plan_manifest_application,
+    apply_manifest_service_install, ensure_manifest_env, plan_manifest_application_with_service,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -62,7 +62,11 @@ pub fn reconcile_manifest_with_options(
     let env_summary = ensure_manifest_env(manifest, env, cwd)?;
     let mut current = env_summary.env;
     let current_service = ServiceService::new(env, cwd).status_fast(&current.name)?;
-    let plan = plan_manifest_application(manifest, Some(&current));
+    let plan = plan_manifest_application_with_service(
+        manifest,
+        Some(&current),
+        Some(current_service.installed),
+    );
     let service_change_needed = match plan.desired_service_install {
         Some(true) => !current_service.installed,
         Some(false) => {

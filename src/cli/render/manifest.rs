@@ -624,6 +624,7 @@ fn manifest_plan_pretty(summary: &ManifestPlanSummary) -> Vec<String> {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "none".to_string())
         ),
+        format!("Service changed: {}", plan.service_changed),
     ]
 }
 
@@ -671,6 +672,10 @@ fn manifest_plan_raw(summary: &ManifestPlanSummary) -> Vec<String> {
             plan.desired_service_install
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "none".to_string()),
+        );
+        lines.insert(
+            "serviceChanged".to_string(),
+            plan.service_changed.to_string(),
         );
     }
     format_key_value_lines(lines)
