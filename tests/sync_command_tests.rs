@@ -232,6 +232,42 @@ fn sync_rolls_back_partial_changes_when_later_reconcile_steps_fail() {
 }
 
 #[test]
+fn sync_clears_an_existing_runtime_binding_when_manifest_has_none() {
+    let root = TestDir::new("sync-clear-runtime");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(cwd.join("ocm.yaml"), "schema: ocm/v1\nenv:\n  name: mira\n").unwrap();
+    write_executable_script(&bin_dir.join("stable"), "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add_runtime = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add_runtime.status.success(), "{}", stderr(&add_runtime));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "mira", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let output = run_ocm(&cwd, &env, &["sync", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"runtime_changed\": true"));
+    assert!(body.contains("\"desired_runtime\": null"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "mira", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_body = stdout(&show);
+    assert!(show_body.contains("\"defaultRuntime\": null"));
+    assert!(show_body.contains("\"defaultLauncher\": null"));
+}
+
+#[test]
 fn help_sync_is_available() {
     let root = TestDir::new("sync-help");
     let cwd = root.child("workspace");

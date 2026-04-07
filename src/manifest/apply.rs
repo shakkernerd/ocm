@@ -81,7 +81,7 @@ pub fn apply_manifest_runtime_binding(
 
     let updated = match desired_runtime.as_deref() {
         Some(runtime_name) => service.set_runtime(&current.name, runtime_name)?,
-        None => current.clone(),
+        None => service.set_runtime(&current.name, "none")?,
     };
 
     Ok(ManifestRuntimeApplySummary {
@@ -114,7 +114,7 @@ pub fn apply_manifest_launcher_binding(
 
     let updated = match desired_launcher.as_deref() {
         Some(launcher_name) => service.set_launcher(&current.name, launcher_name)?,
-        None => current.clone(),
+        None => service.set_launcher(&current.name, "none")?,
     };
 
     Ok(ManifestLauncherApplySummary {

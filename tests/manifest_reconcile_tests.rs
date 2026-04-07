@@ -168,3 +168,40 @@ fn reconcile_manifest_rolls_back_partial_changes_when_later_steps_fail() {
     assert!(status.status.success(), "{}", stderr(&status));
     assert!(crate::support::stdout(&status).contains("\"installed\": false"));
 }
+
+#[test]
+fn reconcile_manifest_clears_existing_bindings_when_manifest_requests_none() {
+    let root = TestDir::new("manifest-reconcile-clear-bindings");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_executable_script(&bin_dir.join("stable"), "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add_runtime = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add_runtime.status.success(), "{}", stderr(&add_runtime));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "mira", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let manifest_path = cwd.join("ocm.yaml");
+    let manifest = parse_manifest("schema: ocm/v1\nenv:\n  name: mira\n").unwrap();
+
+    let summary = reconcile_manifest(&manifest_path, &manifest, &env, &cwd).unwrap();
+    assert!(!summary.env_created);
+    assert!(summary.runtime_changed);
+    assert!(!summary.launcher_changed);
+    assert_eq!(summary.desired_runtime, None);
+    assert_eq!(summary.desired_launcher, None);
+
+    let restored = get_environment("mira", &env, &cwd).unwrap();
+    assert_eq!(restored.default_runtime, None);
+    assert_eq!(restored.default_launcher, None);
+}
