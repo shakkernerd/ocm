@@ -4,10 +4,11 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::env::{CreateEnvSnapshotOptions, EnvironmentService, RestoreEnvSnapshotOptions};
+use crate::service::ServiceService;
 
 use super::{
     OcmManifest, apply_manifest_launcher_binding, apply_manifest_runtime_binding,
-    apply_manifest_service_install, ensure_manifest_env,
+    apply_manifest_service_install, ensure_manifest_env, plan_manifest_application,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -60,6 +61,41 @@ pub fn reconcile_manifest_with_options(
 ) -> Result<ManifestReconcileSummary, String> {
     let env_summary = ensure_manifest_env(manifest, env, cwd)?;
     let mut current = env_summary.env;
+    let current_service = ServiceService::new(env, cwd).status_fast(&current.name)?;
+    let plan = plan_manifest_application(manifest, Some(&current));
+    let service_change_needed = match plan.desired_service_install {
+        Some(true) => !current_service.installed,
+        Some(false) => {
+            current_service.installed || current_service.loaded || current_service.running
+        }
+        None => false,
+    };
+    let apply_needed = env_summary.created
+        || plan.runtime_changed
+        || plan.launcher_changed
+        || service_change_needed;
+
+    if !apply_needed {
+        return Ok(ManifestReconcileSummary {
+            manifest_path: manifest_path.display().to_string(),
+            env_name: current.name.clone(),
+            env_root: current.root.clone(),
+            env_existed: true,
+            env_created: false,
+            runtime_changed: false,
+            launcher_changed: false,
+            service_changed: false,
+            desired_runtime: plan.desired_runtime,
+            desired_launcher: plan.desired_launcher,
+            desired_service_install: plan.desired_service_install,
+            snapshot_id: None,
+            rolled_back: false,
+            service_installed: current_service.installed,
+            service_loaded: current_service.loaded,
+            service_running: current_service.running,
+        });
+    }
+
     let snapshot_id = if !env_summary.created && _options.snapshot_existing_env {
         let snapshot =
             EnvironmentService::new(env, cwd).create_snapshot(CreateEnvSnapshotOptions {

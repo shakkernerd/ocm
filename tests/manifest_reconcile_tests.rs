@@ -205,3 +205,47 @@ fn reconcile_manifest_clears_existing_bindings_when_manifest_requests_none() {
     assert_eq!(restored.default_runtime, None);
     assert_eq!(restored.default_launcher, None);
 }
+
+#[test]
+fn reconcile_manifest_skips_snapshot_when_the_env_is_already_current() {
+    let root = TestDir::new("manifest-reconcile-noop");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_service_manager(&root, &mut env);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "printf launcher"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let install = run_ocm(&cwd, &env, &["service", "install", "mira"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let manifest_path = cwd.join("ocm.yaml");
+    let manifest = parse_manifest(
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\nservice:\n  install: true\n",
+    )
+    .unwrap();
+
+    let summary = reconcile_manifest_with_options(
+        &manifest_path,
+        &manifest,
+        &env,
+        &cwd,
+        ManifestReconcileOptions {
+            snapshot_existing_env: true,
+            rollback_on_failure: true,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(summary.snapshot_id, None);
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "mira", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert_eq!(crate::support::stdout(&list).trim(), "[]");
+}

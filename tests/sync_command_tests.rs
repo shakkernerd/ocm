@@ -268,6 +268,40 @@ fn sync_clears_an_existing_runtime_binding_when_manifest_has_none() {
 }
 
 #[test]
+fn sync_does_not_snapshot_when_manifest_state_already_matches() {
+    let root = TestDir::new("sync-noop-snapshot");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        cwd.join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "printf launcher"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let output = run_ocm(&cwd, &env, &["sync", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"snapshot_id\": null"));
+    assert!(body.contains("\"runtime_changed\": false"));
+    assert!(body.contains("\"launcher_changed\": false"));
+    assert!(body.contains("\"service_changed\": false"));
+
+    let snapshots = run_ocm(&cwd, &env, &["env", "snapshot", "list", "mira", "--json"]);
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    assert_eq!(stdout(&snapshots).trim(), "[]");
+}
+
+#[test]
 fn help_sync_is_available() {
     let root = TestDir::new("sync-help");
     let cwd = root.child("workspace");
