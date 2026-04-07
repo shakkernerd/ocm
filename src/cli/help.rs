@@ -30,9 +30,10 @@ impl Cli {
             ["env"] => Ok(render::help::env_help(&cmd)),
             ["manifest"] => Ok(render::help::manifest_help(&cmd)),
             ["migrate"] => Ok(render::help::migrate_help(&cmd)),
+            ["adopt"] => Ok(render::help::adopt_help(&cmd)),
             ["release"] => Ok(render::help::release_help(&cmd)),
-            ["migrate", action] => render::help::migrate_command_help(&cmd, action)
-                .ok_or_else(|| format!("unknown migrate command: {action}")),
+            ["adopt", action] => render::help::adopt_command_help(&cmd, action)
+                .ok_or_else(|| format!("unknown adopt command: {action}")),
             ["self", action] => render::help::self_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown self command: {action}")),
             ["env", "snapshot"] => Ok(render::help::env_snapshot_help(&cmd)),
@@ -68,6 +69,7 @@ impl Cli {
                         | "env"
                         | "manifest"
                         | "migrate"
+                        | "adopt"
                         | "release"
                         | "launcher"
                         | "runtime"
@@ -97,7 +99,7 @@ impl Cli {
                     "self"
                         | "env"
                         | "manifest"
-                        | "migrate"
+                        | "adopt"
                         | "release"
                         | "launcher"
                         | "runtime"
@@ -109,6 +111,9 @@ impl Cli {
                 Some(vec![group.as_str()])
             }
             [group] if group == "doctor" => Some(vec!["doctor"]),
+            [group, flag] if group == "migrate" && Self::is_help_flag(flag) => {
+                Some(vec!["migrate"])
+            }
             [group, flag] if group == "setup" && Self::is_help_flag(flag) => Some(vec!["setup"]),
             [group, flag] if group == "start" && Self::is_help_flag(flag) => Some(vec!["start"]),
             [group, flag] if group == "sync" && Self::is_help_flag(flag) => Some(vec!["sync"]),
@@ -124,6 +129,7 @@ impl Cli {
                         | "env"
                         | "manifest"
                         | "migrate"
+                        | "adopt"
                         | "release"
                         | "launcher"
                         | "runtime"
@@ -148,6 +154,7 @@ impl Cli {
                         | "env"
                         | "manifest"
                         | "migrate"
+                        | "adopt"
                         | "release"
                         | "launcher"
                         | "runtime"
