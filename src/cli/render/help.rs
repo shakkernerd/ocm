@@ -268,6 +268,7 @@ pub fn setup_help(cmd: &str) -> String {
             "Official release choices prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing.",
             "If git is missing, setup can offer to install it for repo-aware coding workflows.",
             "When run inside an OpenClaw checkout, local mode defaults to `pnpm openclaw` in that folder.",
+            "If OCM detects an existing plain OpenClaw home, setup points you at `migrate` so you can bring that state under OCM instead of starting fresh.",
             "Use `start` when you already know the source you want.",
         ],
     )
@@ -688,6 +689,7 @@ pub fn start_help(cmd: &str) -> String {
             "Start installs and starts the env service by default. Use `--no-service` when you do not want a background process.",
             "Official release selectors prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing.",
             "When start creates a new official-release env interactively, it can offer to install git for repo-aware coding workflows.",
+            "If OCM detects an existing plain OpenClaw home, start keeps the new env fresh and points you at `migrate` if you want to bring that older state under OCM.",
             "`--json` requires `--no-onboard` because onboarding is interactive.",
         ],
     )

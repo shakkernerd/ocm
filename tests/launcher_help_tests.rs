@@ -164,6 +164,9 @@ fn start_help_is_available_from_help_and_flag() {
     assert!(output.contains(
         "When start creates a new official-release env interactively, it can offer to install git for repo-aware coding workflows."
     ));
+    assert!(output.contains(
+        "If OCM detects an existing plain OpenClaw home, start keeps the new env fresh and points you at `migrate`"
+    ));
 }
 
 #[test]
@@ -209,6 +212,11 @@ fn setup_help_is_available_from_help_and_flag() {
     assert!(output.contains(
         "If git is missing, setup can offer to install it for repo-aware coding workflows."
     ));
+    assert!(
+        output.contains(
+            "If OCM detects an existing plain OpenClaw home, setup points you at `migrate`"
+        )
+    );
 }
 
 #[test]

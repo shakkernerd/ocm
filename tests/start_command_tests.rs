@@ -203,6 +203,38 @@ fn start_can_create_a_local_command_launcher() {
 }
 
 #[test]
+fn start_points_existing_plain_openclaw_users_at_migrate_when_creating_fresh_envs() {
+    let root = TestDir::new("start-detect-plain-home");
+    let cwd = root.child("workspace");
+    let plain_home = root.child("home/.openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(plain_home.join("workspace")).unwrap();
+    fs::write(plain_home.join("openclaw.json"), "{}\n").unwrap();
+    let env = ocm_env(&root);
+
+    let start = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "start",
+            "fresh",
+            "--command",
+            "/bin/echo",
+            "--cwd",
+            &cwd.to_string_lossy(),
+            "--no-service",
+            "--no-onboard",
+        ],
+    );
+    assert!(start.status.success(), "{}", stderr(&start));
+    let output = stdout(&start);
+    assert!(output.contains("Started env fresh"));
+    assert!(output.contains("existing plain home:"));
+    assert!(output.contains(&plain_home.display().to_string()));
+    assert!(output.contains("migrate instead: ocm migrate <env>"));
+}
+
+#[test]
 fn start_reuses_existing_env_without_forcing_onboarding() {
     let root = TestDir::new("start-existing");
     let cwd = root.child("workspace");

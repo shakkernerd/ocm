@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 use super::{Cli, start::StartOnboardingMode};
 use crate::cli::start::StartRequest;
 use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
+use crate::migrate::inspect_migration_source;
 use crate::store::validate_name;
 
 impl Cli {
@@ -20,7 +21,10 @@ impl Cli {
         Self::assert_no_extra_args(&args)?;
 
         let local_defaults = self.detect_local_setup_defaults();
-        self.stdout_lines(self.setup_intro_lines(local_defaults.as_ref()));
+        let migration_source = self.detect_plain_openclaw_home();
+        self.stdout_lines(
+            self.setup_intro_lines(local_defaults.as_ref(), migration_source.as_deref()),
+        );
 
         let mode = self.prompt_setup_mode()?;
         if matches!(
@@ -227,11 +231,20 @@ impl Cli {
             })
     }
 
+    fn detect_plain_openclaw_home(&self) -> Option<PathBuf> {
+        let source = inspect_migration_source(None, &self.env);
+        source.exists.then(|| PathBuf::from(source.source_home))
+    }
+
     fn use_pretty_setup_prompts(&self) -> bool {
         self.stdin_is_terminal() && self.stdout_is_terminal()
     }
 
-    fn setup_intro_lines(&self, local_defaults: Option<&LocalSetupDefaults>) -> Vec<String> {
+    fn setup_intro_lines(
+        &self,
+        local_defaults: Option<&LocalSetupDefaults>,
+        plain_home: Option<&Path>,
+    ) -> Vec<String> {
         if !self.use_pretty_setup_prompts() {
             let mut lines = vec![
                 "OpenClaw setup".to_string(),
@@ -247,6 +260,17 @@ impl Cli {
                 lines.push(format!(
                     "Detected local OpenClaw checkout: {}",
                     defaults.cwd.display()
+                ));
+            }
+            if let Some(plain_home) = plain_home {
+                lines.push(String::new());
+                lines.push(format!(
+                    "Detected existing plain OpenClaw home: {}",
+                    plain_home.display()
+                ));
+                lines.push(format!(
+                    "Use \"{} migrate <env>\" if you want to bring that state under OCM instead of starting fresh.",
+                    self.command_example()
                 ));
             }
             lines.push(String::new());
@@ -271,6 +295,16 @@ impl Cli {
             rows.push(KeyValueRow::muted(
                 "Detected checkout",
                 defaults.cwd.display().to_string(),
+            ));
+        }
+        if let Some(plain_home) = plain_home {
+            rows.push(KeyValueRow::warning(
+                "Detected plain home",
+                plain_home.display().to_string(),
+            ));
+            rows.push(KeyValueRow::muted(
+                "Bring it under OCM",
+                format!("{} migrate <env>", self.command_example()),
             ));
         }
         lines.extend(render_key_value_card("Choose a setup path", &rows, color));

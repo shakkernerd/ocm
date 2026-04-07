@@ -4,6 +4,7 @@ use super::Cli;
 use crate::env::{CreateEnvironmentOptions, EnvMeta};
 use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
 use crate::launcher::AddLauncherOptions;
+use crate::migrate::inspect_migration_source;
 use crate::store::validate_name;
 
 #[derive(Clone, Debug, Serialize)]
@@ -20,6 +21,8 @@ struct StartSummary {
     onboarding_planned: bool,
     service_requested: bool,
     service_started: bool,
+    detected_plain_home: Option<String>,
+    migrate_command: Option<String>,
     activate_command: String,
     run_command: String,
     onboard_command: String,
@@ -232,6 +235,12 @@ impl Cli {
         let (effective_port, gateway_port_source) = self
             .environment_service()
             .resolve_effective_gateway_port(&meta)?;
+        let detected_plain_home = if created {
+            let source = inspect_migration_source(None, &self.env);
+            source.exists.then_some(source.source_home)
+        } else {
+            None
+        };
         let summary = StartSummary {
             env_name: request.name.clone(),
             created,
@@ -244,6 +253,10 @@ impl Cli {
             onboarding_planned,
             service_requested: request.service_requested,
             service_started,
+            migrate_command: detected_plain_home
+                .as_ref()
+                .map(|_| format!("{} migrate <env>", self.command_example())),
+            detected_plain_home,
             activate_command: format!(
                 "eval \"$({} env use {})\"",
                 self.command_example(),
@@ -484,6 +497,12 @@ impl Cli {
         } else {
             lines.push(format!("  onboard: {}", summary.onboard_command));
         }
+        if let Some(plain_home) = summary.detected_plain_home.as_deref() {
+            lines.push(format!("  existing plain home: {plain_home}"));
+            if let Some(command) = summary.migrate_command.as_deref() {
+                lines.push(format!("  migrate instead: {command}"));
+            }
+        }
         lines.push(format!("  activate: {}", summary.activate_command));
         lines.push(format!("  run: {}", summary.run_command));
         lines
@@ -557,6 +576,18 @@ impl Cli {
                 next.push(KeyValueRow::muted("Keep running", &summary.service_command));
             }
             lines.extend(render_key_value_card("Next", &next, color));
+        }
+        if let Some(plain_home) = summary.detected_plain_home.as_deref() {
+            let mut existing = vec![KeyValueRow::warning("Detected plain home", plain_home)];
+            if let Some(command) = summary.migrate_command.as_deref() {
+                existing.push(KeyValueRow::muted("Bring it under OCM", command));
+            }
+            lines.push(String::new());
+            lines.extend(render_key_value_card(
+                "Already Using OpenClaw?",
+                &existing,
+                color,
+            ));
         }
         lines
     }
@@ -642,6 +673,8 @@ mod tests {
             onboarding_planned,
             service_requested: true,
             service_started: true,
+            detected_plain_home: None,
+            migrate_command: None,
             activate_command: "eval \"$(ocm env use mira)\"".to_string(),
             run_command: "ocm @mira -- status".to_string(),
             onboard_command: "ocm @mira -- onboard".to_string(),

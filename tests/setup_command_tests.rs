@@ -154,6 +154,25 @@ fn setup_detects_a_local_openclaw_checkout_and_uses_default_local_values() {
 }
 
 #[test]
+fn setup_points_existing_plain_openclaw_users_at_migrate() {
+    let root = TestDir::new("setup-detect-plain-home");
+    let cwd = root.child("workspace");
+    let plain_home = root.child("home/.openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(plain_home.join("workspace")).unwrap();
+    fs::write(plain_home.join("openclaw.json"), "{}\n").unwrap();
+    let env = ocm_env(&root);
+
+    let input = format!("4\nquick\n/bin/echo\n{}\nn\nn\n", cwd.display());
+    let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], &input);
+    assert!(setup.status.success(), "{}", stderr(&setup));
+    let output = stdout(&setup);
+    assert!(output.contains("Detected existing plain OpenClaw home:"));
+    assert!(output.contains(&plain_home.display().to_string()));
+    assert!(output.contains("Use \"ocm migrate <env>\" if you want to bring that state under OCM instead of starting fresh."));
+}
+
+#[test]
 fn setup_defaults_service_install_to_yes_in_raw_mode() {
     let root = TestDir::new("setup-default-service-yes");
     let cwd = root.child("workspace");
