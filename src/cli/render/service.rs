@@ -395,19 +395,6 @@ fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) ->
         ];
     }
 
-    if summary.binding_kind.as_deref() == Some("runtime") && summary.issue.is_some() {
-        let mut rows = Vec::new();
-        if let Some(runtime_name) = summary.binding_name.as_deref() {
-            rows.push(KeyValueRow::accent(
-                "Check runtime",
-                format!("{command_example} runtime verify {runtime_name}"),
-            ));
-        }
-        if !rows.is_empty() {
-            return rows;
-        }
-    }
-
     if summary.definition_drift {
         return match daemon_state(summary.installed, summary.loaded, summary.running) {
             "loaded" | "running" => vec![KeyValueRow::warning(
@@ -420,6 +407,19 @@ fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) ->
             )],
             _ => Vec::new(),
         };
+    }
+
+    if summary.binding_kind.as_deref() == Some("runtime") && summary.issue.is_some() {
+        let mut rows = Vec::new();
+        if let Some(runtime_name) = summary.binding_name.as_deref() {
+            rows.push(KeyValueRow::accent(
+                "Check runtime",
+                format!("{command_example} runtime verify {runtime_name}"),
+            ));
+        }
+        if !rows.is_empty() {
+            return rows;
+        }
     }
 
     match daemon_state(summary.installed, summary.loaded, summary.running) {
@@ -1205,6 +1205,30 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line.contains("ocm service restart demo"))
+        );
+    }
+
+    #[test]
+    fn service_status_pretty_prefers_refresh_for_stale_runtime_definitions() {
+        let mut summary = sample_service_summary();
+        summary.binding_kind = Some("runtime".to_string());
+        summary.binding_name = Some("stable".to_string());
+        summary.running = true;
+        summary.definition_drift = true;
+        summary.issue =
+            Some("installed service definition does not match the current env binding".to_string());
+
+        let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm service restart demo"))
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("ocm runtime verify stable"))
         );
     }
 
