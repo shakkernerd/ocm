@@ -215,6 +215,48 @@ fn reconcile_manifest_removes_new_envs_when_later_steps_fail() {
 }
 
 #[test]
+fn reconcile_manifest_refreshes_drifted_service_definitions() {
+    let root = TestDir::new("manifest-reconcile-service-refresh");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_service_manager(&root, &mut env);
+
+    let add_launcher_a = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev-a", "--command", "printf a"],
+    );
+    assert!(add_launcher_a.status.success(), "{}", stderr(&add_launcher_a));
+    let add_launcher_b = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev-b", "--command", "printf b"],
+    );
+    assert!(add_launcher_b.status.success(), "{}", stderr(&add_launcher_b));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev-a"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let install = run_ocm(&cwd, &env, &["service", "install", "mira"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+    let set_launcher = run_ocm(&cwd, &env, &["env", "set-launcher", "mira", "dev-b"]);
+    assert!(set_launcher.status.success(), "{}", stderr(&set_launcher));
+
+    let manifest_path = cwd.join("ocm.yaml");
+    let manifest = parse_manifest(
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev-b\nservice:\n  install: true\n",
+    )
+    .unwrap();
+
+    let summary = reconcile_manifest(&manifest_path, &manifest, &env, &cwd).unwrap();
+    assert!(summary.service_changed);
+
+    let status = run_ocm(&cwd, &env, &["service", "status", "mira", "--raw"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let body = crate::support::stdout(&status);
+    assert!(body.contains("definitionDrift: false"));
+}
+
+#[test]
 fn reconcile_manifest_clears_existing_bindings_when_manifest_requests_none() {
     let root = TestDir::new("manifest-reconcile-clear-bindings");
     let cwd = root.child("workspace");

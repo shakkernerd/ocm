@@ -1,8 +1,36 @@
 use serde::Serialize;
 
 use crate::env::EnvMeta;
+use crate::service::ServiceSummary;
 
 use super::OcmManifest;
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct ManifestServiceState {
+    pub installed: bool,
+    pub loaded: bool,
+    pub running: bool,
+    pub definition_drift: bool,
+    pub live_exec_unverified: bool,
+    pub orphaned_live_service: bool,
+}
+
+impl ManifestServiceState {
+    pub fn from_service_summary(summary: &ServiceSummary) -> Self {
+        Self {
+            installed: summary.installed,
+            loaded: summary.loaded,
+            running: summary.running,
+            definition_drift: summary.definition_drift,
+            live_exec_unverified: summary.live_exec_unverified,
+            orphaned_live_service: summary.orphaned_live_service,
+        }
+    }
+
+    pub fn needs_refresh(&self) -> bool {
+        self.definition_drift || self.orphaned_live_service
+    }
+}
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ManifestApplyPlan {
@@ -14,6 +42,7 @@ pub struct ManifestApplyPlan {
     pub launcher_changed: bool,
     pub desired_service_install: Option<bool>,
     pub service_changed: bool,
+    pub current_service: Option<ManifestServiceState>,
 }
 
 pub fn plan_manifest_application(
@@ -26,7 +55,7 @@ pub fn plan_manifest_application(
 pub fn plan_manifest_application_with_service(
     manifest: &OcmManifest,
     current: Option<&EnvMeta>,
-    current_service_installed: Option<bool>,
+    current_service: Option<&ManifestServiceState>,
 ) -> ManifestApplyPlan {
     let desired_runtime = manifest.runtime.as_ref().and_then(|runtime| {
         runtime
@@ -46,7 +75,12 @@ pub fn plan_manifest_application_with_service(
         .as_ref()
         .and_then(|service| service.install);
     let service_changed = match desired_service_install {
-        Some(desired) => current_service_installed != Some(desired),
+        Some(true) => current_service
+            .map(|service| !service.installed || service.needs_refresh())
+            .unwrap_or(true),
+        Some(false) => current_service
+            .map(|service| service.installed || service.loaded || service.running)
+            .unwrap_or(false),
         None => false,
     };
 
@@ -59,6 +93,7 @@ pub fn plan_manifest_application_with_service(
         desired_launcher,
         desired_service_install,
         service_changed,
+        current_service: current_service.cloned(),
     }
 }
 
@@ -69,7 +104,7 @@ mod tests {
     use crate::env::EnvMeta;
     use crate::manifest::{
         ManifestEnv, ManifestLauncher, ManifestRuntime, ManifestService, OcmManifest,
-        plan_manifest_application, plan_manifest_application_with_service,
+        ManifestServiceState, plan_manifest_application, plan_manifest_application_with_service,
     };
 
     fn manifest_with_launcher() -> OcmManifest {
@@ -139,7 +174,14 @@ mod tests {
         let plan = plan_manifest_application_with_service(
             &manifest_with_launcher(),
             Some(&current),
-            Some(true),
+            Some(&ManifestServiceState {
+                installed: true,
+                loaded: true,
+                running: false,
+                definition_drift: false,
+                live_exec_unverified: false,
+                orphaned_live_service: false,
+            }),
         );
         assert!(!plan.create_env);
         assert!(!plan.launcher_changed);
@@ -165,8 +207,33 @@ mod tests {
         let plan = plan_manifest_application_with_service(
             &manifest_with_launcher(),
             Some(&current),
-            Some(true),
+            Some(&ManifestServiceState {
+                installed: true,
+                loaded: true,
+                running: false,
+                definition_drift: false,
+                live_exec_unverified: false,
+                orphaned_live_service: false,
+            }),
         );
         assert!(!plan.service_changed);
+    }
+
+    #[test]
+    fn plan_manifest_application_marks_drifted_services_for_refresh() {
+        let current = env_meta();
+        let plan = plan_manifest_application_with_service(
+            &manifest_with_launcher(),
+            Some(&current),
+            Some(&ManifestServiceState {
+                installed: true,
+                loaded: true,
+                running: true,
+                definition_drift: true,
+                live_exec_unverified: false,
+                orphaned_live_service: false,
+            }),
+        );
+        assert!(plan.service_changed);
     }
 }

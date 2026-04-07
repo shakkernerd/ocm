@@ -140,7 +140,16 @@ pub fn apply_manifest_service_install(
     let summary = match desired_service_install {
         Some(true) => {
             let status = service.status_fast(&current.name)?;
-            if status.installed {
+            let needs_refresh = status.definition_drift || status.orphaned_live_service;
+            if needs_refresh {
+                if status.loaded || status.running {
+                    service.restart(&current.name)?;
+                } else {
+                    service.start(&current.name)?;
+                }
+                changed = true;
+                service.status_fast(&current.name)?
+            } else if status.installed {
                 status
             } else {
                 service.install(&current.name)?;

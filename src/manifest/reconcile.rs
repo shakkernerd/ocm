@@ -7,7 +7,7 @@ use crate::env::{CreateEnvSnapshotOptions, EnvironmentService, RestoreEnvSnapsho
 use crate::service::ServiceService;
 
 use super::{
-    OcmManifest, apply_manifest_launcher_binding, apply_manifest_runtime_binding,
+    ManifestServiceState, OcmManifest, apply_manifest_launcher_binding, apply_manifest_runtime_binding,
     apply_manifest_service_install, ensure_manifest_env, plan_manifest_application_with_service,
 };
 
@@ -62,22 +62,16 @@ pub fn reconcile_manifest_with_options(
     let env_summary = ensure_manifest_env(manifest, env, cwd)?;
     let mut current = env_summary.env;
     let current_service = ServiceService::new(env, cwd).status_fast(&current.name)?;
+    let current_service_state = ManifestServiceState::from_service_summary(&current_service);
     let plan = plan_manifest_application_with_service(
         manifest,
         Some(&current),
-        Some(current_service.installed),
+        Some(&current_service_state),
     );
-    let service_change_needed = match plan.desired_service_install {
-        Some(true) => !current_service.installed,
-        Some(false) => {
-            current_service.installed || current_service.loaded || current_service.running
-        }
-        None => false,
-    };
     let apply_needed = env_summary.created
         || plan.runtime_changed
         || plan.launcher_changed
-        || service_change_needed;
+        || plan.service_changed;
 
     if !apply_needed {
         return Ok(ManifestReconcileSummary {

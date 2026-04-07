@@ -771,5 +771,87 @@ fn manifest_plan_reports_no_service_change_when_install_state_matches() {
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     assert!(body.contains("\"desired_service_install\": true"));
+    assert!(body.contains("\"current_service\": {"));
+    assert!(body.contains("\"live_exec_unverified\": true"));
     assert!(body.contains("\"service_changed\": false"));
+}
+
+#[test]
+fn manifest_plan_reports_service_refresh_when_definition_drift_exists() {
+    let root = TestDir::new("manifest-plan-service-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        root.child("workspace").join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev-b\nservice:\n  install: true\n",
+    )
+    .unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let add_launcher_a = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev-a", "--command", "printf a"],
+    );
+    assert!(add_launcher_a.status.success(), "{}", stderr(&add_launcher_a));
+    let add_launcher_b = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev-b", "--command", "printf b"],
+    );
+    assert!(add_launcher_b.status.success(), "{}", stderr(&add_launcher_b));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev-a"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let install = run_ocm(&cwd, &env, &["service", "install", "mira"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+    let set_launcher = run_ocm(&cwd, &env, &["env", "set-launcher", "mira", "dev-b"]);
+    assert!(set_launcher.status.success(), "{}", stderr(&set_launcher));
+
+    let output = run_ocm(&cwd, &env, &["manifest", "plan", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"current_service\": {"));
+    assert!(body.contains("\"definition_drift\": true"));
+    assert!(body.contains("\"service_changed\": true"));
+}
+
+#[test]
+fn manifest_drift_reports_services_that_need_refresh() {
+    let root = TestDir::new("manifest-drift-service-refresh");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        root.child("workspace").join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev-b\nservice:\n  install: true\n",
+    )
+    .unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let add_launcher_a = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev-a", "--command", "printf a"],
+    );
+    assert!(add_launcher_a.status.success(), "{}", stderr(&add_launcher_a));
+    let add_launcher_b = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev-b", "--command", "printf b"],
+    );
+    assert!(add_launcher_b.status.success(), "{}", stderr(&add_launcher_b));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev-a"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let install = run_ocm(&cwd, &env, &["service", "install", "mira"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+    let set_launcher = run_ocm(&cwd, &env, &["env", "set-launcher", "mira", "dev-b"]);
+    assert!(set_launcher.status.success(), "{}", stderr(&set_launcher));
+
+    let output = run_ocm(&cwd, &env, &["manifest", "drift", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"current_service\": {"));
+    assert!(body.contains("\"definition_drift\": true"));
+    assert!(body.contains("service differs (desired installed, current service needs refresh)"));
 }

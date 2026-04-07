@@ -16,7 +16,8 @@ pub use apply::{
 };
 pub use discovery::{MANIFEST_FILE_NAME, find_manifest_path};
 pub use plan::{
-    ManifestApplyPlan, plan_manifest_application, plan_manifest_application_with_service,
+    ManifestApplyPlan, ManifestServiceState, plan_manifest_application,
+    plan_manifest_application_with_service,
 };
 pub use reconcile::{
     ManifestReconcileOptions, ManifestReconcileSummary, reconcile_manifest,

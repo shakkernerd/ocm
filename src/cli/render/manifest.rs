@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::manifest::{ManifestApplyPlan, ManifestReconcileSummary, OcmManifest};
+use crate::manifest::{
+    ManifestApplyPlan, ManifestReconcileSummary, ManifestServiceState, OcmManifest,
+};
 
 use super::{RenderProfile, format_key_value_lines};
 
@@ -32,6 +34,7 @@ pub struct ManifestResolveSummary {
     pub current_runtime: Option<String>,
     pub current_launcher: Option<String>,
     pub current_service_installed: bool,
+    pub current_service: Option<ManifestServiceState>,
     pub desired_runtime: Option<String>,
     pub desired_launcher: Option<String>,
     pub desired_service_install: Option<bool>,
@@ -47,6 +50,7 @@ pub struct ManifestDriftSummary {
     pub current_runtime: Option<String>,
     pub current_launcher: Option<String>,
     pub current_service_installed: bool,
+    pub current_service: Option<ManifestServiceState>,
     pub desired_runtime: Option<String>,
     pub desired_launcher: Option<String>,
     pub aligned: bool,
@@ -131,6 +135,14 @@ fn up_summary_pretty(title: &str, summary: &UpSummary) -> Vec<String> {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "none".to_string())
             ),
+            format!(
+                "Current service: {}",
+                plan.current_service
+                    .as_ref()
+                    .map(manifest_service_state_label)
+                    .unwrap_or_else(|| "none".to_string())
+            ),
+            format!("Service changed: {}", plan.service_changed),
         ];
     }
 
@@ -200,6 +212,24 @@ fn up_summary_raw(summary: &UpSummary) -> Vec<String> {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "none".to_string()),
         );
+        if let Some(service) = plan.current_service.as_ref() {
+            lines.insert("currentServiceInstalled".to_string(), service.installed.to_string());
+            lines.insert("currentServiceLoaded".to_string(), service.loaded.to_string());
+            lines.insert("currentServiceRunning".to_string(), service.running.to_string());
+            lines.insert(
+                "currentServiceDefinitionDrift".to_string(),
+                service.definition_drift.to_string(),
+            );
+            lines.insert(
+                "currentServiceLiveExecUnverified".to_string(),
+                service.live_exec_unverified.to_string(),
+            );
+            lines.insert(
+                "currentServiceOrphanedLive".to_string(),
+                service.orphaned_live_service.to_string(),
+            );
+        }
+        lines.insert("serviceChanged".to_string(), plan.service_changed.to_string());
     }
 
     if let Some(result) = summary.result.as_ref() {
@@ -394,6 +424,14 @@ fn manifest_resolve_pretty(summary: &ManifestResolveSummary) -> Vec<String> {
             summary.current_service_installed
         ),
         format!(
+            "Current service: {}",
+            summary
+                .current_service
+                .as_ref()
+                .map(manifest_service_state_label)
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
             "Desired runtime: {}",
             summary.desired_runtime.as_deref().unwrap_or("none")
         ),
@@ -452,6 +490,22 @@ fn manifest_resolve_raw(summary: &ManifestResolveSummary) -> Vec<String> {
         "currentServiceInstalled".to_string(),
         summary.current_service_installed.to_string(),
     );
+    if let Some(service) = summary.current_service.as_ref() {
+        lines.insert("currentServiceLoaded".to_string(), service.loaded.to_string());
+        lines.insert("currentServiceRunning".to_string(), service.running.to_string());
+        lines.insert(
+            "currentServiceDefinitionDrift".to_string(),
+            service.definition_drift.to_string(),
+        );
+        lines.insert(
+            "currentServiceLiveExecUnverified".to_string(),
+            service.live_exec_unverified.to_string(),
+        );
+        lines.insert(
+            "currentServiceOrphanedLive".to_string(),
+            service.orphaned_live_service.to_string(),
+        );
+    }
     lines.insert(
         "desiredRuntime".to_string(),
         summary
@@ -519,6 +573,14 @@ fn manifest_drift_pretty(summary: &ManifestDriftSummary) -> Vec<String> {
             "Current service installed: {}",
             summary.current_service_installed
         ),
+        format!(
+            "Current service: {}",
+            summary
+                .current_service
+                .as_ref()
+                .map(manifest_service_state_label)
+                .unwrap_or_else(|| "none".to_string())
+        ),
     ];
     if !summary.issues.is_empty() {
         lines.push(String::new());
@@ -577,6 +639,22 @@ fn manifest_drift_raw(summary: &ManifestDriftSummary) -> Vec<String> {
         "currentServiceInstalled".to_string(),
         summary.current_service_installed.to_string(),
     );
+    if let Some(service) = summary.current_service.as_ref() {
+        lines.insert("currentServiceLoaded".to_string(), service.loaded.to_string());
+        lines.insert("currentServiceRunning".to_string(), service.running.to_string());
+        lines.insert(
+            "currentServiceDefinitionDrift".to_string(),
+            service.definition_drift.to_string(),
+        );
+        lines.insert(
+            "currentServiceLiveExecUnverified".to_string(),
+            service.live_exec_unverified.to_string(),
+        );
+        lines.insert(
+            "currentServiceOrphanedLive".to_string(),
+            service.orphaned_live_service.to_string(),
+        );
+    }
     if summary.issues.is_empty() {
         lines.insert("issues".to_string(), "none".to_string());
     } else {
@@ -622,6 +700,13 @@ fn manifest_plan_pretty(summary: &ManifestPlanSummary) -> Vec<String> {
             "Desired service install: {}",
             plan.desired_service_install
                 .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
+            "Current service: {}",
+            plan.current_service
+                .as_ref()
+                .map(manifest_service_state_label)
                 .unwrap_or_else(|| "none".to_string())
         ),
         format!("Service changed: {}", plan.service_changed),
@@ -673,10 +758,49 @@ fn manifest_plan_raw(summary: &ManifestPlanSummary) -> Vec<String> {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "none".to_string()),
         );
+        if let Some(service) = plan.current_service.as_ref() {
+            lines.insert("currentServiceInstalled".to_string(), service.installed.to_string());
+            lines.insert("currentServiceLoaded".to_string(), service.loaded.to_string());
+            lines.insert("currentServiceRunning".to_string(), service.running.to_string());
+            lines.insert(
+                "currentServiceDefinitionDrift".to_string(),
+                service.definition_drift.to_string(),
+            );
+            lines.insert(
+                "currentServiceLiveExecUnverified".to_string(),
+                service.live_exec_unverified.to_string(),
+            );
+            lines.insert(
+                "currentServiceOrphanedLive".to_string(),
+                service.orphaned_live_service.to_string(),
+            );
+        }
         lines.insert(
             "serviceChanged".to_string(),
             plan.service_changed.to_string(),
         );
     }
     format_key_value_lines(lines)
+}
+
+fn manifest_service_state_label(state: &ManifestServiceState) -> String {
+    if state.orphaned_live_service {
+        return "orphaned-live".to_string();
+    }
+    if state.definition_drift {
+        return "definition-drift".to_string();
+    }
+    if state.live_exec_unverified {
+        return "live-unverified".to_string();
+    }
+    if state.running {
+        return "running".to_string();
+    }
+    if state.loaded {
+        return "loaded".to_string();
+    }
+    if state.installed {
+        return "installed".to_string();
+    }
+    "absent".to_string()
 }

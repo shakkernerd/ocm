@@ -1,6 +1,6 @@
 use super::{Cli, render};
 use crate::manifest::{
-    ManifestReconcileOptions, plan_manifest_application_with_service,
+    ManifestReconcileOptions, ManifestServiceState, plan_manifest_application_with_service,
     reconcile_manifest_with_options, resolve_manifest,
 };
 use crate::store::get_environment;
@@ -24,15 +24,14 @@ impl Cli {
         })?;
 
         if dry_run {
-            let current_service_installed = self
+            let current_service = self
                 .service_service()
                 .status_fast(&env_name)
-                .ok()
-                .map(|summary| summary.installed);
+                .map(|summary| ManifestServiceState::from_service_summary(&summary))?;
             let plan = plan_manifest_application_with_service(
                 &resolved.manifest,
                 Some(&current_env),
-                current_service_installed,
+                Some(&current_service),
             );
             let summary = render::manifest::UpSummary {
                 found: true,

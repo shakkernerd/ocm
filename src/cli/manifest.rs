@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use super::{Cli, render};
 use crate::manifest::{
-    find_manifest_path, plan_manifest_application_with_service, resolve_manifest,
+    ManifestServiceState, find_manifest_path, plan_manifest_application_with_service,
+    resolve_manifest,
 };
 use crate::store::get_environment;
 
@@ -56,13 +57,12 @@ impl Cli {
         let summary = if let Some(resolution) = resolved {
             let env_name = resolution.manifest.env.name.clone();
             let current_env = get_environment(&env_name, &self.env, &self.cwd).ok();
-            let current_service_installed = if current_env.is_some() {
-                self.service_service()
-                    .status_fast(&env_name)
-                    .map(|summary| summary.installed)
-                    .unwrap_or(false)
+            let current_service = if current_env.is_some() {
+                Some(ManifestServiceState::from_service_summary(
+                    &self.service_service().status_fast(&env_name)?,
+                ))
             } else {
-                false
+                None
             };
             let desired_runtime = resolution.manifest.runtime.as_ref().and_then(|runtime| {
                 runtime
@@ -107,10 +107,34 @@ impl Cli {
                     .as_ref()
                     .and_then(|service| service.install)
                 {
-                    Some(true) if !current_service_installed => issues
-                        .push("service differs (desired installed, current absent)".to_string()),
-                    Some(false) if current_service_installed => issues
-                        .push("service differs (desired absent, current installed)".to_string()),
+                    Some(true) => match current_service.as_ref() {
+                        None => issues.push(
+                            "service differs (desired installed, current absent)".to_string(),
+                        ),
+                        Some(service) if !service.installed => issues.push(
+                            "service differs (desired installed, current absent)".to_string(),
+                        ),
+                        Some(service) if service.needs_refresh() => issues.push(
+                            "service differs (desired installed, current service needs refresh)"
+                                .to_string(),
+                        ),
+                        Some(service) if service.live_exec_unverified => issues.push(
+                            "service is installed, but live command details are unverified"
+                                .to_string(),
+                        ),
+                        _ => {}
+                    },
+                    Some(false)
+                        if current_service
+                            .as_ref()
+                            .is_some_and(|service| {
+                                service.installed || service.loaded || service.running
+                            }) =>
+                    {
+                        issues.push(
+                            "service differs (desired absent, current installed)".to_string(),
+                        )
+                    }
                     _ => {}
                 }
             }
@@ -123,7 +147,11 @@ impl Cli {
                 env_exists: current_env.is_some(),
                 current_runtime,
                 current_launcher,
-                current_service_installed,
+                current_service_installed: current_service
+                    .as_ref()
+                    .map(|service| service.installed)
+                    .unwrap_or(false),
+                current_service,
                 desired_runtime,
                 desired_launcher,
                 aligned: issues.is_empty(),
@@ -139,6 +167,7 @@ impl Cli {
                 current_runtime: None,
                 current_launcher: None,
                 current_service_installed: false,
+                current_service: None,
                 desired_runtime: None,
                 desired_launcher: None,
                 aligned: false,
@@ -163,16 +192,15 @@ impl Cli {
         let summary = if let Some(resolution) = resolved {
             let env_name = resolution.manifest.env.name.clone();
             let current_env = get_environment(&env_name, &self.env, &self.cwd).ok();
-            let current_service_installed = current_env.as_ref().and_then(|_| {
-                self.service_service()
-                    .status_fast(&env_name)
-                    .ok()
-                    .map(|summary| summary.installed)
-            });
+            let current_service = current_env
+                .as_ref()
+                .map(|_| self.service_service().status_fast(&env_name))
+                .transpose()?
+                .map(|summary| ManifestServiceState::from_service_summary(&summary));
             let plan = plan_manifest_application_with_service(
                 &resolution.manifest,
                 current_env.as_ref(),
-                current_service_installed,
+                current_service.as_ref(),
             );
             render::manifest::ManifestPlanSummary {
                 found: true,
@@ -234,13 +262,12 @@ impl Cli {
         let summary = if let Some(resolution) = resolved {
             let env_name = resolution.manifest.env.name.clone();
             let current_env = get_environment(&env_name, &self.env, &self.cwd).ok();
-            let current_service_installed = if current_env.is_some() {
-                self.service_service()
-                    .status_fast(&env_name)
-                    .map(|summary| summary.installed)
-                    .unwrap_or(false)
+            let current_service = if current_env.is_some() {
+                Some(ManifestServiceState::from_service_summary(
+                    &self.service_service().status_fast(&env_name)?,
+                ))
             } else {
-                false
+                None
             };
             render::manifest::ManifestResolveSummary {
                 found: true,
@@ -255,7 +282,11 @@ impl Cli {
                 current_launcher: current_env
                     .as_ref()
                     .and_then(|meta| meta.default_launcher.clone()),
-                current_service_installed,
+                current_service_installed: current_service
+                    .as_ref()
+                    .map(|service| service.installed)
+                    .unwrap_or(false),
+                current_service,
                 desired_runtime: resolution.manifest.runtime.as_ref().and_then(|runtime| {
                     runtime
                         .name
@@ -285,6 +316,7 @@ impl Cli {
                 current_runtime: None,
                 current_launcher: None,
                 current_service_installed: false,
+                current_service: None,
                 desired_runtime: None,
                 desired_launcher: None,
                 desired_service_install: None,
