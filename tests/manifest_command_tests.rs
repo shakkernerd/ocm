@@ -142,6 +142,23 @@ fn manifest_path_rejects_path_and_manifest_together() {
 }
 
 #[test]
+fn manifest_path_reports_missing_explicit_manifest_files() {
+    let root = TestDir::new("manifest-path-missing-file");
+    let cwd = root.child("workspace");
+    let env = ocm_env(&root);
+    fs::create_dir_all(&cwd).unwrap();
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["manifest", "path", "--manifest", "./missing.yaml"],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("manifest file does not exist:"));
+    assert!(stderr(&output).contains("missing.yaml"));
+}
+
+#[test]
 fn manifest_path_reports_when_no_manifest_exists() {
     let root = TestDir::new("manifest-path-missing");
     let cwd = root.child("workspace");
@@ -329,6 +346,23 @@ fn manifest_resolve_rejects_path_and_manifest_together() {
     assert!(stderr(&output).contains(
         "manifest resolve accepts only one of [path] or --manifest <path>"
     ));
+}
+
+#[test]
+fn manifest_resolve_reports_missing_explicit_manifest_files() {
+    let root = TestDir::new("manifest-resolve-missing-file");
+    let cwd = root.child("workspace");
+    let env = ocm_env(&root);
+    fs::create_dir_all(&cwd).unwrap();
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["manifest", "resolve", "--manifest", "./missing.yaml"],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("manifest file does not exist:"));
+    assert!(stderr(&output).contains("missing.yaml"));
 }
 
 #[test]

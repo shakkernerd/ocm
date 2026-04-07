@@ -18,7 +18,7 @@ mod upgrade;
 
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -386,7 +386,11 @@ impl Cli {
         }
 
         if let Some(path) = explicit_manifest.as_ref() {
-            resolve_absolute_path(path, &self.env, &self.cwd)
+            let path = resolve_absolute_path(path, &self.env, &self.cwd)?;
+            if Self::looks_like_manifest_file_path(&path) && !path.exists() {
+                return Err(format!("manifest file does not exist: {}", path.display()));
+            }
+            Ok(path)
         } else {
             Ok(args
                 .first()
@@ -394,6 +398,20 @@ impl Cli {
                 .transpose()?
                 .unwrap_or_else(|| self.cwd.clone()))
         }
+    }
+
+    fn looks_like_manifest_file_path(path: &Path) -> bool {
+        if path
+            .file_name()
+            .is_some_and(|value| value == std::ffi::OsStr::new("ocm.yaml"))
+        {
+            return true;
+        }
+
+        matches!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("yaml" | "yml")
+        )
     }
 
     fn handle_active_env_run_shorthand(&self, openclaw_args: Vec<String>) -> Result<i32, String> {
