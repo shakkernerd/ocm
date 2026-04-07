@@ -170,6 +170,10 @@ pub fn write_migration_manifest(path: &Path, env_name: &str) -> Result<(), Strin
             display_path(path)
         ));
     }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", display_path(parent)))?;
+    }
     let manifest = manifest_for_migration_env(env_name);
     write_manifest(path, &manifest)
 }
@@ -397,6 +401,21 @@ mod tests {
         let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.contains("schema: ocm/v1"));
         assert!(raw.contains("name: mira"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_migration_manifest_creates_parent_directories() {
+        let root = std::env::temp_dir().join("ocm-migrate-tests-manifest-nested");
+        let _ = fs::remove_dir_all(&root);
+        let path = root.join("nested/project/ocm.yaml");
+
+        write_migration_manifest(&path, "mira").unwrap();
+
+        let manifest_raw = fs::read_to_string(&path).unwrap();
+        assert!(manifest_raw.contains("schema: ocm/v1"));
+        assert!(manifest_raw.contains("name: mira"));
 
         let _ = fs::remove_dir_all(&root);
     }
