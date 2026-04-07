@@ -275,6 +275,23 @@ fn manifest_show_rejects_path_and_manifest_together() {
 }
 
 #[test]
+fn manifest_show_reports_missing_explicit_manifest_files() {
+    let root = TestDir::new("manifest-show-missing-file");
+    let cwd = root.child("workspace");
+    let env = ocm_env(&root);
+    fs::create_dir_all(&cwd).unwrap();
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["manifest", "show", "--manifest", "./missing.yaml"],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("manifest file does not exist:"));
+    assert!(stderr(&output).contains("missing.yaml"));
+}
+
+#[test]
 fn manifest_show_reports_when_no_manifest_exists() {
     let root = TestDir::new("manifest-show-missing");
     let cwd = root.child("workspace");
@@ -467,6 +484,23 @@ fn manifest_drift_rejects_path_and_manifest_together() {
 }
 
 #[test]
+fn manifest_drift_reports_missing_explicit_manifest_files() {
+    let root = TestDir::new("manifest-drift-missing-file");
+    let cwd = root.child("workspace");
+    let env = ocm_env(&root);
+    fs::create_dir_all(&cwd).unwrap();
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["manifest", "drift", "--manifest", "./missing.yaml"],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("manifest file does not exist:"));
+    assert!(stderr(&output).contains("missing.yaml"));
+}
+
+#[test]
 fn manifest_drift_reports_alignment_for_matching_bindings() {
     let root = TestDir::new("manifest-drift-aligned");
     let cwd = root.child("workspace");
@@ -596,6 +630,23 @@ fn manifest_plan_rejects_path_and_manifest_together() {
     assert!(stderr(&output).contains(
         "manifest plan accepts only one of [path] or --manifest <path>"
     ));
+}
+
+#[test]
+fn manifest_plan_reports_missing_explicit_manifest_files() {
+    let root = TestDir::new("manifest-plan-missing-file");
+    let cwd = root.child("workspace");
+    let env = ocm_env(&root);
+    fs::create_dir_all(&cwd).unwrap();
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["manifest", "plan", "--manifest", "./missing.yaml"],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("manifest file does not exist:"));
+    assert!(stderr(&output).contains("missing.yaml"));
 }
 
 #[test]
