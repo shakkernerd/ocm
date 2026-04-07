@@ -305,6 +305,41 @@ fn migrate_import_can_write_a_manifest() {
 }
 
 #[test]
+fn migrate_import_can_write_a_nested_manifest_path() {
+    let root = TestDir::new("migrate-import-nested-manifest");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let manifest_path = cwd.join("nested/project/ocm.yaml");
+    fs::create_dir_all(source_home.join("workspace")).unwrap();
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "import",
+            "--name",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--manifest",
+            "./nested/project/ocm.yaml",
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"manifestPath\":"));
+    assert!(body.contains(&manifest_path.to_string_lossy().to_string()));
+
+    let manifest_raw = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest_raw.contains("schema: ocm/v1"));
+    assert!(manifest_raw.contains("name: mira"));
+}
+
+#[test]
 fn migrate_import_resolves_relative_manifest_paths_from_cwd() {
     let root = TestDir::new("migrate-import-manifest-relative");
     let cwd = root.child("workspace");
