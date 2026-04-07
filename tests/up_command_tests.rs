@@ -43,7 +43,7 @@ fn up_dry_run_accepts_an_explicit_manifest_path() {
     let output = run_ocm(
         &cwd,
         &env,
-        &["up", "--manifest", "./ocm.yaml", "--dry-run", "--json"],
+        &["up", "--manifest", "../ocm.yaml", "--dry-run", "--json"],
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
@@ -99,6 +99,19 @@ fn up_rejects_path_and_manifest_together() {
     let output = run_ocm(&cwd, &env, &["up", ".", "--manifest", "./ocm.yaml"]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("up accepts only one of [path] or --manifest <path>"));
+}
+
+#[test]
+fn up_reports_missing_explicit_manifest_files() {
+    let root = TestDir::new("up-missing-manifest-file");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["up", "--manifest", "./missing.yaml"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("manifest file does not exist:"));
+    assert!(stderr(&output).contains("missing.yaml"));
 }
 
 #[test]
