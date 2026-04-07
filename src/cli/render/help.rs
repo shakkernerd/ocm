@@ -346,16 +346,23 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
     match action {
         "path" => Some(render_leaf(
             "Show the discovered manifest path",
-            "Search upward from the current working directory or one explicit path and report the nearest ocm.yaml without changing any environment state.",
-            vec![format!("{cmd} manifest path [<path>] [--raw] [--json]")],
+            "Search upward from the current working directory or one explicit path, or inspect one explicit manifest file, and report the manifest path without changing any environment state.",
+            vec![format!(
+                "{cmd} manifest path [<path>] [--manifest <path>] [--raw] [--json]"
+            )],
             &[
                 ("[path]", "Optional directory or file path to search from"),
+                (
+                    "--manifest <path>",
+                    "Use a specific manifest file or search root",
+                ),
                 ("--raw", "Print machine-friendly key/value output"),
                 ("--json", "Print JSON output"),
             ],
             vec![
                 format!("{cmd} manifest path"),
                 format!("{cmd} manifest path /path/to/workspace"),
+                format!("{cmd} manifest path --manifest ./ocm.yaml"),
                 format!("{cmd} manifest path --json"),
             ],
             &[
@@ -422,16 +429,23 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
         )),
         "show" => Some(render_leaf(
             "Show the discovered manifest",
-            "Search upward from the current working directory or one explicit path, load the nearest ocm.yaml, and print its resolved contents without changing any environment state.",
-            vec![format!("{cmd} manifest show [<path>] [--raw] [--json]")],
+            "Search upward from the current working directory or one explicit path, or load one explicit manifest file, and print its resolved contents without changing any environment state.",
+            vec![format!(
+                "{cmd} manifest show [<path>] [--manifest <path>] [--raw] [--json]"
+            )],
             &[
                 ("[path]", "Optional directory or file path to search from"),
+                (
+                    "--manifest <path>",
+                    "Use a specific manifest file or search root",
+                ),
                 ("--raw", "Print machine-friendly key/value output"),
                 ("--json", "Print JSON output"),
             ],
             vec![
                 format!("{cmd} manifest show"),
                 format!("{cmd} manifest show /path/to/workspace"),
+                format!("{cmd} manifest show --manifest ./ocm.yaml"),
                 format!("{cmd} manifest show --json"),
             ],
             &[

@@ -97,6 +97,51 @@ fn manifest_path_can_search_from_an_explicit_path() {
 }
 
 #[test]
+fn manifest_path_accepts_an_explicit_manifest_file() {
+    let root = TestDir::new("manifest-path-file");
+    let cwd = root.child("workspace").join("deep");
+    let manifest_path = root.child("workspace").join("mira.yaml");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(&manifest_path, "schema: ocm/v1\nenv:\n  name: mira\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "manifest",
+            "path",
+            "--manifest",
+            manifest_path.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"found\": true"));
+    assert!(body.contains(&manifest_path.to_string_lossy().to_string()));
+}
+
+#[test]
+fn manifest_path_rejects_path_and_manifest_together() {
+    let root = TestDir::new("manifest-path-conflict");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(cwd.join("ocm.yaml"), "schema: ocm/v1\nenv:\n  name: mira\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["manifest", "path", ".", "--manifest", "./ocm.yaml"],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains(
+        "manifest path accepts only one of [path] or --manifest <path>"
+    ));
+}
+
+#[test]
 fn manifest_path_reports_when_no_manifest_exists() {
     let root = TestDir::new("manifest-path-missing");
     let cwd = root.child("workspace");
@@ -144,6 +189,56 @@ fn manifest_show_prints_the_discovered_manifest() {
     assert!(stdout.contains("\"schema\": \"ocm/v1\""));
     assert!(stdout.contains("\"name\": \"mira\""));
     assert!(stdout.contains("\"channel\": \"stable\""));
+}
+
+#[test]
+fn manifest_show_accepts_an_explicit_manifest_file() {
+    let root = TestDir::new("manifest-show-file");
+    let cwd = root.child("workspace").join("deep");
+    let manifest_path = root.child("workspace").join("mira.yaml");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        &manifest_path,
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "manifest",
+            "show",
+            "--manifest",
+            manifest_path.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"found\": true"));
+    assert!(body.contains("\"name\": \"mira\""));
+    assert!(body.contains("\"launcher\":"));
+}
+
+#[test]
+fn manifest_show_rejects_path_and_manifest_together() {
+    let root = TestDir::new("manifest-show-conflict");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(cwd.join("ocm.yaml"), "schema: ocm/v1\nenv:\n  name: mira\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["manifest", "show", ".", "--manifest", "./ocm.yaml"],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains(
+        "manifest show accepts only one of [path] or --manifest <path>"
+    ));
 }
 
 #[test]

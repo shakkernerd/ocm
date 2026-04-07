@@ -25,15 +25,7 @@ impl Cli {
 
     fn handle_manifest_path(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "manifest path")?;
-        if args.len() > 1 {
-            return Err(format!("unexpected arguments: {}", args.join(" ")));
-        }
-
-        let search_root = args
-            .first()
-            .map(|value| self.resolve_manifest_search_root(value))
-            .transpose()?
-            .unwrap_or_else(|| self.cwd.clone());
+        let search_root = self.resolve_manifest_input(args, "manifest path")?;
 
         let summary = render::manifest::ManifestPathSummary {
             found: false,
@@ -216,15 +208,7 @@ impl Cli {
 
     fn handle_manifest_show(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "manifest show")?;
-        if args.len() > 1 {
-            return Err(format!("unexpected arguments: {}", args.join(" ")));
-        }
-
-        let search_root = args
-            .first()
-            .map(|value| self.resolve_manifest_search_root(value))
-            .transpose()?
-            .unwrap_or_else(|| self.cwd.clone());
+        let search_root = self.resolve_manifest_input(args, "manifest show")?;
 
         let resolved = resolve_manifest(&search_root)?;
         let summary = render::manifest::ManifestShowSummary {
