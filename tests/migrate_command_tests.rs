@@ -90,6 +90,9 @@ fn help_migrate_import_is_available() {
     let body = stdout(&output);
     assert!(body.contains("Import a plain OpenClaw home"));
     assert!(body.contains(
+        "preserve config, auth, sessions, and logs, and clear only live runtime residue like locks, pid files, and sockets."
+    ));
+    assert!(body.contains(
         "ocm migrate import --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
     ));
     assert!(body.contains("--manifest <path>"));
@@ -191,12 +194,13 @@ fn help_migrate_plan_is_available() {
 }
 
 #[test]
-fn migrate_import_creates_a_clean_env_from_plain_openclaw_home() {
+fn migrate_import_preserves_history_and_logs_from_plain_openclaw_home() {
     let root = TestDir::new("migrate-import");
     let cwd = root.child("workspace");
     let source_home = root.child("legacy-home/.openclaw");
     fs::create_dir_all(source_home.join("workspace")).unwrap();
     fs::create_dir_all(source_home.join("logs")).unwrap();
+    fs::create_dir_all(source_home.join("run")).unwrap();
     fs::create_dir_all(source_home.join("agents/main/agent")).unwrap();
     fs::create_dir_all(source_home.join("agents/main/sessions")).unwrap();
     fs::create_dir_all(&cwd).unwrap();
@@ -209,7 +213,11 @@ fn migrate_import_creates_a_clean_env_from_plain_openclaw_home() {
     )
     .unwrap();
     fs::write(source_home.join("workspace/notes.txt"), "hello\n").unwrap();
-    fs::write(source_home.join("logs/app.log"), "runtime residue\n").unwrap();
+    fs::write(
+        source_home.join("logs/app.log"),
+        format!("cwd={}\n", source_home.join("workspace").display()),
+    )
+    .unwrap();
     fs::write(
         source_home.join("agents/main/agent/auth-profiles.json"),
         "{}\n",
@@ -217,9 +225,20 @@ fn migrate_import_creates_a_clean_env_from_plain_openclaw_home() {
     .unwrap();
     fs::write(
         source_home.join("agents/main/sessions/main.jsonl"),
-        "stale session\n",
+        format!(
+            "{{\"cwd\":\"{}\",\"log\":\"{}\"}}\n",
+            source_home.join("workspace").display(),
+            source_home.join("logs/app.log").display()
+        ),
     )
     .unwrap();
+    fs::write(
+        source_home.join("openclaw.json.bak"),
+        format!("backup={}\n", source_home.display()),
+    )
+    .unwrap();
+    fs::write(source_home.join("gateway.pid"), "4242\n").unwrap();
+    fs::write(source_home.join("run/live.sock"), "sock\n").unwrap();
     let env = ocm_env(&root);
 
     let output = run_ocm(
@@ -246,16 +265,31 @@ fn migrate_import_creates_a_clean_env_from_plain_openclaw_home() {
             .join("agents/main/agent/auth-profiles.json")
             .exists()
     );
-    assert!(!imported_state.join("logs").exists());
+    assert!(imported_state.join("logs/app.log").exists());
     assert!(
-        !imported_state
+        imported_state
             .join("agents/main/sessions/main.jsonl")
             .exists()
     );
+    assert!(imported_state.join("openclaw.json.bak").exists());
+    assert!(!imported_state.join("gateway.pid").exists());
+    assert!(!imported_state.join("run/live.sock").exists());
 
     let config_text = fs::read_to_string(imported_state.join("openclaw.json")).unwrap();
     assert!(config_text.contains(&imported_state.join("workspace").display().to_string()));
     assert!(!config_text.contains(&source_home.display().to_string()));
+
+    let session_text =
+        fs::read_to_string(imported_state.join("agents/main/sessions/main.jsonl")).unwrap();
+    let log_text = fs::read_to_string(imported_state.join("logs/app.log")).unwrap();
+    let backup_text = fs::read_to_string(imported_state.join("openclaw.json.bak")).unwrap();
+    assert!(session_text.contains(&imported_state.join("workspace").display().to_string()));
+    assert!(session_text.contains(&imported_state.join("logs/app.log").display().to_string()));
+    assert!(!session_text.contains(&source_home.display().to_string()));
+    assert!(log_text.contains(&imported_state.join("workspace").display().to_string()));
+    assert!(!log_text.contains(&source_home.display().to_string()));
+    assert!(backup_text.contains(&imported_state.display().to_string()));
+    assert!(!backup_text.contains(&source_home.display().to_string()));
 }
 
 #[test]

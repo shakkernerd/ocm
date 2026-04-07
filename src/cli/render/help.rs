@@ -489,7 +489,7 @@ pub fn migrate_command_help(cmd: &str, action: &str) -> Option<String> {
     match action {
         "import" => Some(render_leaf(
             "Import a plain OpenClaw home",
-            "Create a managed env from a plain OpenClaw home, preserve durable config and agent auth, and clear copied runtime residue like sessions and logs.",
+            "Create a managed env from a plain OpenClaw home, preserve config, auth, sessions, and logs, and clear only live runtime residue like locks, pid files, and sockets.",
             vec![format!(
                 "{cmd} migrate import --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
             )],

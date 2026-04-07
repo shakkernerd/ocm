@@ -7,8 +7,8 @@ use serde::Serialize;
 use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService};
 use crate::manifest::{ManifestEnv, OcmManifest, render_manifest_yaml, write_manifest};
 use crate::store::{
-    clear_nonportable_runtime_state, copy_dir_recursive, default_env_root, derive_env_paths,
-    display_path, get_environment, resolve_absolute_path, resolve_user_home,
+    copy_dir_recursive, default_env_root, derive_env_paths, display_path, get_environment,
+    prepare_migrated_runtime_state, resolve_absolute_path, resolve_user_home,
     rewrite_openclaw_config_for_target, validate_name,
 };
 
@@ -138,7 +138,7 @@ pub fn migrate_plain_openclaw_home(
     copy_dir_recursive(&source_home, &target_paths.state_dir)?;
     let legacy_root = source_home.parent().unwrap_or(source_home.as_path());
     rewrite_openclaw_config_for_target(&target_paths, Some(legacy_root), created.gateway_port)?;
-    clear_nonportable_runtime_state(&target_paths)?;
+    prepare_migrated_runtime_state(&target_paths, &source_home)?;
 
     Ok(EnvImportSummary {
         name: created.name,
@@ -281,13 +281,14 @@ mod tests {
     }
 
     #[test]
-    fn migrate_plain_openclaw_home_copies_config_and_workspace_but_clears_runtime_residue() {
+    fn migrate_plain_openclaw_home_preserves_history_and_logs_while_clearing_live_residue() {
         let root = std::env::temp_dir().join("ocm-migrate-tests-apply");
         let cwd = root.join("cwd");
         let source_home = root.join("legacy-home");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(source_home.join("workspace")).unwrap();
         fs::create_dir_all(source_home.join("logs")).unwrap();
+        fs::create_dir_all(source_home.join("run")).unwrap();
         fs::create_dir_all(source_home.join("agents/main/agent")).unwrap();
         fs::create_dir_all(source_home.join("agents/main/sessions")).unwrap();
         fs::create_dir_all(&cwd).unwrap();
@@ -300,7 +301,11 @@ mod tests {
         )
         .unwrap();
         fs::write(source_home.join("workspace/notes.txt"), "hello\n").unwrap();
-        fs::write(source_home.join("logs/app.log"), "runtime residue\n").unwrap();
+        fs::write(
+            source_home.join("logs/app.log"),
+            format!("cwd={}\n", source_home.join("workspace").display()),
+        )
+        .unwrap();
         fs::write(
             source_home.join("agents/main/agent/auth-profiles.json"),
             "{}\n",
@@ -308,9 +313,20 @@ mod tests {
         .unwrap();
         fs::write(
             source_home.join("agents/main/sessions/main.jsonl"),
-            "stale session\n",
+            format!(
+                "{{\"cwd\":\"{}\",\"log\":\"{}\"}}\n",
+                source_home.join("workspace").display(),
+                source_home.join("logs/app.log").display()
+            ),
         )
         .unwrap();
+        fs::write(
+            source_home.join("openclaw.json.bak"),
+            format!("backup={}\n", source_home.display()),
+        )
+        .unwrap();
+        fs::write(source_home.join("gateway.pid"), "4242\n").unwrap();
+        fs::write(source_home.join("run/live.sock"), "sock\n").unwrap();
 
         let mut env = BTreeMap::new();
         env.insert("HOME".to_string(), root.join("home").display().to_string());
@@ -340,13 +356,41 @@ mod tests {
                 .join("agents/main/agent/auth-profiles.json")
                 .exists()
         );
-        assert!(!target_paths.state_dir.join("logs").exists());
+        assert!(target_paths.state_dir.join("logs/app.log").exists());
         assert!(
-            !target_paths
+            target_paths
                 .state_dir
                 .join("agents/main/sessions/main.jsonl")
                 .exists()
         );
+        assert!(target_paths.state_dir.join("openclaw.json.bak").exists());
+        assert!(!target_paths.state_dir.join("gateway.pid").exists());
+        assert!(!target_paths.state_dir.join("run").exists());
+
+        let session_raw = fs::read_to_string(
+            target_paths
+                .state_dir
+                .join("agents/main/sessions/main.jsonl"),
+        )
+        .unwrap();
+        let logs_raw = fs::read_to_string(target_paths.state_dir.join("logs/app.log")).unwrap();
+        let backup_raw =
+            fs::read_to_string(target_paths.state_dir.join("openclaw.json.bak")).unwrap();
+        assert!(session_raw.contains(&target_paths.workspace_dir.display().to_string()));
+        assert!(
+            session_raw.contains(
+                &target_paths
+                    .state_dir
+                    .join("logs/app.log")
+                    .display()
+                    .to_string()
+            )
+        );
+        assert!(!session_raw.contains(&source_home.display().to_string()));
+        assert!(logs_raw.contains(&target_paths.workspace_dir.display().to_string()));
+        assert!(!logs_raw.contains(&source_home.display().to_string()));
+        assert!(backup_raw.contains(&target_paths.state_dir.display().to_string()));
+        assert!(!backup_raw.contains(&source_home.display().to_string()));
 
         let _ = fs::remove_dir_all(&root);
     }

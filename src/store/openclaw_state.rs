@@ -71,6 +71,27 @@ pub(crate) fn repair_openclaw_runtime_state(meta: &EnvMeta) -> Result<bool, Stri
     clear_nonportable_runtime_state(&paths)
 }
 
+pub(crate) fn prepare_migrated_runtime_state(
+    paths: &EnvPaths,
+    source_state_root: &Path,
+) -> Result<bool, String> {
+    if !path_exists(&paths.state_dir) {
+        return Ok(false);
+    }
+
+    let mut changed = false;
+    changed |= rewrite_runtime_state_root_refs(
+        &paths.state_dir,
+        &paths.config_path,
+        &paths.workspace_dir,
+        source_state_root,
+        &paths.state_dir,
+    )?;
+    changed |=
+        clear_volatile_runtime_state(&paths.state_dir, &paths.config_path, &paths.workspace_dir)?;
+    Ok(changed)
+}
+
 pub(crate) fn clear_nonportable_runtime_state(paths: &EnvPaths) -> Result<bool, String> {
     if !path_exists(&paths.state_dir) {
         return Ok(false);
@@ -94,6 +115,111 @@ pub(crate) fn clear_nonportable_runtime_state(paths: &EnvPaths) -> Result<bool, 
 
         remove_path(&path)?;
         changed = true;
+    }
+
+    Ok(changed)
+}
+
+fn rewrite_runtime_state_root_refs(
+    root: &Path,
+    config_path: &Path,
+    workspace_dir: &Path,
+    source_state_root: &Path,
+    target_state_root: &Path,
+) -> Result<bool, String> {
+    let mut changed = false;
+    let source_root = display_path(source_state_root);
+    let target_root = display_path(target_state_root);
+    rewrite_runtime_state_root_refs_inner(
+        root,
+        config_path,
+        workspace_dir,
+        &source_root,
+        &target_root,
+        &mut changed,
+    )?;
+    Ok(changed)
+}
+
+fn rewrite_runtime_state_root_refs_inner(
+    root: &Path,
+    config_path: &Path,
+    workspace_dir: &Path,
+    source_root: &str,
+    target_root: &str,
+    changed: &mut bool,
+) -> Result<(), String> {
+    if !path_exists(root) {
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(root).map_err(|error| error.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if path == config_path || path.starts_with(workspace_dir) {
+            continue;
+        }
+
+        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.is_dir() {
+            rewrite_runtime_state_root_refs_inner(
+                &path,
+                config_path,
+                workspace_dir,
+                source_root,
+                target_root,
+                changed,
+            )?;
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let rewritten = raw.replace(source_root, target_root);
+        if rewritten == raw {
+            continue;
+        }
+        fs::write(&path, rewritten).map_err(|error| error.to_string())?;
+        *changed = true;
+    }
+
+    Ok(())
+}
+
+fn clear_volatile_runtime_state(
+    root: &Path,
+    config_path: &Path,
+    workspace_dir: &Path,
+) -> Result<bool, String> {
+    if !path_exists(root) {
+        return Ok(false);
+    }
+
+    let mut changed = false;
+    let entries = fs::read_dir(root).map_err(|error| error.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if path == config_path || path.starts_with(workspace_dir) {
+            continue;
+        }
+
+        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        let file_name = entry.file_name();
+        if should_remove_volatile_runtime_path(&file_name, metadata.is_dir()) {
+            remove_path(&path)?;
+            changed = true;
+            continue;
+        }
+
+        if metadata.is_dir() {
+            changed |= clear_volatile_runtime_state(&path, config_path, workspace_dir)?;
+        }
     }
 
     Ok(changed)
@@ -141,6 +267,23 @@ fn prune_agent_runtime_state(agents_root: &Path) -> Result<bool, String> {
     }
 
     Ok(changed)
+}
+
+fn should_remove_volatile_runtime_path(name: &OsStr, is_dir: bool) -> bool {
+    if is_dir {
+        return matches!(
+            name.to_str(),
+            Some("run") | Some("tmp") | Some("temp") | Some("locks")
+        );
+    }
+
+    matches!(
+        Path::new(name).extension().and_then(OsStr::to_str),
+        Some("pid") | Some("lock") | Some("sock") | Some("socket")
+    ) || matches!(
+        name.to_str(),
+        Some("pid") | Some("lock") | Some("sock") | Some("socket")
+    )
 }
 
 fn collect_runtime_state_path_refs(
@@ -356,6 +499,76 @@ mod tests {
         );
         assert!(!paths.state_dir.join("agents/main/sessions").exists());
         assert!(!paths.state_dir.join("logs.txt").exists());
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn prepare_migrated_runtime_state_preserves_history_and_rewrites_root_refs() {
+        let temp =
+            std::env::temp_dir().join(format!("ocm-openclaw-state-migrate-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        let source_state_root = temp.join("legacy-home/.openclaw");
+        let paths = derive_env_paths(&temp.join("target"));
+        fs::create_dir_all(paths.workspace_dir.join("notes")).unwrap();
+        fs::create_dir_all(paths.state_dir.join("agents/main/agent")).unwrap();
+        fs::create_dir_all(paths.state_dir.join("agents/main/sessions")).unwrap();
+        fs::create_dir_all(paths.state_dir.join("logs")).unwrap();
+        fs::create_dir_all(paths.state_dir.join("run")).unwrap();
+        fs::write(&paths.config_path, "{}\n").unwrap();
+        fs::write(paths.workspace_dir.join("notes/todo.txt"), "keep\n").unwrap();
+        fs::write(
+            paths.state_dir.join("agents/main/agent/auth-profiles.json"),
+            "{}\n",
+        )
+        .unwrap();
+        fs::write(
+            paths.state_dir.join("agents/main/sessions/main.jsonl"),
+            format!(
+                "{{\"cwd\":\"{}\",\"log\":\"{}\"}}\n",
+                source_state_root.join("workspace").display(),
+                source_state_root.join("logs/gateway.log").display()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            paths.state_dir.join("logs/gateway.log"),
+            format!("source={}\n", source_state_root.join("workspace").display()),
+        )
+        .unwrap();
+        fs::write(
+            paths.state_dir.join("openclaw.json.bak"),
+            format!("backup={}\n", source_state_root.display()),
+        )
+        .unwrap();
+        fs::write(paths.state_dir.join("gateway.pid"), "4242\n").unwrap();
+        fs::write(paths.state_dir.join("run/live.sock"), "sock\n").unwrap();
+
+        let changed = prepare_migrated_runtime_state(&paths, &source_state_root).unwrap();
+        assert!(changed);
+        assert!(paths.workspace_dir.join("notes/todo.txt").exists());
+        assert!(
+            paths
+                .state_dir
+                .join("agents/main/sessions/main.jsonl")
+                .exists()
+        );
+        assert!(paths.state_dir.join("logs/gateway.log").exists());
+        assert!(paths.state_dir.join("openclaw.json.bak").exists());
+        assert!(!paths.state_dir.join("gateway.pid").exists());
+        assert!(!paths.state_dir.join("run").exists());
+
+        let session_raw =
+            fs::read_to_string(paths.state_dir.join("agents/main/sessions/main.jsonl")).unwrap();
+        let logs_raw = fs::read_to_string(paths.state_dir.join("logs/gateway.log")).unwrap();
+        let backup_raw = fs::read_to_string(paths.state_dir.join("openclaw.json.bak")).unwrap();
+        assert!(session_raw.contains(&display_path(&paths.state_dir.join("workspace"))));
+        assert!(session_raw.contains(&display_path(&paths.state_dir.join("logs/gateway.log"))));
+        assert!(!session_raw.contains(&display_path(&source_state_root)));
+        assert!(logs_raw.contains(&display_path(&paths.state_dir.join("workspace"))));
+        assert!(!logs_raw.contains(&display_path(&source_state_root)));
+        assert!(backup_raw.contains(&display_path(&paths.state_dir)));
+        assert!(!backup_raw.contains(&display_path(&source_state_root)));
 
         let _ = fs::remove_dir_all(&temp);
     }
