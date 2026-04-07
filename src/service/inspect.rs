@@ -72,6 +72,8 @@ pub struct ServiceSummary {
     pub can_adopt_global: bool,
     pub can_restore_global: bool,
     pub definition_drift: bool,
+    pub live_exec_unverified: bool,
+    pub orphaned_live_service: bool,
     pub issue: Option<String>,
 }
 
@@ -527,6 +529,7 @@ fn build_service_summary(
         == ServiceManagerKind::Launchd
         && live_service
         && live_exec.is_none();
+    let orphaned_live_service = live_service && !managed_status.installed;
     let installed_exec = if managed_status.installed || live_service {
         if live_exec.is_some() {
             live_exec
@@ -586,7 +589,7 @@ fn build_service_summary(
             Some(existing) => format!("{existing}; {detail}"),
             None => detail,
         });
-    } else if live_service && !managed_status.installed {
+    } else if orphaned_live_service {
         let detail = format!(
             "managed service definition is missing while the service is still loaded; run service restart {} to rewrite it",
             env_meta.name
@@ -677,6 +680,8 @@ fn build_service_summary(
         can_adopt_global,
         can_restore_global,
         definition_drift,
+        live_exec_unverified: launchd_live_exec_unverified,
+        orphaned_live_service,
         issue,
     })
 }

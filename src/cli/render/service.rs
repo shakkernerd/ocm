@@ -395,7 +395,7 @@ fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) ->
         ];
     }
 
-    if summary.definition_drift {
+    if summary.definition_drift || summary.live_exec_unverified || summary.orphaned_live_service {
         return match daemon_state(summary.installed, summary.loaded, summary.running) {
             "loaded" | "running" => vec![KeyValueRow::warning(
                 "Refresh",
@@ -518,6 +518,14 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
     }
     lines.push(format!("runDir: {}", summary.run_dir));
     lines.push(format!("definitionDrift: {}", summary.definition_drift));
+    lines.push(format!(
+        "liveExecUnverified: {}",
+        summary.live_exec_unverified
+    ));
+    lines.push(format!(
+        "orphanedLiveService: {}",
+        summary.orphaned_live_service
+    ));
     if let Some(pid) = summary.pid {
         lines.push(format!("managedPid: {pid}"));
     }
@@ -1099,6 +1107,8 @@ mod tests {
                     can_adopt_global: false,
                     can_restore_global: false,
                     definition_drift: false,
+                    live_exec_unverified: false,
+                    orphaned_live_service: false,
                     issue: None,
                 }],
             },
@@ -1249,6 +1259,43 @@ mod tests {
     }
 
     #[test]
+    fn service_status_pretty_suggests_refresh_for_unverified_live_launchd_services() {
+        let mut summary = sample_service_summary();
+        summary.running = true;
+        summary.live_exec_unverified = true;
+        summary.issue = Some(
+            "launchd does not expose live command details for loaded services".to_string(),
+        );
+
+        let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm service restart demo"))
+        );
+    }
+
+    #[test]
+    fn service_status_pretty_suggests_refresh_for_orphaned_live_services() {
+        let mut summary = sample_service_summary();
+        summary.installed = false;
+        summary.running = true;
+        summary.orphaned_live_service = true;
+        summary.issue = Some(
+            "managed service definition is missing while the service is still loaded".to_string(),
+        );
+
+        let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm service restart demo"))
+        );
+    }
+
+    #[test]
     fn service_list_pretty_compacts_on_narrow_terminals() {
         let lines = service_list_with_width(
             &ServiceSummaryList {
@@ -1347,6 +1394,8 @@ mod tests {
             can_adopt_global: false,
             can_restore_global: false,
             definition_drift: false,
+            live_exec_unverified: false,
+            orphaned_live_service: false,
             issue: None,
         }
     }
