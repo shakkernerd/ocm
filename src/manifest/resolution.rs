@@ -84,4 +84,31 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn resolve_manifest_loads_an_explicit_yaml_file_path() {
+        let root = temp_root("explicit-file");
+        let nested = root.join("workspace");
+        std::fs::create_dir_all(&nested).unwrap();
+        let manifest_path = nested.join("mira.yaml");
+        std::fs::write(
+            &manifest_path,
+            "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\n",
+        )
+        .unwrap();
+
+        let resolved = resolve_manifest(&manifest_path).unwrap().unwrap();
+        assert_eq!(resolved.path, manifest_path);
+        assert_eq!(resolved.manifest.env.name, "mira");
+        assert_eq!(
+            resolved
+                .manifest
+                .launcher
+                .as_ref()
+                .and_then(|launcher| launcher.name.as_deref()),
+            Some("dev")
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
