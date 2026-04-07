@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
@@ -35,27 +36,33 @@ pub(crate) fn unsupported_service_manager_message() -> &'static str {
 pub(crate) fn service_backend_support_error(env: &BTreeMap<String, String>) -> Option<String> {
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => {
-            if binary_available(
-                service_manager_binary(env, ServiceManagerKind::Launchd),
-                env,
-            ) {
+            let binary = service_manager_binary(env, ServiceManagerKind::Launchd);
+            if !binary_available(binary, env) {
+                Some(
+                    "managed services require launchctl on this machine; run OpenClaw directly inside the env for now"
+                        .to_string(),
+                )
+            } else if launchd_available(env) {
                 None
             } else {
                 Some(
-                    "managed services require launchctl on this machine; run OpenClaw directly inside the env for now"
+                    "managed services require a usable launchctl session on this machine; run OpenClaw directly inside the env for now"
                         .to_string(),
                 )
             }
         }
         ServiceManagerKind::SystemdUser => {
-            if binary_available(
-                service_manager_binary(env, ServiceManagerKind::SystemdUser),
-                env,
-            ) {
+            let binary = service_manager_binary(env, ServiceManagerKind::SystemdUser);
+            if !binary_available(binary, env) {
+                Some(
+                    "managed services require systemctl --user on this machine; run OpenClaw directly inside the env for now"
+                        .to_string(),
+                )
+            } else if systemd_user_available(env) {
                 None
             } else {
                 Some(
-                    "managed services require systemctl --user on this machine; run OpenClaw directly inside the env for now"
+                    "managed services require a usable systemctl --user session on this machine; run OpenClaw directly inside the env for now"
                         .to_string(),
                 )
             }
@@ -113,6 +120,24 @@ fn binary_available(binary: &str, env: &BTreeMap<String, String>) -> bool {
     std::env::split_paths(path_value)
         .map(|dir| dir.join(binary))
         .any(|candidate| candidate.is_file())
+}
+
+fn launchd_available(env: &BTreeMap<String, String>) -> bool {
+    Command::new(service_manager_binary(env, ServiceManagerKind::Launchd))
+        .arg("managername")
+        .envs(env)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn systemd_user_available(env: &BTreeMap<String, String>) -> bool {
+    Command::new(service_manager_binary(env, ServiceManagerKind::SystemdUser))
+        .args(["--user", "show-environment"])
+        .envs(env)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 pub(crate) fn service_store_hash(
@@ -249,6 +274,44 @@ mod tests {
             service_backend_support_error(&env),
             Some(
                 "managed services require systemctl --user on this machine; run OpenClaw directly inside the env for now"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn backend_support_error_reports_unusable_launchctl_session() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "launchd".to_string(),
+        );
+        env.insert("OCM_INTERNAL_LAUNCHCTL_BIN".to_string(), "/bin/sh".to_string());
+        env.insert("HOME".to_string(), "/tmp".to_string());
+
+        assert_eq!(
+            service_backend_support_error(&env),
+            Some(
+                "managed services require a usable launchctl session on this machine; run OpenClaw directly inside the env for now"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn backend_support_error_reports_unusable_systemd_session() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "systemd-user".to_string(),
+        );
+        env.insert("OCM_INTERNAL_SYSTEMCTL_BIN".to_string(), "/bin/sh".to_string());
+        env.insert("HOME".to_string(), "/tmp".to_string());
+
+        assert_eq!(
+            service_backend_support_error(&env),
+            Some(
+                "managed services require a usable systemctl --user session on this machine; run OpenClaw directly inside the env for now"
                     .to_string()
             )
         );

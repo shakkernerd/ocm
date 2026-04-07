@@ -213,6 +213,31 @@ fn start_rejects_services_when_launchctl_is_unavailable() {
 }
 
 #[test]
+fn start_rejects_services_when_launchctl_is_unusable() {
+    let root = TestDir::new("start-unusable-launchctl");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    env.insert("OCM_INTERNAL_LAUNCHCTL_BIN".to_string(), "/bin/sh".to_string());
+
+    let start = run_ocm(
+        &cwd,
+        &env,
+        &["start", "demo", "--command", "openclaw", "--no-onboard"],
+    );
+    assert_eq!(start.status.code(), Some(1));
+    assert!(stderr(&start).contains("managed services require a usable launchctl session"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo"]);
+    assert_eq!(show.status.code(), Some(1));
+    assert!(stderr(&show).contains("environment \"demo\" does not exist"));
+}
+
+#[test]
 fn start_can_create_a_local_command_launcher() {
     let root = TestDir::new("start-command-launcher");
     let cwd = root.child("workspace");

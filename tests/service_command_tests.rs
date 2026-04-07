@@ -2498,9 +2498,16 @@ fn service_restore_global_dry_run_reports_the_latest_matching_backup_without_mut
             .exists()
     );
     assert!(managed_service_definition_path(&env, &cwd, "demo").exists());
+    let launchctl_log_after = fs::read_to_string(root.child("launchctl.log")).unwrap();
+    let normalize_probe_noise = |value: &str| {
+        value.lines()
+            .filter(|line| *line != "managername")
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     assert_eq!(
-        fs::read_to_string(root.child("launchctl.log")).unwrap(),
-        launchctl_log_before
+        normalize_probe_noise(&launchctl_log_after),
+        normalize_probe_noise(&launchctl_log_before)
     );
 }
 
@@ -2681,6 +2688,37 @@ fn service_install_reports_missing_launchctl_binary() {
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert_eq!(install.status.code(), Some(1));
     assert!(stderr(&install).contains("managed services require launchctl on this machine"));
+}
+
+#[test]
+fn service_install_reports_unusable_launchctl_session() {
+    let root = TestDir::new("service-install-unusable-launchctl");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    env.insert("OCM_INTERNAL_LAUNCHCTL_BIN".to_string(), "/bin/sh".to_string());
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "/bin/true"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert_eq!(install.status.code(), Some(1));
+    assert!(stderr(&install).contains("managed services require a usable launchctl session"));
 }
 
 #[test]
