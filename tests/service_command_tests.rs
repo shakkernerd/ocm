@@ -1669,6 +1669,14 @@ fn service_status_reports_loaded_launchd_services_even_when_the_plist_is_gone() 
     assert_eq!(summary["loaded"], true);
     assert_eq!(summary["running"], true);
     assert_eq!(summary["state"], "running");
+    assert_eq!(summary["definitionDrift"], true);
+    assert!(summary["command"].is_null());
+    assert!(
+        summary["issue"]
+            .as_str()
+            .unwrap()
+            .contains("service restart demo")
+    );
 }
 
 #[test]

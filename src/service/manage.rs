@@ -1223,12 +1223,6 @@ fn refresh_managed_service(
     prepared: &PreparedService,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    if !prepared.managed_plist_path.exists() {
-        return Err(format!(
-            "service for env \"{}\" is not installed; run service install first",
-            prepared.env_meta.name
-        ));
-    }
     write_service_definition(prepared, env)?;
     activate_managed_service(&prepared.managed_label, &prepared.managed_plist_path, env)
 }

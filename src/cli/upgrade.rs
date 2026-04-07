@@ -164,14 +164,14 @@ impl Cli {
 
     fn upgrade_env(&self, name: &str, target: &UpgradeTarget) -> Result<UpgradeEnvSummary, String> {
         let env = self.environment_service().get(name)?;
-        let service = self.service_service().status_fast(name).ok();
+        let service = self.service_service().status_fast(name)?;
 
         if let Some(runtime_name) = env.default_runtime.as_deref() {
-            return self.upgrade_runtime_bound_env(name, runtime_name, target, service.as_ref());
+            return self.upgrade_runtime_bound_env(name, runtime_name, target, Some(&service));
         }
 
         if let Some(launcher_name) = env.default_launcher.as_deref() {
-            return self.upgrade_launcher_bound_env(name, launcher_name, target, service.as_ref());
+            return self.upgrade_launcher_bound_env(name, launcher_name, target, Some(&service));
         }
 
         Err(format!(
@@ -392,7 +392,8 @@ impl Cli {
         let Some(service) = service else {
             return Ok((None, None));
         };
-        if !service.installed {
+        let live_service = service.loaded || service.running;
+        if !service.installed && !live_service {
             return Ok((None, None));
         }
         let definition_changed = service.definition_drift;
@@ -400,7 +401,7 @@ impl Cli {
             return Ok((None, None));
         }
 
-        if service.loaded || service.running {
+        if live_service {
             let restart = self
                 .with_progress(format!("Restarting service for {env_name}"), || {
                     self.service_service().restart(env_name)

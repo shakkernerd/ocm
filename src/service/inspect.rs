@@ -457,18 +457,24 @@ fn build_service_summary(
         }
         Err(error) => (None, None, None, Some(error)),
     };
-    let installed_exec = if managed_status.installed {
-        service_execution_from_status(&managed_status, Path::new(&env_meta.root)).or(
+    let live_service = managed_status.loaded || managed_status.running;
+    let installed_exec = if managed_status.installed || live_service {
+        let live_exec = service_execution_from_status(&managed_status, Path::new(&env_meta.root));
+        if live_exec.is_some() {
+            live_exec
+        } else if managed_status.installed {
             read_service_execution(
                 &managed.definition_path,
                 process_env,
                 Path::new(&env_meta.root),
-            )?,
-        )
+            )?
+        } else {
+            None
+        }
     } else {
         None
     };
-    let installed_service_env = if managed_status.installed {
+    let installed_service_env = if managed_status.installed || live_service {
         Some(ServiceEnvironmentDetails {
             config_path: managed_status.config_path.clone(),
             state_dir: managed_status.state_dir.clone(),
@@ -503,8 +509,21 @@ fn build_service_summary(
             Some(existing) => format!("{existing}; {detail}"),
             None => detail,
         });
+    } else if live_service && !managed_status.installed {
+        let detail = format!(
+            "managed service definition is missing while the service is still loaded; run service restart {} to rewrite it",
+            env_meta.name
+        );
+        issue = Some(match issue {
+            Some(existing) => format!("{existing}; {detail}"),
+            None => detail,
+        });
     }
-    let display_exec = installed_exec.as_ref().or(expected_exec.as_ref());
+    let display_exec = match installed_exec.as_ref() {
+        Some(exec) => Some(exec),
+        None if live_service && !managed_status.installed => None,
+        None => expected_exec.as_ref(),
+    };
     let (command, binary_path, args, run_dir) = match display_exec {
         Some(exec) => (
             exec.command.clone(),

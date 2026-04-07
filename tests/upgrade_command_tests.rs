@@ -438,6 +438,65 @@ fn upgrade_starts_stopped_services_when_only_the_definition_has_drifted() {
 }
 
 #[test]
+fn upgrade_restarts_orphaned_loaded_services_when_the_definition_file_is_missing() {
+    let root = TestDir::new("upgrade-orphaned-loaded-service");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 3);
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_launchctl(&root, &mut env);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-onboard"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let status_json: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    let assigned_port = status_json["gatewayPort"].as_u64().unwrap();
+
+    let plist_path = managed_service_definition_path(&env, &cwd, "demo");
+    fs::remove_file(&plist_path).unwrap();
+    fs::write(
+        root.child("launchctl-print.txt"),
+        format!(
+            "state = running\npid = 4242\nenvironment = {{\n  OPENCLAW_GATEWAY_PORT => {assigned_port}\n  OPENCLAW_CONFIG_PATH => {}\n}}\n",
+            root.child("ocm-home/envs/demo/.openclaw/openclaw.json")
+                .display()
+        ),
+    )
+    .unwrap();
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
+    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("outcome=up-to-date"), "{output}");
+    assert!(output.contains("service=restarted"), "{output}");
+}
+
+#[test]
 fn upgrade_all_updates_safe_envs_and_skips_local_or_pinned_ones() {
     let root = TestDir::new("upgrade-all");
     let cwd = root.child("workspace");
