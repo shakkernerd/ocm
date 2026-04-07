@@ -48,15 +48,7 @@ impl Cli {
 
     fn handle_manifest_drift(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "manifest drift")?;
-        if args.len() > 1 {
-            return Err(format!("unexpected arguments: {}", args.join(" ")));
-        }
-
-        let search_root = args
-            .first()
-            .map(|value| self.resolve_manifest_search_root(value))
-            .transpose()?
-            .unwrap_or_else(|| self.cwd.clone());
+        let search_root = self.resolve_manifest_input(args, "manifest drift")?;
 
         let resolved = resolve_manifest(&search_root)?;
         let summary = if let Some(resolution) = resolved {
@@ -163,15 +155,7 @@ impl Cli {
 
     fn handle_manifest_plan(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "manifest plan")?;
-        if args.len() > 1 {
-            return Err(format!("unexpected arguments: {}", args.join(" ")));
-        }
-
-        let search_root = args
-            .first()
-            .map(|value| self.resolve_manifest_search_root(value))
-            .transpose()?
-            .unwrap_or_else(|| self.cwd.clone());
+        let search_root = self.resolve_manifest_input(args, "manifest plan")?;
 
         let resolved = resolve_manifest(&search_root)?;
         let summary = if let Some(resolution) = resolved {
@@ -232,15 +216,7 @@ impl Cli {
     fn handle_manifest_resolve(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "manifest resolve")?;
-        if args.len() > 1 {
-            return Err(format!("unexpected arguments: {}", args.join(" ")));
-        }
-
-        let search_root = args
-            .first()
-            .map(|value| self.resolve_manifest_search_root(value))
-            .transpose()?
-            .unwrap_or_else(|| self.cwd.clone());
+        let search_root = self.resolve_manifest_input(args, "manifest resolve")?;
 
         let resolved = resolve_manifest(&search_root)?;
         let summary = if let Some(resolution) = resolved {

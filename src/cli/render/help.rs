@@ -372,16 +372,23 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
         )),
         "resolve" => Some(render_leaf(
             "Resolve a manifest into env state",
-            "Search upward from the current working directory or one explicit path, load the nearest ocm.yaml, and show which env it points at plus whether that env already exists.",
-            vec![format!("{cmd} manifest resolve [<path>] [--raw] [--json]")],
+            "Search upward from the current working directory or one explicit path, or load one explicit manifest file, and show which env it points at plus whether that env already exists.",
+            vec![format!(
+                "{cmd} manifest resolve [<path>] [--manifest <path>] [--raw] [--json]"
+            )],
             &[
                 ("[path]", "Optional directory or file path to search from"),
+                (
+                    "--manifest <path>",
+                    "Use a specific manifest file or search root",
+                ),
                 ("--raw", "Print machine-friendly key/value output"),
                 ("--json", "Print JSON output"),
             ],
             vec![
                 format!("{cmd} manifest resolve"),
                 format!("{cmd} manifest resolve /path/to/workspace"),
+                format!("{cmd} manifest resolve --manifest ./ocm.yaml"),
                 format!("{cmd} manifest resolve --json"),
             ],
             &[
@@ -391,16 +398,23 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
         )),
         "plan" => Some(render_leaf(
             "Show the manifest apply plan",
-            "Search upward from the current working directory or one explicit path, load the nearest ocm.yaml, and show the create-or-reconcile work that would be needed without applying it.",
-            vec![format!("{cmd} manifest plan [<path>] [--raw] [--json]")],
+            "Search upward from the current working directory or one explicit path, or load one explicit manifest file, and show the create-or-reconcile work that would be needed without applying it.",
+            vec![format!(
+                "{cmd} manifest plan [<path>] [--manifest <path>] [--raw] [--json]"
+            )],
             &[
                 ("[path]", "Optional directory or file path to search from"),
+                (
+                    "--manifest <path>",
+                    "Use a specific manifest file or search root",
+                ),
                 ("--raw", "Print machine-friendly key/value output"),
                 ("--json", "Print JSON output"),
             ],
             vec![
                 format!("{cmd} manifest plan"),
                 format!("{cmd} manifest plan /path/to/workspace"),
+                format!("{cmd} manifest plan --manifest ./ocm.yaml"),
                 format!("{cmd} manifest plan --json"),
             ],
             &[
@@ -410,16 +424,23 @@ pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
         )),
         "drift" => Some(render_leaf(
             "Show manifest binding drift",
-            "Search upward from the current working directory or one explicit path, load the nearest ocm.yaml, and compare its desired runtime and launcher selectors against the current env state.",
-            vec![format!("{cmd} manifest drift [<path>] [--raw] [--json]")],
+            "Search upward from the current working directory or one explicit path, or load one explicit manifest file, and compare its desired runtime and launcher selectors against the current env state.",
+            vec![format!(
+                "{cmd} manifest drift [<path>] [--manifest <path>] [--raw] [--json]"
+            )],
             &[
                 ("[path]", "Optional directory or file path to search from"),
+                (
+                    "--manifest <path>",
+                    "Use a specific manifest file or search root",
+                ),
                 ("--raw", "Print machine-friendly key/value output"),
                 ("--json", "Print JSON output"),
             ],
             vec![
                 format!("{cmd} manifest drift"),
                 format!("{cmd} manifest drift /path/to/workspace"),
+                format!("{cmd} manifest drift --manifest ./ocm.yaml"),
                 format!("{cmd} manifest drift --json"),
             ],
             &[
