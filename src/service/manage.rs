@@ -162,6 +162,12 @@ struct PreparedGlobalRestore {
     warnings: Vec<String>,
 }
 
+struct ExistingServiceRef {
+    env_meta: EnvMeta,
+    managed_label: String,
+    managed_plist_path: PathBuf,
+}
+
 pub fn install_service(
     name: &str,
     env: &BTreeMap<String, String>,
@@ -299,18 +305,18 @@ pub fn stop_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
-    let prepared = prepare_existing_service(name, env, cwd)?;
-    stop_managed_service(&prepared, env)?;
+    let existing = prepare_existing_service_ref(name, env, cwd)?;
+    stop_managed_service(&existing.managed_label, &existing.managed_plist_path, env)?;
 
     Ok(ServiceActionSummary {
-        env_name: prepared.env_meta.name,
+        env_name: existing.env_meta.name,
         service_kind: "gateway".to_string(),
         action: "stop".to_string(),
-        managed_label: prepared.managed_label,
-        managed_plist_path: display_path(&prepared.managed_plist_path),
-        installed: prepared.managed_plist_path.exists(),
-        gateway_port: prepared.env_meta.gateway_port,
-        warnings: prepared.warnings,
+        managed_label: existing.managed_label,
+        managed_plist_path: display_path(&existing.managed_plist_path),
+        installed: existing.managed_plist_path.exists(),
+        gateway_port: existing.env_meta.gateway_port,
+        warnings: Vec::new(),
     })
 }
 
@@ -425,6 +431,22 @@ fn prepare_existing_service(
     prepare_service(name, env, cwd)
 }
 
+fn prepare_existing_service_ref(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ExistingServiceRef, String> {
+    let service = EnvironmentService::new(env, cwd);
+    let env_meta = service.apply_effective_gateway_port(service.get(name)?)?;
+    let managed_label = managed_service_label(&env_meta.name, env, cwd)?;
+    let managed_plist_path = managed_plist_path(&env_meta.name, env, cwd)?;
+    Ok(ExistingServiceRef {
+        env_meta,
+        managed_label,
+        managed_plist_path,
+    })
+}
+
 fn prepare_service(
     name: &str,
     env: &BTreeMap<String, String>,
@@ -442,7 +464,22 @@ fn prepare_service_with_allowed_busy_port(
 ) -> Result<PreparedService, String> {
     let port_assignment =
         persist_service_gateway_port(name, env, cwd, allowed_busy_port, persist_gateway_port)?;
-    let env_meta = port_assignment.env_meta;
+    build_prepared_service(
+        port_assignment.env_meta,
+        env,
+        cwd,
+        port_assignment.persisted_gateway_port,
+        port_assignment.previous_gateway_port,
+    )
+}
+
+fn build_prepared_service(
+    env_meta: EnvMeta,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    persisted_gateway_port: bool,
+    previous_gateway_port: Option<u32>,
+) -> Result<PreparedService, String> {
     let launch = resolve_service_launch(&env_meta, env, cwd, true)?;
     let managed_label = managed_service_label(&env_meta.name, env, cwd)?;
     let managed_plist_path = managed_plist_path(&env_meta.name, env, cwd)?;
@@ -485,10 +522,10 @@ fn prepare_service_with_allowed_busy_port(
         };
 
     let warnings = service_install_warnings(
-        name,
-        port_assignment.previous_gateway_port,
+        &env_meta.name,
+        previous_gateway_port,
         env_meta.gateway_port.unwrap_or_default(),
-        port_assignment.persisted_gateway_port,
+        persisted_gateway_port,
     );
 
     Ok(PreparedService {
@@ -506,8 +543,8 @@ fn prepare_service_with_allowed_busy_port(
         stdout_path,
         stderr_path,
         warnings,
-        persisted_gateway_port: port_assignment.persisted_gateway_port,
-        previous_gateway_port: port_assignment.previous_gateway_port,
+        persisted_gateway_port,
+        previous_gateway_port,
     })
 }
 
@@ -1009,18 +1046,45 @@ fn activate_managed_service(
 ) -> Result<(), String> {
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => activate_launch_agent(label, service_path, env),
-        ServiceManagerKind::SystemdUser => {
-            run_systemctl(env, ["--user", "daemon-reload"])?;
-            let enable = run_systemctl(env, ["--user", "enable", "--now", label])?;
-            if !enable.status.success() {
-                return Err(format!(
-                    "systemctl --user enable --now failed: {}",
-                    systemctl_detail(&enable)
-                ));
-            }
-            Ok(())
-        }
+        ServiceManagerKind::SystemdUser => activate_systemd_user_service(label, env),
     }
+}
+
+fn activate_systemd_user_service(
+    label: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
+    if !reload.status.success() {
+        return Err(format!(
+            "systemctl --user daemon-reload failed: {}",
+            systemctl_detail(&reload)
+        ));
+    }
+
+    let enable = run_systemctl(env, ["--user", "enable", label])?;
+    if !enable.status.success() {
+        return Err(format!(
+            "systemctl --user enable failed: {}",
+            systemctl_detail(&enable)
+        ));
+    }
+
+    let restart = run_systemctl(env, ["--user", "restart", label])?;
+    if restart.status.success() {
+        return Ok(());
+    }
+
+    let start = run_systemctl(env, ["--user", "start", label])?;
+    if !start.status.success() {
+        return Err(format!(
+            "systemctl --user restart/start failed: {}; {}",
+            systemctl_detail(&restart),
+            systemctl_detail(&start)
+        ));
+    }
+
+    Ok(())
 }
 
 fn backup_global_plist(source_path: &Path, backup_path: &Path) -> Result<(), String> {
@@ -1156,12 +1220,13 @@ fn refresh_managed_service(
 }
 
 fn stop_managed_service(
-    prepared: &PreparedService,
+    label: &str,
+    _service_path: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => {
-            let target = format!("{}/{}", gui_domain(), prepared.managed_label);
+            let target = format!("{}/{}", gui_domain(), label);
             let bootout = run_launchctl(env, ["bootout", target.as_str()])?;
             if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
                 return Err(format!(
@@ -1172,7 +1237,7 @@ fn stop_managed_service(
             Ok(())
         }
         ServiceManagerKind::SystemdUser => {
-            let stop = run_systemctl(env, ["--user", "stop", prepared.managed_label.as_str()])?;
+            let stop = run_systemctl(env, ["--user", "stop", label])?;
             if !stop.status.success() && !systemctl_not_loaded(&stop) {
                 return Err(format!(
                     "systemctl --user stop failed: {}",

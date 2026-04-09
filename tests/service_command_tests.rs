@@ -454,6 +454,164 @@ fn service_status_reports_responding_but_invalid_when_gateway_health_probe_fails
 }
 
 #[test]
+fn service_status_probes_launcher_health_from_the_service_run_dir() {
+    let root = TestDir::new("service-status-launcher-probe-run-dir");
+    let cwd = root.child("workspace");
+    let project_dir = root.child("project");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&project_dir).unwrap();
+    let canonical_project_dir = fs::canonicalize(&project_dir).unwrap();
+    let env = ocm_launchd_env(&root);
+    let server = TestHttpServer::serve_bytes_times(
+        "/healthz",
+        "application/json",
+        br#"{"ok":true,"status":"live"}"#,
+        2,
+    );
+    let port = port_from_http_url(&server.url());
+
+    let fake_openclaw = root.child("bin/openclaw-health");
+    write_executable_script(
+        &fake_openclaw,
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = \"health\" ]; then\n  if [ \"$PWD\" != \"{}\" ]; then\n    echo \"wrong run dir: $PWD\" >&2\n    exit 1\n  fi\n  exit 0\nfi\nexit 0\n",
+            path_string(&canonical_project_dir)
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "stable",
+            "--command",
+            &path_string(&fake_openclaw),
+            "--cwd",
+            &path_string(&project_dir),
+        ],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["openclawState"], "healthy");
+}
+
+#[test]
+fn service_status_reports_installed_definition_drift_after_binding_changes() {
+    let root = TestDir::new("service-status-definition-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+    let server = TestHttpServer::serve_bytes_times(
+        "/healthz",
+        "application/json",
+        br#"{"ok":true,"status":"live"}"#,
+        2,
+    );
+    let port = port_from_http_url(&server.url());
+
+    let stable_openclaw = root.child("bin/stable-openclaw");
+    write_executable_script(
+        &stable_openclaw,
+        "#!/bin/sh\nif [ \"$1\" = \"health\" ]; then\n  exit 0\nfi\nexit 0\n",
+    );
+    let dev_openclaw = root.child("bin/dev-openclaw");
+    write_executable_script(
+        &dev_openclaw,
+        "#!/bin/sh\nif [ \"$1\" = \"health\" ]; then\n  echo 'dev launcher should not be used yet' >&2\n  exit 1\nfi\nexit 0\n",
+    );
+
+    let stable = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "stable",
+            "--command",
+            &path_string(&stable_openclaw),
+        ],
+    );
+    assert!(stable.status.success(), "{}", stderr(&stable));
+
+    let dev = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "dev",
+            "--command",
+            &path_string(&dev_openclaw),
+        ],
+    );
+    assert!(dev.status.success(), "{}", stderr(&dev));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let rebound = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "dev"]);
+    assert!(rebound.status.success(), "{}", stderr(&rebound));
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["bindingKind"], "launcher");
+    assert_eq!(summary["bindingName"], "dev");
+    assert_eq!(summary["definitionDrift"], true);
+    assert_eq!(summary["openclawState"], "stopped");
+    assert!(
+        summary["command"]
+            .as_str()
+            .unwrap()
+            .contains(&path_string(&stable_openclaw))
+    );
+    assert!(
+        summary["issue"]
+            .as_str()
+            .unwrap()
+            .contains("installed service definition does not match the current env binding")
+    );
+}
+
+#[test]
 fn service_status_reports_adoption_and_restore_readiness() {
     let root = TestDir::new("service-status-readiness");
     let cwd = root.child("workspace");
@@ -1624,6 +1782,40 @@ fn service_lifecycle_commands_require_a_target_env() {
 }
 
 #[test]
+fn service_stop_does_not_persist_a_gateway_port_when_only_stopping() {
+    let root = TestDir::new("service-stop-does-not-persist-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let meta_path = root.child("ocm-home/envs/demo.json");
+    let before_meta: Value =
+        serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+    assert_eq!(before_meta["gatewayPort"], Value::Null);
+
+    let stop = run_ocm(&cwd, &env, &["service", "stop", "demo", "--json"]);
+    assert!(stop.status.success(), "{}", stderr(&stop));
+
+    let after_meta: Value = serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+    assert_eq!(after_meta["gatewayPort"], Value::Null);
+}
+
+#[test]
 fn unknown_service_commands_use_service_specific_errors() {
     let root = TestDir::new("service-unknown-command");
     let cwd = root.child("workspace");
@@ -1636,7 +1828,7 @@ fn unknown_service_commands_use_service_specific_errors() {
 }
 
 #[test]
-fn systemd_service_install_writes_unit_and_enables_it() {
+fn systemd_service_install_writes_unit_and_restarts_it() {
     let root = TestDir::new("service-install-systemd");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -1675,7 +1867,69 @@ fn systemd_service_install_writes_unit_and_enables_it() {
 
     let systemctl_log = fs::read_to_string(root.child("systemctl.log")).unwrap();
     assert!(systemctl_log.contains("--user daemon-reload"));
-    assert!(systemctl_log.contains(&format!("--user enable --now {managed_label}")));
+    assert!(systemctl_log.contains(&format!("--user enable {managed_label}")));
+    assert!(systemctl_log.contains(&format!("--user restart {managed_label}")));
+}
+
+#[test]
+fn systemd_service_restart_refreshes_the_installed_service_binding() {
+    let root = TestDir::new("service-restart-systemd-refresh");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_systemd_tools(&root, &mut env);
+
+    let stable = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "/bin/true"],
+    );
+    assert!(stable.status.success(), "{}", stderr(&stable));
+
+    let dev_dir = root.child("openclaw-dev");
+    fs::create_dir_all(&dev_dir).unwrap();
+    let dev = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "dev",
+            "--command",
+            "pnpm openclaw",
+            "--cwd",
+            &path_string(&dev_dir),
+        ],
+    );
+    assert!(dev.status.success(), "{}", stderr(&dev));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let set_launcher = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "dev"]);
+    assert!(set_launcher.status.success(), "{}", stderr(&set_launcher));
+
+    let restart = run_ocm(&cwd, &env, &["service", "restart", "demo", "--json"]);
+    assert!(restart.status.success(), "{}", stderr(&restart));
+
+    let managed_label = managed_service_label(&env, &cwd, "demo");
+    let unit_path = managed_service_definition_path(&env, &cwd, "demo");
+    let unit = fs::read_to_string(&unit_path).unwrap();
+    assert!(unit.contains("ExecStart=/bin/sh -lc"));
+    assert!(unit.contains("pnpm openclaw"));
+    assert!(unit.contains("'gateway' 'run' '--port'"));
+    assert!(unit.contains(&format!("WorkingDirectory={}", path_string(&dev_dir))));
+
+    let systemctl_log = fs::read_to_string(root.child("systemctl.log")).unwrap();
+    assert!(systemctl_log.contains(&format!("--user enable {managed_label}")));
+    assert!(systemctl_log.contains(&format!("--user restart {managed_label}")));
 }
 
 #[test]

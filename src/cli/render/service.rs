@@ -266,6 +266,9 @@ pub fn service_status(
                 .map(|(kind, name)| format!("{kind}:{name}")),
         ),
     ];
+    if summary.definition_drift {
+        status_rows.push(KeyValueRow::warning("Definition", "stale".to_string()));
+    }
     if let Some(detail) = summary.openclaw_detail.as_ref() {
         status_rows.push(KeyValueRow::muted("Detail", detail.clone()));
     }
@@ -397,6 +400,20 @@ fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) ->
         }
     }
 
+    if summary.definition_drift {
+        return match daemon_state(summary.installed, summary.loaded, summary.running) {
+            "loaded" | "running" => vec![KeyValueRow::warning(
+                "Refresh",
+                format!("{command_example} service restart {}", summary.env_name),
+            )],
+            "installed" => vec![KeyValueRow::warning(
+                "Refresh",
+                format!("{command_example} service start {}", summary.env_name),
+            )],
+            _ => Vec::new(),
+        };
+    }
+
     match daemon_state(summary.installed, summary.loaded, summary.running) {
         "absent" => {
             return vec![KeyValueRow::accent(
@@ -486,6 +503,7 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
         lines.push(format!("args: {}", summary.args.join(" ")));
     }
     lines.push(format!("runDir: {}", summary.run_dir));
+    lines.push(format!("definitionDrift: {}", summary.definition_drift));
     if let Some(pid) = summary.pid {
         lines.push(format!("managedPid: {pid}"));
     }
@@ -1064,6 +1082,7 @@ mod tests {
                     backup_available: false,
                     can_adopt_global: false,
                     can_restore_global: false,
+                    definition_drift: false,
                     issue: None,
                 }],
             },
@@ -1152,6 +1171,24 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line.contains("ocm service logs demo --tail 50"))
+        );
+    }
+
+    #[test]
+    fn service_status_pretty_suggests_refresh_for_stale_service_definitions() {
+        let mut summary = sample_service_summary();
+        summary.running = true;
+        summary.definition_drift = true;
+        summary.issue =
+            Some("installed service definition does not match the current env binding".to_string());
+
+        let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
+
+        assert!(lines.iter().any(|line| line.contains("Definition")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm service restart demo"))
         );
     }
 
@@ -1251,6 +1288,7 @@ mod tests {
             backup_available: false,
             can_adopt_global: false,
             can_restore_global: false,
+            definition_drift: false,
             issue: None,
         }
     }

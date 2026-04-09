@@ -13,11 +13,8 @@ use super::platform::{
     managed_service_identity, service_definition_dir, service_definition_extension,
     service_manager_kind,
 };
-use crate::env::{
-    EnvMeta, EnvironmentService, ExecutionBinding, resolve_execution_binding,
-    resolve_runtime_run_dir,
-};
-use crate::infra::shell::build_openclaw_env;
+use crate::env::{EnvMeta, EnvironmentService, resolve_execution_binding};
+use crate::infra::shell::{build_openclaw_env, quote_posix};
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
 use crate::runtime::resolve_runtime_launch;
 use crate::store::{
@@ -72,6 +69,7 @@ pub struct ServiceSummary {
     pub backup_available: bool,
     pub can_adopt_global: bool,
     pub can_restore_global: bool,
+    pub definition_drift: bool,
     pub issue: Option<String>,
 }
 
@@ -173,6 +171,15 @@ enum OpenClawProbeSpec {
         args: Vec<String>,
         run_dir: PathBuf,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ServiceExecutionDetails {
+    command: Option<String>,
+    binary_path: Option<String>,
+    args: Vec<String>,
+    program_arguments: Vec<String>,
+    run_dir: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -375,7 +382,6 @@ fn build_service_summary(
     let managed = managed_service_identity(&env_meta.name, process_env, cwd)?;
     let managed_status = inspect_job(&managed.label, &managed.definition_path, process_env);
     let launch = resolve_service_launch(&env_meta, process_env, cwd, false);
-    let probe_spec = resolve_openclaw_probe_spec(&env_meta, process_env, cwd).ok();
     let env_config_path = display_path(&derive_env_paths(Path::new(&env_meta.root)).config_path);
     let global_matches_env = global
         .config_path
@@ -396,44 +402,74 @@ fn build_service_summary(
         && !global.installed
         && backup_available;
 
-    let (binding_kind, binding_name, command, binary_path, args, run_dir, issue) = match launch {
-        Ok(ServiceLaunchSpec::Launcher {
-            binding_name,
-            command,
-            run_dir,
-        }) => (
-            Some("launcher".to_string()),
-            Some(binding_name),
-            Some(command),
-            None,
-            Vec::new(),
-            display_path(&run_dir),
-            None,
+    let (binding_kind, binding_name, expected_exec, mut issue) = match launch {
+        Ok(launch) => {
+            let binding_kind = match &launch {
+                ServiceLaunchSpec::Launcher { .. } => Some("launcher".to_string()),
+                ServiceLaunchSpec::Runtime { .. } => Some("runtime".to_string()),
+            };
+            let binding_name = match &launch {
+                ServiceLaunchSpec::Launcher { binding_name, .. }
+                | ServiceLaunchSpec::Runtime { binding_name, .. } => Some(binding_name.clone()),
+            };
+            (
+                binding_kind,
+                binding_name,
+                Some(service_execution_from_launch_spec(launch)),
+                None,
+            )
+        }
+        Err(error) => (None, None, None, Some(error)),
+    };
+    let installed_exec = if managed_status.installed {
+        read_service_execution(
+            &managed.definition_path,
+            process_env,
+            Path::new(&env_meta.root),
+        )?
+    } else {
+        None
+    };
+    let definition_drift = installed_exec
+        .as_ref()
+        .zip(expected_exec.as_ref())
+        .is_some_and(|(installed, expected)| {
+            installed.program_arguments != expected.program_arguments
+                || installed.run_dir != expected.run_dir
+        });
+    if definition_drift {
+        let refresh_action = if managed_status.loaded || managed_status.running {
+            "service restart"
+        } else {
+            "service start"
+        };
+        let detail = format!(
+            "installed service definition does not match the current env binding; run {refresh_action} {} to refresh it",
+            env_meta.name
+        );
+        issue = Some(match issue {
+            Some(existing) => format!("{existing}; {detail}"),
+            None => detail,
+        });
+    }
+    let display_exec = installed_exec.as_ref().or(expected_exec.as_ref());
+    let (command, binary_path, args, run_dir) = match display_exec {
+        Some(exec) => (
+            exec.command.clone(),
+            exec.binary_path.clone(),
+            exec.args.clone(),
+            display_path(&exec.run_dir),
         ),
-        Ok(ServiceLaunchSpec::Runtime {
-            binding_name,
-            binary_path,
-            args,
-            run_dir,
-        }) => (
-            Some("runtime".to_string()),
-            Some(binding_name),
-            None,
-            Some(binary_path),
-            args,
-            display_path(&run_dir),
-            None,
-        ),
-        Err(error) => (
-            None,
-            None,
+        None => (
             None,
             None,
             Vec::new(),
             display_path(Path::new(&env_meta.root)),
-            Some(error),
         ),
     };
+    let probe_spec = display_exec.and_then(|execution| {
+        service_execution_health_probe_spec(execution, env_meta.gateway_port)
+    });
 
     let openclaw_probe = match depth {
         ServiceProbeDepth::Fast => detect_openclaw_state_fast(
@@ -486,8 +522,143 @@ fn build_service_summary(
         backup_available,
         can_adopt_global,
         can_restore_global,
+        definition_drift,
         issue,
     })
+}
+
+fn service_execution_from_launch_spec(launch: ServiceLaunchSpec) -> ServiceExecutionDetails {
+    match launch {
+        ServiceLaunchSpec::Launcher {
+            command, run_dir, ..
+        } => ServiceExecutionDetails {
+            command: Some(command.clone()),
+            binary_path: None,
+            args: Vec::new(),
+            program_arguments: vec!["/bin/sh".to_string(), "-lc".to_string(), command],
+            run_dir,
+        },
+        ServiceLaunchSpec::Runtime {
+            binary_path,
+            args,
+            run_dir,
+            ..
+        } => {
+            let mut program_arguments = vec![binary_path.clone()];
+            program_arguments.extend(args.iter().cloned());
+            ServiceExecutionDetails {
+                command: None,
+                binary_path: Some(binary_path),
+                args,
+                program_arguments,
+                run_dir,
+            }
+        }
+    }
+}
+
+fn read_service_execution(
+    service_path: &Path,
+    env: &BTreeMap<String, String>,
+    fallback_run_dir: &Path,
+) -> Result<Option<ServiceExecutionDetails>, String> {
+    if !service_path.exists() {
+        return Ok(None);
+    }
+
+    let program_arguments = read_service_program_arguments(service_path, env)?;
+    if program_arguments.is_empty() {
+        return Ok(None);
+    }
+
+    let run_dir = read_service_working_directory(service_path, env)?
+        .map(PathBuf::from)
+        .unwrap_or_else(|| fallback_run_dir.to_path_buf());
+
+    if program_arguments.len() == 3
+        && program_arguments[0] == "/bin/sh"
+        && program_arguments[1] == "-lc"
+    {
+        return Ok(Some(ServiceExecutionDetails {
+            command: Some(program_arguments[2].clone()),
+            binary_path: None,
+            args: Vec::new(),
+            program_arguments,
+            run_dir,
+        }));
+    }
+
+    let binary_path = program_arguments.first().cloned();
+    let args = program_arguments
+        .iter()
+        .skip(1)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(Some(ServiceExecutionDetails {
+        command: None,
+        binary_path,
+        args,
+        program_arguments,
+        run_dir,
+    }))
+}
+
+fn service_execution_health_probe_spec(
+    execution: &ServiceExecutionDetails,
+    gateway_port: Option<u32>,
+) -> Option<OpenClawProbeSpec> {
+    let gateway_args = gateway_run_args(gateway_port?);
+    let health_args = health_probe_args();
+
+    if let Some(command) = execution.command.as_ref() {
+        let gateway_suffix = format!(
+            " {}",
+            gateway_args
+                .iter()
+                .map(|arg| quote_posix(arg))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let base = command.strip_suffix(&gateway_suffix)?;
+        let health_suffix = health_args
+            .iter()
+            .map(|arg| quote_posix(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
+        return Some(OpenClawProbeSpec::Shell {
+            command: format!("{base} {health_suffix}"),
+            run_dir: execution.run_dir.clone(),
+        });
+    }
+
+    if execution.args != gateway_args {
+        return None;
+    }
+
+    Some(OpenClawProbeSpec::Direct {
+        command: execution.binary_path.clone()?,
+        args: health_args,
+        run_dir: execution.run_dir.clone(),
+    })
+}
+
+fn gateway_run_args(port: u32) -> Vec<String> {
+    vec![
+        "gateway".to_string(),
+        "run".to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ]
+}
+
+fn health_probe_args() -> Vec<String> {
+    vec![
+        "health".to_string(),
+        "--json".to_string(),
+        "--timeout".to_string(),
+        GATEWAY_HEALTH_COMMAND_TIMEOUT_MS.to_string(),
+    ]
 }
 
 fn detect_openclaw_state_fast(
@@ -815,38 +986,6 @@ pub(crate) fn resolve_service_launch(
                 binary_path: launch.program,
                 args: launch.args,
                 run_dir: Path::new(&env.root).to_path_buf(),
-            })
-        }
-    }
-}
-
-fn resolve_openclaw_probe_spec(
-    env: &EnvMeta,
-    process_env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<OpenClawProbeSpec, String> {
-    let health_args = vec![
-        "health".to_string(),
-        "--json".to_string(),
-        "--timeout".to_string(),
-        GATEWAY_HEALTH_COMMAND_TIMEOUT_MS.to_string(),
-    ];
-
-    match resolve_execution_binding(env, None, None)? {
-        ExecutionBinding::Launcher(name) => {
-            let launcher = get_launcher(&name, process_env, cwd)?;
-            Ok(OpenClawProbeSpec::Shell {
-                command: build_launcher_command(&launcher, &health_args),
-                run_dir: resolve_launcher_run_dir(&launcher, cwd),
-            })
-        }
-        ExecutionBinding::Runtime(name) => {
-            let runtime = get_runtime_verified(&name, process_env, cwd)?;
-            let launch = resolve_runtime_launch(&runtime, &health_args, process_env, cwd, false)?;
-            Ok(OpenClawProbeSpec::Direct {
-                command: launch.program,
-                args: launch.args,
-                run_dir: resolve_runtime_run_dir(cwd),
             })
         }
     }
