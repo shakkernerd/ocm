@@ -400,15 +400,6 @@ impl Cli {
         }
 
         if service.loaded || service.running {
-            if binding_changed {
-                let install = self
-                    .with_progress(format!("Refreshing service for {env_name}"), || {
-                        self.service_service().install(env_name)
-                    })?;
-                let note = join_warnings(&install.warnings);
-                return Ok((Some("reloaded".to_string()), note));
-            }
-
             let restart = self
                 .with_progress(format!("Restarting service for {env_name}"), || {
                     self.service_service().restart(env_name)
@@ -417,15 +408,12 @@ impl Cli {
             return Ok((Some("restarted".to_string()), note));
         }
 
-        if binding_changed {
-            return Ok((
-                None,
-                Some(format!(
-                    "service is installed but stopped; run {} service install {} to refresh it",
-                    self.command_example(),
-                    env_name
-                )),
-            ));
+        if binding_changed || runtime_changed {
+            let start = self.with_progress(format!("Starting service for {env_name}"), || {
+                self.service_service().start(env_name)
+            })?;
+            let note = join_warnings(&start.warnings);
+            return Ok((Some("started".to_string()), note));
         }
 
         Ok((None, None))

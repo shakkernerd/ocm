@@ -1,6 +1,8 @@
 mod support;
 
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
@@ -56,6 +58,19 @@ fn sha512_integrity(body: &[u8]) -> String {
         "sha512-{}",
         base64::engine::general_purpose::STANDARD.encode(digest)
     )
+}
+
+fn write_executable_script(path: &std::path::Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
 }
 
 #[test]
@@ -236,6 +251,75 @@ fn upgrade_can_switch_a_local_launcher_env_to_a_published_runtime() {
     let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
     assert_eq!(env_json["defaultRuntime"], "stable");
     assert!(env_json["defaultLauncher"].is_null());
+}
+
+#[test]
+fn upgrade_refreshes_a_stopped_installed_service_through_service_start() {
+    let root = TestDir::new("upgrade-stopped-service-start");
+    let cwd = root.child("workspace");
+    let project_dir = cwd.join("openclaw");
+    fs::create_dir_all(&project_dir).unwrap();
+
+    let tarball = openclaw_package_tarball("console.log('stable');\n", "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_launchctl(&root, &mut env);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+
+    let start = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "start",
+            "hacking",
+            "--command",
+            "pnpm openclaw",
+            "--cwd",
+            &project_dir.display().to_string(),
+            "--no-onboard",
+        ],
+    );
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let stop = run_ocm(&cwd, &env, &["service", "stop", "hacking"]);
+    assert!(stop.status.success(), "{}", stderr(&stop));
+
+    let stopped_launchctl = root.child("fake-launchctl-stopped/launchctl");
+    write_executable_script(
+        &stopped_launchctl,
+        "#!/bin/sh\ncase \"$1\" in\n  print)\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
+    );
+    env.insert(
+        "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
+        stopped_launchctl.display().to_string(),
+    );
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "hacking", "--channel", "stable"]);
+    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("from=launcher:hacking.local"), "{output}");
+    assert!(output.contains("to=runtime:stable"), "{output}");
+    assert!(output.contains("service=started"), "{output}");
 }
 
 #[test]
