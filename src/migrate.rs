@@ -268,9 +268,7 @@ fn preflight_migrated_launcher(
 }
 
 fn resolve_executable_on_path(command: &str, env: &BTreeMap<String, String>) -> Option<String> {
-    let Some(path_value) = env.get("PATH") else {
-        return None;
-    };
+    let path_value = env.get("PATH")?;
     std::env::split_paths(path_value)
         .map(|dir| dir.join(command))
         .find(|candidate| candidate.is_file())

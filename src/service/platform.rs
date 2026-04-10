@@ -85,10 +85,7 @@ pub(crate) fn service_manager_kind(env: &BTreeMap<String, String>) -> ServiceMan
     }
 }
 
-fn service_manager_binary<'a>(
-    env: &'a BTreeMap<String, String>,
-    kind: ServiceManagerKind,
-) -> &'a str {
+fn service_manager_binary(env: &BTreeMap<String, String>, kind: ServiceManagerKind) -> &str {
     match kind {
         ServiceManagerKind::Launchd => env
             .get(LAUNCHCTL_BIN_OVERRIDE)
