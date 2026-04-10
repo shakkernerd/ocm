@@ -370,7 +370,7 @@ fn upgrade_restarts_running_services_when_only_the_definition_has_drifted() {
     assert!(upgrade.status.success(), "{}", stderr(&upgrade));
     let output = stdout(&upgrade);
     assert!(output.contains("outcome=up-to-date"), "{output}");
-    assert!(output.contains("service=started"), "{output}");
+    assert!(output.contains("service=restarted"), "{output}");
 }
 
 #[test]
