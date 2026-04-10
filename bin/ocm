@@ -5,4 +5,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export CARGO_HOME="${CARGO_HOME:-/tmp/ocm-cargo-home}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
 export OCM_SELF="${OCM_SELF:-$0}"
+
+if [[ -z "${RUSTUP_HOME:-}" ]]; then
+  CARGO_BIN="$(command -v cargo || true)"
+  if [[ -n "$CARGO_BIN" && "$CARGO_BIN" == */.cargo/bin/cargo ]]; then
+    export RUSTUP_HOME="${CARGO_BIN%/.cargo/bin/cargo}/.rustup"
+  fi
+fi
+
 exec cargo run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" -- "$@"
