@@ -689,6 +689,7 @@ pub fn start_help(cmd: &str) -> String {
         &[
             "If an environment already exists, start reuses it and only adjusts binding/protection when you asked for it.",
             "Start installs and starts the env service by default. Use `--no-service` when you do not want a background process.",
+            "Managed services currently support launchd on macOS and systemd --user on Linux.",
             "Official release selectors prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing.",
             "When start creates a new official-release env interactively, it can offer to install git for repo-aware coding workflows.",
             "If OCM detects an existing plain OpenClaw home, start keeps the new env fresh and points you at `migrate` if you want to bring that older state under OCM.",
@@ -2158,7 +2159,10 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the install summary as JSON"),
             ],
             vec![format!("{cmd} service install mira")],
-            &["If the preferred port is busy, OCM auto-provisions the next free port and warns."],
+            &[
+                "If the preferred port is busy, OCM auto-provisions the next free port and warns.",
+                "Managed services currently support launchd on macOS and systemd --user on Linux.",
+            ],
         ),
         "list" => render_leaf(
             "List env-scoped services",

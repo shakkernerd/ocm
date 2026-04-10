@@ -159,6 +159,9 @@ fn start_help_is_available_from_help_and_flag() {
     );
     assert!(output.contains("Start installs and starts the env service by default."));
     assert!(output.contains(
+        "Managed services currently support launchd on macOS and systemd --user on Linux."
+    ));
+    assert!(output.contains(
         "Official release selectors prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing."
     ));
     assert!(output.contains(
@@ -409,6 +412,18 @@ fn env_and_service_status_style_help_mentions_raw_mode() {
     assert!(
         output.contains("TTY output uses cards for one env and a table for `--all` by default.")
     );
+
+    let service_install = run_ocm(&cwd, &env, &["help", "service", "install"]);
+    assert!(
+        service_install.status.success(),
+        "{}",
+        stderr(&service_install)
+    );
+    let output = stdout(&service_install);
+    assert!(output.contains("ocm service install <env> [--raw] [--json]"));
+    assert!(output.contains(
+        "Managed services currently support launchd on macOS and systemd --user on Linux."
+    ));
 }
 
 #[test]
