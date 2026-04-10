@@ -1677,6 +1677,21 @@ fn service_status_reports_loaded_launchd_services_even_when_the_plist_is_gone() 
             .unwrap()
             .contains("service restart demo")
     );
+
+    let discover = run_ocm(&cwd, &env, &["service", "discover", "--json"]);
+    assert!(discover.status.success(), "{}", stderr(&discover));
+    let discovered: Value = serde_json::from_str(&stdout(&discover)).unwrap();
+    let service = discovered["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|service| service["label"] == managed_service_label(&env, &cwd, "demo"))
+        .unwrap();
+    assert_eq!(service["installed"], false);
+    assert_eq!(service["loaded"], true);
+    assert_eq!(service["running"], true);
+    assert_eq!(service["matchedEnvName"], "demo");
+    assert_eq!(service["gatewayPort"].as_u64(), Some(port as u64));
 }
 
 #[test]

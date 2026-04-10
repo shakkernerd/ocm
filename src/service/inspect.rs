@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
@@ -277,116 +277,77 @@ pub fn discover_services(
 ) -> Result<DiscoveredServiceList, String> {
     let envs = list_environments(env, cwd)?;
     let mut env_config_paths = BTreeMap::new();
-    for meta in envs {
+    for meta in &envs {
         let config_path = display_path(&derive_env_paths(Path::new(&meta.root)).config_path);
-        env_config_paths.insert(config_path, meta.name);
+        env_config_paths.insert(config_path, meta.name.clone());
     }
 
     let launch_agents_dir = launch_agents_dir(env);
-    if !launch_agents_dir.exists() {
-        return Ok(DiscoveredServiceList {
-            services: Vec::new(),
-        });
+    let mut services = Vec::new();
+    let mut seen_labels = BTreeSet::new();
+    if launch_agents_dir.exists() {
+        for entry in fs::read_dir(&launch_agents_dir).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let plist_path = entry.path();
+            if plist_path.extension().and_then(|value| value.to_str())
+                != Some(service_definition_extension(service_manager_kind(env)))
+            {
+                continue;
+            }
+
+            let label = read_service_label(&plist_path, env)?
+                .or_else(|| {
+                    plist_path
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .map(|value| value.to_string())
+                })
+                .unwrap_or_else(|| display_path(&plist_path));
+            let status = inspect_job(&label, &plist_path, env);
+            if let Some(summary) =
+                build_discovered_service_summary(label, plist_path, status, &env_config_paths, env)?
+            {
+                seen_labels.insert(summary.label.clone());
+                services.push(summary);
+            }
+        }
     }
 
-    let mut services = Vec::new();
-    for entry in fs::read_dir(&launch_agents_dir).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let plist_path = entry.path();
-        if plist_path.extension().and_then(|value| value.to_str())
-            != Some(service_definition_extension(service_manager_kind(env)))
-        {
+    for meta in &envs {
+        let identity = managed_service_identity(&meta.name, env, cwd)?;
+        if seen_labels.contains(&identity.label) {
             continue;
         }
-
-        let label = read_service_label(&plist_path, env)?
-            .or_else(|| {
-                plist_path
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .map(|value| value.to_string())
-            })
-            .unwrap_or_else(|| display_path(&plist_path));
-        let status = inspect_job(&label, &plist_path, env);
-        let config_path = status
-            .config_path
-            .clone()
-            .or(read_service_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH", env)?);
-        let state_dir = status
-            .state_dir
-            .clone()
-            .or(read_service_environment_value(&plist_path, "OPENCLAW_STATE_DIR", env)?);
-        let openclaw_home = status
-            .openclaw_home
-            .clone()
-            .or(read_service_environment_value(&plist_path, "OPENCLAW_HOME", env)?);
-        let program_arguments = if status.program_arguments.is_empty() {
-            read_service_program_arguments(&plist_path, env)?
-        } else {
-            status.program_arguments.clone()
-        };
-        let program = read_service_program(&plist_path, env)?
-            .or_else(|| program_arguments.first().cloned());
-        let working_directory = status
-            .working_directory
-            .clone()
-            .or(read_service_working_directory(&plist_path, env)?);
-        let gateway_port = status.gateway_port.or(
-            read_service_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT", env)?
-                .and_then(|value| value.parse::<u32>().ok()),
-        );
-
-        if !looks_like_openclaw_service(
-            &label,
-            program.as_deref(),
-            &program_arguments,
-            config_path.as_deref(),
-            state_dir.as_deref(),
-            openclaw_home.as_deref(),
-            gateway_port,
-        ) {
+        let status = inspect_job(&identity.label, &identity.definition_path, env);
+        if !(status.loaded || status.running) {
             continue;
         }
-
-        let matched_env_name = config_path
-            .as_deref()
-            .and_then(|value| env_config_paths.get(value))
-            .cloned();
-        let source_kind = discovered_source_kind(&label).to_string();
-        let (adoptable, adopt_reason) = discover_adoption_state(
-            &source_kind,
-            matched_env_name.as_deref(),
-            config_path.as_deref(),
+        if let Some(summary) = build_discovered_service_summary(
+            identity.label.clone(),
+            identity.definition_path.clone(),
+            status,
+            &env_config_paths,
             env,
-        );
+        )? {
+            seen_labels.insert(identity.label);
+            services.push(summary);
+        }
+    }
 
-        services.push(DiscoveredServiceSummary {
-            label,
-            plist_path: display_path(&plist_path),
-            source_kind,
-            installed: status.installed,
-            loaded: status.loaded,
-            running: status.running,
-            pid: status.pid,
-            state: status.state,
-            config_path,
-            state_dir,
-            openclaw_home,
-            gateway_port,
-            openclaw_state: detect_openclaw_state_fast(
-                gateway_port,
-                status.installed,
-                status.loaded,
-                status.running,
-            )
-            .state,
-            program,
-            program_arguments,
-            working_directory,
-            matched_env_name,
-            adoptable,
-            adopt_reason,
-        });
+    let global_path = global_service_definition_path(env);
+    if !seen_labels.contains(GLOBAL_GATEWAY_LABEL) {
+        let status = inspect_job(GLOBAL_GATEWAY_LABEL, &global_path, env);
+        if status.loaded || status.running {
+            if let Some(summary) = build_discovered_service_summary(
+                GLOBAL_GATEWAY_LABEL.to_string(),
+                global_path,
+                status,
+                &env_config_paths,
+                env,
+            )? {
+                services.push(summary);
+            }
+        }
     }
 
     services.sort_by(|left, right| {
@@ -396,6 +357,119 @@ pub fn discover_services(
     });
 
     Ok(DiscoveredServiceList { services })
+}
+
+fn build_discovered_service_summary(
+    label: String,
+    plist_path: PathBuf,
+    status: LaunchdJobStatus,
+    env_config_paths: &BTreeMap<String, String>,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<DiscoveredServiceSummary>, String> {
+    let definition_exists = plist_path.exists();
+    let config_path = status
+        .config_path
+        .clone()
+        .or(if definition_exists {
+            read_service_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH", env)?
+        } else {
+            None
+        });
+    let state_dir = status
+        .state_dir
+        .clone()
+        .or(if definition_exists {
+            read_service_environment_value(&plist_path, "OPENCLAW_STATE_DIR", env)?
+        } else {
+            None
+        });
+    let openclaw_home = status
+        .openclaw_home
+        .clone()
+        .or(if definition_exists {
+            read_service_environment_value(&plist_path, "OPENCLAW_HOME", env)?
+        } else {
+            None
+        });
+    let program_arguments = if status.program_arguments.is_empty() {
+        if definition_exists {
+            read_service_program_arguments(&plist_path, env)?
+        } else {
+            Vec::new()
+        }
+    } else {
+        status.program_arguments.clone()
+    };
+    let program = if definition_exists {
+        read_service_program(&plist_path, env)?
+    } else {
+        None
+    }
+    .or_else(|| program_arguments.first().cloned());
+    let working_directory = status
+        .working_directory
+        .clone()
+        .or(if definition_exists {
+            read_service_working_directory(&plist_path, env)?
+        } else {
+            None
+        });
+    let gateway_port = status.gateway_port.or(
+        if definition_exists {
+            read_service_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT", env)?
+                .and_then(|value| value.parse::<u32>().ok())
+        } else {
+            None
+        },
+    );
+
+    if !looks_like_openclaw_service(
+        &label,
+        program.as_deref(),
+        &program_arguments,
+        config_path.as_deref(),
+        state_dir.as_deref(),
+        openclaw_home.as_deref(),
+        gateway_port,
+    ) {
+        return Ok(None);
+    }
+
+    let matched_env_name = config_path
+        .as_deref()
+        .and_then(|value| env_config_paths.get(value))
+        .cloned();
+    let source_kind = discovered_source_kind(&label).to_string();
+    let (adoptable, adopt_reason) =
+        discover_adoption_state(&source_kind, matched_env_name.as_deref(), config_path.as_deref(), env);
+
+    Ok(Some(DiscoveredServiceSummary {
+        label,
+        plist_path: display_path(&plist_path),
+        source_kind,
+        installed: status.installed,
+        loaded: status.loaded,
+        running: status.running,
+        pid: status.pid,
+        state: status.state,
+        config_path,
+        state_dir,
+        openclaw_home,
+        gateway_port,
+        openclaw_state: detect_openclaw_state_fast(
+            gateway_port,
+            status.installed,
+            status.loaded,
+            status.running,
+        )
+        .state,
+        program,
+        program_arguments,
+        working_directory,
+        matched_env_name,
+        adoptable,
+        adopt_reason,
+    }))
 }
 
 fn build_service_summary(
