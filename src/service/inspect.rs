@@ -500,8 +500,13 @@ fn build_service_summary(
             display_path(Path::new(&env_meta.root)),
         ),
     };
-    let probe_spec = display_exec
-        .and_then(|execution| service_execution_health_probe_spec(execution, actual_gateway_port));
+    let probe_spec = if definition_drift {
+        None
+    } else {
+        display_exec.and_then(|execution| {
+            service_execution_health_probe_spec(execution, actual_gateway_port)
+        })
+    };
 
     let openclaw_probe = match depth {
         ServiceProbeDepth::Fast => detect_openclaw_state_fast(

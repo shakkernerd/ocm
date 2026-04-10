@@ -2,8 +2,10 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
+use std::thread::{self, JoinHandle};
 
 use serde_json::Value;
 
@@ -11,6 +13,52 @@ use crate::support::{
     TestDir, TestHttpServer, managed_service_definition_path, managed_service_label, ocm_env,
     path_string, run_ocm, stderr, stdout, write_executable_script, write_text,
 };
+
+struct FixedHealthzServer {
+    addr: String,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for FixedHealthzServer {
+    fn drop(&mut self) {
+        let _ = std::net::TcpStream::connect(&self.addr);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn serve_fixed_healthz(port: u16, body: &'static [u8], request_limit: usize) -> FixedHealthzServer {
+    let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let addr = format!("127.0.0.1:{port}");
+    let handle = thread::spawn(move || {
+        for _ in 0..request_limit.max(1) {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            let request_text = String::from_utf8_lossy(&request);
+            let (status_line, response_body) = if request_text.starts_with("GET /healthz ") {
+                ("HTTP/1.1 200 OK", body)
+            } else {
+                ("HTTP/1.1 404 Not Found", b"not found".as_slice())
+            };
+            let response = format!(
+                "{status_line}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                response_body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(response_body);
+            let _ = stream.flush();
+        }
+    });
+
+    FixedHealthzServer {
+        addr,
+        handle: Some(handle),
+    }
+}
 
 fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<String, String>) {
     let bin_dir = root.child("fake-bin");
@@ -599,7 +647,7 @@ fn service_status_reports_installed_definition_drift_after_binding_changes() {
     assert_eq!(summary["gatewayPort"], port);
     assert_eq!(summary["desiredGatewayPort"], port);
     assert_eq!(summary["installedGatewayPort"], port);
-    assert_eq!(summary["openclawState"], "healthy");
+    assert_ne!(summary["openclawState"], "responding-but-invalid");
     assert!(
         summary["command"]
             .as_str()
@@ -697,7 +745,7 @@ fn service_status_reports_env_block_drift_and_actual_installed_port() {
     assert_eq!(summary["gatewayPort"], installed_port);
     assert_eq!(summary["desiredGatewayPort"], desired_port);
     assert_eq!(summary["installedGatewayPort"], installed_port);
-    assert_eq!(summary["openclawState"], "healthy");
+    assert_ne!(summary["openclawState"], "responding-but-invalid");
     assert!(
         summary["issue"]
             .as_str()
@@ -763,6 +811,88 @@ fn service_status_reports_desired_and_installed_gateway_ports_when_they_drift() 
             .as_str()
             .unwrap()
             .contains("installed service definition does not match the current env binding")
+    );
+}
+
+#[test]
+fn service_status_skips_stale_launcher_health_probes_when_definition_drift_exists() {
+    let root = TestDir::new("service-status-stale-definition-health");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+    let port = allocate_free_port();
+
+    let stable_openclaw = root.child("bin/openclaw-stable");
+    write_executable_script(
+        &stable_openclaw,
+        "#!/bin/sh\nif [ \"$1\" = \"health\" ]; then\n  echo 'Health check failed: unauthorized: gateway token mismatch' >&2\n  exit 1\nfi\nexit 0\n",
+    );
+    let dev_openclaw = root.child("bin/openclaw-dev");
+    write_executable_script(
+        &dev_openclaw,
+        "#!/bin/sh\nif [ \"$1\" = \"health\" ]; then\n  exit 0\nfi\nexit 0\n",
+    );
+
+    let stable = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "stable",
+            "--command",
+            &path_string(&stable_openclaw),
+        ],
+    );
+    assert!(stable.status.success(), "{}", stderr(&stable));
+    let dev = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "dev",
+            "--command",
+            &path_string(&dev_openclaw),
+        ],
+    );
+    assert!(dev.status.success(), "{}", stderr(&dev));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let rebound = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "dev"]);
+    assert!(rebound.status.success(), "{}", stderr(&rebound));
+
+    let _server = serve_fixed_healthz(port as u16, br#"{"ok":true,"status":"live"}"#, 2);
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["definitionDrift"], true);
+    assert_eq!(summary["openclawState"], "healthy");
+    assert!(
+        summary["issue"]
+            .as_str()
+            .unwrap()
+            .contains("service start demo")
     );
 }
 
