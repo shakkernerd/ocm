@@ -100,8 +100,12 @@ pub fn parse_manifest(raw: &str) -> Result<OcmManifest, String> {
 }
 
 pub fn validate_manifest(manifest: OcmManifest) -> Result<OcmManifest, String> {
-    if manifest.schema.trim().is_empty() {
+    let schema = manifest.schema.trim();
+    if schema.is_empty() {
         return Err("manifest schema is required".to_string());
+    }
+    if schema != "ocm/v1" {
+        return Err("manifest schema must be ocm/v1".to_string());
     }
     if manifest.env.name.trim().is_empty() {
         return Err("manifest env.name is required".to_string());
@@ -206,6 +210,13 @@ mod tests {
             error,
             "manifest accepts either a runtime selector or a launcher selector, not both"
         );
+    }
+
+    #[test]
+    fn parse_manifest_rejects_unknown_schema() {
+        let error = parse_manifest("schema: ocm/v2\nenv:\n  name: mira\n").unwrap_err();
+
+        assert_eq!(error, "manifest schema must be ocm/v1");
     }
 
     #[test]
