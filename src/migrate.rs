@@ -182,7 +182,7 @@ fn complete_migration_import(
     };
 
     let launcher_service = LauncherService::new(env, cwd);
-    match launcher_service.show(&launcher_name) {
+    match launcher_service.show(launcher_name) {
         Ok(_) => {}
         Err(error) if error.contains("does not exist") => {
             launcher_service.add(AddLauncherOptions {
@@ -198,7 +198,7 @@ fn complete_migration_import(
         Err(error) => return Err(error),
     }
 
-    EnvironmentService::new(env, cwd).set_launcher(&created.name, &launcher_name)
+    EnvironmentService::new(env, cwd).set_launcher(&created.name, launcher_name)
 }
 
 fn preflight_migrated_launcher_name(

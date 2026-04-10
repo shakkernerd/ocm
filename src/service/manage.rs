@@ -212,12 +212,18 @@ pub fn adopt_global_service(
         write_service_definition(&adoption.prepared, env)?;
         backup_global_plist(&adoption.global.plist_path, &adoption.backup_plist_path)?;
         bootout_global_service(env)?;
-        activate_managed_service(
+        if let Err(error) = activate_managed_service(
             &adoption.prepared.managed_label,
             &adoption.prepared.managed_plist_path,
             env,
-        )?;
-        fs::remove_file(&adoption.global.plist_path).map_err(|error| error.to_string())?;
+        ) {
+            rollback_failed_global_adoption(&adoption, env)?;
+            return Err(error);
+        }
+        if let Err(error) = fs::remove_file(&adoption.global.plist_path) {
+            rollback_failed_global_adoption(&adoption, env)?;
+            return Err(error.to_string());
+        }
     }
 
     Ok(ServiceAdoptionSummary {
@@ -1108,6 +1114,22 @@ fn backup_global_plist(source_path: &Path, backup_path: &Path) -> Result<(), Str
     fs::copy(source_path, backup_path).map_err(|error| error.to_string())?;
     set_mode(backup_path, LAUNCH_AGENT_PLIST_MODE)?;
     Ok(())
+}
+
+fn rollback_failed_global_adoption(
+    adoption: &PreparedGlobalAdoption,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let _ = bootout_managed_service(&adoption.prepared.managed_label, env);
+    if adoption.prepared.managed_plist_path.exists() {
+        fs::remove_file(&adoption.prepared.managed_plist_path).map_err(|error| {
+            format!(
+                "failed to roll back managed plist {}: {error}",
+                display_path(&adoption.prepared.managed_plist_path)
+            )
+        })?;
+    }
+    activate_launch_agent(GLOBAL_GATEWAY_LABEL, &adoption.global.plist_path, env)
 }
 
 fn restore_global_plist(backup_path: &Path, global_path: &Path) -> Result<(), String> {

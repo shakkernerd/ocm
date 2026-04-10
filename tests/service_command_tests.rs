@@ -2029,6 +2029,82 @@ fn service_adopt_global_dry_run_reports_the_plan_without_mutating_state() {
 }
 
 #[test]
+fn service_adopt_global_rolls_back_when_managed_activation_fails() {
+    let root = TestDir::new("service-adopt-global-rollback");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+    let assigned_port = allocate_free_port();
+    let managed_label = managed_service_label(&env, &cwd, "demo");
+    let managed_path = managed_service_definition_path(&env, &cwd, "demo");
+    let global_plist = root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist");
+    write_text(
+        &root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
+        &format!("{{\"gateway\":{{\"port\":{assigned_port}}}}}\n"),
+    );
+    write_text(
+        &global_plist,
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+  <dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>OPENCLAW_CONFIG_PATH</key>
+      <string>{}</string>
+      <key>OPENCLAW_GATEWAY_PORT</key>
+      <string>{}</string>
+    </dict>
+  </dict>
+</plist>
+"#,
+            path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json")),
+            assigned_port
+        ),
+    );
+    write_executable_script(
+        &root.child("fake-bin/launchctl"),
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  bootstrap)\n    case \"$3\" in\n      *{}*)\n        printf 'managed bootstrap failed\\n' >&2\n        exit 1\n        ;;\n      *)\n        printf 'state = running\\npid = 23613\\n' > \"{}\"\n        exit 0\n        ;;\n    esac\n    ;;\n  bootout|unload)\n    rm -f \"{}\"\n    exit 0\n    ;;\n  print)\n    if [ -f \"{}\" ]; then\n      /bin/cat \"{}\"\n      exit 0\n    fi\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
+            path_string(&root.child("launchctl.log")),
+            managed_label,
+            path_string(&root.child("launchctl-print.txt")),
+            path_string(&root.child("launchctl-print.txt")),
+            path_string(&root.child("launchctl-print.txt")),
+            path_string(&root.child("launchctl-print.txt")),
+        ),
+    );
+
+    let output = run_ocm(&cwd, &env, &["service", "adopt-global", "demo"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("launchctl bootstrap failed"));
+    assert!(global_plist.exists());
+    assert!(!managed_path.exists());
+
+    let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
+    assert!(
+        launchctl_log.matches("bootstrap gui/").count() >= 2,
+        "{launchctl_log}"
+    );
+    assert!(launchctl_log.contains(&managed_label), "{launchctl_log}");
+    assert!(launchctl_log.contains("ai.openclaw.gateway"), "{launchctl_log}");
+}
+
+#[test]
 fn service_restore_global_restores_the_latest_matching_backup() {
     let root = TestDir::new("service-restore-global");
     let cwd = root.child("workspace");
