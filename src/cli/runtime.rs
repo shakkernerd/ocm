@@ -134,14 +134,13 @@ impl Cli {
                 "runtime install accepts only one of --path, --url, or --manifest-url".to_string(),
             );
         }
-        if manifest_url.is_none() {
-            if path.is_some() || url.is_some() {
-                if version.is_some() || channel.is_some() {
-                    return Err(
-                        "runtime install only supports --version or --channel with the official release source or --manifest-url".to_string(),
-                    );
-                }
-            }
+        if manifest_url.is_none()
+            && (path.is_some() || url.is_some())
+            && (version.is_some() || channel.is_some())
+        {
+            return Err(
+                "runtime install only supports --version or --channel with the official release source or --manifest-url".to_string(),
+            );
         }
 
         let resolve_official_name = || -> Result<String, String> {

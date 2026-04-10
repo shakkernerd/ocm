@@ -1718,35 +1718,35 @@ fn env_status_next_steps(status: &EnvStatusSummary, command_example: &str) -> Ve
         )];
     }
 
-    if status.resolved_kind.as_deref() == Some("runtime") {
-        if matches!(status.runtime_health.as_deref(), Some("missing" | "broken")) {
-            let mut rows = Vec::new();
-            if let Some(runtime_name) = status.resolved_name.as_deref() {
-                rows.push(KeyValueRow::accent(
-                    "Check runtime",
-                    format!("{command_example} runtime verify {runtime_name}"),
-                ));
-            }
-            if let Some(channel) = status.runtime_release_channel.as_deref() {
-                rows.push(KeyValueRow::warning(
-                    "Repair binding",
-                    format!(
-                        "{command_example} env set-runtime {} --channel {channel}",
-                        status.env_name
-                    ),
-                ));
-            } else if let Some(version) = status.runtime_release_version.as_deref() {
-                rows.push(KeyValueRow::warning(
-                    "Repair binding",
-                    format!(
-                        "{command_example} env set-runtime {} --version {version}",
-                        status.env_name
-                    ),
-                ));
-            }
-            if !rows.is_empty() {
-                return rows;
-            }
+    if status.resolved_kind.as_deref() == Some("runtime")
+        && matches!(status.runtime_health.as_deref(), Some("missing" | "broken"))
+    {
+        let mut rows = Vec::new();
+        if let Some(runtime_name) = status.resolved_name.as_deref() {
+            rows.push(KeyValueRow::accent(
+                "Check runtime",
+                format!("{command_example} runtime verify {runtime_name}"),
+            ));
+        }
+        if let Some(channel) = status.runtime_release_channel.as_deref() {
+            rows.push(KeyValueRow::warning(
+                "Repair binding",
+                format!(
+                    "{command_example} env set-runtime {} --channel {channel}",
+                    status.env_name
+                ),
+            ));
+        } else if let Some(version) = status.runtime_release_version.as_deref() {
+            rows.push(KeyValueRow::warning(
+                "Repair binding",
+                format!(
+                    "{command_example} env set-runtime {} --version {version}",
+                    status.env_name
+                ),
+            ));
+        }
+        if !rows.is_empty() {
+            return rows;
         }
     }
 

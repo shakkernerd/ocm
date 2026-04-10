@@ -313,15 +313,16 @@ impl Cli {
     }
 
     fn setup_theme() -> ColorfulTheme {
-        let mut theme = ColorfulTheme::default();
-        theme.prompt_style = Style::new().bold().cyan();
-        theme.values_style = Style::new().yellow();
-        theme.active_item_style = Style::new().bold().cyan();
-        theme.prompt_prefix = style("◆".to_string()).cyan();
-        theme.success_prefix = style("✓".to_string()).green();
-        theme.success_suffix = style("·".to_string()).dim();
-        theme.error_prefix = style("✗".to_string()).red();
-        theme
+        ColorfulTheme {
+            prompt_style: Style::new().bold().cyan(),
+            values_style: Style::new().yellow(),
+            active_item_style: Style::new().bold().cyan(),
+            prompt_prefix: style("◆".to_string()).cyan(),
+            success_prefix: style("✓".to_string()).green(),
+            success_suffix: style("·".to_string()).dim(),
+            error_prefix: style("✗".to_string()).red(),
+            ..ColorfulTheme::default()
+        }
     }
 
     fn setup_name_default(
