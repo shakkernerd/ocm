@@ -184,6 +184,10 @@ fn start_rejects_services_on_unsupported_backends() {
     );
     assert_eq!(start.status.code(), Some(1));
     assert!(stderr(&start).contains("managed services are not supported on this platform yet"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo"]);
+    assert_eq!(show.status.code(), Some(1));
+    assert!(stderr(&show).contains("environment \"demo\" does not exist"));
 }
 
 #[test]

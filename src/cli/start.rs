@@ -198,6 +198,12 @@ impl Cli {
             request.cwd.clone(),
         )?;
 
+        if request.service_requested
+            && service_manager_kind(&self.env) == ServiceManagerKind::Unsupported
+        {
+            return Err(unsupported_service_manager_message().to_string());
+        }
+
         let mut meta = match existing {
             None => self
                 .environment_service()
@@ -226,9 +232,6 @@ impl Cli {
 
         let mut service_started = false;
         if request.service_requested {
-            if service_manager_kind(&self.env) == ServiceManagerKind::Unsupported {
-                return Err(unsupported_service_manager_message().to_string());
-            }
             self.with_progress(format!("Installing service for {}", request.name), || {
                 self.service_service().install(&request.name)
             })?;

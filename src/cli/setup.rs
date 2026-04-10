@@ -14,6 +14,7 @@ use super::{Cli, start::StartOnboardingMode};
 use crate::cli::start::StartRequest;
 use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
 use crate::migrate::inspect_migration_source;
+use crate::service::{ServiceManagerKind, service_manager_kind, unsupported_service_manager_message};
 use crate::store::validate_name;
 
 impl Cli {
@@ -78,13 +79,23 @@ impl Cli {
             ),
         };
 
+        let service_supported = service_manager_kind(&self.env) != ServiceManagerKind::Unsupported;
+        let service_requested = if service_supported {
+            self.prompt_yes_no("Keep OpenClaw running in the background?", true)?
+        } else {
+            self.stdout_line(format!(
+                "Note: {} Continuing without a background service.",
+                unsupported_service_manager_message()
+            ));
+            false
+        };
+
         let request = StartRequest {
             name,
             root: None,
             gateway_port: None,
             protect: false,
-            service_requested: self
-                .prompt_yes_no("Keep OpenClaw running in the background?", true)?,
+            service_requested,
             onboarding_mode: if self.prompt_yes_no("Run onboarding now?", true)? {
                 StartOnboardingMode::Always
             } else {

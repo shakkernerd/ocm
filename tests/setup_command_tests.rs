@@ -197,6 +197,31 @@ fn setup_defaults_service_install_to_yes_in_raw_mode() {
 }
 
 #[test]
+fn setup_skips_background_service_prompt_on_unsupported_backends() {
+    let root = TestDir::new("setup-unsupported-service-backend");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "unsupported".to_string(),
+    );
+
+    let input = format!("4\nquick\n/bin/echo\n{}\nn\n", cwd.display());
+    let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], &input);
+    assert!(setup.status.success(), "{}", stderr(&setup));
+    let output = stdout(&setup);
+    assert!(output.contains("managed services are not supported on this platform yet"));
+    assert!(!output.contains("Keep OpenClaw running in the background?"));
+    assert!(output.contains("Started env quick"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "quick", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["defaultLauncher"], "quick.local");
+}
+
+#[test]
 fn setup_can_offer_git_install_before_using_managed_node_fallback() {
     let root = TestDir::new("setup-host-doctor-missing");
     let cwd = root.child("workspace");
