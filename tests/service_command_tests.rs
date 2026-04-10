@@ -596,13 +596,168 @@ fn service_status_reports_installed_definition_drift_after_binding_changes() {
     assert_eq!(summary["bindingKind"], "launcher");
     assert_eq!(summary["bindingName"], "dev");
     assert_eq!(summary["definitionDrift"], true);
-    assert_eq!(summary["openclawState"], "stopped");
+    assert_eq!(summary["gatewayPort"], port);
+    assert_eq!(summary["desiredGatewayPort"], port);
+    assert_eq!(summary["installedGatewayPort"], port);
+    assert_eq!(summary["openclawState"], "healthy");
     assert!(
         summary["command"]
             .as_str()
             .unwrap()
             .contains(&path_string(&stable_openclaw))
     );
+    assert!(
+        summary["issue"]
+            .as_str()
+            .unwrap()
+            .contains("installed service definition does not match the current env binding")
+    );
+}
+
+#[test]
+fn service_status_reports_env_block_drift_and_actual_installed_port() {
+    let root = TestDir::new("service-status-env-block-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+    let desired_server = TestHttpServer::serve_bytes_times(
+        "/healthz",
+        "application/json",
+        br#"{"ok":true,"status":"live"}"#,
+        1,
+    );
+    let desired_port = port_from_http_url(&desired_server.url());
+    let installed_server = TestHttpServer::serve_bytes_times(
+        "/healthz",
+        "application/json",
+        br#"{"ok":true,"status":"live"}"#,
+        2,
+    );
+    let installed_port = port_from_http_url(&installed_server.url());
+
+    let stable_openclaw = root.child("bin/stable-openclaw");
+    write_executable_script(
+        &stable_openclaw,
+        "#!/bin/sh\nif [ \"$1\" = \"health\" ]; then\n  exit 0\nfi\nexit 0\n",
+    );
+
+    let stable = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "stable",
+            "--command",
+            &path_string(&stable_openclaw),
+        ],
+    );
+    assert!(stable.status.success(), "{}", stderr(&stable));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &desired_port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let plist_path = managed_service_definition_path(&env, &cwd, "demo");
+    let desired_config_path =
+        path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json"));
+    let desired_state_dir = path_string(&root.child("ocm-home/envs/demo/.openclaw"));
+    let desired_home = path_string(&root.child("ocm-home/envs/demo"));
+    let installed_config_path = "/tmp/foreign/.openclaw/openclaw.json";
+    let installed_state_dir = "/tmp/foreign/.openclaw";
+    let installed_home = "/tmp/foreign";
+    let plist = fs::read_to_string(&plist_path).unwrap();
+    let rewritten = plist
+        .replace(&desired_port.to_string(), &installed_port.to_string())
+        .replace(&desired_config_path, installed_config_path)
+        .replace(&desired_state_dir, installed_state_dir)
+        .replace(&desired_home, installed_home);
+    fs::write(&plist_path, rewritten).unwrap();
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["definitionDrift"], true);
+    assert_eq!(summary["gatewayPort"], installed_port);
+    assert_eq!(summary["desiredGatewayPort"], desired_port);
+    assert_eq!(summary["installedGatewayPort"], installed_port);
+    assert_eq!(summary["openclawState"], "healthy");
+    assert!(
+        summary["issue"]
+            .as_str()
+            .unwrap()
+            .contains("installed service definition does not match the current env binding")
+    );
+}
+
+#[test]
+fn service_status_reports_desired_and_installed_gateway_ports_when_they_drift() {
+    let root = TestDir::new("service-status-port-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+    let assigned_port = allocate_free_port();
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &assigned_port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let meta_path = root.child("ocm-home/envs/demo.json");
+    let mut meta: Value = serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+    let desired_port = assigned_port + 1;
+    meta["gatewayPort"] = Value::from(desired_port);
+    fs::write(
+        &meta_path,
+        format!("{}\n", serde_json::to_string_pretty(&meta).unwrap()),
+    )
+    .unwrap();
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["gatewayPort"], assigned_port);
+    assert_eq!(summary["desiredGatewayPort"], desired_port);
+    assert_eq!(summary["installedGatewayPort"], assigned_port);
+    assert_eq!(summary["definitionDrift"], true);
     assert!(
         summary["issue"]
             .as_str()

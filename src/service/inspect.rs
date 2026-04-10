@@ -52,6 +52,8 @@ pub struct ServiceSummary {
     pub args: Vec<String>,
     pub run_dir: String,
     pub gateway_port: u32,
+    pub desired_gateway_port: Option<u32>,
+    pub installed_gateway_port: Option<u32>,
     pub openclaw_state: String,
     pub openclaw_detail: Option<String>,
     pub installed: bool,
@@ -139,6 +141,8 @@ pub(crate) struct LaunchdJobStatus {
     pub(crate) pid: Option<u32>,
     pub(crate) state: Option<String>,
     pub(crate) config_path: Option<String>,
+    pub(crate) state_dir: Option<String>,
+    pub(crate) openclaw_home: Option<String>,
     pub(crate) gateway_port: Option<u32>,
 }
 
@@ -180,6 +184,14 @@ struct ServiceExecutionDetails {
     args: Vec<String>,
     program_arguments: Vec<String>,
     run_dir: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ServiceEnvironmentDetails {
+    config_path: Option<String>,
+    state_dir: Option<String>,
+    openclaw_home: Option<String>,
+    gateway_port: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -379,10 +391,17 @@ fn build_service_summary(
 ) -> Result<ServiceSummary, String> {
     let service = EnvironmentService::new(process_env, cwd);
     let env_meta = service.apply_effective_gateway_port(meta)?;
+    let env_paths = derive_env_paths(Path::new(&env_meta.root));
     let managed = managed_service_identity(&env_meta.name, process_env, cwd)?;
     let managed_status = inspect_job(&managed.label, &managed.definition_path, process_env);
     let launch = resolve_service_launch(&env_meta, process_env, cwd, false);
-    let env_config_path = display_path(&derive_env_paths(Path::new(&env_meta.root)).config_path);
+    let env_config_path = display_path(&env_paths.config_path);
+    let expected_service_env = ServiceEnvironmentDetails {
+        config_path: Some(env_config_path.clone()),
+        state_dir: Some(display_path(&env_paths.state_dir)),
+        openclaw_home: Some(display_path(&env_paths.openclaw_home)),
+        gateway_port: env_meta.gateway_port,
+    };
     let global_matches_env = global
         .config_path
         .as_deref()
@@ -430,13 +449,27 @@ fn build_service_summary(
     } else {
         None
     };
+    let installed_service_env = if managed_status.installed {
+        Some(ServiceEnvironmentDetails {
+            config_path: managed_status.config_path.clone(),
+            state_dir: managed_status.state_dir.clone(),
+            openclaw_home: managed_status.openclaw_home.clone(),
+            gateway_port: managed_status.gateway_port,
+        })
+    } else {
+        None
+    };
+    let actual_gateway_port = managed_status.gateway_port.or(env_meta.gateway_port);
     let definition_drift = installed_exec
         .as_ref()
         .zip(expected_exec.as_ref())
         .is_some_and(|(installed, expected)| {
             installed.program_arguments != expected.program_arguments
                 || installed.run_dir != expected.run_dir
-        });
+        })
+        || installed_service_env
+            .as_ref()
+            .is_some_and(|installed| installed != &expected_service_env);
     if definition_drift {
         let refresh_action = if managed_status.loaded || managed_status.running {
             "service restart"
@@ -467,20 +500,19 @@ fn build_service_summary(
             display_path(Path::new(&env_meta.root)),
         ),
     };
-    let probe_spec = display_exec.and_then(|execution| {
-        service_execution_health_probe_spec(execution, env_meta.gateway_port)
-    });
+    let probe_spec = display_exec
+        .and_then(|execution| service_execution_health_probe_spec(execution, actual_gateway_port));
 
     let openclaw_probe = match depth {
         ServiceProbeDepth::Fast => detect_openclaw_state_fast(
-            env_meta.gateway_port,
+            actual_gateway_port,
             managed_status.installed,
             managed_status.loaded,
             managed_status.running,
         ),
         ServiceProbeDepth::Deep => detect_openclaw_state_detailed(
             &env_meta,
-            env_meta.gateway_port,
+            actual_gateway_port,
             managed_status.installed,
             managed_status.loaded,
             managed_status.running,
@@ -502,7 +534,9 @@ fn build_service_summary(
         binary_path,
         args,
         run_dir,
-        gateway_port: env_meta.gateway_port.unwrap_or_default(),
+        gateway_port: actual_gateway_port.unwrap_or_default(),
+        desired_gateway_port: env_meta.gateway_port,
+        installed_gateway_port: managed_status.gateway_port,
         openclaw_state: openclaw_probe.state,
         openclaw_detail: openclaw_probe.detail,
         installed: managed_status.installed,
@@ -1032,6 +1066,12 @@ pub(crate) fn inspect_job(
     }
 
     status.config_path = read_service_environment_value(service_path, "OPENCLAW_CONFIG_PATH", env)
+        .ok()
+        .flatten();
+    status.state_dir = read_service_environment_value(service_path, "OPENCLAW_STATE_DIR", env)
+        .ok()
+        .flatten();
+    status.openclaw_home = read_service_environment_value(service_path, "OPENCLAW_HOME", env)
         .ok()
         .flatten();
     status.gateway_port =

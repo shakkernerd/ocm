@@ -269,6 +269,14 @@ pub fn service_status(
     if summary.definition_drift {
         status_rows.push(KeyValueRow::warning("Definition", "stale".to_string()));
     }
+    if let Some(desired_gateway_port) = summary.desired_gateway_port {
+        if desired_gateway_port != summary.gateway_port {
+            status_rows.push(KeyValueRow::muted(
+                "Desired port",
+                desired_gateway_port.to_string(),
+            ));
+        }
+    }
     if let Some(detail) = summary.openclaw_detail.as_ref() {
         status_rows.push(KeyValueRow::muted("Detail", detail.clone()));
     }
@@ -492,6 +500,12 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
         summary.binding_name.as_deref(),
     ) {
         lines.push(format!("binding: {kind}:{name}"));
+    }
+    if let Some(desired_gateway_port) = summary.desired_gateway_port {
+        lines.push(format!("desiredGatewayPort: {desired_gateway_port}"));
+    }
+    if let Some(installed_gateway_port) = summary.installed_gateway_port {
+        lines.push(format!("installedGatewayPort: {installed_gateway_port}"));
     }
     if let Some(command) = summary.command.as_deref() {
         lines.push(format!("command: {command}"));
@@ -1065,6 +1079,8 @@ mod tests {
                     args: Vec::new(),
                     run_dir: "/tmp/demo".to_string(),
                     gateway_port: 18789,
+                    desired_gateway_port: Some(18789),
+                    installed_gateway_port: Some(18789),
                     openclaw_state: "healthy".to_string(),
                     openclaw_detail: None,
                     installed: true,
@@ -1193,6 +1209,22 @@ mod tests {
     }
 
     #[test]
+    fn service_status_shows_desired_port_when_it_differs_from_the_installed_port() {
+        let mut summary = sample_service_summary();
+        summary.gateway_port = 18789;
+        summary.desired_gateway_port = Some(18790);
+        summary.installed_gateway_port = Some(18789);
+
+        let pretty = service_status(&summary, RenderProfile::pretty(false), "ocm");
+        assert!(pretty.iter().any(|line| line.contains("Desired port")));
+        assert!(pretty.iter().any(|line| line.contains("18790")));
+
+        let raw = service_status(&summary, RenderProfile::raw(), "ocm");
+        assert!(raw.contains(&"desiredGatewayPort: 18790".to_string()));
+        assert!(raw.contains(&"installedGatewayPort: 18789".to_string()));
+    }
+
+    #[test]
     fn service_list_pretty_compacts_on_narrow_terminals() {
         let lines = service_list_with_width(
             &ServiceSummaryList {
@@ -1271,6 +1303,8 @@ mod tests {
             args: Vec::new(),
             run_dir: "/tmp/demo".to_string(),
             gateway_port: 18789,
+            desired_gateway_port: Some(18789),
+            installed_gateway_port: Some(18789),
             openclaw_state: "stopped".to_string(),
             openclaw_detail: None,
             installed: true,
