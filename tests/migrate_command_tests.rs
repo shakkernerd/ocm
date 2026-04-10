@@ -185,6 +185,18 @@ fn adopt_plan_reports_the_target_env_and_root() {
 }
 
 #[test]
+fn adopt_plan_requires_name_when_only_a_positional_token_is_given() {
+    let root = TestDir::new("adopt-plan-requires-name");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["adopt", "plan", "mira"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("--name is required"));
+}
+
+#[test]
 fn adopt_plan_accepts_an_explicit_target_root() {
     let root = TestDir::new("adopt-plan-root");
     let cwd = root.child("workspace");
@@ -273,6 +285,81 @@ fn help_adopt_plan_is_available() {
     assert!(body.contains(
         "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
     ));
+}
+
+#[test]
+fn adopt_import_requires_name_when_only_a_positional_token_is_given() {
+    let root = TestDir::new("adopt-import-requires-name");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let mut env = ocm_env(&root);
+    install_fake_openclaw_on_path(&root, &mut env);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["adopt", "import", source_home.to_string_lossy().as_ref()],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("--name is required"));
+}
+
+#[test]
+fn migrate_allows_name_flag_with_bare_relative_source_home() {
+    let root = TestDir::new("migrate-name-relative-source");
+    let cwd = root.child("workspace");
+    let source_home = cwd.join("legacy-home");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let mut env = ocm_env(&root);
+    install_fake_openclaw_on_path(&root, &mut env);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["migrate", "--name", "mira", "legacy-home", "--json"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"name\": \"mira\""));
+}
+
+#[test]
+fn migrate_plan_alias_requires_name() {
+    let root = TestDir::new("migrate-plan-alias-requires-name");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["migrate", "plan", "mira"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("--name is required"));
+}
+
+#[test]
+fn migrate_import_alias_requires_name() {
+    let root = TestDir::new("migrate-import-alias-requires-name");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let mut env = ocm_env(&root);
+    install_fake_openclaw_on_path(&root, &mut env);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "import",
+            source_home.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("--name is required"));
 }
 
 fn seed_plain_openclaw_home(source_home: &std::path::Path) {
