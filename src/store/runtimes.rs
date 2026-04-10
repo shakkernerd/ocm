@@ -40,6 +40,49 @@ fn installed_openclaw_binary_path(install_files: &Path) -> PathBuf {
     install_files.join("node_modules/openclaw/openclaw.mjs")
 }
 
+#[derive(Clone, Debug, Default)]
+struct RuntimeSourceDetails {
+    path: Option<PathBuf>,
+    url: Option<String>,
+    manifest_url: Option<String>,
+    sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RuntimeReleaseDetails {
+    version: Option<String>,
+    channel: Option<String>,
+    selector_kind: Option<RuntimeReleaseSelectorKind>,
+    selector_value: Option<String>,
+}
+
+impl RuntimeReleaseDetails {
+    pub(crate) fn with_selector(
+        selector_kind: Option<RuntimeReleaseSelectorKind>,
+        selector_value: Option<String>,
+    ) -> Self {
+        Self {
+            selector_kind,
+            selector_value,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeInstallTarget {
+    name: String,
+    meta_path: PathBuf,
+    install_root: PathBuf,
+    install_files: PathBuf,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct InstallContext<'a> {
+    pub env: &'a BTreeMap<String, String>,
+    pub cwd: &'a Path,
+}
+
 fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
     for bytes in [stderr, stdout] {
         let text = String::from_utf8_lossy(bytes);
@@ -115,34 +158,27 @@ fn install_openclaw_package_with_npm(
 }
 
 fn build_installed_runtime_meta(
-    name: String,
+    target: &RuntimeInstallTarget,
     binary_path: &Path,
-    install_root: &Path,
-    source_path: Option<&Path>,
-    source_url: Option<String>,
-    source_manifest_url: Option<String>,
-    source_sha256: Option<String>,
-    release_version: Option<String>,
-    release_channel: Option<String>,
-    release_selector_kind: Option<RuntimeReleaseSelectorKind>,
-    release_selector_value: Option<String>,
+    source: &RuntimeSourceDetails,
+    release: &RuntimeReleaseDetails,
     description: Option<String>,
 ) -> RuntimeMeta {
     let created_at = now_utc();
     RuntimeMeta {
         kind: "ocm-runtime".to_string(),
-        name,
+        name: target.name.clone(),
         binary_path: display_path(binary_path),
         source_kind: RuntimeSourceKind::Installed,
-        source_path: source_path.map(display_path),
-        source_url,
-        source_manifest_url,
-        source_sha256,
-        release_version,
-        release_channel,
-        release_selector_kind,
-        release_selector_value,
-        install_root: Some(display_path(install_root)),
+        source_path: source.path.as_deref().map(display_path),
+        source_url: source.url.clone(),
+        source_manifest_url: source.manifest_url.clone(),
+        source_sha256: source.sha256.clone(),
+        release_version: release.version.clone(),
+        release_channel: release.channel.clone(),
+        release_selector_kind: release.selector_kind.clone(),
+        release_selector_value: release.selector_value.clone(),
+        install_root: Some(display_path(&target.install_root)),
         description,
         created_at,
         updated_at: created_at,
@@ -161,36 +197,27 @@ fn copy_installed_runtime_binary(source_path: &Path, binary_path: &Path) -> Resu
 }
 
 fn install_runtime_at_path(
-    name: String,
-    meta_path: PathBuf,
-    install_root: PathBuf,
-    install_files: PathBuf,
+    target: RuntimeInstallTarget,
     file_name: &Path,
-    source_path: Option<&Path>,
-    source_url: Option<String>,
-    source_manifest_url: Option<String>,
-    source_sha256: Option<String>,
-    release_version: Option<String>,
-    release_channel: Option<String>,
-    release_selector_kind: Option<RuntimeReleaseSelectorKind>,
-    release_selector_value: Option<String>,
+    source: RuntimeSourceDetails,
+    release: RuntimeReleaseDetails,
     description: Option<String>,
 ) -> Result<RuntimeMeta, String> {
-    if path_exists(&install_root) {
+    if path_exists(&target.install_root) {
         return Err(format!(
             "runtime install root already exists: {}",
-            display_path(&install_root)
+            display_path(&target.install_root)
         ));
     }
 
     let result = (|| {
-        ensure_dir(&install_files)?;
-        let binary_path = install_files.join(file_name);
-        match (source_path, source_url.as_deref()) {
+        ensure_dir(&target.install_files)?;
+        let binary_path = target.install_files.join(file_name);
+        match (source.path.as_deref(), source.url.as_deref()) {
             (Some(source_path), _) => copy_installed_runtime_binary(source_path, &binary_path)?,
             (None, Some(source_url)) => {
                 download_to_file(source_url, &binary_path)?;
-                if let Some(source_sha256) = source_sha256.as_deref() {
+                if let Some(source_sha256) = source.sha256.as_deref() {
                     verify_file_sha256(&binary_path, source_sha256)?;
                 }
                 #[cfg(unix)]
@@ -206,68 +233,74 @@ fn install_runtime_at_path(
             (None, None) => return Err("runtime install requires a source path or URL".to_string()),
         }
 
-        let meta = build_installed_runtime_meta(
-            name,
-            &binary_path,
-            &install_root,
-            source_path,
-            source_url,
-            source_manifest_url,
-            source_sha256,
-            release_version,
-            release_channel,
-            release_selector_kind,
-            release_selector_value,
-            description,
-        );
-        write_json(&meta_path, &meta)?;
+        let meta =
+            build_installed_runtime_meta(&target, &binary_path, &source, &release, description);
+        write_json(&target.meta_path, &meta)?;
         Ok(meta)
     })();
 
     if result.is_err() {
-        let _ = fs::remove_file(&meta_path);
-        let _ = fs::remove_dir_all(&install_root);
+        let _ = fs::remove_file(&target.meta_path);
+        let _ = fs::remove_dir_all(&target.install_root);
     }
 
     result
 }
 
-fn install_runtime_from_openclaw_package(
+fn prepare_runtime_install_target(
     name: String,
-    meta_path: PathBuf,
-    install_root: PathBuf,
-    install_files: PathBuf,
-    tarball_url: String,
-    source_manifest_url: String,
-    source_integrity: Option<String>,
-    release_version: String,
-    release_channel: Option<String>,
-    release_selector_kind: Option<RuntimeReleaseSelectorKind>,
-    release_selector_value: Option<String>,
-    description: Option<String>,
+    replace_existing: bool,
     env: &BTreeMap<String, String>,
     cwd: &Path,
+) -> Result<RuntimeInstallTarget, String> {
+    let meta_path = prepare_runtime_meta_path(&name, replace_existing, env, cwd)?;
+    let install_root = runtime_install_root(&name, env, cwd)?;
+    let install_files = runtime_install_files_dir(&name, env, cwd)?;
+    Ok(RuntimeInstallTarget {
+        name,
+        meta_path,
+        install_root,
+        install_files,
+    })
+}
+
+fn install_runtime_from_openclaw_package(
+    target: RuntimeInstallTarget,
+    source: RuntimeSourceDetails,
+    source_integrity: Option<String>,
+    release: RuntimeReleaseDetails,
+    description: Option<String>,
+    context: InstallContext<'_>,
 ) -> Result<RuntimeMeta, String> {
-    if path_exists(&install_root) {
+    if path_exists(&target.install_root) {
         return Err(format!(
             "runtime install root already exists: {}",
-            display_path(&install_root)
+            display_path(&target.install_root)
         ));
     }
     let result = (|| {
-        ensure_dir(&install_files)?;
-        let archive_name = artifact_file_name_from_url(&tarball_url)?;
-        let archive_path = install_files.join(&archive_name);
-        download_to_file(&tarball_url, &archive_path)?;
+        ensure_dir(&target.install_files)?;
+        let tarball_url = source.url.as_deref().ok_or_else(|| {
+            "official OpenClaw runtime install requires a tarball URL".to_string()
+        })?;
+        let archive_name = artifact_file_name_from_url(tarball_url)?;
+        let archive_path = target.install_files.join(&archive_name);
+        download_to_file(tarball_url, &archive_path)?;
         if let Some(source_integrity) = source_integrity.as_deref() {
             verify_file_integrity(&archive_path, source_integrity)?;
         }
 
-        install_openclaw_package_with_npm(&archive_path, &install_files, cwd, env)?;
+        install_openclaw_package_with_npm(
+            &archive_path,
+            &target.install_files,
+            context.cwd,
+            context.env,
+        )?;
         let _ = fs::remove_file(&archive_path);
 
-        let binary_path = installed_openclaw_binary_path(&install_files);
+        let binary_path = installed_openclaw_binary_path(&target.install_files);
         if !path_exists(&binary_path) {
+            let release_version = release.version.as_deref().unwrap_or("unknown");
             return Err(format!(
                 "OpenClaw release \"{release_version}\" is missing node_modules/openclaw/openclaw.mjs after installation"
             ));
@@ -282,27 +315,17 @@ fn install_runtime_from_openclaw_package(
         }
         let binary_sha256 = file_sha256(&binary_path)?;
 
-        let meta = build_installed_runtime_meta(
-            name,
-            &binary_path,
-            &install_root,
-            None,
-            Some(tarball_url),
-            Some(source_manifest_url),
-            Some(binary_sha256),
-            Some(release_version),
-            release_channel,
-            release_selector_kind,
-            release_selector_value,
-            description,
-        );
-        write_json(&meta_path, &meta)?;
+        let mut source = source;
+        source.sha256 = Some(binary_sha256);
+        let meta =
+            build_installed_runtime_meta(&target, &binary_path, &source, &release, description);
+        write_json(&target.meta_path, &meta)?;
         Ok(meta)
     })();
 
     if result.is_err() {
-        let _ = fs::remove_file(&meta_path);
-        let _ = fs::remove_dir_all(&install_root);
+        let _ = fs::remove_file(&target.meta_path);
+        let _ = fs::remove_dir_all(&target.install_root);
     }
 
     result
@@ -439,7 +462,7 @@ pub fn install_runtime(
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
     let name = validate_name(&options.name, "Runtime name")?;
-    let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
+    let target = prepare_runtime_install_target(name, options.force, env, cwd)?;
 
     let raw_path = options.path.trim();
     if raw_path.is_empty() {
@@ -462,28 +485,20 @@ pub fn install_runtime(
         ));
     }
 
-    let file_name = source_path.file_name().ok_or_else(|| {
+    let file_name = PathBuf::from(source_path.file_name().ok_or_else(|| {
         format!(
             "runtime path must include a file name: {}",
             display_path(&source_path)
         )
-    })?;
-    let install_root = runtime_install_root(&name, env, cwd)?;
-    let install_files = runtime_install_files_dir(&name, env, cwd)?;
+    })?);
     install_runtime_at_path(
-        name,
-        meta_path,
-        install_root,
-        install_files,
-        Path::new(file_name),
-        Some(&source_path),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        target,
+        &file_name,
+        RuntimeSourceDetails {
+            path: Some(source_path),
+            ..RuntimeSourceDetails::default()
+        },
+        RuntimeReleaseDetails::default(),
         trim_description(options.description),
     )
 }
@@ -494,25 +509,17 @@ pub fn install_runtime_from_url(
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
     let name = validate_name(&options.name, "Runtime name")?;
-    let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
+    let target = prepare_runtime_install_target(name, options.force, env, cwd)?;
 
     let file_name = artifact_file_name_from_url(&options.url)?;
-    let install_root = runtime_install_root(&name, env, cwd)?;
-    let install_files = runtime_install_files_dir(&name, env, cwd)?;
     install_runtime_at_path(
-        name,
-        meta_path,
-        install_root,
-        install_files,
+        target,
         Path::new(&file_name),
-        None,
-        Some(options.url),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        RuntimeSourceDetails {
+            url: Some(options.url),
+            ..RuntimeSourceDetails::default()
+        },
+        RuntimeReleaseDetails::default(),
         trim_description(options.description),
     )
 }
@@ -523,10 +530,15 @@ pub fn install_runtime_from_release(
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
     let name = validate_name(&options.name, "Runtime name")?;
-    let meta_path = prepare_runtime_meta_path(&name, options.force, env, cwd)?;
+    let target = prepare_runtime_install_target(name, options.force, env, cwd)?;
 
     let manifest = load_release_manifest(&options.manifest_url)?;
-    let (release_selector_kind, release_selector_value) =
+    let release = select_release(
+        &manifest,
+        options.version.as_deref(),
+        options.channel.as_deref(),
+    )?;
+    let (selector_kind, selector_value) =
         match (options.version.as_deref(), options.channel.as_deref()) {
             (Some(version), None) => (
                 Some(RuntimeReleaseSelectorKind::Version),
@@ -538,31 +550,26 @@ pub fn install_runtime_from_release(
             ),
             _ => (None, None),
         };
-    let release = select_release(
-        &manifest,
-        options.version.as_deref(),
-        options.channel.as_deref(),
-    )?;
+    let release_details = RuntimeReleaseDetails {
+        version: Some(release.version.clone()),
+        channel: release.channel.clone(),
+        selector_kind,
+        selector_value,
+    };
     let description =
         trim_description(options.description).or_else(|| trim_description(release.description));
 
     let file_name = artifact_file_name_from_url(&release.url)?;
-    let install_root = runtime_install_root(&name, env, cwd)?;
-    let install_files = runtime_install_files_dir(&name, env, cwd)?;
     install_runtime_at_path(
-        name,
-        meta_path,
-        install_root,
-        install_files,
+        target,
         Path::new(&file_name),
-        None,
-        Some(release.url),
-        Some(options.manifest_url),
-        release.sha256,
-        Some(release.version),
-        release.channel,
-        release_selector_kind,
-        release_selector_value,
+        RuntimeSourceDetails {
+            url: Some(release.url),
+            manifest_url: Some(options.manifest_url),
+            sha256: release.sha256,
+            ..RuntimeSourceDetails::default()
+        },
+        release_details,
         description,
     )
 }
@@ -611,46 +618,47 @@ pub fn install_runtime_from_official_openclaw_release(
         options.force,
         releases_url,
         release,
-        release_selector_kind,
-        release_selector_value,
+        RuntimeReleaseDetails {
+            selector_kind: release_selector_kind,
+            selector_value: release_selector_value,
+            ..RuntimeReleaseDetails::default()
+        },
         description,
-        env,
-        cwd,
+        InstallContext { env, cwd },
     )
 }
 
-pub fn install_runtime_from_selected_official_openclaw_release(
+pub(crate) fn install_runtime_from_selected_official_openclaw_release(
     name: String,
     force: bool,
     releases_url: String,
     release: OpenClawRelease,
-    release_selector_kind: Option<RuntimeReleaseSelectorKind>,
-    release_selector_value: Option<String>,
+    release_details: RuntimeReleaseDetails,
     description: Option<String>,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
+    context: InstallContext<'_>,
 ) -> Result<RuntimeMeta, String> {
-    let meta_path = prepare_runtime_meta_path(&name, force, env, cwd)?;
+    let target = prepare_runtime_install_target(name, force, context.env, context.cwd)?;
     let description = trim_description(description)
         .or_else(|| Some(format!("Official OpenClaw release {}", release.version)));
-
-    let install_root = runtime_install_root(&name, env, cwd)?;
-    let install_files = runtime_install_files_dir(&name, env, cwd)?;
+    let source_integrity = release.integrity.clone();
+    let source = RuntimeSourceDetails {
+        url: Some(release.tarball_url),
+        manifest_url: Some(releases_url),
+        ..RuntimeSourceDetails::default()
+    };
+    let release = RuntimeReleaseDetails {
+        version: Some(release.version),
+        channel: release.channel,
+        selector_kind: release_details.selector_kind,
+        selector_value: release_details.selector_value,
+    };
     install_runtime_from_openclaw_package(
-        name,
-        meta_path,
-        install_root,
-        install_files,
-        release.tarball_url,
-        releases_url,
-        release.integrity,
-        release.version,
-        release.channel,
-        release_selector_kind,
-        release_selector_value,
+        target,
+        source,
+        source_integrity,
+        release,
         description,
-        env,
-        cwd,
+        context,
     )
 }
 
@@ -677,9 +685,7 @@ pub fn runtime_integrity_issue(
         ));
     }
 
-    let Some(expected_sha256) = meta.source_sha256.as_deref() else {
-        return None;
-    };
+    let expected_sha256 = meta.source_sha256.as_deref()?;
     let expected_sha256 = match normalize_sha256(expected_sha256) {
         Ok(value) => value,
         Err(error) => return Some(error),

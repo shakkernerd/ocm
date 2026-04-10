@@ -5,9 +5,10 @@ use crate::runtime::releases::{
     select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
 };
 use crate::store::{
-    get_runtime, install_runtime, install_runtime_from_official_openclaw_release,
-    install_runtime_from_release, install_runtime_from_selected_official_openclaw_release,
-    install_runtime_from_url, list_runtimes, runtime_integrity_issue,
+    InstallContext, RuntimeReleaseDetails, get_runtime, install_runtime,
+    install_runtime_from_official_openclaw_release, install_runtime_from_release,
+    install_runtime_from_selected_official_openclaw_release, install_runtime_from_url,
+    list_runtimes, runtime_integrity_issue,
 };
 use serde::Serialize;
 
@@ -218,19 +219,23 @@ impl<'a> RuntimeService<'a> {
             options.force || existing_meta.is_some(),
             releases_url,
             selected_release,
-            match (version.as_deref(), channel.as_deref()) {
-                (Some(_), None) => Some(RuntimeReleaseSelectorKind::Version),
-                (None, Some(_)) => Some(RuntimeReleaseSelectorKind::Channel),
-                _ => None,
-            },
-            match (version, channel) {
-                (Some(version), None) => Some(version),
-                (None, Some(channel)) => Some(channel),
-                _ => None,
-            },
+            RuntimeReleaseDetails::with_selector(
+                match (version.as_deref(), channel.as_deref()) {
+                    (Some(_), None) => Some(RuntimeReleaseSelectorKind::Version),
+                    (None, Some(_)) => Some(RuntimeReleaseSelectorKind::Channel),
+                    _ => None,
+                },
+                match (version, channel) {
+                    (Some(version), None) => Some(version),
+                    (None, Some(channel)) => Some(channel),
+                    _ => None,
+                },
+            ),
             description,
-            self.env,
-            self.cwd,
+            InstallContext {
+                env: self.env,
+                cwd: self.cwd,
+            },
         )?;
         let action = if existing_meta.is_some() {
             OfficialRuntimePrepareAction::Updated
