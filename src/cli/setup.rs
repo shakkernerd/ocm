@@ -14,7 +14,9 @@ use super::{Cli, start::StartOnboardingMode};
 use crate::cli::start::StartRequest;
 use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
 use crate::migrate::inspect_migration_source;
-use crate::service::{ServiceManagerKind, service_manager_kind, unsupported_service_manager_message};
+use crate::service::{
+    ServiceManagerKind, service_manager_kind, unsupported_service_manager_message,
+};
 use crate::store::validate_name;
 
 impl Cli {

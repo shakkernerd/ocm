@@ -367,30 +367,21 @@ fn build_discovered_service_summary(
     env: &BTreeMap<String, String>,
 ) -> Result<Option<DiscoveredServiceSummary>, String> {
     let definition_exists = plist_path.exists();
-    let config_path = status
-        .config_path
-        .clone()
-        .or(if definition_exists {
-            read_service_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH", env)?
-        } else {
-            None
-        });
-    let state_dir = status
-        .state_dir
-        .clone()
-        .or(if definition_exists {
-            read_service_environment_value(&plist_path, "OPENCLAW_STATE_DIR", env)?
-        } else {
-            None
-        });
-    let openclaw_home = status
-        .openclaw_home
-        .clone()
-        .or(if definition_exists {
-            read_service_environment_value(&plist_path, "OPENCLAW_HOME", env)?
-        } else {
-            None
-        });
+    let config_path = status.config_path.clone().or(if definition_exists {
+        read_service_environment_value(&plist_path, "OPENCLAW_CONFIG_PATH", env)?
+    } else {
+        None
+    });
+    let state_dir = status.state_dir.clone().or(if definition_exists {
+        read_service_environment_value(&plist_path, "OPENCLAW_STATE_DIR", env)?
+    } else {
+        None
+    });
+    let openclaw_home = status.openclaw_home.clone().or(if definition_exists {
+        read_service_environment_value(&plist_path, "OPENCLAW_HOME", env)?
+    } else {
+        None
+    });
     let program_arguments = if status.program_arguments.is_empty() {
         if definition_exists {
             read_service_program_arguments(&plist_path, env)?
@@ -406,22 +397,17 @@ fn build_discovered_service_summary(
         None
     }
     .or_else(|| program_arguments.first().cloned());
-    let working_directory = status
-        .working_directory
-        .clone()
-        .or(if definition_exists {
-            read_service_working_directory(&plist_path, env)?
-        } else {
-            None
-        });
-    let gateway_port = status.gateway_port.or(
-        if definition_exists {
-            read_service_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT", env)?
-                .and_then(|value| value.parse::<u32>().ok())
-        } else {
-            None
-        },
-    );
+    let working_directory = status.working_directory.clone().or(if definition_exists {
+        read_service_working_directory(&plist_path, env)?
+    } else {
+        None
+    });
+    let gateway_port = status.gateway_port.or(if definition_exists {
+        read_service_environment_value(&plist_path, "OPENCLAW_GATEWAY_PORT", env)?
+            .and_then(|value| value.parse::<u32>().ok())
+    } else {
+        None
+    });
 
     if !looks_like_openclaw_service(
         &label,
@@ -440,8 +426,12 @@ fn build_discovered_service_summary(
         .and_then(|value| env_config_paths.get(value))
         .cloned();
     let source_kind = discovered_source_kind(&label).to_string();
-    let (adoptable, adopt_reason) =
-        discover_adoption_state(&source_kind, matched_env_name.as_deref(), config_path.as_deref(), env);
+    let (adoptable, adopt_reason) = discover_adoption_state(
+        &source_kind,
+        matched_env_name.as_deref(),
+        config_path.as_deref(),
+        env,
+    );
 
     Ok(Some(DiscoveredServiceSummary {
         label,
@@ -533,7 +523,8 @@ fn build_service_summary(
     };
     let live_service = managed_status.loaded || managed_status.running;
     let live_exec = service_execution_from_status(&managed_status, Path::new(&env_meta.root));
-    let launchd_live_exec_unverified = service_manager_kind(process_env) == ServiceManagerKind::Launchd
+    let launchd_live_exec_unverified = service_manager_kind(process_env)
+        == ServiceManagerKind::Launchd
         && live_service
         && live_exec.is_none();
     let installed_exec = if managed_status.installed || live_service {

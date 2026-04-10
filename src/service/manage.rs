@@ -252,7 +252,8 @@ pub fn restore_global_service(
     if !dry_run {
         restore_global_plist(&restore.backup_plist_path, &restore.global_plist_path)?;
         bootout_managed_service(&restore.managed_label, env)?;
-        if let Err(error) = activate_launch_agent(GLOBAL_GATEWAY_LABEL, &restore.global_plist_path, env)
+        if let Err(error) =
+            activate_launch_agent(GLOBAL_GATEWAY_LABEL, &restore.global_plist_path, env)
         {
             rollback_failed_global_restore(&restore, env)?;
             return Err(error);
@@ -763,9 +764,7 @@ fn write_service_definition(
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => write_plist_file(prepared, env),
         ServiceManagerKind::SystemdUser => write_systemd_unit_file(prepared, env),
-        ServiceManagerKind::Unsupported => {
-            Err(unsupported_service_manager_message().to_string())
-        }
+        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
     }
 }
 
@@ -1075,9 +1074,7 @@ fn activate_managed_service(
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => activate_launch_agent(label, service_path, env),
         ServiceManagerKind::SystemdUser => activate_systemd_user_service(label, env),
-        ServiceManagerKind::Unsupported => {
-            Err(unsupported_service_manager_message().to_string())
-        }
+        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
     }
 }
 
@@ -1310,9 +1307,7 @@ fn stop_managed_service(
             }
             Ok(())
         }
-        ServiceManagerKind::Unsupported => {
-            Err(unsupported_service_manager_message().to_string())
-        }
+        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
     }
 }
 
@@ -1338,9 +1333,7 @@ fn uninstall_managed_service_by_label(
             }
             Ok(())
         }
-        ServiceManagerKind::Unsupported => {
-            Err(unsupported_service_manager_message().to_string())
-        }
+        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
     }
 }
 

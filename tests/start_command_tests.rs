@@ -174,13 +174,7 @@ fn start_rejects_services_on_unsupported_backends() {
     let start = run_ocm(
         &cwd,
         &env,
-        &[
-            "start",
-            "demo",
-            "--command",
-            "openclaw",
-            "--no-onboard",
-        ],
+        &["start", "demo", "--command", "openclaw", "--no-onboard"],
     );
     assert_eq!(start.status.code(), Some(1));
     assert!(stderr(&start).contains("managed services are not supported on this platform yet"));

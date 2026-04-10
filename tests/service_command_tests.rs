@@ -2188,7 +2188,10 @@ fn service_adopt_global_rolls_back_when_managed_activation_fails() {
         "{launchctl_log}"
     );
     assert!(launchctl_log.contains(&managed_label), "{launchctl_log}");
-    assert!(launchctl_log.contains("ai.openclaw.gateway"), "{launchctl_log}");
+    assert!(
+        launchctl_log.contains("ai.openclaw.gateway"),
+        "{launchctl_log}"
+    );
 }
 
 #[test]
@@ -2355,7 +2358,11 @@ fn service_restore_global_rolls_back_when_global_activation_fails() {
     let installed = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert!(installed.status.success(), "{}", stderr(&installed));
     let env_show_before = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
-    assert!(env_show_before.status.success(), "{}", stderr(&env_show_before));
+    assert!(
+        env_show_before.status.success(),
+        "{}",
+        stderr(&env_show_before)
+    );
     let env_meta_before: Value = serde_json::from_str(&stdout(&env_show_before)).unwrap();
 
     let original_meta_port = env_meta_before["gatewayPort"].as_u64().unwrap();
