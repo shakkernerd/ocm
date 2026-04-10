@@ -96,6 +96,23 @@ struct HostCommandSummary {
     version: String,
 }
 
+#[derive(Clone, Debug, Default)]
+struct HostCheckNotes {
+    version: Option<String>,
+    detail: Option<String>,
+    suggestion: Option<String>,
+}
+
+impl HostCheckNotes {
+    fn new(version: Option<String>, detail: Option<String>, suggestion: Option<String>) -> Self {
+        Self {
+            version,
+            detail,
+            suggestion,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HostPackageManager {
     Brew,
@@ -349,11 +366,13 @@ fn node_check(
                 "Run published OpenClaw releases",
                 level,
                 HostCheckStatus::Outdated,
-                Some(version.clone()),
-                Some(format!(
-                    "found Node.js {version}; official releases need {OPENCLAW_MIN_NODE_VERSION} or newer"
-                )),
-                Some(node_suggestion(managed_fallback_supported)),
+                HostCheckNotes::new(
+                    Some(version.clone()),
+                    Some(format!(
+                        "found Node.js {version}; official releases need {OPENCLAW_MIN_NODE_VERSION} or newer"
+                    )),
+                    Some(node_suggestion(managed_fallback_supported)),
+                ),
             ),
             Some(_) => check(
                 "official-release",
@@ -361,9 +380,7 @@ fn node_check(
                 "Run published OpenClaw releases",
                 level,
                 HostCheckStatus::Ok,
-                Some(version),
-                None,
-                None,
+                HostCheckNotes::new(Some(version), None, None),
             ),
             None => check(
                 "official-release",
@@ -371,11 +388,13 @@ fn node_check(
                 "Run published OpenClaw releases",
                 level,
                 HostCheckStatus::Outdated,
-                Some(version.clone()),
-                Some(format!(
-                    "node --version returned an unreadable version: {version}"
-                )),
-                Some(node_suggestion(managed_fallback_supported)),
+                HostCheckNotes::new(
+                    Some(version.clone()),
+                    Some(format!(
+                        "node --version returned an unreadable version: {version}"
+                    )),
+                    Some(node_suggestion(managed_fallback_supported)),
+                ),
             ),
         },
         Err(detail) => check(
@@ -384,9 +403,11 @@ fn node_check(
             "Run published OpenClaw releases",
             level,
             HostCheckStatus::Missing,
-            None,
-            Some(node_detail(detail, managed_fallback_supported)),
-            Some(node_suggestion(managed_fallback_supported)),
+            HostCheckNotes::new(
+                None,
+                Some(node_detail(detail, managed_fallback_supported)),
+                Some(node_suggestion(managed_fallback_supported)),
+            ),
         ),
     }
 }
@@ -404,9 +425,7 @@ fn npm_check(env: &BTreeMap<String, String>, managed_fallback_supported: bool) -
             "Install published OpenClaw releases",
             level,
             HostCheckStatus::Ok,
-            Some(version),
-            None,
-            None,
+            HostCheckNotes::new(Some(version), None, None),
         ),
         Err(detail) => check(
             "official-release",
@@ -414,9 +433,11 @@ fn npm_check(env: &BTreeMap<String, String>, managed_fallback_supported: bool) -
             "Install published OpenClaw releases",
             level,
             HostCheckStatus::Missing,
-            None,
-            Some(npm_detail(detail, managed_fallback_supported)),
-            Some(npm_suggestion(managed_fallback_supported)),
+            HostCheckNotes::new(
+                None,
+                Some(npm_detail(detail, managed_fallback_supported)),
+                Some(npm_suggestion(managed_fallback_supported)),
+            ),
         ),
     }
 }
@@ -467,9 +488,7 @@ fn python_check() -> HostCheckSummary {
             "Support hardened file operations on macOS/Linux",
             HostCheckLevel::Recommended,
             HostCheckStatus::Ok,
-            Some(summary.version),
-            None,
-            None,
+            HostCheckNotes::new(Some(summary.version), None, None),
         ),
         Err(detail) => check(
             "common-features",
@@ -477,9 +496,11 @@ fn python_check() -> HostCheckSummary {
             "Support hardened file operations on macOS/Linux",
             HostCheckLevel::Recommended,
             HostCheckStatus::Missing,
-            None,
-            Some(detail),
-            Some("Install python3 in a system-managed location.".to_string()),
+            HostCheckNotes::new(
+                None,
+                Some(detail),
+                Some("Install python3 in a system-managed location.".to_string()),
+            ),
         ),
     }
 }
@@ -576,13 +597,15 @@ fn chrome_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
             "Chrome MCP existing-session browser flows",
             HostCheckLevel::Recommended,
             HostCheckStatus::Missing,
-            None,
-            Some(format!(
-                "Google Chrome {CHROME_MCP_MIN_MAJOR}+ was not found on this host"
-            )),
-            Some(format!(
-                "Install Google Chrome {CHROME_MCP_MIN_MAJOR}+ if you want Chrome MCP existing-session flows."
-            )),
+            HostCheckNotes::new(
+                None,
+                Some(format!(
+                    "Google Chrome {CHROME_MCP_MIN_MAJOR}+ was not found on this host"
+                )),
+                Some(format!(
+                    "Install Google Chrome {CHROME_MCP_MIN_MAJOR}+ if you want Chrome MCP existing-session flows."
+                )),
+            ),
         );
     };
 
@@ -594,14 +617,16 @@ fn chrome_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
                 "Chrome MCP existing-session browser flows",
                 HostCheckLevel::Recommended,
                 HostCheckStatus::Outdated,
-                Some(summary.version.clone()),
-                Some(format!(
-                    "detected Chrome {summary}; upgrade to {CHROME_MCP_MIN_MAJOR}+",
-                    summary = summary.version
-                )),
-                Some(format!(
-                    "Upgrade Google Chrome to {CHROME_MCP_MIN_MAJOR} or newer for Chrome MCP existing-session flows."
-                )),
+                HostCheckNotes::new(
+                    Some(summary.version.clone()),
+                    Some(format!(
+                        "detected Chrome {summary}; upgrade to {CHROME_MCP_MIN_MAJOR}+",
+                        summary = summary.version
+                    )),
+                    Some(format!(
+                        "Upgrade Google Chrome to {CHROME_MCP_MIN_MAJOR} or newer for Chrome MCP existing-session flows."
+                    )),
+                ),
             ),
             Some(_) => check(
                 "browser",
@@ -609,9 +634,11 @@ fn chrome_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
                 "Chrome MCP existing-session browser flows",
                 HostCheckLevel::Recommended,
                 HostCheckStatus::Ok,
-                Some(summary.version),
-                Some(format!("path: {}", path.display())),
-                None,
+                HostCheckNotes::new(
+                    Some(summary.version),
+                    Some(format!("path: {}", path.display())),
+                    None,
+                ),
             ),
             None => check(
                 "browser",
@@ -619,14 +646,16 @@ fn chrome_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
                 "Chrome MCP existing-session browser flows",
                 HostCheckLevel::Recommended,
                 HostCheckStatus::Outdated,
-                Some(summary.version.clone()),
-                Some(format!(
-                    "could not read the Chrome major version from {}",
-                    summary.version
-                )),
-                Some(format!(
-                    "Verify Google Chrome is {CHROME_MCP_MIN_MAJOR}+ if you want Chrome MCP existing-session flows."
-                )),
+                HostCheckNotes::new(
+                    Some(summary.version.clone()),
+                    Some(format!(
+                        "could not read the Chrome major version from {}",
+                        summary.version
+                    )),
+                    Some(format!(
+                        "Verify Google Chrome is {CHROME_MCP_MIN_MAJOR}+ if you want Chrome MCP existing-session flows."
+                    )),
+                ),
             ),
         },
         Err(detail) => check(
@@ -635,11 +664,13 @@ fn chrome_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
             "Chrome MCP existing-session browser flows",
             HostCheckLevel::Recommended,
             HostCheckStatus::Missing,
-            None,
-            Some(format!("{} ({detail})", path.display())),
-            Some(format!(
-                "Install Google Chrome {CHROME_MCP_MIN_MAJOR}+ if you want Chrome MCP existing-session flows."
-            )),
+            HostCheckNotes::new(
+                None,
+                Some(format!("{} ({detail})", path.display())),
+                Some(format!(
+                    "Install Google Chrome {CHROME_MCP_MIN_MAJOR}+ if you want Chrome MCP existing-session flows."
+                )),
+            ),
         ),
     }
 }
@@ -653,9 +684,7 @@ fn service_manager_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
                 "Keep envs running in the background",
                 HostCheckLevel::Recommended,
                 HostCheckStatus::Ok,
-                None,
-                Some("launchd is available".to_string()),
-                None,
+                HostCheckNotes::new(None, Some("launchd is available".to_string()), None),
             ),
             Err(detail) => check(
                 "background-services",
@@ -663,11 +692,13 @@ fn service_manager_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
                 "Keep envs running in the background",
                 HostCheckLevel::Recommended,
                 HostCheckStatus::Missing,
-                None,
-                Some(detail),
-                Some(
-                    "Use --no-service or make sure launchd is available on this machine."
-                        .to_string(),
+                HostCheckNotes::new(
+                    None,
+                    Some(detail),
+                    Some(
+                        "Use --no-service or make sure launchd is available on this machine."
+                            .to_string(),
+                    ),
                 ),
             ),
         },
@@ -678,9 +709,11 @@ fn service_manager_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
                 "Keep envs running in the background",
                 HostCheckLevel::Recommended,
                 HostCheckStatus::Ok,
-                Some(summary.version),
-                Some("systemd --user service support is available".to_string()),
-                None,
+                HostCheckNotes::new(
+                    Some(summary.version),
+                    Some("systemd --user service support is available".to_string()),
+                    None,
+                ),
             ),
             Err(detail) => check(
                 "background-services",
@@ -688,11 +721,13 @@ fn service_manager_check(env: &BTreeMap<String, String>) -> HostCheckSummary {
                 "Keep envs running in the background",
                 HostCheckLevel::Recommended,
                 HostCheckStatus::Missing,
-                None,
-                Some(detail),
-                Some(
-                    "Use --no-service or install systemd user services on this machine."
-                        .to_string(),
+                HostCheckNotes::new(
+                    None,
+                    Some(detail),
+                    Some(
+                        "Use --no-service or install systemd user services on this machine."
+                            .to_string(),
+                    ),
                 ),
             ),
         },
@@ -715,9 +750,7 @@ fn tool_check(
             purpose,
             level,
             HostCheckStatus::Ok,
-            Some(summary.version),
-            None,
-            None,
+            HostCheckNotes::new(Some(summary.version), None, None),
         ),
         Err(detail) => check(
             category,
@@ -725,9 +758,7 @@ fn tool_check(
             purpose,
             level,
             HostCheckStatus::Missing,
-            None,
-            Some(detail),
-            suggestion,
+            HostCheckNotes::new(None, Some(detail), suggestion),
         ),
     }
 }
@@ -888,9 +919,7 @@ fn check(
     purpose: &str,
     level: HostCheckLevel,
     status: HostCheckStatus,
-    version: Option<String>,
-    detail: Option<String>,
-    suggestion: Option<String>,
+    notes: HostCheckNotes,
 ) -> HostCheckSummary {
     HostCheckSummary {
         category: category.to_string(),
@@ -899,9 +928,9 @@ fn check(
         level: level.as_str().to_string(),
         status: status.as_str().to_string(),
         available: status.available(),
-        version,
-        detail,
-        suggestion,
+        version: notes.version,
+        detail: notes.detail,
+        suggestion: notes.suggestion,
     }
 }
 
