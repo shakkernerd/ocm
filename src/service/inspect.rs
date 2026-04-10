@@ -532,8 +532,11 @@ fn build_service_summary(
         Err(error) => (None, None, None, Some(error)),
     };
     let live_service = managed_status.loaded || managed_status.running;
+    let live_exec = service_execution_from_status(&managed_status, Path::new(&env_meta.root));
+    let launchd_live_exec_unverified = service_manager_kind(process_env) == ServiceManagerKind::Launchd
+        && live_service
+        && live_exec.is_none();
     let installed_exec = if managed_status.installed || live_service {
-        let live_exec = service_execution_from_status(&managed_status, Path::new(&env_meta.root));
         if live_exec.is_some() {
             live_exec
         } else if managed_status.installed {
@@ -583,6 +586,15 @@ fn build_service_summary(
             Some(existing) => format!("{existing}; {detail}"),
             None => detail,
         });
+    } else if launchd_live_exec_unverified {
+        let detail = format!(
+            "launchd does not expose live command details for loaded services; run service restart {} to fully verify the current binding",
+            env_meta.name
+        );
+        issue = Some(match issue {
+            Some(existing) => format!("{existing}; {detail}"),
+            None => detail,
+        });
     } else if live_service && !managed_status.installed {
         let detail = format!(
             "managed service definition is missing while the service is still loaded; run service restart {} to rewrite it",
@@ -612,7 +624,7 @@ fn build_service_summary(
             display_path(Path::new(&env_meta.root)),
         ),
     };
-    let probe_spec = if definition_drift {
+    let probe_spec = if definition_drift || launchd_live_exec_unverified {
         None
     } else {
         display_exec.and_then(|execution| {

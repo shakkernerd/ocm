@@ -449,6 +449,78 @@ fn service_status_reports_auth_required_when_gateway_health_probe_is_rejected() 
 }
 
 #[test]
+fn service_status_reports_launchd_live_exec_uncertainty_for_running_services() {
+    let root = TestDir::new("service-status-launchd-live-uncertain");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+    let server = TestHttpServer::serve_bytes_times(
+        "/healthz",
+        "application/json",
+        br#"{"ok":true,"status":"live"}"#,
+        2,
+    );
+    let port = port_from_http_url(&server.url());
+
+    let fake_openclaw = root.child("bin/openclaw-health");
+    write_executable_script(
+        &fake_openclaw,
+        "#!/bin/sh\nif [ \"$1\" = \"health\" ]; then\n  echo 'Health check failed: unauthorized: gateway token mismatch' >&2\n  exit 1\nfi\nexit 0\n",
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "stable",
+            "--command",
+            &path_string(&fake_openclaw),
+        ],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+    write_text(
+        &root.child("launchctl-print.txt"),
+        &format!(
+            "state = running\npid = 23613\nenvironment = {{\n  OPENCLAW_GATEWAY_PORT => {port}\n  OPENCLAW_CONFIG_PATH => {}\n}}\n",
+            path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json"))
+        ),
+    );
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let summary: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(summary["definitionDrift"], false);
+    assert!(
+        summary["issue"]
+            .as_str()
+            .unwrap()
+            .contains("launchd does not expose live command details")
+    );
+}
+
+#[test]
 fn service_status_reports_responding_but_invalid_when_gateway_health_probe_fails() {
     let root = TestDir::new("service-status-responding-invalid");
     let cwd = root.child("workspace");
