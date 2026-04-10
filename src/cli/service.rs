@@ -25,7 +25,6 @@ impl Cli {
     }
 
     pub(super) fn handle_service_restore_global(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service restore-global")?;
         let (args, dry_run) = Self::consume_flag(args, "--dry-run");
@@ -33,6 +32,7 @@ impl Cli {
             return Err("service restore-global requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
+        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.with_progress(
             if dry_run {
@@ -52,7 +52,6 @@ impl Cli {
     }
 
     pub(super) fn handle_service_adopt_global(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service adopt-global")?;
         let (args, dry_run) = Self::consume_flag(args, "--dry-run");
@@ -60,6 +59,7 @@ impl Cli {
             return Err("service adopt-global requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
+        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.with_progress(
             if dry_run {
@@ -108,13 +108,13 @@ impl Cli {
     }
 
     pub(super) fn handle_service_install(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service install")?;
         let Some(name) = args.first() else {
             return Err("service install requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
+        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.with_progress(format!("Installing service for {name}"), || {
             self.service_service().install(name)
@@ -182,12 +182,12 @@ impl Cli {
     }
 
     pub(super) fn handle_service_start(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "service start")?;
         let Some(name) = args.first() else {
             return Err("service start requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
+        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.service_service().start(name)?;
         if json_flag {
@@ -204,12 +204,12 @@ impl Cli {
     }
 
     pub(super) fn handle_service_stop(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "service stop")?;
         let Some(name) = args.first() else {
             return Err("service stop requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
+        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.service_service().stop(name)?;
         if json_flag {
@@ -226,13 +226,13 @@ impl Cli {
     }
 
     pub(super) fn handle_service_restart(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service restart")?;
         let Some(name) = args.first() else {
             return Err("service restart requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
+        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.service_service().restart(name)?;
         if json_flag {
@@ -249,13 +249,13 @@ impl Cli {
     }
 
     pub(super) fn handle_service_uninstall(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service uninstall")?;
         let Some(name) = args.first() else {
             return Err("service uninstall requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
+        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.service_service().uninstall(name)?;
         if json_flag {

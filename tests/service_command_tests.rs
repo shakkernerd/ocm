@@ -2517,7 +2517,8 @@ fn service_restore_global_rejects_missing_backups() {
     let root = TestDir::new("service-restore-global-missing-backup");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_launchd_env(&root);
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
 
     let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
     assert!(created.status.success(), "{}", stderr(&created));
