@@ -64,9 +64,12 @@ fn install_fake_launchctl(root: &TestDir, env: &mut std::collections::BTreeMap<S
     let bin_dir = root.child("fake-bin");
     fs::create_dir_all(&bin_dir).unwrap();
     let log_path = root.child("launchctl.log");
+    let print_path = root.child("launchctl-print.txt");
     let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  print)\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
-        path_string(&log_path)
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  print)\n    if [ -f \"{}\" ]; then\n      /bin/cat \"{}\"\n      exit 0\n    fi\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
+        path_string(&log_path),
+        path_string(&print_path),
+        path_string(&print_path),
     );
     write_executable_script(&bin_dir.join("launchctl"), &script);
 
@@ -89,7 +92,7 @@ fn install_fake_systemd_tools(root: &TestDir, env: &mut BTreeMap<String, String>
     let log_path = root.child("systemctl.log");
     let journal_log_path = root.child("journalctl.log");
     let systemctl_script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"show\" ]; then\n  unit=\"$3\"\n  home=\"${{HOME:-$PWD}}\"\n  unit_path=\"$home/.config/systemd/user/$unit.service\"\n  if [ -f \"$unit_path\" ]; then\n    printf 'LoadState=loaded\\nUnitFileState=enabled\\nActiveState=active\\nSubState=running\\nMainPID=4242\\nFragmentPath=%s\\n' \"$unit_path\"\n    exit 0\n  fi\n  printf 'Unit %s could not be found\\n' \"$unit\" >&2\n  exit 1\nfi\nexit 0\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"show\" ]; then\n  unit=\"$3\"\n  home=\"${{HOME:-$PWD}}\"\n  unit_path=\"$home/.config/systemd/user/$unit.service\"\n  show_path=\"$home/.config/systemd/user/$unit.show\"\n  if [ -f \"$show_path\" ]; then\n    /bin/cat \"$show_path\"\n    exit 0\n  fi\n  if [ -f \"$unit_path\" ]; then\n    printf 'LoadState=loaded\\nUnitFileState=enabled\\nActiveState=active\\nSubState=running\\nMainPID=4242\\nFragmentPath=%s\\n' \"$unit_path\"\n    exit 0\n  fi\n  printf 'Unit %s could not be found\\n' \"$unit\" >&2\n  exit 1\nfi\nexit 0\n",
         path_string(&log_path)
     );
     let journalctl_script = format!(
@@ -1614,6 +1617,93 @@ fn service_uninstall_does_not_require_a_still_valid_binding() {
     assert!(uninstall.status.success(), "{}", stderr(&uninstall));
     assert!(stdout(&uninstall).contains("Uninstalled service demo"));
     assert!(!managed_service_definition_path(&env, &cwd, "demo").exists());
+}
+
+#[test]
+fn service_status_reports_loaded_launchd_services_even_when_the_plist_is_gone() {
+    let root = TestDir::new("service-status-launchd-orphan");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+    let port = allocate_free_port();
+    let _server = serve_fixed_healthz(port, br#"{"ok":true,"status":"live"}"#, 2);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let plist_path = managed_service_definition_path(&env, &cwd, "demo");
+    fs::remove_file(&plist_path).unwrap();
+    write_text(
+        &root.child("launchctl-print.txt"),
+        &format!(
+            "state = running\npid = 4242\nenvironment = {{\n  OPENCLAW_GATEWAY_PORT => {port}\n  OPENCLAW_CONFIG_PATH => {}\n}}\n",
+            path_string(&root.child("ocm-home/envs/demo/.openclaw/openclaw.json"))
+        ),
+    );
+
+    let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let summary: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    assert_eq!(summary["installed"], false);
+    assert_eq!(summary["loaded"], true);
+    assert_eq!(summary["running"], true);
+    assert_eq!(summary["state"], "running");
+}
+
+#[test]
+fn systemd_service_uninstall_disables_orphans_even_when_the_unit_file_is_missing() {
+    let root = TestDir::new("service-uninstall-systemd-orphan");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_systemd_tools(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "/bin/true"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let managed_label = managed_service_label(&env, &cwd, "demo");
+    let unit_path = managed_service_definition_path(&env, &cwd, "demo");
+    fs::remove_file(&unit_path).unwrap();
+
+    let uninstall = run_ocm(&cwd, &env, &["service", "uninstall", "demo"]);
+    assert!(uninstall.status.success(), "{}", stderr(&uninstall));
+
+    let systemctl_log = fs::read_to_string(root.child("systemctl.log")).unwrap();
+    assert!(systemctl_log.contains(&format!("--user disable --now {managed_label}")));
+    assert!(systemctl_log.contains("--user daemon-reload"));
 }
 
 #[test]

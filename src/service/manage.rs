@@ -1256,7 +1256,7 @@ fn stop_managed_service(
 
 fn uninstall_managed_service_by_label(
     label: &str,
-    service_path: &Path,
+    _service_path: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     match service_manager_kind(env) {
@@ -1266,15 +1266,13 @@ fn uninstall_managed_service_by_label(
             Ok(())
         }
         ServiceManagerKind::SystemdUser => {
-            if service_path.exists() {
-                let _ = run_systemctl(env, ["--user", "disable", "--now", label]);
-                let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
-                if !reload.status.success() {
-                    return Err(format!(
-                        "systemctl --user daemon-reload failed: {}",
-                        systemctl_detail(&reload)
-                    ));
-                }
+            let _ = run_systemctl(env, ["--user", "disable", "--now", label]);
+            let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
+            if !reload.status.success() {
+                return Err(format!(
+                    "systemctl --user daemon-reload failed: {}",
+                    systemctl_detail(&reload)
+                ));
             }
             Ok(())
         }

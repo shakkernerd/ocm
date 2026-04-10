@@ -1064,26 +1064,23 @@ pub(crate) fn inspect_job(
         ..LaunchdJobStatus::default()
     };
 
-    // Keep inspection scoped to the resolved HOME/plist layout so tests and alternate homes do
-    // not accidentally report unrelated host-global launchd state.
-    if !status.installed {
-        return status;
-    }
-
-    status.config_path = read_service_environment_value(service_path, "OPENCLAW_CONFIG_PATH", env)
-        .ok()
-        .flatten();
-    status.state_dir = read_service_environment_value(service_path, "OPENCLAW_STATE_DIR", env)
-        .ok()
-        .flatten();
-    status.openclaw_home = read_service_environment_value(service_path, "OPENCLAW_HOME", env)
-        .ok()
-        .flatten();
-    status.gateway_port =
-        read_service_environment_value(service_path, "OPENCLAW_GATEWAY_PORT", env)
+    if status.installed {
+        status.config_path =
+            read_service_environment_value(service_path, "OPENCLAW_CONFIG_PATH", env)
+                .ok()
+                .flatten();
+        status.state_dir = read_service_environment_value(service_path, "OPENCLAW_STATE_DIR", env)
             .ok()
-            .flatten()
-            .and_then(|value| value.parse::<u32>().ok());
+            .flatten();
+        status.openclaw_home = read_service_environment_value(service_path, "OPENCLAW_HOME", env)
+            .ok()
+            .flatten();
+        status.gateway_port =
+            read_service_environment_value(service_path, "OPENCLAW_GATEWAY_PORT", env)
+                .ok()
+                .flatten()
+                .and_then(|value| value.parse::<u32>().ok());
+    }
 
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => {
