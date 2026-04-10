@@ -248,6 +248,16 @@ pub fn manifest_for_migration_env(env_name: &str) -> OcmManifest {
 }
 
 pub fn write_migration_manifest(path: &Path, env_name: &str) -> Result<(), String> {
+    preflight_migration_manifest_path(path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", display_path(parent)))?;
+    }
+    let manifest = manifest_for_migration_env(env_name);
+    write_manifest(path, &manifest)
+}
+
+fn preflight_migration_manifest_path(path: &Path) -> Result<(), String> {
     if path.exists() {
         return Err(format!(
             "refusing to overwrite existing manifest: {}",
@@ -255,11 +265,14 @@ pub fn write_migration_manifest(path: &Path, env_name: &str) -> Result<(), Strin
         ));
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create {}: {error}", display_path(parent)))?;
+        if parent.exists() && !parent.is_dir() {
+            return Err(format!(
+                "manifest parent is not a directory: {}",
+                display_path(parent)
+            ));
+        }
     }
-    let manifest = manifest_for_migration_env(env_name);
-    write_manifest(path, &manifest)
+    Ok(())
 }
 
 pub fn migrate_plain_openclaw_home_with_manifest(
@@ -269,16 +282,14 @@ pub fn migrate_plain_openclaw_home_with_manifest(
     cwd: &Path,
 ) -> Result<MigrationImportSummary, String> {
     if let Some(path) = manifest_path {
-        if path.exists() {
-            return Err(format!(
-                "refusing to overwrite existing manifest: {}",
-                display_path(path)
-            ));
-        }
+        preflight_migration_manifest_path(path)?;
     }
     let import = migrate_plain_openclaw_home(options, env, cwd)?;
     let manifest_path = if let Some(path) = manifest_path {
-        write_migration_manifest(path, &import.name)?;
+        if let Err(error) = write_migration_manifest(path, &import.name) {
+            let _ = EnvironmentService::new(env, cwd).remove(&import.name, true);
+            return Err(error);
+        }
         Some(display_path(path))
     } else {
         None

@@ -4,7 +4,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_text};
 
 fn install_fake_openclaw_on_path(
     root: &TestDir,
@@ -489,4 +489,37 @@ fn migrate_resolves_relative_manifest_paths_from_cwd() {
     assert!(manifest_path.exists());
     let body = stdout(&output);
     assert!(body.contains("\"manifestPath\":"));
+}
+
+#[test]
+fn migrate_rejects_manifest_targets_under_regular_files_before_importing() {
+    let root = TestDir::new("migrate-direct-manifest-parent-file");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    write_text(&cwd.join("occupied"), "not a directory\n");
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--manifest",
+            "occupied/ocm.yaml",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("manifest parent is not a directory"),
+        "{}",
+        stderr(&output)
+    );
+
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "mira"]);
+    assert_eq!(env_show.status.code(), Some(1));
+    assert!(stderr(&env_show).contains("environment \"mira\" does not exist"));
 }
