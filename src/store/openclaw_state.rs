@@ -509,7 +509,7 @@ mod tests {
             std::env::temp_dir().join(format!("ocm-openclaw-state-migrate-{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp);
         let source_state_root = temp.join("legacy-home/.openclaw");
-        let paths = derive_env_paths(&temp.join("target"));
+        let paths = derive_env_paths(temp.join("target"));
         fs::create_dir_all(paths.workspace_dir.join("notes")).unwrap();
         fs::create_dir_all(paths.state_dir.join("agents/main/agent")).unwrap();
         fs::create_dir_all(paths.state_dir.join("agents/main/sessions")).unwrap();

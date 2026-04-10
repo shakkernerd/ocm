@@ -839,9 +839,10 @@ fn privileged_install_command(
         return Ok(HostInstallCommand::new("sudo", sudo_args));
     }
 
-    Err(format!(
+    Err(
         "Installing git requires elevated privileges on Linux. Run as root or install sudo, then retry."
-    ))
+            .to_string(),
+    )
 }
 
 fn host_is_root(env: &BTreeMap<String, String>) -> bool {

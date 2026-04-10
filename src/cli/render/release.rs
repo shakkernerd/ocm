@@ -37,7 +37,7 @@ fn release_list_with_width(
             let published_at = release
                 .release
                 .published_at
-                .map(|value| format_rfc3339(value))
+                .map(format_rfc3339)
                 .transpose()
                 .unwrap_or_else(|_| Some("—".to_string()))
                 .unwrap_or_else(|| "—".to_string());
