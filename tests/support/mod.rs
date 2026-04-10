@@ -334,9 +334,9 @@ pub fn install_fake_git_package_manager(
     let bin_dir = root.child("fake-host-bin");
     fs::create_dir_all(&bin_dir).unwrap();
     let log_path = root.child(format!("{manager}.log"));
-    let git_script = format!(
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'git version 2.51.0\\n'\n  exit 0\nfi\nprintf 'fake git %s\\n' \"$*\"\n",
-    );
+    let git_script =
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'git version 2.51.0\\n'\n  exit 0\nfi\nprintf 'fake git %s\\n' \"$*\"\n"
+            .to_string();
     let manager_script = format!(
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"--version\" ]; then\n  printf '{} version 1.0.0\\n'\n  exit 0\nfi\ncase \"$1\" in\n  update)\n    exit 0\n    ;;\n  install)\n    ;;\n  add)\n    ;;\n  *)\n    echo 'unexpected fake {} command: '$* >&2\n    exit 1\n    ;;\nesac\n/bin/cat > \"{}/git\" <<'EOF'\n{}EOF\n/bin/chmod 755 \"{}/git\"\n",
         path_string(&log_path),
@@ -348,9 +348,9 @@ pub fn install_fake_git_package_manager(
     );
     write_executable_script(&bin_dir.join(manager), &manager_script);
 
-    let sudo_script = format!(
+    let sudo_script =
         "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'sudo 1.0.0\\n'\n  exit 0\nfi\nexec \"$@\"\n"
-    );
+            .to_string();
     write_executable_script(&bin_dir.join("sudo"), &sudo_script);
 
     let existing_path = env.get("PATH").cloned().unwrap_or_default();

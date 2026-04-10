@@ -121,7 +121,7 @@ pub fn extract_zip(archive_path: &Path, destination_dir: &Path) -> Result<(), St
     let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        let Some(relative_path) = entry.enclosed_name().map(PathBuf::from) else {
+        let Some(relative_path) = entry.enclosed_name() else {
             continue;
         };
         let output_path = destination_dir.join(relative_path);

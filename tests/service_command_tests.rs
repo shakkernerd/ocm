@@ -880,7 +880,7 @@ fn service_status_skips_stale_launcher_health_probes_when_definition_drift_exist
     let rebound = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "dev"]);
     assert!(rebound.status.success(), "{}", stderr(&rebound));
 
-    let _server = serve_fixed_healthz(port as u16, br#"{"ok":true,"status":"live"}"#, 2);
+    let _server = serve_fixed_healthz(port, br#"{"ok":true,"status":"live"}"#, 2);
 
     let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));

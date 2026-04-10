@@ -1,3 +1,5 @@
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Align {
     Left,
@@ -538,4 +540,3 @@ mod tests {
         assert!(table[3].contains('…'));
     }
 }
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
