@@ -370,7 +370,7 @@ fn upgrade_restarts_running_services_when_only_the_definition_has_drifted() {
     assert!(upgrade.status.success(), "{}", stderr(&upgrade));
     let output = stdout(&upgrade);
     assert!(output.contains("outcome=up-to-date"), "{output}");
-    assert!(output.contains("service=restarted"), "{output}");
+    assert!(output.contains("service=started"), "{output}");
 }
 
 #[test]
@@ -438,7 +438,7 @@ fn upgrade_starts_stopped_services_when_only_the_definition_has_drifted() {
 }
 
 #[test]
-fn upgrade_restarts_orphaned_loaded_services_when_the_definition_file_is_missing() {
+fn upgrade_starts_orphaned_loaded_services_when_the_definition_file_is_missing() {
     let root = TestDir::new("upgrade-orphaned-loaded-service");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -493,7 +493,7 @@ fn upgrade_restarts_orphaned_loaded_services_when_the_definition_file_is_missing
     assert!(upgrade.status.success(), "{}", stderr(&upgrade));
     let output = stdout(&upgrade);
     assert!(output.contains("outcome=up-to-date"), "{output}");
-    assert!(output.contains("service=restarted"), "{output}");
+    assert!(output.contains("service=started"), "{output}");
 }
 
 #[test]

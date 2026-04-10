@@ -655,8 +655,7 @@ fn choose_gateway_port(
 ) -> u32 {
     let mut port = preferred_port.max(18_789);
     loop {
-        let managed_self_running =
-            current_summary.installed && (current_summary.loaded || current_summary.running);
+        let managed_self_running = current_summary.loaded || current_summary.running;
         let allowed_busy = allowed_busy_port == Some(port);
         let available = !reserved_ports.contains(&port)
             && (port_is_available(port)

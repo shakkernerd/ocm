@@ -401,7 +401,7 @@ impl Cli {
             return Ok((None, None));
         }
 
-        if live_service {
+        if live_service && service.installed {
             let restart = self
                 .with_progress(format!("Restarting service for {env_name}"), || {
                     self.service_service().restart(env_name)
