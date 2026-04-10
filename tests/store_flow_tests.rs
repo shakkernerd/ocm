@@ -276,11 +276,15 @@ fn clone_environment_skips_busy_ports_when_assigning_a_new_identity() {
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
+    let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let occupied_port = u32::from(occupied.local_addr().unwrap().port());
+    let source_port = occupied_port.saturating_sub(1).max(1024);
+
     let source = create_environment(
         CreateEnvironmentOptions {
             name: "source".to_string(),
             root: None,
-            gateway_port: Some(19789),
+            gateway_port: Some(source_port),
             default_runtime: None,
             default_launcher: None,
             protected: false,
@@ -289,7 +293,6 @@ fn clone_environment_skips_busy_ports_when_assigning_a_new_identity() {
         &cwd,
     )
     .unwrap();
-    let occupied = std::net::TcpListener::bind(("127.0.0.1", 19790)).unwrap();
 
     let cloned = clone_environment(
         CloneEnvironmentOptions {
@@ -302,9 +305,8 @@ fn clone_environment_skips_busy_ports_when_assigning_a_new_identity() {
     )
     .unwrap();
 
-    assert_ne!(cloned.gateway_port, Some(19789));
-    assert_ne!(cloned.gateway_port, Some(19790));
-    assert!(cloned.gateway_port.unwrap() >= 19791);
+    assert_ne!(cloned.gateway_port, Some(source_port));
+    assert_ne!(cloned.gateway_port, Some(occupied_port));
     drop(occupied);
 }
 
