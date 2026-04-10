@@ -7,8 +7,9 @@ use crate::env::{CreateEnvSnapshotOptions, EnvironmentService, RestoreEnvSnapsho
 use crate::service::ServiceService;
 
 use super::{
-    ManifestServiceState, OcmManifest, apply_manifest_launcher_binding, apply_manifest_runtime_binding,
-    apply_manifest_service_install, ensure_manifest_env, plan_manifest_application_with_service,
+    ManifestServiceState, OcmManifest, apply_manifest_launcher_binding,
+    apply_manifest_runtime_binding, apply_manifest_service_install, ensure_manifest_env,
+    plan_manifest_application_with_service,
 };
 
 #[derive(Clone, Debug, Default)]

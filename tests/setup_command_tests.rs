@@ -255,7 +255,10 @@ fn setup_skips_background_service_prompt_when_launchctl_is_unusable() {
         "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
         "launchd".to_string(),
     );
-    env.insert("OCM_INTERNAL_LAUNCHCTL_BIN".to_string(), "/bin/sh".to_string());
+    env.insert(
+        "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
+        "/bin/sh".to_string(),
+    );
 
     let input = format!("4\nquick\n/bin/echo\n{}\nn\n", cwd.display());
     let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], &input);

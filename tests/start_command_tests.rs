@@ -222,7 +222,10 @@ fn start_rejects_services_when_launchctl_is_unusable() {
         "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
         "launchd".to_string(),
     );
-    env.insert("OCM_INTERNAL_LAUNCHCTL_BIN".to_string(), "/bin/sh".to_string());
+    env.insert(
+        "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
+        "/bin/sh".to_string(),
+    );
 
     let start = run_ocm(
         &cwd,

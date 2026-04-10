@@ -794,14 +794,26 @@ fn manifest_plan_reports_service_refresh_when_definition_drift_exists() {
         &env,
         &["launcher", "add", "dev-a", "--command", "printf a"],
     );
-    assert!(add_launcher_a.status.success(), "{}", stderr(&add_launcher_a));
+    assert!(
+        add_launcher_a.status.success(),
+        "{}",
+        stderr(&add_launcher_a)
+    );
     let add_launcher_b = run_ocm(
         &cwd,
         &env,
         &["launcher", "add", "dev-b", "--command", "printf b"],
     );
-    assert!(add_launcher_b.status.success(), "{}", stderr(&add_launcher_b));
-    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev-a"]);
+    assert!(
+        add_launcher_b.status.success(),
+        "{}",
+        stderr(&add_launcher_b)
+    );
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "mira", "--launcher", "dev-a"],
+    );
     assert!(create.status.success(), "{}", stderr(&create));
     let install = run_ocm(&cwd, &env, &["service", "install", "mira"]);
     assert!(install.status.success(), "{}", stderr(&install));
@@ -834,14 +846,26 @@ fn manifest_drift_reports_services_that_need_refresh() {
         &env,
         &["launcher", "add", "dev-a", "--command", "printf a"],
     );
-    assert!(add_launcher_a.status.success(), "{}", stderr(&add_launcher_a));
+    assert!(
+        add_launcher_a.status.success(),
+        "{}",
+        stderr(&add_launcher_a)
+    );
     let add_launcher_b = run_ocm(
         &cwd,
         &env,
         &["launcher", "add", "dev-b", "--command", "printf b"],
     );
-    assert!(add_launcher_b.status.success(), "{}", stderr(&add_launcher_b));
-    let create = run_ocm(&cwd, &env, &["env", "create", "mira", "--launcher", "dev-a"]);
+    assert!(
+        add_launcher_b.status.success(),
+        "{}",
+        stderr(&add_launcher_b)
+    );
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "mira", "--launcher", "dev-a"],
+    );
     assert!(create.status.success(), "{}", stderr(&create));
     let install = run_ocm(&cwd, &env, &["service", "install", "mira"]);
     assert!(install.status.success(), "{}", stderr(&install));

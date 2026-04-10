@@ -1263,9 +1263,8 @@ mod tests {
         let mut summary = sample_service_summary();
         summary.running = true;
         summary.live_exec_unverified = true;
-        summary.issue = Some(
-            "launchd does not expose live command details for loaded services".to_string(),
-        );
+        summary.issue =
+            Some("launchd does not expose live command details for loaded services".to_string());
 
         let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
 

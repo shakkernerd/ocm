@@ -213,9 +213,18 @@ fn up_summary_raw(summary: &UpSummary) -> Vec<String> {
                 .unwrap_or_else(|| "none".to_string()),
         );
         if let Some(service) = plan.current_service.as_ref() {
-            lines.insert("currentServiceInstalled".to_string(), service.installed.to_string());
-            lines.insert("currentServiceLoaded".to_string(), service.loaded.to_string());
-            lines.insert("currentServiceRunning".to_string(), service.running.to_string());
+            lines.insert(
+                "currentServiceInstalled".to_string(),
+                service.installed.to_string(),
+            );
+            lines.insert(
+                "currentServiceLoaded".to_string(),
+                service.loaded.to_string(),
+            );
+            lines.insert(
+                "currentServiceRunning".to_string(),
+                service.running.to_string(),
+            );
             lines.insert(
                 "currentServiceDefinitionDrift".to_string(),
                 service.definition_drift.to_string(),
@@ -229,7 +238,10 @@ fn up_summary_raw(summary: &UpSummary) -> Vec<String> {
                 service.orphaned_live_service.to_string(),
             );
         }
-        lines.insert("serviceChanged".to_string(), plan.service_changed.to_string());
+        lines.insert(
+            "serviceChanged".to_string(),
+            plan.service_changed.to_string(),
+        );
     }
 
     if let Some(result) = summary.result.as_ref() {
@@ -491,8 +503,14 @@ fn manifest_resolve_raw(summary: &ManifestResolveSummary) -> Vec<String> {
         summary.current_service_installed.to_string(),
     );
     if let Some(service) = summary.current_service.as_ref() {
-        lines.insert("currentServiceLoaded".to_string(), service.loaded.to_string());
-        lines.insert("currentServiceRunning".to_string(), service.running.to_string());
+        lines.insert(
+            "currentServiceLoaded".to_string(),
+            service.loaded.to_string(),
+        );
+        lines.insert(
+            "currentServiceRunning".to_string(),
+            service.running.to_string(),
+        );
         lines.insert(
             "currentServiceDefinitionDrift".to_string(),
             service.definition_drift.to_string(),
@@ -640,8 +658,14 @@ fn manifest_drift_raw(summary: &ManifestDriftSummary) -> Vec<String> {
         summary.current_service_installed.to_string(),
     );
     if let Some(service) = summary.current_service.as_ref() {
-        lines.insert("currentServiceLoaded".to_string(), service.loaded.to_string());
-        lines.insert("currentServiceRunning".to_string(), service.running.to_string());
+        lines.insert(
+            "currentServiceLoaded".to_string(),
+            service.loaded.to_string(),
+        );
+        lines.insert(
+            "currentServiceRunning".to_string(),
+            service.running.to_string(),
+        );
         lines.insert(
             "currentServiceDefinitionDrift".to_string(),
             service.definition_drift.to_string(),
@@ -759,9 +783,18 @@ fn manifest_plan_raw(summary: &ManifestPlanSummary) -> Vec<String> {
                 .unwrap_or_else(|| "none".to_string()),
         );
         if let Some(service) = plan.current_service.as_ref() {
-            lines.insert("currentServiceInstalled".to_string(), service.installed.to_string());
-            lines.insert("currentServiceLoaded".to_string(), service.loaded.to_string());
-            lines.insert("currentServiceRunning".to_string(), service.running.to_string());
+            lines.insert(
+                "currentServiceInstalled".to_string(),
+                service.installed.to_string(),
+            );
+            lines.insert(
+                "currentServiceLoaded".to_string(),
+                service.loaded.to_string(),
+            );
+            lines.insert(
+                "currentServiceRunning".to_string(),
+                service.running.to_string(),
+            );
             lines.insert(
                 "currentServiceDefinitionDrift".to_string(),
                 service.definition_drift.to_string(),

@@ -1731,12 +1731,7 @@ pub fn env_status(
         issues.push(KeyValueRow::warning("Service", service_issue.clone()));
     }
     if !issues.is_empty() {
-        push_card(
-            &mut lines,
-            "Issue",
-            issues,
-            profile.color,
-        );
+        push_card(&mut lines, "Issue", issues, profile.color);
     }
 
     let next_steps = env_status_next_steps(status, command_example);

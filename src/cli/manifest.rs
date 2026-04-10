@@ -125,15 +125,12 @@ impl Cli {
                         _ => {}
                     },
                     Some(false)
-                        if current_service
-                            .as_ref()
-                            .is_some_and(|service| {
-                                service.installed || service.loaded || service.running
-                            }) =>
+                        if current_service.as_ref().is_some_and(|service| {
+                            service.installed || service.loaded || service.running
+                        }) =>
                     {
-                        issues.push(
-                            "service differs (desired absent, current installed)".to_string(),
-                        )
+                        issues
+                            .push("service differs (desired absent, current installed)".to_string())
                     }
                     _ => {}
                 }

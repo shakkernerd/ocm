@@ -103,8 +103,8 @@ mod tests {
 
     use crate::env::EnvMeta;
     use crate::manifest::{
-        ManifestEnv, ManifestLauncher, ManifestRuntime, ManifestService, OcmManifest,
-        ManifestServiceState, plan_manifest_application, plan_manifest_application_with_service,
+        ManifestEnv, ManifestLauncher, ManifestRuntime, ManifestService, ManifestServiceState,
+        OcmManifest, plan_manifest_application, plan_manifest_application_with_service,
     };
 
     fn manifest_with_launcher() -> OcmManifest {

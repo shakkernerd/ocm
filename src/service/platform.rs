@@ -286,7 +286,10 @@ mod tests {
             "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
             "launchd".to_string(),
         );
-        env.insert("OCM_INTERNAL_LAUNCHCTL_BIN".to_string(), "/bin/sh".to_string());
+        env.insert(
+            "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
+            "/bin/sh".to_string(),
+        );
         env.insert("HOME".to_string(), "/tmp".to_string());
 
         assert_eq!(
@@ -305,7 +308,10 @@ mod tests {
             "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
             "systemd-user".to_string(),
         );
-        env.insert("OCM_INTERNAL_SYSTEMCTL_BIN".to_string(), "/bin/sh".to_string());
+        env.insert(
+            "OCM_INTERNAL_SYSTEMCTL_BIN".to_string(),
+            "/bin/sh".to_string(),
+        );
         env.insert("HOME".to_string(), "/tmp".to_string());
 
         assert_eq!(

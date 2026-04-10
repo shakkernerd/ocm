@@ -332,14 +332,26 @@ fn env_status_reports_service_definition_drift() {
         &env,
         &["launcher", "add", "dev-a", "--command", "printf a"],
     );
-    assert!(add_launcher_a.status.success(), "{}", stderr(&add_launcher_a));
+    assert!(
+        add_launcher_a.status.success(),
+        "{}",
+        stderr(&add_launcher_a)
+    );
     let add_launcher_b = run_ocm(
         &cwd,
         &env,
         &["launcher", "add", "dev-b", "--command", "printf b"],
     );
-    assert!(add_launcher_b.status.success(), "{}", stderr(&add_launcher_b));
-    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev-a"]);
+    assert!(
+        add_launcher_b.status.success(),
+        "{}",
+        stderr(&add_launcher_b)
+    );
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "dev-a"],
+    );
     assert!(create.status.success(), "{}", stderr(&create));
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert!(install.status.success(), "{}", stderr(&install));
