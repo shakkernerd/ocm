@@ -2,7 +2,7 @@ use super::{Cli, render};
 use crate::service::service_backend_support_error;
 
 impl Cli {
-    fn ensure_service_backend_supported(&self) -> Result<(), String> {
+    fn ensure_service_backend_mutation_supported(&self) -> Result<(), String> {
         if let Some(error) = service_backend_support_error(&self.env) {
             return Err(error);
         }
@@ -10,7 +10,6 @@ impl Cli {
     }
 
     pub(super) fn handle_service_discover(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service discover")?;
         Self::assert_no_extra_args(&args)?;
@@ -26,7 +25,7 @@ impl Cli {
     }
 
     pub(super) fn handle_service_restore_global(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
+        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service restore-global")?;
         let (args, dry_run) = Self::consume_flag(args, "--dry-run");
@@ -53,7 +52,7 @@ impl Cli {
     }
 
     pub(super) fn handle_service_adopt_global(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
+        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service adopt-global")?;
         let (args, dry_run) = Self::consume_flag(args, "--dry-run");
@@ -80,7 +79,6 @@ impl Cli {
     }
 
     pub(super) fn handle_service_logs(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, stderr_flag) = Self::consume_flag(args, "--stderr");
         let (args, stdout_flag) = Self::consume_flag(args, "--stdout");
@@ -110,7 +108,7 @@ impl Cli {
     }
 
     pub(super) fn handle_service_install(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
+        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service install")?;
         let Some(name) = args.first() else {
@@ -135,7 +133,6 @@ impl Cli {
     }
 
     pub(super) fn handle_service_list(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "service list")?;
         Self::assert_no_extra_args(&args)?;
 
@@ -150,7 +147,6 @@ impl Cli {
     }
 
     pub(super) fn handle_service_status(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "service status")?;
         let (args, all_flag) = Self::consume_flag(args, "--all");
 
@@ -186,7 +182,7 @@ impl Cli {
     }
 
     pub(super) fn handle_service_start(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
+        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "service start")?;
         let Some(name) = args.first() else {
             return Err("service start requires <env>".to_string());
@@ -208,7 +204,7 @@ impl Cli {
     }
 
     pub(super) fn handle_service_stop(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
+        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "service stop")?;
         let Some(name) = args.first() else {
             return Err("service stop requires <env>".to_string());
@@ -230,7 +226,7 @@ impl Cli {
     }
 
     pub(super) fn handle_service_restart(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
+        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service restart")?;
         let Some(name) = args.first() else {
@@ -253,7 +249,7 @@ impl Cli {
     }
 
     pub(super) fn handle_service_uninstall(&self, args: Vec<String>) -> Result<i32, String> {
-        self.ensure_service_backend_supported()?;
+        self.ensure_service_backend_mutation_supported()?;
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "service uninstall")?;
         let Some(name) = args.first() else {

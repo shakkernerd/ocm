@@ -2500,7 +2500,8 @@ fn service_restore_global_dry_run_reports_the_latest_matching_backup_without_mut
     assert!(managed_service_definition_path(&env, &cwd, "demo").exists());
     let launchctl_log_after = fs::read_to_string(root.child("launchctl.log")).unwrap();
     let normalize_probe_noise = |value: &str| {
-        value.lines()
+        value
+            .lines()
             .filter(|line| *line != "managername")
             .collect::<Vec<_>>()
             .join("\n")
@@ -2700,7 +2701,10 @@ fn service_install_reports_unusable_launchctl_session() {
         "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
         "launchd".to_string(),
     );
-    env.insert("OCM_INTERNAL_LAUNCHCTL_BIN".to_string(), "/bin/sh".to_string());
+    env.insert(
+        "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
+        "/bin/sh".to_string(),
+    );
 
     let launcher = run_ocm(
         &cwd,
@@ -2719,6 +2723,95 @@ fn service_install_reports_unusable_launchctl_session() {
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert_eq!(install.status.code(), Some(1));
     assert!(stderr(&install).contains("managed services require a usable launchctl session"));
+}
+
+#[test]
+fn service_list_succeeds_when_systemd_is_unusable() {
+    let root = TestDir::new("service-list-unusable-systemd");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "systemd-user".to_string(),
+    );
+    env.insert(
+        "OCM_INTERNAL_SYSTEMCTL_BIN".to_string(),
+        "/bin/sh".to_string(),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "/bin/true"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let list = run_ocm(&cwd, &env, &["service", "list", "--raw"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert!(stdout(&list).contains("demo"));
+}
+
+#[test]
+fn service_status_succeeds_when_systemd_is_unusable() {
+    let root = TestDir::new("service-status-unusable-systemd");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "systemd-user".to_string(),
+    );
+    env.insert(
+        "OCM_INTERNAL_SYSTEMCTL_BIN".to_string(),
+        "/bin/sh".to_string(),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "/bin/true"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--raw"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    assert!(stdout(&status).contains("managedState: absent"));
+}
+
+#[test]
+fn service_discover_succeeds_when_systemd_is_unusable() {
+    let root = TestDir::new("service-discover-unusable-systemd");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "systemd-user".to_string(),
+    );
+    env.insert(
+        "OCM_INTERNAL_SYSTEMCTL_BIN".to_string(),
+        "/bin/sh".to_string(),
+    );
+
+    let discover = run_ocm(&cwd, &env, &["service", "discover", "--json"]);
+    assert!(discover.status.success(), "{}", stderr(&discover));
+    let summary: Value = serde_json::from_str(&stdout(&discover)).unwrap();
+    assert!(summary["services"].as_array().is_some());
 }
 
 #[test]
