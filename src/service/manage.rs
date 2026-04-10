@@ -428,6 +428,11 @@ fn prepare_existing_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<PreparedService, String> {
+    let existing = prepare_existing_service_ref(name, env, cwd)?;
+    if existing.managed_plist_path.exists() {
+        return build_prepared_service(existing.env_meta, env, cwd, false, None);
+    }
+
     prepare_service(name, env, cwd)
 }
 

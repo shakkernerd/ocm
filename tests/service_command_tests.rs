@@ -1485,6 +1485,100 @@ fn service_start_refreshes_the_installed_service_binding() {
 }
 
 #[test]
+fn service_restart_keeps_the_existing_gateway_port_when_it_is_busy() {
+    let root = TestDir::new("service-restart-keeps-existing-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+    let port = allocate_free_port();
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let occupied = TcpListener::bind(("127.0.0.1", port)).unwrap();
+
+    let restart = run_ocm(&cwd, &env, &["service", "restart", "demo", "--json"]);
+    assert!(restart.status.success(), "{}", stderr(&restart));
+    let summary: Value = serde_json::from_str(&stdout(&restart)).unwrap();
+    assert_eq!(summary["gatewayPort"], port);
+
+    let env_meta: Value =
+        serde_json::from_str(&fs::read_to_string(root.child("ocm-home/envs/demo.json")).unwrap())
+            .unwrap();
+    assert_eq!(env_meta["gatewayPort"], port);
+    drop(occupied);
+}
+
+#[test]
+fn service_start_keeps_the_existing_gateway_port_when_it_is_busy() {
+    let root = TestDir::new("service-start-keeps-existing-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+    let port = allocate_free_port();
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--port",
+            &port.to_string(),
+            "--launcher",
+            "stable",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+    let stop = run_ocm(&cwd, &env, &["service", "stop", "demo"]);
+    assert!(stop.status.success(), "{}", stderr(&stop));
+
+    let occupied = TcpListener::bind(("127.0.0.1", port)).unwrap();
+
+    let start = run_ocm(&cwd, &env, &["service", "start", "demo", "--json"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+    let summary: Value = serde_json::from_str(&stdout(&start)).unwrap();
+    assert_eq!(summary["gatewayPort"], port);
+
+    let env_meta: Value =
+        serde_json::from_str(&fs::read_to_string(root.child("ocm-home/envs/demo.json")).unwrap())
+            .unwrap();
+    assert_eq!(env_meta["gatewayPort"], port);
+    drop(occupied);
+}
+
+#[test]
 fn service_uninstall_does_not_require_a_still_valid_binding() {
     let root = TestDir::new("service-uninstall-stale-binding");
     let cwd = root.child("workspace");
