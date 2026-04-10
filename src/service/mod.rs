@@ -12,7 +12,7 @@ pub use manage::{
     ServiceRestoreSummary,
 };
 pub(crate) use platform::{
-    ServiceManagerKind, service_manager_kind, unsupported_service_manager_message,
+    ServiceManagerKind, service_backend_support_error, service_manager_kind,
 };
 
 pub struct ServiceService<'a> {

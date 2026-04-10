@@ -10,6 +10,8 @@ use super::inspect::GLOBAL_GATEWAY_LABEL;
 
 pub(crate) const OCM_GATEWAY_LABEL_PREFIX: &str = "ai.openclaw.gateway.ocm.";
 const SERVICE_MANAGER_OVERRIDE: &str = "OCM_INTERNAL_SERVICE_MANAGER";
+const LAUNCHCTL_BIN_OVERRIDE: &str = "OCM_INTERNAL_LAUNCHCTL_BIN";
+const SYSTEMCTL_BIN_OVERRIDE: &str = "OCM_INTERNAL_SYSTEMCTL_BIN";
 const STORE_HASH_LEN: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +30,38 @@ pub(crate) enum ServiceManagerKind {
 
 pub(crate) fn unsupported_service_manager_message() -> &'static str {
     "managed services are not supported on this platform yet; run OpenClaw directly inside the env for now"
+}
+
+pub(crate) fn service_backend_support_error(env: &BTreeMap<String, String>) -> Option<String> {
+    match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => {
+            if binary_available(
+                service_manager_binary(env, ServiceManagerKind::Launchd),
+                env,
+            ) {
+                None
+            } else {
+                Some(
+                    "managed services require launchctl on this machine; run OpenClaw directly inside the env for now"
+                        .to_string(),
+                )
+            }
+        }
+        ServiceManagerKind::SystemdUser => {
+            if binary_available(
+                service_manager_binary(env, ServiceManagerKind::SystemdUser),
+                env,
+            ) {
+                None
+            } else {
+                Some(
+                    "managed services require systemctl --user on this machine; run OpenClaw directly inside the env for now"
+                        .to_string(),
+                )
+            }
+        }
+        ServiceManagerKind::Unsupported => Some(unsupported_service_manager_message().to_string()),
+    }
 }
 
 pub(crate) fn service_manager_kind(env: &BTreeMap<String, String>) -> ServiceManagerKind {
@@ -49,6 +83,39 @@ pub(crate) fn service_manager_kind(env: &BTreeMap<String, String>) -> ServiceMan
     } else {
         ServiceManagerKind::Unsupported
     }
+}
+
+fn service_manager_binary<'a>(
+    env: &'a BTreeMap<String, String>,
+    kind: ServiceManagerKind,
+) -> &'a str {
+    match kind {
+        ServiceManagerKind::Launchd => env
+            .get(LAUNCHCTL_BIN_OVERRIDE)
+            .map(String::as_str)
+            .unwrap_or("launchctl"),
+        ServiceManagerKind::SystemdUser => env
+            .get(SYSTEMCTL_BIN_OVERRIDE)
+            .map(String::as_str)
+            .unwrap_or("systemctl"),
+        ServiceManagerKind::Unsupported => "",
+    }
+}
+
+fn binary_available(binary: &str, env: &BTreeMap<String, String>) -> bool {
+    if binary.trim().is_empty() {
+        return false;
+    }
+    let path = Path::new(binary);
+    if path.is_absolute() || binary.contains(std::path::MAIN_SEPARATOR) {
+        return path.is_file();
+    }
+    let Some(path_value) = env.get("PATH") else {
+        return false;
+    };
+    std::env::split_paths(path_value)
+        .map(|dir| dir.join(binary))
+        .any(|candidate| candidate.is_file())
 }
 
 pub(crate) fn service_store_hash(
@@ -124,8 +191,8 @@ mod tests {
 
     use super::{
         ManagedServiceIdentity, ServiceManagerKind, global_service_definition_path,
-        managed_service_identity, managed_service_label, service_definition_dir,
-        service_manager_kind,
+        managed_service_identity, managed_service_label, service_backend_support_error,
+        service_definition_dir, service_manager_kind,
     };
 
     #[test]
@@ -146,6 +213,48 @@ mod tests {
             "unsupported".to_string(),
         );
         assert_eq!(service_manager_kind(&env), ServiceManagerKind::Unsupported);
+    }
+
+    #[test]
+    fn backend_support_error_reports_missing_launchctl_binary() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "launchd".to_string(),
+        );
+        env.insert(
+            "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
+            "/tmp/ocm-tests/missing-launchctl".to_string(),
+        );
+
+        assert_eq!(
+            service_backend_support_error(&env),
+            Some(
+                "managed services require launchctl on this machine; run OpenClaw directly inside the env for now"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn backend_support_error_reports_missing_systemctl_binary() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "systemd-user".to_string(),
+        );
+        env.insert(
+            "OCM_INTERNAL_SYSTEMCTL_BIN".to_string(),
+            "/tmp/ocm-tests/missing-systemctl".to_string(),
+        );
+
+        assert_eq!(
+            service_backend_support_error(&env),
+            Some(
+                "managed services require systemctl --user on this machine; run OpenClaw directly inside the env for now"
+                    .to_string()
+            )
+        );
     }
 
     #[test]

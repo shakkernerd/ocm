@@ -222,6 +222,30 @@ fn setup_skips_background_service_prompt_on_unsupported_backends() {
 }
 
 #[test]
+fn setup_skips_background_service_prompt_when_launchctl_is_unavailable() {
+    let root = TestDir::new("setup-missing-launchctl");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    env.insert(
+        "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
+        root.child("missing-bin/launchctl").display().to_string(),
+    );
+
+    let input = format!("4\nquick\n/bin/echo\n{}\nn\n", cwd.display());
+    let setup = run_ocm_with_stdin(&cwd, &env, &["setup"], &input);
+    assert!(setup.status.success(), "{}", stderr(&setup));
+    let output = stdout(&setup);
+    assert!(output.contains("managed services require launchctl on this machine"));
+    assert!(!output.contains("Keep OpenClaw running in the background?"));
+    assert!(output.contains("Started env quick"));
+}
+
+#[test]
 fn setup_can_offer_git_install_before_using_managed_node_fallback() {
     let root = TestDir::new("setup-host-doctor-missing");
     let cwd = root.child("workspace");

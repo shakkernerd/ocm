@@ -14,9 +14,7 @@ use super::{Cli, start::StartOnboardingMode};
 use crate::cli::start::StartRequest;
 use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
 use crate::migrate::inspect_migration_source;
-use crate::service::{
-    ServiceManagerKind, service_manager_kind, unsupported_service_manager_message,
-};
+use crate::service::service_backend_support_error;
 use crate::store::validate_name;
 
 impl Cli {
@@ -81,13 +79,14 @@ impl Cli {
             ),
         };
 
-        let service_supported = service_manager_kind(&self.env) != ServiceManagerKind::Unsupported;
+        let service_supported = service_backend_support_error(&self.env).is_none();
         let service_requested = if service_supported {
             self.prompt_yes_no("Keep OpenClaw running in the background?", true)?
         } else {
+            let message = service_backend_support_error(&self.env)
+                .unwrap_or_else(|| "managed services are not available here".to_string());
             self.stdout_line(format!(
-                "Note: {} Continuing without a background service.",
-                unsupported_service_manager_message()
+                "Note: {message} Continuing without a background service."
             ));
             false
         };

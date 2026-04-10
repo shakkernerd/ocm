@@ -1,12 +1,10 @@
 use super::{Cli, render};
-use crate::service::{
-    ServiceManagerKind, service_manager_kind, unsupported_service_manager_message,
-};
+use crate::service::service_backend_support_error;
 
 impl Cli {
     fn ensure_service_backend_supported(&self) -> Result<(), String> {
-        if service_manager_kind(&self.env) == ServiceManagerKind::Unsupported {
-            return Err(unsupported_service_manager_message().to_string());
+        if let Some(error) = service_backend_support_error(&self.env) {
+            return Err(error);
         }
         Ok(())
     }
