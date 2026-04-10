@@ -48,6 +48,34 @@ impl Cli {
         false
     }
 
+    fn reject_mixed_migrate_alias_syntax(args: &[String]) -> Result<(), String> {
+        let mut index = 0;
+        let mut saw_frontdoor_flag = false;
+        while index < args.len() {
+            let arg = &args[index];
+            if matches!(arg.as_str(), "--manifest" | "--root" | "--name") {
+                saw_frontdoor_flag = true;
+                index += 2;
+                continue;
+            }
+            if arg.starts_with("--manifest=")
+                || arg.starts_with("--root=")
+                || arg.starts_with("--name=")
+            {
+                saw_frontdoor_flag = true;
+                index += 1;
+                continue;
+            }
+            if saw_frontdoor_flag && matches!(arg.as_str(), "inspect" | "plan" | "import") {
+                return Err(format!(
+                    "mixed migrate syntax: use `migrate {arg} ...` for the alias form or `migrate <env> ...` for direct import, but not both"
+                ));
+            }
+            index += 1;
+        }
+        Ok(())
+    }
+
     fn parse_migrate_target(
         args: Vec<String>,
         name_value: Option<String>,
@@ -109,6 +137,7 @@ impl Cli {
                 Self::prepend_human_output_flags(args[1..].to_vec(), json_flag, profile),
             );
         }
+        Self::reject_mixed_migrate_alias_syntax(&args)?;
 
         let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
         let manifest_value = Self::require_option_value(manifest_value, "--manifest")?;

@@ -362,6 +362,45 @@ fn migrate_import_alias_requires_name() {
     assert!(stderr(&output).contains("--name is required"));
 }
 
+#[test]
+fn migrate_rejects_alias_after_manifest_flag_with_clear_error() {
+    let root = TestDir::new("migrate-mixed-alias-manifest");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "--manifest",
+            "ocm.yaml",
+            "plan",
+            "--name",
+            "mira",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("mixed migrate syntax"));
+}
+
+#[test]
+fn migrate_rejects_alias_after_name_flag_with_clear_error() {
+    let root = TestDir::new("migrate-mixed-alias-name");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["migrate", "--name", "mira", "import", "./legacy-home"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("mixed migrate syntax"));
+}
+
 fn seed_plain_openclaw_home(source_home: &std::path::Path) {
     fs::create_dir_all(source_home.join("workspace")).unwrap();
     fs::create_dir_all(source_home.join("logs")).unwrap();
