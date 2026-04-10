@@ -27,7 +27,7 @@ pub(crate) enum ServiceManagerKind {
 }
 
 pub(crate) fn unsupported_service_manager_message() -> &'static str {
-    "managed services are not supported on this platform yet; use --no-service and run OpenClaw directly inside the env for now"
+    "managed services are not supported on this platform yet; run OpenClaw directly inside the env for now"
 }
 
 pub(crate) fn service_manager_kind(env: &BTreeMap<String, String>) -> ServiceManagerKind {
@@ -124,7 +124,8 @@ mod tests {
 
     use super::{
         ManagedServiceIdentity, ServiceManagerKind, global_service_definition_path,
-        managed_service_identity, managed_service_label, service_definition_dir, service_manager_kind,
+        managed_service_identity, managed_service_label, service_definition_dir,
+        service_manager_kind,
     };
 
     #[test]

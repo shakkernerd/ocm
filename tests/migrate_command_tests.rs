@@ -106,6 +106,32 @@ fn adopt_inspect_can_use_an_explicit_source_home() {
 }
 
 #[test]
+fn migrate_legacy_inspect_accepts_leading_json_flag() {
+    let root = TestDir::new("migrate-legacy-inspect-json");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-openclaw");
+    fs::create_dir_all(source_home.join("workspace")).unwrap();
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "--json",
+            "inspect",
+            source_home.to_string_lossy().as_ref(),
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("\"exists\": true"));
+    assert!(body.contains("\"configExists\": true"));
+}
+
+#[test]
 fn help_adopt_inspect_is_available() {
     let root = TestDir::new("adopt-help-inspect");
     let cwd = root.child("workspace");
@@ -213,6 +239,20 @@ fn adopt_plan_can_preview_a_manifest_write() {
     assert!(body.contains("\"manifestPreview\":"));
     assert!(body.contains("schema: ocm/v1"));
     assert!(body.contains("name: mira"));
+}
+
+#[test]
+fn migrate_legacy_plan_accepts_leading_raw_flag() {
+    let root = TestDir::new("migrate-legacy-plan-raw");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["migrate", "--raw", "plan", "--name", "mira"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = stdout(&output);
+    assert!(body.contains("env: mira"));
+    assert!(body.contains("envExists: false"));
 }
 
 #[test]

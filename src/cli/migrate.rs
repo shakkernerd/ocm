@@ -8,6 +8,59 @@ use crate::migrate::{
 use crate::store::resolve_absolute_path;
 
 impl Cli {
+    fn prepend_human_output_flags(
+        mut args: Vec<String>,
+        json_flag: bool,
+        profile: render::RenderProfile,
+    ) -> Vec<String> {
+        if json_flag {
+            args.insert(0, "--json".to_string());
+        } else if !profile.pretty {
+            args.insert(0, "--raw".to_string());
+        }
+        args
+    }
+
+    fn migration_arg_looks_like_path(value: &str) -> bool {
+        value.starts_with("./")
+            || value.starts_with("../")
+            || value.starts_with("~/")
+            || value == "."
+            || value == ".."
+            || value.contains(std::path::MAIN_SEPARATOR)
+            || Path::new(value).is_absolute()
+    }
+
+    fn parse_named_migration_target(
+        command_name: &str,
+        args: Vec<String>,
+        name_value: Option<String>,
+    ) -> Result<(String, Option<String>), String> {
+        if args.len() > 2 {
+            return Err(format!("unexpected arguments: {}", args.join(" ")));
+        }
+
+        let (env_name, source_home) = if let Some(env_name) = name_value {
+            if args.len() > 1
+                || args.first().is_some_and(|value| {
+                    command_name == "migrate" && !Self::migration_arg_looks_like_path(value)
+                })
+            {
+                return Err(format!(
+                    "{command_name} accepts only one env name from <env> or --name <env>"
+                ));
+            }
+            (env_name, args.first().cloned())
+        } else {
+            let positional_name = args.first().cloned();
+            let env_name = positional_name
+                .ok_or_else(|| format!("{command_name} requires <env> or --name <env>"))?;
+            (env_name, args.get(1).cloned())
+        };
+
+        Ok((env_name, source_home))
+    }
+
     pub(super) fn dispatch_adopt_command(
         &self,
         action: &str,
@@ -24,28 +77,23 @@ impl Cli {
 
     pub(super) fn handle_migrate_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "migrate")?;
+        if let Some(action) = args.first().map(String::as_str)
+            && matches!(action, "inspect" | "plan" | "import")
+        {
+            return self.dispatch_adopt_command(
+                action,
+                Self::prepend_human_output_flags(args[1..].to_vec(), json_flag, profile),
+            );
+        }
+
         let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
         let manifest_value = Self::require_option_value(manifest_value, "--manifest")?;
         let (args, root_value) = Self::consume_option(args, "--root")?;
         let root_value = Self::require_option_value(root_value, "--root")?;
         let (args, name_value) = Self::consume_option(args, "--name")?;
         let name_value = Self::require_option_value(name_value, "--name")?;
-        if args.len() > 2 {
-            return Err(format!("unexpected arguments: {}", args.join(" ")));
-        }
-
-        let positional_name = args.first().cloned();
-        if positional_name.is_some() && name_value.is_some() {
-            return Err("migrate accepts only one env name from <env> or --name <env>".to_string());
-        }
-        let env_name = positional_name
-            .or(name_value)
-            .ok_or_else(|| "migrate requires <env> or --name <env>".to_string())?;
-        let source_home = if args.len() == 2 {
-            Some(args[1].clone())
-        } else {
-            None
-        };
+        let (env_name, source_home) =
+            Self::parse_named_migration_target("migrate", args, name_value)?;
         let manifest_path = manifest_value
             .as_deref()
             .map(|path| resolve_absolute_path(path, &self.env, &self.cwd))
@@ -83,13 +131,9 @@ impl Cli {
         let (args, root_value) = Self::consume_option(args, "--root")?;
         let root_value = Self::require_option_value(root_value, "--root")?;
         let (args, name_value) = Self::consume_option(args, "--name")?;
-        let env_name = Self::require_option_value(name_value, "--name")?
-            .ok_or_else(|| "--name is required".to_string())?;
-        if args.len() > 1 {
-            return Err(format!("unexpected arguments: {}", args.join(" ")));
-        }
-
-        let source_home = args.first().cloned();
+        let name_value = Self::require_option_value(name_value, "--name")?;
+        let (env_name, source_home) =
+            Self::parse_named_migration_target("adopt import", args, name_value)?;
         let manifest_path = manifest_value
             .as_deref()
             .map(|path| resolve_absolute_path(path, &self.env, &self.cwd))
@@ -145,13 +189,10 @@ impl Cli {
         let (args, root_value) = Self::consume_option(args, "--root")?;
         let root_value = Self::require_option_value(root_value, "--root")?;
         let (args, name_value) = Self::consume_option(args, "--name")?;
-        let env_name = Self::require_option_value(name_value, "--name")?
-            .ok_or_else(|| "--name is required".to_string())?;
-        if args.len() > 1 {
-            return Err(format!("unexpected arguments: {}", args.join(" ")));
-        }
-
-        let explicit = args.first().map(|value| Path::new(value.as_str()));
+        let name_value = Self::require_option_value(name_value, "--name")?;
+        let (env_name, source_home) =
+            Self::parse_named_migration_target("adopt plan", args, name_value)?;
+        let explicit = source_home.as_deref().map(Path::new);
         let manifest_path = manifest_value
             .as_deref()
             .map(|path| resolve_absolute_path(path, &self.env, &self.cwd))
