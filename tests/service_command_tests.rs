@@ -2246,6 +2246,92 @@ fn service_restore_global_persists_the_restored_gateway_port_into_env_state() {
 }
 
 #[test]
+fn service_restore_global_rolls_back_when_global_activation_fails() {
+    let root = TestDir::new("service-restore-global-rollback");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+    let installed = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(installed.status.success(), "{}", stderr(&installed));
+    let env_show_before = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show_before.status.success(), "{}", stderr(&env_show_before));
+    let env_meta_before: Value = serde_json::from_str(&stdout(&env_show_before)).unwrap();
+
+    let original_meta_port = env_meta_before["gatewayPort"].as_u64().unwrap();
+    let original_config_port = 19999_u32;
+    let restored_port = allocate_free_port();
+    let config_path = root.child("ocm-home/envs/demo/.openclaw/openclaw.json");
+    let managed_path = managed_service_definition_path(&env, &cwd, "demo");
+    let global_plist = root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist");
+    write_text(
+        &config_path,
+        &format!("{{\"gateway\":{{\"port\":{original_config_port}}}}}\n"),
+    );
+    write_text(
+        &root.child("ocm-home/services/backups/ai.openclaw.gateway.123.plist"),
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+  <dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>OPENCLAW_CONFIG_PATH</key>
+      <string>{}</string>
+      <key>OPENCLAW_GATEWAY_PORT</key>
+      <string>{}</string>
+    </dict>
+  </dict>
+</plist>
+"#,
+            path_string(&config_path),
+            restored_port
+        ),
+    );
+    write_executable_script(
+        &root.child("fake-bin/launchctl"),
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  bootstrap)\n    case \"$3\" in\n      *ai.openclaw.gateway.plist)\n        printf 'global bootstrap failed\\n' >&2\n        exit 1\n        ;;\n      *)\n        printf 'state = running\\npid = 23613\\n' > \"{}\"\n        exit 0\n        ;;\n    esac\n    ;;\n  bootout|unload)\n    rm -f \"{}\"\n    exit 0\n    ;;\n  print)\n    if [ -f \"{}\" ]; then\n      /bin/cat \"{}\"\n      exit 0\n    fi\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
+            path_string(&root.child("launchctl.log")),
+            path_string(&root.child("launchctl-print.txt")),
+            path_string(&root.child("launchctl-print.txt")),
+            path_string(&root.child("launchctl-print.txt")),
+            path_string(&root.child("launchctl-print.txt")),
+        ),
+    );
+
+    let restored = run_ocm(&cwd, &env, &["service", "restore-global", "demo"]);
+    assert_eq!(restored.status.code(), Some(1));
+    assert!(stderr(&restored).contains("launchctl bootstrap failed"));
+    assert!(!global_plist.exists());
+    assert!(managed_path.exists());
+
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_meta: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    assert_eq!(env_meta["gatewayPort"].as_u64(), Some(original_meta_port));
+
+    let config: Value = serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(
+        config["gateway"]["port"].as_u64(),
+        Some(original_config_port as u64)
+    );
+}
+
+#[test]
 fn service_restore_global_dry_run_reports_the_latest_matching_backup_without_mutation() {
     let root = TestDir::new("service-restore-global-dry-run");
     let cwd = root.child("workspace");

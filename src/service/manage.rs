@@ -250,12 +250,24 @@ pub fn restore_global_service(
     ensure_launchd_only("service restore-global", env)?;
     let restore = prepare_global_restore(name, env, cwd)?;
     if !dry_run {
-        persist_restored_gateway_port(&restore.env_meta, restore.gateway_port, env, cwd)?;
         restore_global_plist(&restore.backup_plist_path, &restore.global_plist_path)?;
         bootout_managed_service(&restore.managed_label, env)?;
-        activate_launch_agent(GLOBAL_GATEWAY_LABEL, &restore.global_plist_path, env)?;
+        if let Err(error) = activate_launch_agent(GLOBAL_GATEWAY_LABEL, &restore.global_plist_path, env)
+        {
+            rollback_failed_global_restore(&restore, env)?;
+            return Err(error);
+        }
+        if let Err(error) =
+            persist_restored_gateway_port(&restore.env_meta, restore.gateway_port, env, cwd)
+        {
+            rollback_failed_global_restore(&restore, env)?;
+            return Err(error);
+        }
         if restore.managed_plist_path.exists() {
-            fs::remove_file(&restore.managed_plist_path).map_err(|error| error.to_string())?;
+            if let Err(error) = fs::remove_file(&restore.managed_plist_path) {
+                rollback_failed_global_restore(&restore, env)?;
+                return Err(error.to_string());
+            }
         }
     }
 
@@ -1130,6 +1142,29 @@ fn rollback_failed_global_adoption(
         })?;
     }
     activate_launch_agent(GLOBAL_GATEWAY_LABEL, &adoption.global.plist_path, env)
+}
+
+fn rollback_failed_global_restore(
+    restore: &PreparedGlobalRestore,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let _ = bootout_global_service(env);
+    if restore.global_plist_path.exists() {
+        fs::remove_file(&restore.global_plist_path).map_err(|error| {
+            format!(
+                "failed to remove restored global plist {}: {error}",
+                display_path(&restore.global_plist_path)
+            )
+        })?;
+    }
+    if restore.managed_plist_path.exists() {
+        activate_managed_service(&restore.managed_label, &restore.managed_plist_path, env)
+    } else {
+        Err(format!(
+            "failed to roll back restore because managed service definition is absent: {}",
+            display_path(&restore.managed_plist_path)
+        ))
+    }
 }
 
 fn restore_global_plist(backup_path: &Path, global_path: &Path) -> Result<(), String> {
