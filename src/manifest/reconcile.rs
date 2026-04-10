@@ -126,6 +126,19 @@ pub fn reconcile_manifest_with_options(
     let (runtime_summary, launcher_summary, service_summary) = match apply_result {
         Ok(summaries) => summaries,
         Err(error) => {
+            if _options.rollback_on_failure && env_summary.created {
+                let rollback = rollback_created_manifest_env(&current.name, env, cwd);
+                return match rollback {
+                    Ok(()) => Err(format!(
+                        "{error} (removed newly created env \"{}\")",
+                        current.name
+                    )),
+                    Err(rollback_error) => Err(format!(
+                        "{error} (cleanup of newly created env \"{}\" failed: {rollback_error})",
+                        current.name
+                    )),
+                };
+            }
             if _options.rollback_on_failure
                 && let Some(snapshot_id) = snapshot_id.as_deref()
             {
@@ -166,4 +179,18 @@ pub fn reconcile_manifest_with_options(
         service_loaded: service_summary.service.loaded,
         service_running: service_summary.service.running,
     })
+}
+
+fn rollback_created_manifest_env(
+    env_name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<(), String> {
+    let service = ServiceService::new(env, cwd);
+    let status = service.status_fast(env_name)?;
+    if status.installed || status.loaded || status.running {
+        service.uninstall(env_name)?;
+    }
+    EnvironmentService::new(env, cwd).remove(env_name, true)?;
+    Ok(())
 }

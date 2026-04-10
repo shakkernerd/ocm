@@ -170,6 +170,51 @@ fn reconcile_manifest_rolls_back_partial_changes_when_later_steps_fail() {
 }
 
 #[test]
+fn reconcile_manifest_removes_new_envs_when_later_steps_fail() {
+    let root = TestDir::new("manifest-reconcile-created-env-rollback");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let fake_home = root.child("fake-home-file");
+    fs::write(&fake_home, "not-a-directory").unwrap();
+    let env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "printf launcher"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let mut failing_env = env.clone();
+    failing_env.insert("HOME".to_string(), fake_home.display().to_string());
+    failing_env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+
+    let manifest_path = cwd.join("ocm.yaml");
+    let manifest = parse_manifest(
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\nservice:\n  install: true\n",
+    )
+    .unwrap();
+
+    let error = reconcile_manifest_with_options(
+        &manifest_path,
+        &manifest,
+        &failing_env,
+        &cwd,
+        ManifestReconcileOptions {
+            snapshot_existing_env: true,
+            rollback_on_failure: true,
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("removed newly created env \"mira\""));
+    assert!(get_environment("mira", &env, &cwd).is_err());
+}
+
+#[test]
 fn reconcile_manifest_clears_existing_bindings_when_manifest_requests_none() {
     let root = TestDir::new("manifest-reconcile-clear-bindings");
     let cwd = root.child("workspace");
