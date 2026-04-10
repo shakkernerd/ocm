@@ -265,6 +265,44 @@ fn sync_rolls_back_partial_changes_when_later_reconcile_steps_fail() {
 }
 
 #[test]
+fn sync_reports_missing_launchctl_for_manifest_service_installs() {
+    let root = TestDir::new("sync-missing-launchctl");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        cwd.join("ocm.yaml"),
+        "schema: ocm/v1\nenv:\n  name: mira\nlauncher:\n  name: dev\nservice:\n  install: true\n",
+    )
+    .unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    env.insert(
+        "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
+        root.child("missing-bin/launchctl").display().to_string(),
+    );
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "printf launcher"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+    let create = run_ocm(&cwd, &env, &["env", "create", "mira"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let output = run_ocm(&cwd, &env, &["sync", "--json"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("managed services require launchctl on this machine"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "mira", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    assert!(stdout(&show).contains("\"defaultLauncher\": null"));
+}
+
+#[test]
 fn sync_clears_an_existing_runtime_binding_when_manifest_has_none() {
     let root = TestDir::new("sync-clear-runtime");
     let cwd = root.child("workspace");

@@ -13,7 +13,8 @@ use super::inspect::{
     managed_service_label, resolve_service_launch, service_status,
 };
 use super::platform::{
-    ServiceManagerKind, service_manager_kind, unsupported_service_manager_message,
+    ServiceManagerKind, service_backend_support_error, service_manager_kind,
+    unsupported_service_manager_message,
 };
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::infra::shell::build_openclaw_env;
@@ -175,6 +176,7 @@ pub fn install_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceInstallSummary, String> {
+    ensure_service_backend_ready(env)?;
     let prepared = prepare_service(name, env, cwd)?;
     write_service_definition(&prepared, env)?;
     activate_managed_service(&prepared.managed_label, &prepared.managed_plist_path, env)?;
@@ -207,6 +209,7 @@ pub fn adopt_global_service(
     dry_run: bool,
 ) -> Result<ServiceAdoptionSummary, String> {
     ensure_launchd_only("service adopt-global", env)?;
+    ensure_service_backend_ready(env)?;
     let adoption = prepare_global_adoption(name, env, cwd, !dry_run)?;
     if !dry_run {
         write_service_definition(&adoption.prepared, env)?;
@@ -248,6 +251,7 @@ pub fn restore_global_service(
     dry_run: bool,
 ) -> Result<ServiceRestoreSummary, String> {
     ensure_launchd_only("service restore-global", env)?;
+    ensure_service_backend_ready(env)?;
     let restore = prepare_global_restore(name, env, cwd)?;
     if !dry_run {
         restore_global_plist(&restore.backup_plist_path, &restore.global_plist_path)?;
@@ -306,6 +310,7 @@ pub fn start_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
+    ensure_service_backend_ready(env)?;
     let prepared = prepare_existing_service(name, env, cwd)?;
     refresh_managed_service(&prepared, env)?;
 
@@ -346,6 +351,7 @@ pub fn restart_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
+    ensure_service_backend_ready(env)?;
     let prepared = prepare_existing_service(name, env, cwd)?;
     refresh_managed_service(&prepared, env)?;
 
@@ -1479,6 +1485,13 @@ fn ensure_launchd_only(action: &str, env: &BTreeMap<String, String>) -> Result<(
     Err(format!(
         "{action} is currently only supported for launchd-managed machine-wide services"
     ))
+}
+
+fn ensure_service_backend_ready(env: &BTreeMap<String, String>) -> Result<(), String> {
+    if let Some(error) = service_backend_support_error(env) {
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn systemd_quote(value: &str) -> String {
