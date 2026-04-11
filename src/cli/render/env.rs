@@ -1239,7 +1239,7 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("Gateway")));
         assert!(lines.iter().any(|line| line.contains("OCM service")));
         assert!(lines.iter().any(|line| line.contains("OpenClaw")));
-        assert!(!lines.iter().any(|line| line.contains("OpenClaw service")));
+        assert!(lines.iter().any(|line| line.contains("Global service")));
     }
 
     #[test]
@@ -1319,6 +1319,52 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line.contains("ocm service logs demo --tail 50"))
+        );
+    }
+
+    #[test]
+    fn env_status_pretty_surfaces_global_service_conflicts() {
+        let lines = env_status(
+            &EnvStatusSummary {
+                env_name: "demo".to_string(),
+                root: "/tmp/demo".to_string(),
+                gateway_port: Some(18789),
+                gateway_port_source: Some("metadata".to_string()),
+                default_runtime: Some("stable".to_string()),
+                default_launcher: None,
+                resolved_kind: Some("runtime".to_string()),
+                resolved_name: Some("stable".to_string()),
+                binary_path: Some("/tmp/demo/openclaw".to_string()),
+                command: None,
+                run_dir: Some("/tmp/demo".to_string()),
+                runtime_source_kind: Some("installed".to_string()),
+                runtime_release_version: Some("2026.3.24".to_string()),
+                runtime_release_channel: Some("stable".to_string()),
+                runtime_health: Some("ok".to_string()),
+                managed_service_state: Some("running".to_string()),
+                openclaw_state: Some("healthy".to_string()),
+                global_service_state: Some("running-other".to_string()),
+                service_definition_drift: None,
+                service_live_exec_unverified: None,
+                service_orphaned_live: None,
+                service_issue: None,
+                issue: None,
+            },
+            RenderProfile::pretty(false),
+            "ocm",
+        );
+
+        assert!(lines.iter().any(|line| line.contains("Global service")));
+        assert!(lines.iter().any(|line| line.contains("running-other")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm service discover"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm service status demo"))
         );
     }
 
@@ -1704,6 +1750,7 @@ pub fn env_status(
             optional_value_row("Port source", status.gateway_port_source.clone()),
             optional_state_row("OCM service", status.managed_service_state.clone()),
             optional_state_row("OpenClaw", status.openclaw_state.clone()),
+            optional_state_row("Global service", status.global_service_state.clone()),
             optional_state_row(
                 "Service drift",
                 status
@@ -1751,6 +1798,22 @@ fn env_status_next_steps(status: &EnvStatusSummary, command_example: &str) -> Ve
             "Start",
             format!("{command_example} start {}", status.env_name),
         )];
+    }
+
+    if matches!(
+        status.global_service_state.as_deref(),
+        Some("installed-other" | "loaded-other" | "running-other")
+    ) {
+        return vec![
+            KeyValueRow::warning(
+                "Inspect global",
+                format!("{command_example} service discover"),
+            ),
+            KeyValueRow::accent(
+                "Inspect env",
+                format!("{command_example} service status {}", status.env_name),
+            ),
+        ];
     }
 
     if status.service_definition_drift == Some(true) || status.service_orphaned_live == Some(true) {
