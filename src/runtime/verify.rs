@@ -29,6 +29,9 @@ pub struct RuntimeBinarySummary {
     pub source_kind: String,
     pub release_version: Option<String>,
     pub release_channel: Option<String>,
+    pub release_selector_kind: Option<RuntimeReleaseSelectorKind>,
+    pub release_selector_value: Option<String>,
+    pub install_root: Option<String>,
 }
 
 impl<'a> RuntimeService<'a> {
@@ -53,6 +56,9 @@ impl<'a> RuntimeService<'a> {
             source_kind: meta.source_kind.as_str().to_string(),
             release_version: meta.release_version,
             release_channel: meta.release_channel,
+            release_selector_kind: meta.release_selector_kind,
+            release_selector_value: meta.release_selector_value,
+            install_root: meta.install_root,
         })
     }
 }

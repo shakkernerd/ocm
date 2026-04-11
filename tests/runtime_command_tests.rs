@@ -189,6 +189,10 @@ fn runtime_install_and_which_use_the_managed_binary_path() {
         path_string(&expected_binary)
     )));
     assert!(which_json_stdout.contains("\"sourceKind\": \"installed\""));
+    assert!(which_json_stdout.contains(&format!(
+        "\"installRoot\": \"{}\"",
+        path_string(&install_root)
+    )));
 
     let show = run_ocm(&cwd, &env, &["runtime", "show", "stable"]);
     assert!(show.status.success(), "{}", stderr(&show));
@@ -355,6 +359,19 @@ fn runtime_install_from_official_release_installs_the_openclaw_package() {
         stdout(&which),
         format!("{}\n", path_string(&expected_binary))
     );
+
+    let which_json = run_ocm(&cwd, &env, &["runtime", "which", "stable", "--json"]);
+    assert!(which_json.status.success(), "{}", stderr(&which_json));
+    let which_json_stdout = stdout(&which_json);
+    assert!(which_json_stdout.contains("\"sourceKind\": \"installed\""));
+    assert!(which_json_stdout.contains("\"releaseVersion\": \"2026.3.24\""));
+    assert!(which_json_stdout.contains("\"releaseChannel\": \"stable\""));
+    assert!(which_json_stdout.contains("\"releaseSelectorKind\": \"channel\""));
+    assert!(which_json_stdout.contains("\"releaseSelectorValue\": \"stable\""));
+    assert!(which_json_stdout.contains(&format!(
+        "\"installRoot\": \"{}\"",
+        path_string(&install_root)
+    )));
 }
 
 #[test]
