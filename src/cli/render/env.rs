@@ -607,7 +607,11 @@ fn env_imported_raw(summary: &EnvImportSummary, command_example: &str) -> Vec<St
     lines
 }
 
-pub fn env_doctor(doctor: &EnvDoctorSummary, profile: RenderProfile) -> Vec<String> {
+pub fn env_doctor(
+    doctor: &EnvDoctorSummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
     if !profile.pretty {
         return env_doctor_raw(doctor);
     }
@@ -676,7 +680,71 @@ pub fn env_doctor(doctor: &EnvDoctorSummary, profile: RenderProfile) -> Vec<Stri
         push_card(&mut lines, "Issues", issue_rows, profile.color);
     }
 
+    let next_steps = env_doctor_next_steps(doctor, command_example);
+    if !next_steps.is_empty() {
+        push_card(&mut lines, "Next", next_steps, profile.color);
+    }
+
     lines
+}
+
+fn env_doctor_next_steps(doctor: &EnvDoctorSummary, command_example: &str) -> Vec<KeyValueRow> {
+    if doctor.healthy {
+        return vec![KeyValueRow::accent(
+            "Status",
+            format!("{command_example} env status {}", doctor.env_name),
+        )];
+    }
+
+    if doctor.resolution_status == "unbound" {
+        return vec![KeyValueRow::accent(
+            "Start",
+            format!("{command_example} start {}", doctor.env_name),
+        )];
+    }
+
+    if doctor.runtime_status == "missing" || doctor.runtime_status == "broken" {
+        let mut rows = Vec::new();
+        if let Some(runtime_name) = doctor.resolved_name.as_deref() {
+            if doctor.resolved_kind.as_deref() == Some("runtime") {
+                rows.push(KeyValueRow::accent(
+                    "Check runtime",
+                    format!("{command_example} runtime verify {runtime_name}"),
+                ));
+            }
+        }
+        rows.push(KeyValueRow::warning(
+            "Cleanup",
+            format!("{command_example} env cleanup {}", doctor.env_name),
+        ));
+        return rows;
+    }
+
+    if doctor.launcher_status == "missing" {
+        return vec![
+            KeyValueRow::accent("List launchers", format!("{command_example} launcher list")),
+            KeyValueRow::warning(
+                "Cleanup",
+                format!("{command_example} env cleanup {}", doctor.env_name),
+            ),
+        ];
+    }
+
+    if doctor.marker_status != "ok" || doctor.config_status == "drifted" {
+        let mut rows = vec![KeyValueRow::warning(
+            "Cleanup",
+            format!("{command_example} env cleanup {}", doctor.env_name),
+        )];
+        if doctor.marker_status != "ok" {
+            rows.push(KeyValueRow::accent(
+                "Repair marker",
+                format!("{command_example} env repair-marker {}", doctor.env_name),
+            ));
+        }
+        return rows;
+    }
+
+    Vec::new()
 }
 
 fn env_doctor_raw(doctor: &EnvDoctorSummary) -> Vec<String> {
@@ -1436,6 +1504,7 @@ mod tests {
                 issues: vec!["environment marker name mismatch".to_string()],
             },
             RenderProfile::pretty(false),
+            "ocm",
         );
 
         assert_eq!(lines[0], "Environment doctor demo");
@@ -1467,11 +1536,89 @@ mod tests {
                 issues: Vec::new(),
             },
             RenderProfile::pretty(false),
+            "ocm",
         );
 
         assert!(lines.iter().any(|line| line.contains("Runtime")));
         assert!(lines.iter().any(|line| line.contains("Release version")));
         assert!(lines.iter().any(|line| line.contains("Release channel")));
+    }
+
+    #[test]
+    fn env_doctor_pretty_suggests_runtime_repair_steps() {
+        let lines = env_doctor(
+            &EnvDoctorSummary {
+                env_name: "demo".to_string(),
+                root: "/tmp/demo".to_string(),
+                default_runtime: Some("stable".to_string()),
+                default_launcher: None,
+                healthy: false,
+                root_status: "ok".to_string(),
+                marker_status: "ok".to_string(),
+                config_status: "absent".to_string(),
+                runtime_status: "broken".to_string(),
+                launcher_status: "unbound".to_string(),
+                resolution_status: "error".to_string(),
+                resolved_kind: Some("runtime".to_string()),
+                resolved_name: Some("stable".to_string()),
+                runtime_source_kind: Some("installed".to_string()),
+                runtime_release_version: Some("2026.3.24".to_string()),
+                runtime_release_channel: Some("stable".to_string()),
+                issues: vec!["runtime mismatch".to_string()],
+            },
+            RenderProfile::pretty(false),
+            "ocm",
+        );
+
+        assert!(lines.iter().any(|line| line.contains("Next")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm runtime verify stable"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm env cleanup demo"))
+        );
+    }
+
+    #[test]
+    fn env_doctor_pretty_suggests_marker_repair_steps() {
+        let lines = env_doctor(
+            &EnvDoctorSummary {
+                env_name: "demo".to_string(),
+                root: "/tmp/demo".to_string(),
+                default_runtime: None,
+                default_launcher: Some("stable".to_string()),
+                healthy: false,
+                root_status: "ok".to_string(),
+                marker_status: "mismatch".to_string(),
+                config_status: "drifted".to_string(),
+                runtime_status: "unbound".to_string(),
+                launcher_status: "ok".to_string(),
+                resolution_status: "ok".to_string(),
+                resolved_kind: Some("launcher".to_string()),
+                resolved_name: Some("stable".to_string()),
+                runtime_source_kind: None,
+                runtime_release_version: None,
+                runtime_release_channel: None,
+                issues: vec!["marker mismatch".to_string()],
+            },
+            RenderProfile::pretty(false),
+            "ocm",
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm env cleanup demo"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm env repair-marker demo"))
+        );
     }
 
     #[test]

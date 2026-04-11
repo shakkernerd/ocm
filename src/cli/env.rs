@@ -408,7 +408,11 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stdout_lines(render::env::env_doctor(&doctor, profile));
+        self.stdout_lines(render::env::env_doctor(
+            &doctor,
+            profile,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 
