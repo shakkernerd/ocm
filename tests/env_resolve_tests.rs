@@ -4,7 +4,10 @@ use std::fs;
 
 use serde_json::Value;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_executable_script};
+use crate::support::{
+    TestDir, TestHttpServer, install_fake_node_and_npm, ocm_env, openclaw_package_tarball, run_ocm,
+    sha512_integrity, stderr, stdout, write_executable_script,
+};
 
 #[test]
 fn env_resolve_reports_the_bound_launcher_without_touching_last_used_at() {
@@ -88,6 +91,7 @@ fn env_resolve_reports_the_bound_runtime_and_forwarded_args() {
     assert!(resolved.contains("bindingKind: runtime"));
     assert!(resolved.contains("bindingName: stable"));
     assert!(resolved.contains(&format!("binaryPath: {}", expected_binary_path.display())));
+    assert!(resolved.contains("runtimeSourceKind: registered"));
     assert!(resolved.contains("forwardedArgs: onboard status --no-install-daemon"));
     assert!(resolved.contains(&format!("runDir: {}", expected_cwd.display())));
 }
@@ -133,6 +137,7 @@ fn env_resolve_json_reports_runtime_resolution_shape() {
         resolved["binaryPath"],
         Value::String(expected_binary_path.display().to_string())
     );
+    assert_eq!(resolved["runtimeSourceKind"], "registered");
     assert_eq!(
         resolved["forwardedArgs"],
         Value::Array(vec![
@@ -144,4 +149,53 @@ fn env_resolve_json_reports_runtime_resolution_shape() {
         resolved["runDir"],
         Value::String(expected_cwd.display().to_string())
     );
+}
+
+#[test]
+fn env_resolve_reports_release_backed_runtime_provenance() {
+    let root = TestDir::new("env-resolve-release-runtime");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball =
+        openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n", "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let manifest_body = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let manifest_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", manifest_body.as_bytes());
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        manifest_server.url(),
+    );
+
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let resolve = run_ocm(&cwd, &env, &["env", "resolve", "demo", "--json"]);
+    assert!(resolve.status.success(), "{}", stderr(&resolve));
+
+    let resolved: Value = serde_json::from_str(&stdout(&resolve)).unwrap();
+    assert_eq!(resolved["bindingKind"], "runtime");
+    assert_eq!(resolved["bindingName"], "stable");
+    assert_eq!(resolved["runtimeSourceKind"], "installed");
+    assert_eq!(resolved["runtimeReleaseVersion"], "2026.3.24");
+    assert_eq!(resolved["runtimeReleaseChannel"], "stable");
 }

@@ -1331,6 +1331,9 @@ mod tests {
                 binding_name: "stable".to_string(),
                 command: Some("openclaw".to_string()),
                 binary_path: None,
+                runtime_source_kind: None,
+                runtime_release_version: None,
+                runtime_release_channel: None,
                 forwarded_args: vec!["status".to_string()],
                 run_dir: "/tmp/demo".to_string(),
             },
@@ -2365,6 +2368,21 @@ pub fn env_resolved(summary: &ExecutionSummary, profile: RenderProfile) -> Vec<S
     if let Some(binary_path) = summary.binary_path.as_ref() {
         resolution.push(KeyValueRow::accent("Binary", binary_path.clone()));
     }
+    if let Some(source_kind) = summary.runtime_source_kind.as_ref() {
+        resolution.push(KeyValueRow::plain("Runtime source", source_kind.clone()));
+    }
+    if let Some(release_version) = summary.runtime_release_version.as_ref() {
+        resolution.push(KeyValueRow::plain(
+            "Release version",
+            release_version.clone(),
+        ));
+    }
+    if let Some(release_channel) = summary.runtime_release_channel.as_ref() {
+        resolution.push(KeyValueRow::plain(
+            "Release channel",
+            release_channel.clone(),
+        ));
+    }
     if !summary.forwarded_args.is_empty() {
         resolution.push(KeyValueRow::plain(
             "Forwarded args",
@@ -2387,6 +2405,15 @@ fn env_resolved_raw(summary: &ExecutionSummary) -> Vec<String> {
     }
     if let Some(binary_path) = summary.binary_path.as_deref() {
         lines.push(format!("binaryPath: {binary_path}"));
+    }
+    if let Some(source_kind) = summary.runtime_source_kind.as_deref() {
+        lines.push(format!("runtimeSourceKind: {source_kind}"));
+    }
+    if let Some(release_version) = summary.runtime_release_version.as_deref() {
+        lines.push(format!("runtimeReleaseVersion: {release_version}"));
+    }
+    if let Some(release_channel) = summary.runtime_release_channel.as_deref() {
+        lines.push(format!("runtimeReleaseChannel: {release_channel}"));
     }
     if !summary.forwarded_args.is_empty() {
         lines.push(format!(
