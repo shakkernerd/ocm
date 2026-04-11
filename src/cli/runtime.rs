@@ -407,7 +407,11 @@ impl Cli {
             return Ok(code);
         }
 
-        self.stdout_lines(render::runtime::runtime_verify(&summary, profile));
+        self.stdout_lines(render::runtime::runtime_verify(
+            &summary,
+            profile,
+            &self.command_example(),
+        ));
         Ok(code)
     }
 

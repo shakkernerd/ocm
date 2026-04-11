@@ -765,7 +765,11 @@ fn runtime_verify_all_raw(summaries: &[RuntimeVerifySummary]) -> Vec<String> {
     lines
 }
 
-pub fn runtime_verify(summary: &RuntimeVerifySummary, profile: RenderProfile) -> Vec<String> {
+pub fn runtime_verify(
+    summary: &RuntimeVerifySummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
     if !profile.pretty {
         return runtime_verify_raw(summary);
     }
@@ -822,7 +826,50 @@ pub fn runtime_verify(summary: &RuntimeVerifySummary, profile: RenderProfile) ->
     }
     push_card(&mut lines, "Source details", source_rows, profile.color);
 
+    let next_steps = runtime_verify_next_steps(summary, command_example);
+    if !next_steps.is_empty() {
+        push_card(&mut lines, "Next", next_steps, profile.color);
+    }
+
     lines
+}
+
+fn runtime_verify_next_steps(
+    summary: &RuntimeVerifySummary,
+    command_example: &str,
+) -> Vec<KeyValueRow> {
+    let mut rows = vec![KeyValueRow::accent(
+        "Show",
+        format!("{command_example} runtime show {}", summary.name),
+    )];
+
+    if summary.healthy {
+        rows.push(KeyValueRow::accent(
+            "Which",
+            format!("{command_example} runtime which {}", summary.name),
+        ));
+        if summary.release_selector_kind.is_some() {
+            rows.push(KeyValueRow::warning(
+                "Update",
+                format!("{command_example} runtime update {}", summary.name),
+            ));
+        }
+        return rows;
+    }
+
+    if summary.release_selector_kind.is_some() {
+        rows.push(KeyValueRow::warning(
+            "Repair",
+            format!("{command_example} runtime update {}", summary.name),
+        ));
+    } else {
+        rows.push(KeyValueRow::warning(
+            "Replace",
+            format!("{command_example} runtime remove {}", summary.name),
+        ));
+    }
+
+    rows
 }
 
 fn runtime_verify_raw(summary: &RuntimeVerifySummary) -> Vec<String> {
@@ -1013,7 +1060,11 @@ mod tests {
 
     #[test]
     fn runtime_verify_pretty_uses_cards() {
-        let lines = runtime_verify(&sample_verify_summary(), RenderProfile::pretty(false));
+        let lines = runtime_verify(
+            &sample_verify_summary(),
+            RenderProfile::pretty(false),
+            "ocm",
+        );
 
         assert_eq!(lines[0], "Runtime stable");
         assert!(lines.iter().any(|line| line.contains("Verification")));
@@ -1033,7 +1084,7 @@ mod tests {
 
     #[test]
     fn runtime_verify_raw_keeps_key_value_lines() {
-        let lines = runtime_verify(&sample_verify_summary(), RenderProfile::raw());
+        let lines = runtime_verify(&sample_verify_summary(), RenderProfile::raw(), "ocm");
 
         assert!(lines.iter().any(|line| line == "name: stable"));
         assert!(lines.iter().any(|line| line == "healthy: true"));
@@ -1043,6 +1094,47 @@ mod tests {
                 .any(|line| line == "releaseSelectorKind: channel")
         );
         assert!(!lines.iter().any(|line| line.contains('┌')));
+    }
+
+    #[test]
+    fn runtime_verify_pretty_includes_next_steps() {
+        let lines = runtime_verify(
+            &sample_verify_summary(),
+            RenderProfile::pretty(false),
+            "ocm",
+        );
+
+        assert!(lines.iter().any(|line| line.contains("Next")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm runtime show stable"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm runtime which stable"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm runtime update stable"))
+        );
+    }
+
+    #[test]
+    fn runtime_verify_pretty_prefers_repair_for_broken_selector_backed_runtimes() {
+        let mut summary = sample_verify_summary();
+        summary.healthy = false;
+        summary.issue = Some("sha256 mismatch".to_string());
+
+        let lines = runtime_verify(&summary, RenderProfile::pretty(false), "ocm");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm runtime update stable"))
+        );
     }
 
     fn sample_runtime() -> RuntimeMeta {
