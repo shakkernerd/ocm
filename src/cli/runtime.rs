@@ -71,7 +71,7 @@ impl Cli {
     }
 
     pub(super) fn handle_runtime_which(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "runtime which")?;
         let Some(name) = args.first() else {
             return Err("runtime name is required".to_string());
         };
@@ -82,7 +82,11 @@ impl Cli {
             self.print_json(&summary)?;
             return Ok(0);
         }
-        self.stdout_lines(render::runtime::runtime_which(&summary));
+        self.stdout_lines(render::runtime::runtime_which(
+            &summary,
+            profile,
+            &self.command_example(),
+        ));
         Ok(0)
     }
 

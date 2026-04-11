@@ -371,8 +371,63 @@ fn selector_label(kind: &RuntimeReleaseSelectorKind, value: Option<&str>) -> Str
     }
 }
 
-pub fn runtime_which(summary: &RuntimeBinarySummary) -> Vec<String> {
-    vec![summary.binary_path.clone()]
+pub fn runtime_which(
+    summary: &RuntimeBinarySummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return vec![summary.binary_path.clone()];
+    }
+
+    let mut lines = vec![paint(
+        &format!("Runtime path {}", summary.name),
+        Tone::Strong,
+        profile.color,
+    )];
+    let mut runtime_rows = vec![
+        KeyValueRow::accent("Name", summary.name.clone()),
+        KeyValueRow::accent("Binary", summary.binary_path.clone()),
+        KeyValueRow::plain("Source", summary.source_kind.clone()),
+    ];
+    if let Some(release_version) = summary.release_version.as_ref() {
+        runtime_rows.push(KeyValueRow::plain(
+            "Release version",
+            release_version.clone(),
+        ));
+    }
+    if let Some(release_channel) = summary.release_channel.as_ref() {
+        runtime_rows.push(KeyValueRow::plain(
+            "Release channel",
+            release_channel.clone(),
+        ));
+    }
+    if let Some(selector_kind) = summary.release_selector_kind.as_ref() {
+        runtime_rows.push(KeyValueRow::plain(
+            "Tracks",
+            selector_label(selector_kind, summary.release_selector_value.as_deref()),
+        ));
+    }
+    if let Some(install_root) = summary.install_root.as_ref() {
+        runtime_rows.push(KeyValueRow::plain("Install root", install_root.clone()));
+    }
+    push_card(&mut lines, "Runtime", runtime_rows, profile.color);
+    push_card(
+        &mut lines,
+        "Next",
+        vec![
+            KeyValueRow::accent(
+                "Show",
+                format!("{command_example} runtime show {}", summary.name),
+            ),
+            KeyValueRow::accent(
+                "Verify",
+                format!("{command_example} runtime verify {}", summary.name),
+            ),
+        ],
+        profile.color,
+    );
+    lines
 }
 
 pub fn runtime_removed(name: &str, profile: RenderProfile, command_example: &str) -> Vec<String> {
@@ -838,9 +893,11 @@ mod tests {
 
     use super::{
         RenderProfile, runtime_list_with_width, runtime_show, runtime_verify, runtime_verify_all,
+        runtime_which,
     };
     use crate::runtime::{
-        RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind, RuntimeVerifySummary,
+        RuntimeBinarySummary, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeSourceKind,
+        RuntimeVerifySummary,
     };
 
     #[test]
@@ -925,6 +982,36 @@ mod tests {
     }
 
     #[test]
+    fn runtime_which_pretty_uses_cards() {
+        let lines = runtime_which(
+            &sample_runtime_binary_summary(),
+            RenderProfile::pretty(false),
+            "ocm",
+        );
+
+        assert_eq!(lines[0], "Runtime path stable");
+        assert!(lines.iter().any(|line| line.contains("Runtime")));
+        assert!(lines.iter().any(|line| line.contains("Release version")));
+        assert!(lines.iter().any(|line| line.contains("Install root")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm runtime verify stable"))
+        );
+    }
+
+    #[test]
+    fn runtime_which_raw_keeps_path_only() {
+        let lines = runtime_which(
+            &sample_runtime_binary_summary(),
+            RenderProfile::raw(),
+            "ocm",
+        );
+
+        assert_eq!(lines, vec!["/tmp/openclaw".to_string()]);
+    }
+
+    #[test]
     fn runtime_verify_pretty_uses_cards() {
         let lines = runtime_verify(&sample_verify_summary(), RenderProfile::pretty(false));
 
@@ -997,6 +1084,19 @@ mod tests {
             install_root: Some("/tmp/ocm/runtimes/stable".to_string()),
             healthy: true,
             issue: None,
+        }
+    }
+
+    fn sample_runtime_binary_summary() -> RuntimeBinarySummary {
+        RuntimeBinarySummary {
+            name: "stable".to_string(),
+            binary_path: "/tmp/openclaw".to_string(),
+            source_kind: "installed".to_string(),
+            release_version: Some("2026.3.24".to_string()),
+            release_channel: Some("stable".to_string()),
+            release_selector_kind: Some(RuntimeReleaseSelectorKind::Channel),
+            release_selector_value: Some("stable".to_string()),
+            install_root: Some("/tmp/ocm/runtimes/stable".to_string()),
         }
     }
 }

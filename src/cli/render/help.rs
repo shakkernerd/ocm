@@ -2065,10 +2065,16 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
         "which" => render_leaf(
             "Print a runtime binary path",
             "Show the resolved binary path for a runtime.",
-            vec![format!("{cmd} runtime which <name> [--json]")],
-            &[("--json", "Print the resolution summary as JSON")],
+            vec![format!("{cmd} runtime which <name> [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain path output instead of the TTY card view",
+                ),
+                ("--json", "Print the resolution summary as JSON"),
+            ],
             vec![format!("{cmd} runtime which stable")],
-            &[],
+            &["TTY output uses a grouped card by default."],
         ),
         "remove" | "rm" => render_leaf(
             "Remove a runtime",

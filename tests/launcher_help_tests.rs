@@ -576,6 +576,21 @@ fn runtime_verify_help_mentions_raw_mode() {
 }
 
 #[test]
+fn runtime_which_help_mentions_raw_mode_and_tty_cards() {
+    let root = TestDir::new("help-runtime-which");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let which = run_ocm(&cwd, &env, &["help", "runtime", "which"]);
+    assert!(which.status.success(), "{}", stderr(&which));
+    let output = stdout(&which);
+    assert!(output.contains("ocm runtime which <name> [--raw] [--json]"));
+    assert!(output.contains("--raw"));
+    assert!(output.contains("TTY output uses a grouped card by default."));
+}
+
+#[test]
 fn version_flag_uses_the_package_version() {
     let root = TestDir::new("version-flag");
     let cwd = root.child("workspace");
