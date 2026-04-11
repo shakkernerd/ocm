@@ -653,6 +653,19 @@ pub fn env_doctor(doctor: &EnvDoctorSummary, profile: RenderProfile) -> Vec<Stri
         profile.color,
     );
 
+    if doctor.resolved_kind.as_deref() == Some("runtime") {
+        push_card(
+            &mut lines,
+            "Runtime",
+            vec![
+                optional_value_row("Source", doctor.runtime_source_kind.clone()),
+                optional_value_row("Release version", doctor.runtime_release_version.clone()),
+                optional_value_row("Release channel", doctor.runtime_release_channel.clone()),
+            ],
+            profile.color,
+        );
+    }
+
     if !doctor.issues.is_empty() {
         let issue_rows = doctor
             .issues
@@ -689,6 +702,15 @@ fn env_doctor_raw(doctor: &EnvDoctorSummary) -> Vec<String> {
     }
     if let Some(name) = doctor.resolved_name.as_deref() {
         lines.push(format!("resolvedName: {name}"));
+    }
+    if let Some(source_kind) = doctor.runtime_source_kind.as_deref() {
+        lines.push(format!("runtimeSourceKind: {source_kind}"));
+    }
+    if let Some(release_version) = doctor.runtime_release_version.as_deref() {
+        lines.push(format!("runtimeReleaseVersion: {release_version}"));
+    }
+    if let Some(release_channel) = doctor.runtime_release_channel.as_deref() {
+        lines.push(format!("runtimeReleaseChannel: {release_channel}"));
     }
     for issue in &doctor.issues {
         lines.push(format!("issue: {issue}"));
@@ -1408,6 +1430,9 @@ mod tests {
                 resolution_status: "ok".to_string(),
                 resolved_kind: Some("launcher".to_string()),
                 resolved_name: Some("stable".to_string()),
+                runtime_source_kind: None,
+                runtime_release_version: None,
+                runtime_release_channel: None,
                 issues: vec!["environment marker name mismatch".to_string()],
             },
             RenderProfile::pretty(false),
@@ -1417,6 +1442,36 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("Summary")));
         assert!(lines.iter().any(|line| line.contains("Checks")));
         assert!(lines.iter().any(|line| line.contains("Issues")));
+    }
+
+    #[test]
+    fn env_doctor_pretty_shows_runtime_provenance() {
+        let lines = env_doctor(
+            &EnvDoctorSummary {
+                env_name: "demo".to_string(),
+                root: "/tmp/demo".to_string(),
+                default_runtime: Some("stable".to_string()),
+                default_launcher: None,
+                healthy: true,
+                root_status: "ok".to_string(),
+                marker_status: "ok".to_string(),
+                config_status: "absent".to_string(),
+                runtime_status: "ok".to_string(),
+                launcher_status: "unbound".to_string(),
+                resolution_status: "ok".to_string(),
+                resolved_kind: Some("runtime".to_string()),
+                resolved_name: Some("stable".to_string()),
+                runtime_source_kind: Some("installed".to_string()),
+                runtime_release_version: Some("2026.3.24".to_string()),
+                runtime_release_channel: Some("stable".to_string()),
+                issues: Vec::new(),
+            },
+            RenderProfile::pretty(false),
+        );
+
+        assert!(lines.iter().any(|line| line.contains("Runtime")));
+        assert!(lines.iter().any(|line| line.contains("Release version")));
+        assert!(lines.iter().any(|line| line.contains("Release channel")));
     }
 
     #[test]

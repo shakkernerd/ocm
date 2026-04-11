@@ -27,6 +27,9 @@ pub struct EnvDoctorSummary {
     pub resolution_status: String,
     pub resolved_kind: Option<String>,
     pub resolved_name: Option<String>,
+    pub runtime_source_kind: Option<String>,
+    pub runtime_release_version: Option<String>,
+    pub runtime_release_channel: Option<String>,
     pub issues: Vec<String>,
 }
 
@@ -253,37 +256,56 @@ impl<'a> EnvironmentService<'a> {
             "unbound".to_string()
         };
 
-        let (resolution_status, resolved_kind, resolved_name) =
-            match resolve_execution_binding(&env, None, None) {
-                Ok(ExecutionBinding::Runtime(runtime_name)) => {
-                    let resolution_status = if runtime_status == "ok" {
-                        "ok".to_string()
-                    } else {
-                        "error".to_string()
-                    };
-                    (
-                        resolution_status,
-                        Some("runtime".to_string()),
-                        Some(runtime_name),
-                    )
-                }
-                Ok(ExecutionBinding::Launcher(launcher_name)) => {
-                    let resolution_status = if launcher_status == "ok" {
-                        "ok".to_string()
-                    } else {
-                        "error".to_string()
-                    };
-                    (
-                        resolution_status,
-                        Some("launcher".to_string()),
-                        Some(launcher_name),
-                    )
-                }
-                Err(error) => {
-                    push_issue(&mut issues, error);
-                    ("unbound".to_string(), None, None)
-                }
-            };
+        let (
+            resolution_status,
+            resolved_kind,
+            resolved_name,
+            runtime_source_kind,
+            runtime_release_version,
+            runtime_release_channel,
+        ) = match resolve_execution_binding(&env, None, None) {
+            Ok(ExecutionBinding::Runtime(runtime_name)) => {
+                let resolution_status = if runtime_status == "ok" {
+                    "ok".to_string()
+                } else {
+                    "error".to_string()
+                };
+                let runtime_meta = get_runtime(&runtime_name, self.env, self.cwd).ok();
+                (
+                    resolution_status,
+                    Some("runtime".to_string()),
+                    Some(runtime_name),
+                    runtime_meta
+                        .as_ref()
+                        .map(|runtime| runtime.source_kind.as_str().to_string()),
+                    runtime_meta
+                        .as_ref()
+                        .and_then(|runtime| runtime.release_version.clone()),
+                    runtime_meta
+                        .as_ref()
+                        .and_then(|runtime| runtime.release_channel.clone()),
+                )
+            }
+            Ok(ExecutionBinding::Launcher(launcher_name)) => {
+                let resolution_status = if launcher_status == "ok" {
+                    "ok".to_string()
+                } else {
+                    "error".to_string()
+                };
+                (
+                    resolution_status,
+                    Some("launcher".to_string()),
+                    Some(launcher_name),
+                    None,
+                    None,
+                    None,
+                )
+            }
+            Err(error) => {
+                push_issue(&mut issues, error);
+                ("unbound".to_string(), None, None, None, None, None)
+            }
+        };
 
         Ok(EnvDoctorSummary {
             env_name: env.name,
@@ -299,6 +321,9 @@ impl<'a> EnvironmentService<'a> {
             resolution_status,
             resolved_kind,
             resolved_name,
+            runtime_source_kind,
+            runtime_release_version,
+            runtime_release_channel,
             issues,
         })
     }

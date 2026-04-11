@@ -86,6 +86,9 @@ fn env_doctor_json_reports_marker_and_runtime_health_issues() {
     assert_eq!(value["resolutionStatus"], "error");
     assert_eq!(value["resolvedKind"], "runtime");
     assert_eq!(value["resolvedName"], "stable");
+    assert_eq!(value["runtimeSourceKind"], "registered");
+    assert_eq!(value["runtimeReleaseVersion"], Value::Null);
+    assert_eq!(value["runtimeReleaseChannel"], Value::Null);
     let issues = value["issues"].as_array().unwrap();
     assert_eq!(issues.len(), 2);
     assert!(
@@ -157,6 +160,9 @@ fn env_doctor_keeps_official_runtime_healthy_when_managed_fallback_is_available(
     assert_eq!(value["healthy"], true);
     assert_eq!(value["configStatus"], "absent");
     assert_eq!(value["runtimeStatus"], "ok");
+    assert_eq!(value["runtimeSourceKind"], "installed");
+    assert_eq!(value["runtimeReleaseVersion"], "2026.3.24");
+    assert_eq!(value["runtimeReleaseChannel"], "stable");
     let issues = value["issues"].as_array().unwrap();
     assert!(issues.is_empty());
 }
