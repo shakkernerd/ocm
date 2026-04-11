@@ -301,6 +301,21 @@ pub fn service_status(
     if let Some(binary_path) = summary.binary_path.as_ref() {
         launch.push(KeyValueRow::accent("Binary", binary_path.clone()));
     }
+    if let Some(source_kind) = summary.runtime_source_kind.as_ref() {
+        launch.push(KeyValueRow::plain("Runtime source", source_kind.clone()));
+    }
+    if let Some(release_version) = summary.runtime_release_version.as_ref() {
+        launch.push(KeyValueRow::plain(
+            "Release version",
+            release_version.clone(),
+        ));
+    }
+    if let Some(release_channel) = summary.runtime_release_channel.as_ref() {
+        launch.push(KeyValueRow::plain(
+            "Release channel",
+            release_channel.clone(),
+        ));
+    }
     if !summary.args.is_empty() {
         launch.push(KeyValueRow::plain("Args", summary.args.join(" ")));
     }
@@ -512,6 +527,15 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
     }
     if let Some(binary_path) = summary.binary_path.as_deref() {
         lines.push(format!("binaryPath: {binary_path}"));
+    }
+    if let Some(source_kind) = summary.runtime_source_kind.as_deref() {
+        lines.push(format!("runtimeSourceKind: {source_kind}"));
+    }
+    if let Some(release_version) = summary.runtime_release_version.as_deref() {
+        lines.push(format!("runtimeReleaseVersion: {release_version}"));
+    }
+    if let Some(release_channel) = summary.runtime_release_channel.as_deref() {
+        lines.push(format!("runtimeReleaseChannel: {release_channel}"));
     }
     if !summary.args.is_empty() {
         lines.push(format!("args: {}", summary.args.join(" ")));
@@ -1084,6 +1108,9 @@ mod tests {
                     binding_name: Some("stable".to_string()),
                     command: Some("openclaw gateway run".to_string()),
                     binary_path: None,
+                    runtime_source_kind: None,
+                    runtime_release_version: None,
+                    runtime_release_channel: None,
                     args: Vec::new(),
                     run_dir: "/tmp/demo".to_string(),
                     gateway_port: 18789,
@@ -1147,6 +1174,25 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("OpenClaw")));
         assert!(lines.iter().any(|line| line.contains("OCM service")));
         assert!(!lines.iter().any(|line| line.contains("OpenClaw service")));
+    }
+
+    #[test]
+    fn service_status_pretty_shows_runtime_provenance() {
+        let mut summary = sample_service_summary();
+        summary.binding_kind = Some("runtime".to_string());
+        summary.binding_name = Some("stable".to_string());
+        summary.command = None;
+        summary.binary_path = Some("/tmp/demo/runtime/openclaw".to_string());
+        summary.runtime_source_kind = Some("installed".to_string());
+        summary.runtime_release_version = Some("2026.3.24".to_string());
+        summary.runtime_release_channel = Some("stable".to_string());
+        summary.args = vec!["gateway".to_string(), "run".to_string()];
+
+        let lines = service_status(&summary, RenderProfile::pretty(false), "ocm");
+
+        assert!(lines.iter().any(|line| line.contains("Runtime source")));
+        assert!(lines.iter().any(|line| line.contains("Release version")));
+        assert!(lines.iter().any(|line| line.contains("Release channel")));
     }
 
     #[test]
@@ -1370,6 +1416,9 @@ mod tests {
             binding_name: Some("stable".to_string()),
             command: Some("openclaw gateway run".to_string()),
             binary_path: None,
+            runtime_source_kind: None,
+            runtime_release_version: None,
+            runtime_release_channel: None,
             args: Vec::new(),
             run_dir: "/tmp/demo".to_string(),
             gateway_port: 18789,

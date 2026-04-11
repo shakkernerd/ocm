@@ -303,6 +303,9 @@ fn service_list_reports_launcher_and_runtime_bindings_in_json() {
     assert_eq!(prod["bindingKind"], "runtime");
     assert_eq!(prod["bindingName"], "managed");
     assert_eq!(prod["binaryPath"], path_string(&runtime_path));
+    assert_eq!(prod["runtimeSourceKind"], "registered");
+    assert_eq!(prod["runtimeReleaseVersion"], Value::Null);
+    assert_eq!(prod["runtimeReleaseChannel"], Value::Null);
     assert_eq!(prod["gatewayPort"], 18790);
     assert_eq!(
         prod["runDir"],

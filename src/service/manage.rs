@@ -538,6 +538,7 @@ fn build_prepared_service(
                 binary_path,
                 args,
                 run_dir,
+                ..
             } => {
                 let mut program_arguments = vec![binary_path.clone()];
                 program_arguments.extend(args.iter().cloned());

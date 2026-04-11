@@ -49,6 +49,9 @@ pub struct ServiceSummary {
     pub binding_name: Option<String>,
     pub command: Option<String>,
     pub binary_path: Option<String>,
+    pub runtime_source_kind: Option<String>,
+    pub runtime_release_version: Option<String>,
+    pub runtime_release_channel: Option<String>,
     pub args: Vec<String>,
     pub run_dir: String,
     pub gateway_port: u32,
@@ -130,6 +133,9 @@ pub(crate) enum ServiceLaunchSpec {
     Runtime {
         binding_name: String,
         binary_path: String,
+        runtime_source_kind: String,
+        runtime_release_version: Option<String>,
+        runtime_release_channel: Option<String>,
         args: Vec<String>,
         run_dir: PathBuf,
     },
@@ -504,7 +510,15 @@ fn build_service_summary(
         && !global.installed
         && backup_available;
 
-    let (binding_kind, binding_name, expected_exec, mut issue) = match launch {
+    let (
+        binding_kind,
+        binding_name,
+        runtime_source_kind,
+        runtime_release_version,
+        runtime_release_channel,
+        expected_exec,
+        mut issue,
+    ) = match launch {
         Ok(launch) => {
             let binding_kind = match &launch {
                 ServiceLaunchSpec::Launcher { .. } => Some("launcher".to_string()),
@@ -514,14 +528,38 @@ fn build_service_summary(
                 ServiceLaunchSpec::Launcher { binding_name, .. }
                 | ServiceLaunchSpec::Runtime { binding_name, .. } => Some(binding_name.clone()),
             };
+            let runtime_source_kind = match &launch {
+                ServiceLaunchSpec::Runtime {
+                    runtime_source_kind,
+                    ..
+                } => Some(runtime_source_kind.clone()),
+                ServiceLaunchSpec::Launcher { .. } => None,
+            };
+            let runtime_release_version = match &launch {
+                ServiceLaunchSpec::Runtime {
+                    runtime_release_version,
+                    ..
+                } => runtime_release_version.clone(),
+                ServiceLaunchSpec::Launcher { .. } => None,
+            };
+            let runtime_release_channel = match &launch {
+                ServiceLaunchSpec::Runtime {
+                    runtime_release_channel,
+                    ..
+                } => runtime_release_channel.clone(),
+                ServiceLaunchSpec::Launcher { .. } => None,
+            };
             (
                 binding_kind,
                 binding_name,
+                runtime_source_kind,
+                runtime_release_version,
+                runtime_release_channel,
                 Some(service_execution_from_launch_spec(launch)),
                 None,
             )
         }
-        Err(error) => (None, None, None, Some(error)),
+        Err(error) => (None, None, None, None, None, None, Some(error)),
     };
     let live_service = managed_status.loaded || managed_status.running;
     let live_exec = service_execution_from_status(&managed_status, Path::new(&env_meta.root));
@@ -655,6 +693,9 @@ fn build_service_summary(
         binding_name,
         command,
         binary_path,
+        runtime_source_kind,
+        runtime_release_version,
+        runtime_release_channel,
         args,
         run_dir,
         gateway_port: actual_gateway_port.unwrap_or_default(),
@@ -1187,6 +1228,9 @@ pub(crate) fn resolve_service_launch(
             Ok(ServiceLaunchSpec::Runtime {
                 binding_name: name,
                 binary_path: launch.program,
+                runtime_source_kind: runtime.source_kind.as_str().to_string(),
+                runtime_release_version: runtime.release_version.clone(),
+                runtime_release_channel: runtime.release_channel.clone(),
                 args: launch.args,
                 run_dir: Path::new(&env.root).to_path_buf(),
             })
