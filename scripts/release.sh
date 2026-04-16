@@ -267,7 +267,8 @@ fi
 
 if [[ "$need_checks" -eq 1 ]]; then
   run_step "Running cargo fmt --check" cargo fmt --check
-  run_step "Running cargo test" cargo test
+  run_step "Building test binaries" cargo test --no-run
+  run_step "Running test suite" cargo test
   run_step "Building release binary" cargo build --release
 fi
 
