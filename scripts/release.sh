@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+timestamp() {
+  date '+%H:%M:%S'
+}
+
+log_step() {
+  printf '[%s] %s\n' "$(timestamp)" "$*" >&2
+}
+
+run_step() {
+  local description="$1"
+  shift
+  local started_at="$SECONDS"
+  log_step "$description"
+  "$@"
+  log_step "done: ${description} ($((SECONDS - started_at))s)"
+}
+
 usage() {
   cat <<'EOF'
 Prepare a signed ocm release from the current main branch.
@@ -91,23 +108,32 @@ if git ls-remote --exit-code --tags "$remote" "refs/tags/${tag}" >/dev/null 2>&1
   exit 1
 fi
 
-"${script_dir}/update-version.sh" "$version"
-
+log_step "Preparing release ${tag} from branch ${branch} using remote ${remote}"
 if [[ "$skip_checks" -eq 0 ]]; then
-  cargo fmt --check
-  cargo test
-  cargo build --release
+  log_step "Local checks are enabled"
+else
+  log_step "Local checks are skipped"
 fi
 
-git add Cargo.toml Cargo.lock
-git commit -m "chore: bump version to ${version}"
+run_step "Updating version files to ${version}" "${script_dir}/update-version.sh" "$version"
 
+if [[ "$skip_checks" -eq 0 ]]; then
+  run_step "Running cargo fmt --check" cargo fmt --check
+  run_step "Running cargo test" cargo test
+  run_step "Building release binary" cargo build --release
+fi
+
+run_step "Staging version files" git add Cargo.toml Cargo.lock
+run_step "Creating release commit" git commit -m "chore: bump version to ${version}"
+
+log_step "Creating signed tag ${tag}; git or GPG may prompt here"
 if ! git tag -s "$tag" -m "$tag"; then
   echo "error: failed to create signed tag ${tag}; make sure git signing is configured" >&2
   exit 1
 fi
+log_step "done: Creating signed tag ${tag}"
 
-git push "$remote" main "$tag"
+run_step "Pushing main and ${tag} to ${remote}" git push "$remote" main "$tag"
 
 cat <<EOF
 Release prep complete for ${tag}.
