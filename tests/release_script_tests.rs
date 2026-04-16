@@ -284,7 +284,10 @@ fn release_script_resumes_after_uncommitted_version_bump() {
     let head_sha = repo.git_stdout(&["rev-parse", "HEAD"]);
     let tag_sha = repo.git_stdout(&["rev-list", "-n1", "v0.2.8"]);
     assert_eq!(head_sha.trim(), tag_sha.trim());
-    assert!(repo.remote_ls_remote("refs/heads/main").contains(head_sha.trim()));
+    assert!(
+        repo.remote_ls_remote("refs/heads/main")
+            .contains(head_sha.trim())
+    );
     assert_eq!(repo.remote_tag_commit("v0.2.8"), head_sha.trim());
 }
 
@@ -310,7 +313,10 @@ fn release_script_resumes_after_local_tag_creation() {
     assert!(stderr_output.contains("skip: local tag v0.2.8 already exists"));
 
     let head_sha = repo.git_stdout(&["rev-parse", "HEAD"]);
-    assert!(repo.remote_ls_remote("refs/heads/main").contains(head_sha.trim()));
+    assert!(
+        repo.remote_ls_remote("refs/heads/main")
+            .contains(head_sha.trim())
+    );
     assert_eq!(repo.remote_tag_commit("v0.2.8"), head_sha.trim());
 }
 
