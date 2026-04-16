@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+timestamp() {
+  date '+%H:%M:%S'
+}
+
+log_step() {
+  printf '[%s] %s\n' "$(timestamp)" "$*" >&2
+}
+
+run_step() {
+  local description="$1"
+  shift
+  local started_at="$SECONDS"
+  log_step "$description"
+  "$@"
+  log_step "done: ${description} ($((SECONDS - started_at))s)"
+}
+
 usage() {
   cat <<'EOF'
 Update the ocm package version safely.
@@ -42,6 +59,8 @@ fi
 
 export OCM_NEW_VERSION="$new_version"
 
+log_step "Updating Cargo.toml and Cargo.lock from ${current_version} to ${new_version}"
+
 perl -0pi -e 's/^(version = ")[^"]+(")/$1.$ENV{OCM_NEW_VERSION}.$2/me' Cargo.toml
 
 perl -0pi -e 's/(\[\[package\]\]\nname = "ocm"\nversion = ")[^"]+(")/$1.$ENV{OCM_NEW_VERSION}.$2/se' Cargo.lock
@@ -54,6 +73,6 @@ if [[ "$updated_toml_version" != "$new_version" || "$updated_lock_version" != "$
   exit 1
 fi
 
-cargo check --locked --quiet
+run_step "Verifying the version bump with cargo check --locked" cargo check --locked --quiet
 
 echo "Updated ocm version: ${current_version} -> ${new_version}"
