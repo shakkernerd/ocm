@@ -218,7 +218,8 @@ fn service_list_reports_launcher_and_runtime_bindings_in_json() {
     let root = TestDir::new("service-list");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_launchd_env(&root);
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
 
     let launcher = run_ocm(
         &cwd,
@@ -1196,7 +1197,8 @@ fn service_discover_ignores_unrelated_launch_agents() {
     let root = TestDir::new("service-discover-unrelated");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_launchd_env(&root);
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
 
     write_launch_agent_plist(
         &root.child("home/Library/LaunchAgents/com.example.other.plist"),
@@ -1217,7 +1219,8 @@ fn service_discover_finds_openclaw_programs_without_openclaw_env_vars() {
     let root = TestDir::new("service-discover-program-only");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_launchd_env(&root);
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
 
     write_launch_agent_plist(
         &root.child("home/Library/LaunchAgents/com.example.gateway.plist"),
