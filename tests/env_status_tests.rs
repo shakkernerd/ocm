@@ -24,7 +24,8 @@ fn env_status_reports_the_resolved_launcher() {
     let root = TestDir::new("env-status-launcher");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let mut env = ocm_env(&root);
+    install_fake_service_manager(&root, &mut env);
     let port = allocate_free_port().to_string();
 
     let add = run_ocm(
@@ -108,7 +109,8 @@ fn env_status_reports_when_an_environment_has_no_binding() {
     let root = TestDir::new("env-status-unbound");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let mut env = ocm_env(&root);
+    install_fake_service_manager(&root, &mut env);
     let port = allocate_free_port().to_string();
 
     let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--port", &port]);
@@ -134,7 +136,8 @@ fn env_status_json_reports_runtime_health_and_binding_shape() {
     fs::create_dir_all(&bin_dir).unwrap();
     let runtime_path = bin_dir.join("stable");
     write_executable_script(&runtime_path, "#!/bin/sh\nexit 0\n");
-    let env = ocm_env(&root);
+    let mut env = ocm_env(&root);
+    install_fake_service_manager(&root, &mut env);
     let port = allocate_free_port().to_string();
 
     let add = run_ocm(
