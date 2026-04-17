@@ -34,7 +34,7 @@ pub struct SupervisorChildSpec {
     pub openclaw_config_path: String,
     pub stdout_path: String,
     pub stderr_path: String,
-    pub env_overrides: BTreeMap<String, String>,
+    pub process_env: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,7 +269,7 @@ impl<'a> SupervisorService<'a> {
                         stderr_path: display_path(
                             &logs_dir.join(format!("{}.stderr.log", process.env_name)),
                         ),
-                        env_overrides: process_env_overrides(&process.process_env, self.env),
+                        process_env: process.process_env,
                     });
                 }
                 Err(reason) => skipped_envs.push(SkippedSupervisorEnv {
@@ -287,19 +287,6 @@ impl<'a> SupervisorService<'a> {
             skipped_envs,
         })
     }
-}
-
-fn process_env_overrides(
-    process_env: &BTreeMap<String, String>,
-    base_env: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    process_env
-        .iter()
-        .filter_map(|(key, value)| match base_env.get(key) {
-            Some(existing) if existing == value => None,
-            _ => Some((key.clone(), value.clone())),
-        })
-        .collect()
 }
 
 fn view_from_state(state_path: &Path, persisted: bool, state: SupervisorState) -> SupervisorView {

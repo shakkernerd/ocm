@@ -82,7 +82,7 @@ fn supervisor_plan_reports_runnable_children_and_skipped_envs() {
     assert_eq!(demo["startMode"], "on-demand");
     assert_eq!(demo["childPort"], 18789);
     assert!(
-        demo["envOverrides"]["OPENCLAW_HOME"]
+        demo["processEnv"]["OPENCLAW_HOME"]
             .as_str()
             .unwrap()
             .contains("/envs/demo")
