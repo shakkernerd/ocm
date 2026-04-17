@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::store::{add_launcher, get_launcher, list_launchers, remove_launcher};
+use crate::supervisor::sync_supervisor_if_present;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +40,9 @@ impl<'a> LauncherService<'a> {
     }
 
     pub fn add(&self, options: AddLauncherOptions) -> Result<LauncherMeta, String> {
-        add_launcher(options, self.env, self.cwd)
+        let meta = add_launcher(options, self.env, self.cwd)?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(meta)
     }
 
     pub fn list(&self) -> Result<Vec<LauncherMeta>, String> {
@@ -51,6 +54,8 @@ impl<'a> LauncherService<'a> {
     }
 
     pub fn remove(&self, name: &str) -> Result<LauncherMeta, String> {
-        remove_launcher(name, self.env, self.cwd)
+        let meta = remove_launcher(name, self.env, self.cwd)?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(meta)
     }
 }

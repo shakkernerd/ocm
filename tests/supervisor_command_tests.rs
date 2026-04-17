@@ -164,11 +164,11 @@ fn supervisor_status_reports_missing_and_changed_state() {
             .is_empty()
     );
 
-    let removed_launcher = run_ocm(&cwd, &env, &["launcher", "remove", "dev"]);
+    let removed_runtime = run_ocm(&cwd, &env, &["runtime", "remove", "managed"]);
     assert!(
-        removed_launcher.status.success(),
+        removed_runtime.status.success(),
         "{}",
-        stderr(&removed_launcher)
+        stderr(&removed_runtime)
     );
 
     let after_change = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
@@ -177,11 +177,11 @@ fn supervisor_status_reports_missing_and_changed_state() {
     assert_eq!(after_change_body["inSync"], false);
     assert_eq!(
         after_change_body["extraChildren"],
-        serde_json::json!(["demo"])
+        serde_json::json!(["prod"])
     );
     assert_eq!(
         after_change_body["skippedEnvChanges"],
-        serde_json::json!(["demo"])
+        serde_json::json!(["prod"])
     );
 }
 
@@ -262,4 +262,39 @@ fn env_create_and_remove_refresh_persisted_supervisor_state() {
             .iter()
             .any(|child| child["envName"] == "extra")
     );
+}
+
+#[test]
+fn launcher_removal_refreshes_persisted_supervisor_state() {
+    let root = TestDir::new("supervisor-auto-refresh-launcher");
+    let (cwd, env) = setup_supervisor_fixture(&root);
+
+    let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
+    assert!(sync.status.success(), "{}", stderr(&sync));
+
+    let removed = run_ocm(&cwd, &env, &["launcher", "remove", "dev"]);
+    assert!(removed.status.success(), "{}", stderr(&removed));
+
+    let show = run_ocm(&cwd, &env, &["supervisor", "show", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_body: Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert!(
+        !show_body["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|child| child["envName"] == "demo")
+    );
+    assert!(
+        show_body["skippedEnvs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["envName"] == "demo")
+    );
+
+    let status = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let status_body: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_body["inSync"], true);
 }
