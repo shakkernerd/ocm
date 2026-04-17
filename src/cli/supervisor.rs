@@ -1,6 +1,27 @@
 use super::{Cli, render};
 
 impl Cli {
+    pub(super) fn handle_supervisor_run(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, "supervisor run")?;
+        let (args, once) = Self::consume_flag(args, "--once");
+        Self::assert_no_extra_args(&args)?;
+
+        let summary = self.supervisor_service().run(once)?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::supervisor::supervisor_run(&summary, profile));
+        Ok(
+            if once && summary.child_results.iter().any(|result| !result.success) {
+                1
+            } else {
+                0
+            },
+        )
+    }
+
     pub(super) fn handle_supervisor_plan(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "supervisor plan")?;
@@ -73,6 +94,7 @@ impl Cli {
                 self.dispatch_help_command(vec!["supervisor".to_string()])
             }
             "plan" => self.handle_supervisor_plan(rest),
+            "run" => self.handle_supervisor_run(rest),
             "sync" => self.handle_supervisor_sync(rest),
             "show" => self.handle_supervisor_show(rest),
             "status" => self.handle_supervisor_status(rest),

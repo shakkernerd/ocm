@@ -1,6 +1,6 @@
 use super::{RenderProfile, format_rfc3339};
 use crate::infra::terminal::{Cell, Tone, paint, render_table, terminal_width};
-use crate::supervisor::{SupervisorStatusSummary, SupervisorView};
+use crate::supervisor::{SupervisorRunSummary, SupervisorStatusSummary, SupervisorView};
 
 pub fn supervisor_state(summary: &SupervisorView, profile: RenderProfile) -> Vec<String> {
     supervisor_state_with_width(summary, profile, terminal_width())
@@ -188,5 +188,82 @@ fn supervisor_status_raw(summary: &SupervisorStatusSummary) -> Vec<String> {
             summary.skipped_env_changes.join(",")
         ));
     }
+    lines
+}
+
+pub fn supervisor_run(summary: &SupervisorRunSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return supervisor_run_raw(summary);
+    }
+
+    let mut lines = vec![paint("Supervisor run", Tone::Strong, profile.color)];
+    lines.push(format!("State: {}", summary.state_path));
+    lines.push(format!(
+        "Mode: {}",
+        if summary.once { "once" } else { "watch" }
+    ));
+    lines.push(format!("Children: {}", summary.child_count));
+    if summary.stopped_by_signal {
+        lines.push("Stopped by signal: yes".to_string());
+    }
+
+    if !summary.child_results.is_empty() {
+        lines.push(String::new());
+        let rows = summary
+            .child_results
+            .iter()
+            .map(|result| {
+                vec![
+                    Cell::accent(result.env_name.clone()),
+                    Cell::plain(format!("{}:{}", result.binding_kind, result.binding_name)),
+                    Cell::new(
+                        result
+                            .exit_code
+                            .map(|code| code.to_string())
+                            .unwrap_or_else(|| "signal".to_string()),
+                        crate::infra::terminal::Align::Left,
+                        if result.success {
+                            Tone::Success
+                        } else {
+                            Tone::Danger
+                        },
+                    ),
+                    Cell::right(result.restart_count.to_string(), Tone::Muted),
+                ]
+            })
+            .collect::<Vec<_>>();
+        lines.extend(render_table(
+            &["Env", "Binding", "Exit", "Restarts"],
+            &rows,
+            profile.color,
+        ));
+    }
+
+    lines
+}
+
+fn supervisor_run_raw(summary: &SupervisorRunSummary) -> Vec<String> {
+    let mut lines = vec![
+        format!("statePath: {}", summary.state_path),
+        format!("mode: {}", if summary.once { "once" } else { "watch" }),
+        format!("children: {}", summary.child_count),
+        format!("stoppedBySignal: {}", summary.stopped_by_signal),
+    ];
+
+    for result in &summary.child_results {
+        lines.push(format!(
+            "{}  binding={}:{}  exit={}  success={}  restarts={}",
+            result.env_name,
+            result.binding_kind,
+            result.binding_name,
+            result
+                .exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            result.success,
+            result.restart_count
+        ));
+    }
+
     lines
 }

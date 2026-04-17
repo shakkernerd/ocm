@@ -54,6 +54,77 @@ fn setup_supervisor_fixture(
     (cwd, env)
 }
 
+fn setup_supervisor_run_fixture(
+    root: &TestDir,
+) -> (
+    std::path::PathBuf,
+    std::collections::BTreeMap<String, String>,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(root);
+
+    let launcher_marker = root.child("launcher-ran.txt");
+    let runtime_marker = root.child("runtime-ran.txt");
+
+    let launcher_script = root.child("bin/launcher-openclaw");
+    write_executable_script(
+        &launcher_script,
+        &format!(
+            "#!/bin/sh\nprintf 'launcher\\n' > '{}'\n",
+            path_string(&launcher_marker)
+        ),
+    );
+    let runtime_script = root.child("bin/runtime-openclaw");
+    write_executable_script(
+        &runtime_script,
+        &format!(
+            "#!/bin/sh\nprintf 'runtime\\n' > '{}'\n",
+            path_string(&runtime_marker)
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "dev",
+            "--command",
+            &path_string(&launcher_script),
+        ],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let runtime = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "add",
+            "managed",
+            "--path",
+            &path_string(&runtime_script),
+        ],
+    );
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+
+    let demo = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
+    assert!(demo.status.success(), "{}", stderr(&demo));
+
+    let prod = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "prod", "--runtime", "managed"],
+    );
+    assert!(prod.status.success(), "{}", stderr(&prod));
+
+    (cwd, env, launcher_marker, runtime_marker)
+}
+
 #[test]
 fn supervisor_plan_reports_runnable_children_and_skipped_envs() {
     let root = TestDir::new("supervisor-plan");
@@ -135,6 +206,32 @@ fn supervisor_sync_persists_and_show_reads_the_state() {
     assert_eq!(show_body["statePath"], sync_body["statePath"]);
     assert_eq!(show_body["children"], sync_body["children"]);
     assert_eq!(show_body["skippedEnvs"], sync_body["skippedEnvs"]);
+}
+
+#[test]
+fn supervisor_run_once_executes_planned_children() {
+    let root = TestDir::new("supervisor-run-once");
+    let (cwd, env, launcher_marker, runtime_marker) = setup_supervisor_run_fixture(&root);
+
+    let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
+    assert!(sync.status.success(), "{}", stderr(&sync));
+
+    let run = run_ocm(&cwd, &env, &["supervisor", "run", "--once", "--json"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    let body: Value = serde_json::from_slice(&run.stdout).unwrap();
+    assert_eq!(body["once"], true);
+    assert_eq!(body["childCount"], 2);
+    assert_eq!(body["childResults"].as_array().unwrap().len(), 2);
+    assert!(
+        body["childResults"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|result| result["success"] == true)
+    );
+
+    assert_eq!(fs::read_to_string(launcher_marker).unwrap(), "launcher\n");
+    assert_eq!(fs::read_to_string(runtime_marker).unwrap(), "runtime\n");
 }
 
 #[test]

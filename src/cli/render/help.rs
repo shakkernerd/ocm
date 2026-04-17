@@ -1156,6 +1156,7 @@ pub fn supervisor_help(cmd: &str) -> String {
                     "plan",
                     "Compute the desired supervisor state from current envs",
                 ),
+                ("run", "Run the foreground OCM supervisor process"),
                 (
                     "status",
                     "Compare planned supervisor state with the persisted state",
@@ -1166,6 +1167,7 @@ pub fn supervisor_help(cmd: &str) -> String {
         )],
         vec![
             format!("{cmd} supervisor plan"),
+            format!("{cmd} supervisor run --once"),
             format!("{cmd} supervisor status"),
             format!("{cmd} supervisor sync"),
             format!("{cmd} supervisor show --json"),
@@ -2339,6 +2341,30 @@ pub fn supervisor_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "This does not write state to disk.",
                 "Each runnable env becomes one child entry with its gateway launch spec.",
+            ],
+        ),
+        "run" => render_leaf(
+            "Run the supervisor",
+            "Start the foreground OCM supervisor process from the persisted supervisor state file.",
+            vec![format!("{cmd} supervisor run [--once] [--raw] [--json]")],
+            &[
+                (
+                    "--once",
+                    "Start each planned child once, wait for exits, then return",
+                ),
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY summary rendering",
+                ),
+                ("--json", "Print the run summary as JSON on exit"),
+            ],
+            vec![
+                format!("{cmd} supervisor run --once"),
+                format!("{cmd} supervisor sync"),
+            ],
+            &[
+                "Run `supervisor sync` first so the process reads the current persisted state.",
+                "Without `--once`, the foreground supervisor restarts child gateway processes when they exit and stops on Ctrl-C.",
             ],
         ),
         "sync" => render_leaf(

@@ -1,5 +1,13 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread::sleep;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -12,6 +20,8 @@ use crate::store::{
 
 const SUPERVISOR_STATE_KIND: &str = "ocm-supervisor-state";
 const DEFAULT_START_MODE: &str = "on-demand";
+const SUPERVISOR_POLL_INTERVAL_MS: u64 = 200;
+const SUPERVISOR_RESTART_DELAY_MS: u64 = 400;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +98,27 @@ pub struct SupervisorStatusSummary {
     pub skipped_env_changes: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorChildRunResult {
+    pub env_name: String,
+    pub binding_kind: String,
+    pub binding_name: String,
+    pub exit_code: Option<i32>,
+    pub success: bool,
+    pub restart_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorRunSummary {
+    pub state_path: String,
+    pub once: bool,
+    pub child_count: usize,
+    pub stopped_by_signal: bool,
+    pub child_results: Vec<SupervisorChildRunResult>,
+}
+
 pub struct SupervisorService<'a> {
     env: &'a BTreeMap<String, String>,
     cwd: &'a Path,
@@ -128,14 +159,16 @@ impl<'a> SupervisorService<'a> {
     }
 
     pub fn show(&self) -> Result<SupervisorView, String> {
-        let state_path = supervisor_state_path(self.env, self.cwd)?;
-        if !state_path.exists() {
-            return Err(
-                "supervisor state has not been synced yet; run \"ocm supervisor sync\"".to_string(),
-            );
-        }
-        let state: SupervisorState = read_json(&state_path)?;
+        let (state_path, state) = self.read_persisted_state()?;
         Ok(view_from_state(&state_path, true, state))
+    }
+
+    pub fn run(&self, once: bool) -> Result<SupervisorRunSummary, String> {
+        let (state_path, state) = self.read_persisted_state()?;
+        if once {
+            return self.run_once(&state_path, state);
+        }
+        self.run_until_stopped(&state_path, state)
     }
 
     pub fn status(&self) -> Result<SupervisorStatusSummary, String> {
@@ -286,6 +319,208 @@ impl<'a> SupervisorService<'a> {
             children,
             skipped_envs,
         })
+    }
+
+    fn read_persisted_state(&self) -> Result<(PathBuf, SupervisorState), String> {
+        let state_path = supervisor_state_path(self.env, self.cwd)?;
+        if !state_path.exists() {
+            return Err(
+                "supervisor state has not been synced yet; run \"ocm supervisor sync\"".to_string(),
+            );
+        }
+        let state = read_json(&state_path)?;
+        Ok((state_path, state))
+    }
+
+    fn run_once(
+        &self,
+        state_path: &Path,
+        state: SupervisorState,
+    ) -> Result<SupervisorRunSummary, String> {
+        let mut child_results = Vec::with_capacity(state.children.len());
+        for spec in state.children {
+            eprintln!(
+                "ocm supervisor: starting {} ({})",
+                spec.env_name,
+                child_binding_label(&spec)
+            );
+            let mut child = spawn_supervisor_child(&spec)?;
+            let status = child.wait().map_err(|error| {
+                format!("failed waiting for env \"{}\": {error}", spec.env_name)
+            })?;
+            child_results.push(child_run_result(&spec, status.code(), 0));
+        }
+
+        Ok(SupervisorRunSummary {
+            state_path: display_path(state_path),
+            once: true,
+            child_count: child_results.len(),
+            stopped_by_signal: false,
+            child_results,
+        })
+    }
+
+    fn run_until_stopped(
+        &self,
+        state_path: &Path,
+        state: SupervisorState,
+    ) -> Result<SupervisorRunSummary, String> {
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        let signal_flag = Arc::clone(&stop_requested);
+        ctrlc::set_handler(move || {
+            signal_flag.store(true, Ordering::SeqCst);
+        })
+        .map_err(|error| format!("failed to install supervisor signal handler: {error}"))?;
+
+        let mut running = state
+            .children
+            .into_iter()
+            .map(|spec| spawn_running_child(spec, 0))
+            .collect::<Result<Vec<_>, _>>()?;
+        let managed_child_count = running.len();
+        let mut child_results = Vec::new();
+
+        while !stop_requested.load(Ordering::SeqCst) {
+            for running_child in &mut running {
+                if let Some(status) = running_child.child.try_wait().map_err(|error| {
+                    format!(
+                        "failed to poll env \"{}\": {error}",
+                        running_child.spec.env_name
+                    )
+                })? {
+                    let exit_code = status.code();
+                    eprintln!(
+                        "ocm supervisor: {} exited with {}; restarting",
+                        running_child.spec.env_name,
+                        exit_code
+                            .map(|code| code.to_string())
+                            .unwrap_or_else(|| "signal".to_string())
+                    );
+                    child_results.push(child_run_result(
+                        &running_child.spec,
+                        exit_code,
+                        running_child.restart_count,
+                    ));
+                    sleep(Duration::from_millis(SUPERVISOR_RESTART_DELAY_MS));
+                    if stop_requested.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    *running_child = spawn_running_child(
+                        running_child.spec.clone(),
+                        running_child.restart_count + 1,
+                    )?;
+                }
+            }
+            if !stop_requested.load(Ordering::SeqCst) {
+                sleep(Duration::from_millis(SUPERVISOR_POLL_INTERVAL_MS));
+            }
+        }
+
+        for mut running_child in running {
+            let _ = running_child.child.kill();
+            let _ = running_child.child.wait();
+        }
+
+        Ok(SupervisorRunSummary {
+            state_path: display_path(state_path),
+            once: false,
+            child_count: managed_child_count,
+            stopped_by_signal: true,
+            child_results,
+        })
+    }
+}
+
+struct RunningSupervisorChild {
+    spec: SupervisorChildSpec,
+    child: Child,
+    restart_count: usize,
+}
+
+fn spawn_running_child(
+    spec: SupervisorChildSpec,
+    restart_count: usize,
+) -> Result<RunningSupervisorChild, String> {
+    eprintln!(
+        "ocm supervisor: starting {} ({})",
+        spec.env_name,
+        child_binding_label(&spec)
+    );
+    Ok(RunningSupervisorChild {
+        child: spawn_supervisor_child(&spec)?,
+        spec,
+        restart_count,
+    })
+}
+
+fn spawn_supervisor_child(spec: &SupervisorChildSpec) -> Result<Child, String> {
+    let Some(program) = spec.program_arguments.first() else {
+        return Err(format!(
+            "supervisor child env \"{}\" is missing program arguments",
+            spec.env_name
+        ));
+    };
+    if let Some(parent) = Path::new(&spec.stdout_path).parent() {
+        ensure_dir(parent)?;
+    }
+    if let Some(parent) = Path::new(&spec.stderr_path).parent() {
+        ensure_dir(parent)?;
+    }
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&spec.stdout_path)
+        .map_err(|error| {
+            format!(
+                "failed opening stdout log for env \"{}\": {error}",
+                spec.env_name
+            )
+        })?;
+    let stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&spec.stderr_path)
+        .map_err(|error| {
+            format!(
+                "failed opening stderr log for env \"{}\": {error}",
+                spec.env_name
+            )
+        })?;
+
+    Command::new(program)
+        .args(spec.program_arguments.iter().skip(1))
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .env_clear()
+        .envs(&spec.process_env)
+        .current_dir(Path::new(&spec.run_dir))
+        .spawn()
+        .map_err(|error| {
+            format!(
+                "failed starting env \"{}\" with {}: {error}",
+                spec.env_name,
+                child_binding_label(spec)
+            )
+        })
+}
+
+fn child_binding_label(spec: &SupervisorChildSpec) -> String {
+    format!("{}:{}", spec.binding_kind, spec.binding_name)
+}
+
+fn child_run_result(
+    spec: &SupervisorChildSpec,
+    exit_code: Option<i32>,
+    restart_count: usize,
+) -> SupervisorChildRunResult {
+    SupervisorChildRunResult {
+        env_name: spec.env_name.clone(),
+        binding_kind: spec.binding_kind.clone(),
+        binding_name: spec.binding_name.clone(),
+        exit_code,
+        success: exit_code == Some(0),
+        restart_count,
     }
 }
 
