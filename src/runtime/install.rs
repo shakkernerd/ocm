@@ -242,32 +242,41 @@ impl<'a> RuntimeService<'a> {
         } else {
             OfficialRuntimePrepareAction::Installed
         };
+        self.refresh_supervisor_if_present()?;
         Ok((meta, action))
     }
 
     pub fn install(&self, options: InstallRuntimeOptions) -> Result<RuntimeMeta, String> {
-        install_runtime(options, self.env, self.cwd)
+        let meta = install_runtime(options, self.env, self.cwd)?;
+        self.refresh_supervisor_if_present()?;
+        Ok(meta)
     }
 
     pub fn install_from_url(
         &self,
         options: InstallRuntimeFromUrlOptions,
     ) -> Result<RuntimeMeta, String> {
-        install_runtime_from_url(options, self.env, self.cwd)
+        let meta = install_runtime_from_url(options, self.env, self.cwd)?;
+        self.refresh_supervisor_if_present()?;
+        Ok(meta)
     }
 
     pub fn install_from_release(
         &self,
         options: InstallRuntimeFromReleaseOptions,
     ) -> Result<RuntimeMeta, String> {
-        install_runtime_from_release(options, self.env, self.cwd)
+        let meta = install_runtime_from_release(options, self.env, self.cwd)?;
+        self.refresh_supervisor_if_present()?;
+        Ok(meta)
     }
 
     pub fn install_from_official_openclaw_release(
         &self,
         options: InstallRuntimeFromOfficialReleaseOptions,
     ) -> Result<RuntimeMeta, String> {
-        install_runtime_from_official_openclaw_release(options, self.env, self.cwd)
+        let meta = install_runtime_from_official_openclaw_release(options, self.env, self.cwd)?;
+        self.refresh_supervisor_if_present()?;
+        Ok(meta)
     }
 
     pub fn update_from_release(
@@ -305,7 +314,7 @@ impl<'a> RuntimeService<'a> {
         };
 
         if is_official_openclaw_releases_url(Some(manifest_url.as_str()), self.env) {
-            return install_runtime_from_official_openclaw_release(
+            let meta = install_runtime_from_official_openclaw_release(
                 InstallRuntimeFromOfficialReleaseOptions {
                     name: existing.name,
                     version,
@@ -316,9 +325,12 @@ impl<'a> RuntimeService<'a> {
                 self.env,
                 self.cwd,
             );
+            let meta = meta?;
+            self.refresh_supervisor_if_present()?;
+            return Ok(meta);
         }
 
-        install_runtime_from_release(
+        let meta = install_runtime_from_release(
             InstallRuntimeFromReleaseOptions {
                 name: existing.name,
                 manifest_url,
@@ -329,7 +341,9 @@ impl<'a> RuntimeService<'a> {
             },
             self.env,
             self.cwd,
-        )
+        )?;
+        self.refresh_supervisor_if_present()?;
+        Ok(meta)
     }
 
     pub fn update_all_from_release(

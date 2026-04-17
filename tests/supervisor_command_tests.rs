@@ -149,8 +149,10 @@ fn supervisor_status_reports_missing_and_changed_state() {
     assert_eq!(before_body["inSync"], false);
     assert_eq!(before_body["missingChildren"].as_array().unwrap().len(), 2);
 
-    let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
+    let sync = run_ocm(&cwd, &env, &["supervisor", "sync", "--json"]);
     assert!(sync.status.success(), "{}", stderr(&sync));
+    let sync_body: Value = serde_json::from_slice(&sync.stdout).unwrap();
+    let state_path = sync_body["statePath"].as_str().unwrap();
 
     let after_sync = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
     assert!(after_sync.status.success(), "{}", stderr(&after_sync));
@@ -164,23 +166,17 @@ fn supervisor_status_reports_missing_and_changed_state() {
             .is_empty()
     );
 
-    let removed_runtime = run_ocm(&cwd, &env, &["runtime", "remove", "managed"]);
-    assert!(
-        removed_runtime.status.success(),
-        "{}",
-        stderr(&removed_runtime)
-    );
+    let mut persisted: Value = serde_json::from_slice(&fs::read(state_path).unwrap()).unwrap();
+    let children = persisted["children"].as_array_mut().unwrap();
+    children.retain(|child| child["envName"] != "prod");
+    fs::write(state_path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
 
     let after_change = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
     assert!(after_change.status.success(), "{}", stderr(&after_change));
     let after_change_body: Value = serde_json::from_slice(&after_change.stdout).unwrap();
     assert_eq!(after_change_body["inSync"], false);
     assert_eq!(
-        after_change_body["extraChildren"],
-        serde_json::json!(["prod"])
-    );
-    assert_eq!(
-        after_change_body["skippedEnvChanges"],
+        after_change_body["missingChildren"],
         serde_json::json!(["prod"])
     );
 }
@@ -291,6 +287,41 @@ fn launcher_removal_refreshes_persisted_supervisor_state() {
             .unwrap()
             .iter()
             .any(|entry| entry["envName"] == "demo")
+    );
+
+    let status = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let status_body: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_body["inSync"], true);
+}
+
+#[test]
+fn runtime_removal_refreshes_persisted_supervisor_state() {
+    let root = TestDir::new("supervisor-auto-refresh-runtime");
+    let (cwd, env) = setup_supervisor_fixture(&root);
+
+    let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
+    assert!(sync.status.success(), "{}", stderr(&sync));
+
+    let removed = run_ocm(&cwd, &env, &["runtime", "remove", "managed"]);
+    assert!(removed.status.success(), "{}", stderr(&removed));
+
+    let show = run_ocm(&cwd, &env, &["supervisor", "show", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_body: Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert!(
+        !show_body["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|child| child["envName"] == "prod")
+    );
+    assert!(
+        show_body["skippedEnvs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["envName"] == "prod")
     );
 
     let status = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);

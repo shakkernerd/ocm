@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::store::{add_runtime, get_runtime_verified, list_runtimes, remove_runtime};
+use crate::supervisor::sync_supervisor_if_present;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,12 +89,19 @@ pub struct RuntimeService<'a> {
 }
 
 impl<'a> RuntimeService<'a> {
+    pub(crate) fn refresh_supervisor_if_present(&self) -> Result<(), String> {
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(())
+    }
+
     pub fn new(env: &'a BTreeMap<String, String>, cwd: &'a Path) -> Self {
         Self { env, cwd }
     }
 
     pub fn add(&self, options: AddRuntimeOptions) -> Result<RuntimeMeta, String> {
-        add_runtime(options, self.env, self.cwd)
+        let meta = add_runtime(options, self.env, self.cwd)?;
+        self.refresh_supervisor_if_present()?;
+        Ok(meta)
     }
 
     pub fn list(&self) -> Result<Vec<RuntimeMeta>, String> {
@@ -105,6 +113,8 @@ impl<'a> RuntimeService<'a> {
     }
 
     pub fn remove(&self, name: &str) -> Result<RuntimeMeta, String> {
-        remove_runtime(name, self.env, self.cwd)
+        let meta = remove_runtime(name, self.env, self.cwd)?;
+        self.refresh_supervisor_if_present()?;
+        Ok(meta)
     }
 }
