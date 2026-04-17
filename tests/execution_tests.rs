@@ -1,7 +1,10 @@
 use std::path::Path;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use ocm::env::EnvMeta;
-use ocm::env::{ExecutionBinding, resolve_execution_binding, resolve_runtime_run_dir};
+use ocm::env::{
+    ExecutionBinding, GatewayProcessSpec, resolve_execution_binding, resolve_runtime_run_dir,
+};
 use ocm::launcher::{
     LauncherMeta, build_launcher_command, resolve_launcher_name, resolve_launcher_run_dir,
 };
@@ -136,4 +139,63 @@ fn resolve_execution_binding_uses_runtime_and_launcher_wording_when_unbound() {
 fn resolve_runtime_run_dir_uses_the_calling_cwd() {
     let run_dir = resolve_runtime_run_dir(Path::new("/tmp/fallback"));
     assert_eq!(run_dir, Path::new("/tmp/fallback"));
+}
+
+#[test]
+fn gateway_process_spec_shell_arguments_wrap_the_launcher_command() {
+    let spec = GatewayProcessSpec {
+        env_name: "demo".to_string(),
+        binding_kind: "launcher".to_string(),
+        binding_name: "stable".to_string(),
+        command: Some("openclaw gateway run --port 18789".to_string()),
+        binary_path: None,
+        runtime_source_kind: None,
+        runtime_release_version: None,
+        runtime_release_channel: None,
+        args: Vec::new(),
+        run_dir: PathBuf::from("/tmp/demo"),
+        process_env: BTreeMap::new(),
+    };
+
+    assert_eq!(
+        spec.program_arguments(),
+        vec![
+            "/bin/sh".to_string(),
+            "-lc".to_string(),
+            "openclaw gateway run --port 18789".to_string()
+        ]
+    );
+}
+
+#[test]
+fn gateway_process_spec_direct_arguments_preserve_the_binary_and_args() {
+    let spec = GatewayProcessSpec {
+        env_name: "demo".to_string(),
+        binding_kind: "runtime".to_string(),
+        binding_name: "managed".to_string(),
+        command: None,
+        binary_path: Some("/tmp/runtime/openclaw".to_string()),
+        runtime_source_kind: Some("official".to_string()),
+        runtime_release_version: Some("1.2.3".to_string()),
+        runtime_release_channel: Some("stable".to_string()),
+        args: vec![
+            "gateway".to_string(),
+            "run".to_string(),
+            "--port".to_string(),
+            "18789".to_string(),
+        ],
+        run_dir: PathBuf::from("/tmp/demo"),
+        process_env: BTreeMap::new(),
+    };
+
+    assert_eq!(
+        spec.program_arguments(),
+        vec![
+            "/tmp/runtime/openclaw".to_string(),
+            "gateway".to_string(),
+            "run".to_string(),
+            "--port".to_string(),
+            "18789".to_string()
+        ]
+    );
 }

@@ -10,7 +10,8 @@ use std::path::Path;
 
 pub use execution::ExecutionSummary;
 pub use execution::{
-    ExecutionBinding, ResolvedExecution, resolve_execution_binding, resolve_runtime_run_dir,
+    ExecutionBinding, GatewayProcessSpec, ResolvedExecution, resolve_execution_binding,
+    resolve_gateway_process_spec, resolve_runtime_run_dir,
 };
 pub use health::{
     EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,

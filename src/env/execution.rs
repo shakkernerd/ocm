@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use super::{EnvMeta, EnvironmentService};
+use crate::infra::shell::build_openclaw_env;
 use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
 use crate::runtime::resolve_runtime_launch;
 use crate::store::{get_launcher, get_runtime_verified};
@@ -20,6 +22,21 @@ pub struct ExecutionSummary {
     pub runtime_release_channel: Option<String>,
     pub forwarded_args: Vec<String>,
     pub run_dir: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct GatewayProcessSpec {
+    pub env_name: String,
+    pub binding_kind: String,
+    pub binding_name: String,
+    pub command: Option<String>,
+    pub binary_path: Option<String>,
+    pub runtime_source_kind: Option<String>,
+    pub runtime_release_version: Option<String>,
+    pub runtime_release_channel: Option<String>,
+    pub args: Vec<String>,
+    pub run_dir: PathBuf,
+    pub process_env: BTreeMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -66,6 +83,80 @@ pub fn resolve_runtime_run_dir(fallback_cwd: &Path) -> PathBuf {
     fallback_cwd.to_path_buf()
 }
 
+fn gateway_shell_program_arguments(command: &str) -> Vec<String> {
+    if cfg!(windows) {
+        vec!["cmd".to_string(), "/C".to_string(), command.to_string()]
+    } else {
+        vec![
+            "/bin/sh".to_string(),
+            "-lc".to_string(),
+            command.to_string(),
+        ]
+    }
+}
+
+pub fn resolve_gateway_process_spec(
+    env_meta: &EnvMeta,
+    process_env: &BTreeMap<String, String>,
+    cwd: &Path,
+    bootstrap_managed_node: bool,
+) -> Result<GatewayProcessSpec, String> {
+    let port = env_meta.gateway_port.ok_or_else(|| {
+        format!(
+            "failed to resolve gateway port for env \"{}\"",
+            env_meta.name
+        )
+    })?;
+    let gateway_args = vec![
+        "gateway".to_string(),
+        "run".to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ];
+
+    match resolve_execution_binding(env_meta, None, None)? {
+        ExecutionBinding::Launcher(binding_name) => {
+            let launcher = get_launcher(&binding_name, process_env, cwd)?;
+            Ok(GatewayProcessSpec {
+                env_name: env_meta.name.clone(),
+                binding_kind: "launcher".to_string(),
+                binding_name,
+                command: Some(build_launcher_command(&launcher, &gateway_args)),
+                binary_path: None,
+                runtime_source_kind: None,
+                runtime_release_version: None,
+                runtime_release_channel: None,
+                args: Vec::new(),
+                run_dir: resolve_launcher_run_dir(&launcher, Path::new(&env_meta.root)),
+                process_env: build_openclaw_env(env_meta, process_env),
+            })
+        }
+        ExecutionBinding::Runtime(binding_name) => {
+            let runtime = get_runtime_verified(&binding_name, process_env, cwd)?;
+            let launch = resolve_runtime_launch(
+                &runtime,
+                &gateway_args,
+                process_env,
+                cwd,
+                bootstrap_managed_node,
+            )?;
+            Ok(GatewayProcessSpec {
+                env_name: env_meta.name.clone(),
+                binding_kind: "runtime".to_string(),
+                binding_name,
+                command: None,
+                binary_path: Some(launch.program),
+                runtime_source_kind: Some(runtime.source_kind.as_str().to_string()),
+                runtime_release_version: runtime.release_version.clone(),
+                runtime_release_channel: runtime.release_channel.clone(),
+                args: launch.args,
+                run_dir: Path::new(&env_meta.root).to_path_buf(),
+                process_env: build_openclaw_env(env_meta, process_env),
+            })
+        }
+    }
+}
+
 fn normalize_openclaw_args_for_env(args: &[String]) -> Result<Vec<String>, String> {
     if !matches!(args.first().map(String::as_str), Some("onboard")) {
         return Ok(args.to_vec());
@@ -110,6 +201,20 @@ pub enum ResolvedExecution {
     },
 }
 
+impl GatewayProcessSpec {
+    pub fn program_arguments(&self) -> Vec<String> {
+        match (&self.command, &self.binary_path) {
+            (Some(command), _) => gateway_shell_program_arguments(command),
+            (None, Some(binary_path)) => {
+                let mut program_arguments = vec![binary_path.clone()];
+                program_arguments.extend(self.args.iter().cloned());
+                program_arguments
+            }
+            (None, None) => Vec::new(),
+        }
+    }
+}
+
 impl<'a> EnvironmentService<'a> {
     pub fn resolve(
         &self,
@@ -131,6 +236,15 @@ impl<'a> EnvironmentService<'a> {
     ) -> Result<ResolvedExecution, String> {
         let env = self.apply_effective_gateway_port(self.touch(name)?)?;
         self.resolve_execution(env, runtime_override, launcher_override, args)
+    }
+
+    pub fn resolve_gateway_process(
+        &self,
+        name: &str,
+        bootstrap_managed_node: bool,
+    ) -> Result<GatewayProcessSpec, String> {
+        let env = self.apply_effective_gateway_port(self.get(name)?)?;
+        resolve_gateway_process_spec(&env, self.env, self.cwd, bootstrap_managed_node)
     }
 
     fn resolve_execution(

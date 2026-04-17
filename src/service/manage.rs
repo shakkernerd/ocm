@@ -9,13 +9,14 @@ use std::process::Command;
 use serde::Serialize;
 
 use super::inspect::{
-    GLOBAL_GATEWAY_LABEL, ServiceLaunchSpec, current_uid, global_plist_path, managed_plist_path,
-    managed_service_label, resolve_service_launch, service_status,
+    GLOBAL_GATEWAY_LABEL, current_uid, global_plist_path, managed_plist_path,
+    managed_service_label, service_status,
 };
 use super::platform::{
     ServiceManagerKind, service_backend_support_error, service_manager_kind,
     unsupported_service_manager_message,
 };
+use crate::env::resolve_gateway_process_spec;
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::infra::shell::build_openclaw_env;
 use crate::store::{
@@ -512,47 +513,13 @@ fn build_prepared_service(
     persisted_gateway_port: bool,
     previous_gateway_port: Option<u32>,
 ) -> Result<PreparedService, String> {
-    let launch = resolve_service_launch(&env_meta, env, cwd, true)?;
+    let process_spec = resolve_gateway_process_spec(&env_meta, env, cwd, true)?;
     let managed_label = managed_service_label(&env_meta.name, env, cwd)?;
     let managed_plist_path = managed_plist_path(&env_meta.name, env, cwd)?;
     let log_dir = service_log_dir(&env_meta);
     let stdout_path = service_stdout_log_path(&env_meta);
     let stderr_path = service_stderr_log_path(&env_meta);
-    let (binding_kind, binding_name, command, binary_path, args, program_arguments, run_dir) =
-        match launch {
-            ServiceLaunchSpec::Launcher {
-                binding_name,
-                command,
-                run_dir,
-            } => (
-                "launcher".to_string(),
-                binding_name,
-                Some(command.clone()),
-                None,
-                Vec::new(),
-                vec!["/bin/sh".to_string(), "-lc".to_string(), command],
-                run_dir,
-            ),
-            ServiceLaunchSpec::Runtime {
-                binding_name,
-                binary_path,
-                args,
-                run_dir,
-                ..
-            } => {
-                let mut program_arguments = vec![binary_path.clone()];
-                program_arguments.extend(args.iter().cloned());
-                (
-                    "runtime".to_string(),
-                    binding_name,
-                    None,
-                    Some(binary_path),
-                    args,
-                    program_arguments,
-                    run_dir,
-                )
-            }
-        };
+    let program_arguments = process_spec.program_arguments();
 
     let warnings = service_install_warnings(
         &env_meta.name,
@@ -563,13 +530,13 @@ fn build_prepared_service(
 
     Ok(PreparedService {
         env_meta,
-        binding_kind,
-        binding_name,
-        command,
-        binary_path,
-        args,
+        binding_kind: process_spec.binding_kind,
+        binding_name: process_spec.binding_name,
+        command: process_spec.command,
+        binary_path: process_spec.binary_path,
+        args: process_spec.args,
         program_arguments,
-        run_dir,
+        run_dir: process_spec.run_dir,
         managed_label,
         managed_plist_path,
         log_dir,

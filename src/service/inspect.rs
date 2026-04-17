@@ -13,13 +13,10 @@ use super::platform::{
     managed_service_identity, service_definition_dir, service_definition_extension,
     service_manager_kind,
 };
-use crate::env::{EnvMeta, EnvironmentService, resolve_execution_binding};
+use crate::env::{EnvMeta, EnvironmentService, resolve_gateway_process_spec};
 use crate::infra::shell::{build_openclaw_env, quote_posix};
-use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
-use crate::runtime::resolve_runtime_launch;
 use crate::store::{
-    derive_env_paths, display_path, get_environment, get_launcher, get_runtime_verified,
-    list_environments, resolve_ocm_home,
+    derive_env_paths, display_path, get_environment, list_environments, resolve_ocm_home,
 };
 
 pub(crate) const GLOBAL_GATEWAY_LABEL: &str = "ai.openclaw.gateway";
@@ -1197,44 +1194,29 @@ pub(crate) fn resolve_service_launch(
     cwd: &Path,
     bootstrap_managed_node: bool,
 ) -> Result<ServiceLaunchSpec, String> {
-    let port = env
-        .gateway_port
-        .ok_or_else(|| format!("failed to resolve gateway port for env \"{}\"", env.name))?;
-    let gateway_args = vec![
-        "gateway".to_string(),
-        "run".to_string(),
-        "--port".to_string(),
-        port.to_string(),
-    ];
-
-    match resolve_execution_binding(env, None, None)? {
-        crate::env::ExecutionBinding::Launcher(name) => {
-            let launcher = get_launcher(&name, process_env, cwd)?;
-            Ok(ServiceLaunchSpec::Launcher {
-                binding_name: name,
-                command: build_launcher_command(&launcher, &gateway_args),
-                run_dir: resolve_launcher_run_dir(&launcher, Path::new(&env.root)),
-            })
-        }
-        crate::env::ExecutionBinding::Runtime(name) => {
-            let runtime = get_runtime_verified(&name, process_env, cwd)?;
-            let launch = resolve_runtime_launch(
-                &runtime,
-                &gateway_args,
-                process_env,
-                cwd,
-                bootstrap_managed_node,
-            )?;
-            Ok(ServiceLaunchSpec::Runtime {
-                binding_name: name,
-                binary_path: launch.program,
-                runtime_source_kind: runtime.source_kind.as_str().to_string(),
-                runtime_release_version: runtime.release_version.clone(),
-                runtime_release_channel: runtime.release_channel.clone(),
-                args: launch.args,
-                run_dir: Path::new(&env.root).to_path_buf(),
-            })
-        }
+    let process_spec = resolve_gateway_process_spec(env, process_env, cwd, bootstrap_managed_node)?;
+    match process_spec.binding_kind.as_str() {
+        "launcher" => Ok(ServiceLaunchSpec::Launcher {
+            binding_name: process_spec.binding_name,
+            command: process_spec
+                .command
+                .ok_or_else(|| "missing launcher command for gateway process spec".to_string())?,
+            run_dir: process_spec.run_dir,
+        }),
+        "runtime" => Ok(ServiceLaunchSpec::Runtime {
+            binding_name: process_spec.binding_name,
+            binary_path: process_spec
+                .binary_path
+                .ok_or_else(|| "missing runtime binary for gateway process spec".to_string())?,
+            runtime_source_kind: process_spec.runtime_source_kind.ok_or_else(|| {
+                "missing runtime source kind for gateway process spec".to_string()
+            })?,
+            runtime_release_version: process_spec.runtime_release_version,
+            runtime_release_channel: process_spec.runtime_release_channel,
+            args: process_spec.args,
+            run_dir: process_spec.run_dir,
+        }),
+        kind => Err(format!("unsupported gateway process binding kind: {kind}")),
     }
 }
 
