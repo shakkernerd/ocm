@@ -9,3 +9,4 @@ pub mod migrate;
 pub mod runtime;
 pub mod service;
 pub mod store;
+pub mod supervisor;

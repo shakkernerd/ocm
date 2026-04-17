@@ -75,7 +75,7 @@ pub fn root_help(cmd: &str) -> String {
     let lines = vec![
         format!("OpenClaw Manager v{}", env!("CARGO_PKG_VERSION")),
         String::new(),
-        "Manage isolated OpenClaw environments, releases, runtimes, launchers, and services."
+        "Manage isolated OpenClaw environments, releases, runtimes, launchers, services, and supervisor state."
             .to_string(),
     ];
     let mut lines = lines;
@@ -140,6 +140,10 @@ pub fn root_help(cmd: &str) -> String {
                 "runtime",
                 "Registered and installer-managed OpenClaw runtimes",
             ),
+            (
+                "supervisor",
+                "Supervisor state for many env-scoped gateway runtimes",
+            ),
             ("service", "Persistent OpenClaw services for environments"),
             ("init", "Shell setup snippets for using ocm"),
             ("help", "Show help for a command or command group"),
@@ -181,6 +185,7 @@ pub fn root_help(cmd: &str) -> String {
             format!("{cmd} help env"),
             format!("{cmd} help manifest"),
             format!("{cmd} help release"),
+            format!("{cmd} help supervisor"),
             format!("{cmd} help service"),
             format!("{cmd} help runtime install"),
             format!("{cmd} --color always env list"),
@@ -1133,6 +1138,34 @@ pub fn service_help(cmd: &str) -> String {
             format!("{cmd} help service install"),
             format!("{cmd} help service discover"),
         ],
+    )
+}
+
+pub fn supervisor_help(cmd: &str) -> String {
+    render_group(
+        "Supervisor commands",
+        "Build, persist, and inspect the single-supervisor control-plane state for env-scoped gateway runtimes.",
+        vec![
+            format!("{cmd} supervisor <command> [args]"),
+            format!("{cmd} help supervisor <command>"),
+        ],
+        &[(
+            "Commands",
+            &[
+                (
+                    "plan",
+                    "Compute the desired supervisor state from current envs",
+                ),
+                ("sync", "Write the desired supervisor state to disk"),
+                ("show", "Read the persisted supervisor state"),
+            ],
+        )],
+        vec![
+            format!("{cmd} supervisor plan"),
+            format!("{cmd} supervisor sync"),
+            format!("{cmd} supervisor show --json"),
+        ],
+        vec![format!("{cmd} help supervisor sync")],
     )
 }
 
@@ -2279,6 +2312,60 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             vec![format!("{cmd} service uninstall mira")],
             &[],
+        ),
+        _ => return None,
+    })
+}
+
+pub fn supervisor_command_help(cmd: &str, action: &str) -> Option<String> {
+    Some(match action {
+        "plan" => render_leaf(
+            "Plan supervisor state",
+            "Compute the desired child-process registry that the single OCM supervisor should manage from current env metadata and bindings.",
+            vec![format!("{cmd} supervisor plan [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY table rendering",
+                ),
+                ("--json", "Print the planned supervisor state as JSON"),
+            ],
+            vec![format!("{cmd} supervisor plan")],
+            &[
+                "This does not write state to disk.",
+                "Each runnable env becomes one child entry with its gateway launch spec.",
+            ],
+        ),
+        "sync" => render_leaf(
+            "Sync supervisor state",
+            "Write the desired supervisor child-process registry to the OCM store.",
+            vec![format!("{cmd} supervisor sync [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY table rendering",
+                ),
+                ("--json", "Print the synced supervisor state as JSON"),
+            ],
+            vec![format!("{cmd} supervisor sync")],
+            &[
+                "This writes `.ocm/supervisor/state.json` under the active OCM store.",
+                "The persisted state is the contract the future machine supervisor service will consume.",
+            ],
+        ),
+        "show" => render_leaf(
+            "Show supervisor state",
+            "Read the persisted supervisor state from the OCM store.",
+            vec![format!("{cmd} supervisor show [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY table rendering",
+                ),
+                ("--json", "Print the persisted supervisor state as JSON"),
+            ],
+            vec![format!("{cmd} supervisor show")],
+            &["Run `supervisor sync` first when the state file has not been written yet."],
         ),
         _ => return None,
     })

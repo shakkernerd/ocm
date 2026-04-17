@@ -51,6 +51,9 @@ impl Cli {
             ["runtime"] => Ok(render::help::runtime_help(&cmd)),
             ["runtime", action] => render::help::runtime_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown runtime command: {action}")),
+            ["supervisor"] => Ok(render::help::supervisor_help(&cmd)),
+            ["supervisor", action] => render::help::supervisor_command_help(&cmd, action)
+                .ok_or_else(|| format!("unknown supervisor command: {action}")),
             ["doctor", action] => render::help::doctor_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown doctor command: {action}")),
             ["service"] => Ok(render::help::service_help(&cmd)),
@@ -73,6 +76,7 @@ impl Cli {
                         | "release"
                         | "launcher"
                         | "runtime"
+                        | "supervisor"
                         | "service"
                         | "init"
                 ) =>
@@ -103,6 +107,7 @@ impl Cli {
                         | "release"
                         | "launcher"
                         | "runtime"
+                        | "supervisor"
                         | "service"
                         | "sync"
                         | "up"
@@ -133,6 +138,7 @@ impl Cli {
                         | "release"
                         | "launcher"
                         | "runtime"
+                        | "supervisor"
                         | "service"
                         | "sync"
                         | "up"
@@ -158,6 +164,7 @@ impl Cli {
                         | "release"
                         | "launcher"
                         | "runtime"
+                        | "supervisor"
                         | "service"
                         | "sync"
                         | "up"

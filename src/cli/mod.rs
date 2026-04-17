@@ -12,6 +12,7 @@ mod self_cmd;
 mod service;
 mod setup;
 mod start;
+mod supervisor;
 mod sync;
 mod up;
 mod upgrade;
@@ -29,6 +30,7 @@ use crate::launcher::LauncherService;
 use crate::runtime::RuntimeService;
 use crate::service::ServiceService;
 use crate::store::{ensure_store, resolve_absolute_path};
+use crate::supervisor::SupervisorService;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const INTERNAL_COLOR_MODE_ENV: &str = "OCM_INTERNAL_COLOR_MODE";
@@ -103,6 +105,10 @@ impl Cli {
 
     fn service_service(&self) -> ServiceService<'_> {
         ServiceService::new(&self.env, &self.cwd)
+    }
+
+    fn supervisor_service(&self) -> SupervisorService<'_> {
+        SupervisorService::new(&self.env, &self.cwd)
     }
 
     fn stdout_line(&self, line: impl AsRef<str>) {
@@ -539,6 +545,7 @@ impl Cli {
             "release" => cli.dispatch_release_command(action.as_str(), rest),
             "launcher" => cli.dispatch_launcher_command(action.as_str(), rest),
             "runtime" => cli.dispatch_runtime_command(action.as_str(), rest),
+            "supervisor" => cli.dispatch_supervisor_command(action.as_str(), rest),
             "service" => cli.dispatch_service_command(action.as_str(), rest),
             _ => Err(format!("unknown command group: {group}")),
         };

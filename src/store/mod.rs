@@ -14,8 +14,7 @@ use time::OffsetDateTime;
 
 use crate::env::EnvMeta;
 use crate::env::EnvSummary;
-pub(crate) use common::copy_dir_recursive;
-use common::ensure_dir;
+pub(crate) use common::{copy_dir_recursive, ensure_dir, read_json, write_json};
 pub use envs::{
     clone_environment, create_environment, export_environment, get_environment, import_environment,
     list_environments, remove_environment, repair_environment_marker, save_environment,
@@ -25,7 +24,8 @@ pub use layout::{
     EnvPaths, StorePaths, clean_path, default_env_root, derive_env_paths, display_path,
     env_meta_path, launcher_meta_path, resolve_absolute_path, resolve_ocm_home,
     resolve_store_paths, resolve_user_home, runtime_install_files_dir, runtime_install_root,
-    runtime_meta_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path, validate_name,
+    runtime_meta_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
+    supervisor_logs_dir, supervisor_state_path, validate_name,
 };
 pub(crate) use openclaw_config::{
     OpenClawConfigAudit, audit_openclaw_config, repair_openclaw_config,
@@ -58,6 +58,7 @@ pub fn ensure_store(env: &BTreeMap<String, String>, cwd: &Path) -> Result<StoreP
     ensure_dir(&stores.launchers_dir)?;
     ensure_dir(&stores.runtimes_dir)?;
     ensure_dir(&stores.snapshots_dir)?;
+    ensure_dir(&stores.supervisor_dir)?;
     Ok(stores)
 }
 

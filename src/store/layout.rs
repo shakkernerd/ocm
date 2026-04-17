@@ -19,6 +19,7 @@ pub struct StorePaths {
     pub launchers_dir: PathBuf,
     pub runtimes_dir: PathBuf,
     pub snapshots_dir: PathBuf,
+    pub supervisor_dir: PathBuf,
 }
 
 pub fn display_path(path: &Path) -> String {
@@ -149,6 +150,7 @@ pub fn resolve_store_paths(
         launchers_dir: home.join("launchers"),
         runtimes_dir: home.join("runtimes"),
         snapshots_dir: home.join("snapshots"),
+        supervisor_dir: home.join("supervisor"),
         home,
     })
 }
@@ -259,6 +261,19 @@ pub fn snapshot_meta_path(
     cwd: &Path,
 ) -> Result<PathBuf, String> {
     Ok(snapshot_env_dir(env_name, env, cwd)?.join(format!("{snapshot_id}.json")))
+}
+
+pub fn supervisor_state_path(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let stores = resolve_store_paths(env, cwd)?;
+    Ok(stores.supervisor_dir.join("state.json"))
+}
+
+pub fn supervisor_logs_dir(env: &BTreeMap<String, String>, cwd: &Path) -> Result<PathBuf, String> {
+    let stores = resolve_store_paths(env, cwd)?;
+    Ok(stores.supervisor_dir.join("logs"))
 }
 
 pub fn snapshot_archive_path(

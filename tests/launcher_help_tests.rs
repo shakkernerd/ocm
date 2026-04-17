@@ -15,9 +15,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
     assert!(output.contains(&format!("OpenClaw Manager v{}", env!("CARGO_PKG_VERSION"))));
-    assert!(output.contains(
-        "Manage isolated OpenClaw environments, releases, runtimes, launchers, and services."
-    ));
+    assert!(output.contains("Manage isolated OpenClaw environments, releases, runtimes, launchers, services, and supervisor state."));
     assert!(output.contains("ocm [--color <mode>] <command> [args]"));
     assert!(output.contains("Fast path: create or reuse an env and keep it running"));
     assert!(output.contains("Guided setup for release and local-dev flows"));
@@ -26,6 +24,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("Update the installed ocm binary"));
     assert!(output.contains("Bring an existing plain OpenClaw home into OCM"));
     assert!(output.contains("Inspect and control the explicit OpenClaw adoption flow"));
+    assert!(output.contains("Supervisor state for many env-scoped gateway runtimes"));
     assert!(output.contains("--color <mode>"));
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
@@ -53,10 +52,31 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("ocm help start"));
     assert!(output.contains("ocm help env"));
     assert!(output.contains("ocm help release"));
+    assert!(output.contains("ocm help supervisor"));
     assert!(output.contains("ocm help runtime install"));
     assert!(output.contains("ocm --color always env list"));
     assert!(!output.contains("env snapshot restore <name> <snapshot>"));
     assert!(!output.contains("service restore-global <env> [--dry-run] [--json]"));
+}
+
+#[test]
+fn supervisor_help_is_available_from_help_and_bare_group() {
+    let root = TestDir::new("help-supervisor-group");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "supervisor"]);
+    let bare = run_ocm(&cwd, &env, &["supervisor"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(bare.status.success(), "{}", stderr(&bare));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&bare));
+    assert!(output.contains("Supervisor commands"));
+    assert!(output.contains("ocm supervisor plan"));
+    assert!(output.contains("ocm supervisor sync"));
+    assert!(output.contains("ocm supervisor show --json"));
 }
 
 #[test]
