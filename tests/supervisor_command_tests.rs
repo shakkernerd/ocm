@@ -73,7 +73,7 @@ fn setup_supervisor_run_fixture(
     write_executable_script(
         &launcher_script,
         &format!(
-            "#!/bin/sh\nprintf 'launcher\\n' > '{}'\n",
+            "#!/bin/sh\nprintf 'launcher\\n' > '{}'\nprintf 'launcher stdout\\n'\nprintf 'launcher stderr\\n' >&2\n",
             path_string(&launcher_marker)
         ),
     );
@@ -81,7 +81,7 @@ fn setup_supervisor_run_fixture(
     write_executable_script(
         &runtime_script,
         &format!(
-            "#!/bin/sh\nprintf 'runtime\\n' > '{}'\n",
+            "#!/bin/sh\nprintf 'runtime\\n' > '{}'\nprintf 'runtime stdout\\n'\nprintf 'runtime stderr\\n' >&2\n",
             path_string(&runtime_marker)
         ),
     );
@@ -232,6 +232,47 @@ fn supervisor_run_once_executes_planned_children() {
 
     assert_eq!(fs::read_to_string(launcher_marker).unwrap(), "launcher\n");
     assert_eq!(fs::read_to_string(runtime_marker).unwrap(), "runtime\n");
+}
+
+#[test]
+fn supervisor_logs_read_stdout_and_stderr_from_persisted_child_paths() {
+    let root = TestDir::new("supervisor-logs");
+    let (cwd, env, _, _) = setup_supervisor_run_fixture(&root);
+
+    let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
+    assert!(sync.status.success(), "{}", stderr(&sync));
+
+    let run = run_ocm(&cwd, &env, &["supervisor", "run", "--once"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+
+    let stdout_log = run_ocm(&cwd, &env, &["supervisor", "logs", "demo", "--json"]);
+    assert!(stdout_log.status.success(), "{}", stderr(&stdout_log));
+    let stdout_body: Value = serde_json::from_slice(&stdout_log.stdout).unwrap();
+    assert_eq!(stdout_body["stream"], "stdout");
+    assert!(
+        stdout_body["content"]
+            .as_str()
+            .unwrap()
+            .contains("launcher stdout")
+    );
+
+    let stderr_log = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "supervisor",
+            "logs",
+            "prod",
+            "--stderr",
+            "--tail",
+            "1",
+            "--json",
+        ],
+    );
+    assert!(stderr_log.status.success(), "{}", stderr(&stderr_log));
+    let stderr_body: Value = serde_json::from_slice(&stderr_log.stdout).unwrap();
+    assert_eq!(stderr_body["stream"], "stderr");
+    assert_eq!(stderr_body["content"], "runtime stderr\n");
 }
 
 #[test]

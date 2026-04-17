@@ -1161,12 +1161,17 @@ pub fn supervisor_help(cmd: &str) -> String {
                     "status",
                     "Compare planned supervisor state with the persisted state",
                 ),
+                (
+                    "logs",
+                    "Read stdout or stderr logs for one supervisor child",
+                ),
                 ("sync", "Write the desired supervisor state to disk"),
                 ("show", "Read the persisted supervisor state"),
             ],
         )],
         vec![
             format!("{cmd} supervisor plan"),
+            format!("{cmd} supervisor logs demo --tail 20"),
             format!("{cmd} supervisor run --once"),
             format!("{cmd} supervisor status"),
             format!("{cmd} supervisor sync"),
@@ -2365,6 +2370,25 @@ pub fn supervisor_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Run `supervisor sync` first so the process reads the current persisted state.",
                 "Without `--once`, the foreground supervisor restarts child gateway processes when they exit and stops on Ctrl-C.",
+            ],
+        ),
+        "logs" => render_leaf(
+            "Read supervisor child logs",
+            "Print stdout or stderr logs for one env child from the persisted supervisor state.",
+            vec![format!(
+                "{cmd} supervisor logs <env> [--stderr] [--tail <count>] [--json]"
+            )],
+            &[
+                ("--stderr", "Read stderr instead of stdout"),
+                ("--tail <count>", "Only print the last N lines"),
+                ("--json", "Print log metadata and content as JSON"),
+            ],
+            vec![
+                format!("{cmd} supervisor logs mira"),
+                format!("{cmd} supervisor logs mira --stderr --tail 50"),
+            ],
+            &[
+                "Run `supervisor sync` first so the command can resolve the persisted child log paths.",
             ],
         ),
         "sync" => render_leaf(

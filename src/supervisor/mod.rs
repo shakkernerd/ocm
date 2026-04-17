@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -117,6 +118,16 @@ pub struct SupervisorRunSummary {
     pub child_count: usize,
     pub stopped_by_signal: bool,
     pub child_results: Vec<SupervisorChildRunResult>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorLogSummary {
+    pub env_name: String,
+    pub stream: String,
+    pub path: String,
+    pub tail_lines: Option<usize>,
+    pub content: String,
 }
 
 pub struct SupervisorService<'a> {
@@ -253,6 +264,52 @@ impl<'a> SupervisorService<'a> {
             extra_children,
             changed_children,
             skipped_env_changes,
+        })
+    }
+
+    pub fn logs(
+        &self,
+        env_name: &str,
+        stream: &str,
+        tail_lines: Option<usize>,
+    ) -> Result<SupervisorLogSummary, String> {
+        let (_, state) = self.read_persisted_state()?;
+        let stream = normalize_log_stream(stream)?;
+        let child = state
+            .children
+            .into_iter()
+            .find(|child| child.env_name == env_name)
+            .ok_or_else(|| {
+                format!(
+                    "supervisor state does not include env \"{env_name}\"; run \"ocm supervisor status\" for drift details"
+                )
+            })?;
+
+        let log_path = match stream {
+            "stdout" => child.stdout_path,
+            "stderr" => child.stderr_path,
+            _ => unreachable!("normalize_log_stream validates supervisor log stream"),
+        };
+        if !Path::new(&log_path).exists() {
+            return Err(format!(
+                "{} log does not exist for env \"{}\": {}",
+                stream, env_name, log_path
+            ));
+        }
+
+        let raw = fs::read_to_string(&log_path).map_err(|error| error.to_string())?;
+        let content = if let Some(tail_lines) = tail_lines {
+            tail_text(&raw, tail_lines)
+        } else {
+            raw
+        };
+
+        Ok(SupervisorLogSummary {
+            env_name: env_name.to_string(),
+            stream: stream.to_string(),
+            path: log_path,
+            tail_lines,
+            content,
         })
     }
 
@@ -522,6 +579,34 @@ fn child_run_result(
         success: exit_code == Some(0),
         restart_count,
     }
+}
+
+fn normalize_log_stream(stream: &str) -> Result<&'static str, String> {
+    match stream.trim() {
+        "" | "stdout" => Ok("stdout"),
+        "stderr" => Ok("stderr"),
+        other => Err(format!(
+            "unsupported log stream \"{other}\"; expected stdout or stderr"
+        )),
+    }
+}
+
+fn tail_text(raw: &str, tail_lines: usize) -> String {
+    if tail_lines == 0 {
+        return String::new();
+    }
+
+    let mut lines = raw.lines().collect::<Vec<_>>();
+    if lines.len() <= tail_lines {
+        return raw.to_string();
+    }
+
+    lines = lines[lines.len() - tail_lines..].to_vec();
+    let mut content = lines.join("\n");
+    if raw.ends_with('\n') {
+        content.push('\n');
+    }
+    content
 }
 
 fn view_from_state(state_path: &Path, persisted: bool, state: SupervisorState) -> SupervisorView {
