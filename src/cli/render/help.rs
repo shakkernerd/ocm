@@ -1156,12 +1156,17 @@ pub fn supervisor_help(cmd: &str) -> String {
                     "plan",
                     "Compute the desired supervisor state from current envs",
                 ),
+                (
+                    "status",
+                    "Compare planned supervisor state with the persisted state",
+                ),
                 ("sync", "Write the desired supervisor state to disk"),
                 ("show", "Read the persisted supervisor state"),
             ],
         )],
         vec![
             format!("{cmd} supervisor plan"),
+            format!("{cmd} supervisor status"),
             format!("{cmd} supervisor sync"),
             format!("{cmd} supervisor show --json"),
         ],
@@ -2366,6 +2371,22 @@ pub fn supervisor_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             vec![format!("{cmd} supervisor show")],
             &["Run `supervisor sync` first when the state file has not been written yet."],
+        ),
+        "status" => render_leaf(
+            "Show supervisor drift",
+            "Compare the planned supervisor state from current env metadata with the persisted supervisor state on disk.",
+            vec![format!("{cmd} supervisor status [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY summary rendering",
+                ),
+                ("--json", "Print supervisor drift details as JSON"),
+            ],
+            vec![format!("{cmd} supervisor status")],
+            &[
+                "Use this to see whether `supervisor sync` needs to be rerun after env or binding changes.",
+            ],
         ),
         _ => return None,
     })

@@ -13,7 +13,7 @@ use crate::store::{
 const SUPERVISOR_STATE_KIND: &str = "ocm-supervisor-state";
 const DEFAULT_START_MODE: &str = "on-demand";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SupervisorChildSpec {
     pub env_name: String,
@@ -37,7 +37,7 @@ pub struct SupervisorChildSpec {
     pub env_overrides: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkippedSupervisorEnv {
     pub env_name: String,
@@ -66,6 +66,26 @@ pub struct SupervisorView {
     pub generated_at: OffsetDateTime,
     pub children: Vec<SupervisorChildSpec>,
     pub skipped_envs: Vec<SkippedSupervisorEnv>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorStatusSummary {
+    pub state_path: String,
+    pub state_present: bool,
+    pub in_sync: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub planned_generated_at: OffsetDateTime,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub persisted_generated_at: Option<OffsetDateTime>,
+    pub planned_child_count: usize,
+    pub persisted_child_count: usize,
+    pub planned_skipped_env_count: usize,
+    pub persisted_skipped_env_count: usize,
+    pub missing_children: Vec<String>,
+    pub extra_children: Vec<String>,
+    pub changed_children: Vec<String>,
+    pub skipped_env_changes: Vec<String>,
 }
 
 pub struct SupervisorService<'a> {
@@ -104,6 +124,91 @@ impl<'a> SupervisorService<'a> {
         }
         let state: SupervisorState = read_json(&state_path)?;
         Ok(view_from_state(&state_path, true, state))
+    }
+
+    pub fn status(&self) -> Result<SupervisorStatusSummary, String> {
+        let planned = self.build_state()?;
+        let state_path = supervisor_state_path(self.env, self.cwd)?;
+        let persisted = if state_path.exists() {
+            Some(read_json::<SupervisorState>(&state_path)?)
+        } else {
+            None
+        };
+
+        let planned_children = child_map(&planned.children);
+        let planned_skipped = skipped_map(&planned.skipped_envs);
+        let persisted_children = persisted
+            .as_ref()
+            .map(|state| child_map(&state.children))
+            .unwrap_or_default();
+        let persisted_skipped = persisted
+            .as_ref()
+            .map(|state| skipped_map(&state.skipped_envs))
+            .unwrap_or_default();
+
+        let mut missing_children = planned_children
+            .keys()
+            .filter(|name| !persisted_children.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut extra_children = persisted_children
+            .keys()
+            .filter(|name| !planned_children.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut changed_children = planned_children
+            .iter()
+            .filter_map(|(name, child)| match persisted_children.get(name) {
+                Some(existing) if existing == child => None,
+                Some(_) => Some(name.clone()),
+                None => None,
+            })
+            .collect::<Vec<_>>();
+        let mut skipped_env_changes = planned_skipped
+            .iter()
+            .filter_map(|(name, reason)| match persisted_skipped.get(name) {
+                Some(existing) if existing == reason => None,
+                _ => Some(name.clone()),
+            })
+            .collect::<Vec<_>>();
+        skipped_env_changes.extend(
+            persisted_skipped
+                .keys()
+                .filter(|name| !planned_skipped.contains_key(*name))
+                .cloned(),
+        );
+
+        missing_children.sort();
+        extra_children.sort();
+        changed_children.sort();
+        skipped_env_changes.sort();
+        skipped_env_changes.dedup();
+
+        Ok(SupervisorStatusSummary {
+            state_path: display_path(&state_path),
+            state_present: persisted.is_some(),
+            in_sync: persisted.is_some()
+                && missing_children.is_empty()
+                && extra_children.is_empty()
+                && changed_children.is_empty()
+                && skipped_env_changes.is_empty(),
+            planned_generated_at: planned.generated_at,
+            persisted_generated_at: persisted.as_ref().map(|state| state.generated_at),
+            planned_child_count: planned.children.len(),
+            persisted_child_count: persisted
+                .as_ref()
+                .map(|state| state.children.len())
+                .unwrap_or(0),
+            planned_skipped_env_count: planned.skipped_envs.len(),
+            persisted_skipped_env_count: persisted
+                .as_ref()
+                .map(|state| state.skipped_envs.len())
+                .unwrap_or(0),
+            missing_children,
+            extra_children,
+            changed_children,
+            skipped_env_changes,
+        })
     }
 
     fn build_state(&self) -> Result<SupervisorState, String> {
@@ -195,4 +300,19 @@ fn view_from_state(state_path: &Path, persisted: bool, state: SupervisorState) -
         children: state.children,
         skipped_envs: state.skipped_envs,
     }
+}
+
+fn child_map(children: &[SupervisorChildSpec]) -> BTreeMap<String, SupervisorChildSpec> {
+    children
+        .iter()
+        .cloned()
+        .map(|child| (child.env_name.clone(), child))
+        .collect()
+}
+
+fn skipped_map(skipped_envs: &[SkippedSupervisorEnv]) -> BTreeMap<String, String> {
+    skipped_envs
+        .iter()
+        .map(|skipped| (skipped.env_name.clone(), skipped.reason.clone()))
+        .collect()
 }

@@ -48,6 +48,21 @@ impl Cli {
         Ok(0)
     }
 
+    pub(super) fn handle_supervisor_status(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "supervisor status")?;
+        Self::assert_no_extra_args(&args)?;
+
+        let summary = self.supervisor_service().status()?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::supervisor::supervisor_status(&summary, profile));
+        Ok(0)
+    }
+
     pub(super) fn dispatch_supervisor_command(
         &self,
         action: &str,
@@ -60,6 +75,7 @@ impl Cli {
             "plan" => self.handle_supervisor_plan(rest),
             "sync" => self.handle_supervisor_sync(rest),
             "show" => self.handle_supervisor_show(rest),
+            "status" => self.handle_supervisor_status(rest),
             _ => Err(format!("unknown supervisor command: {action}")),
         }
     }

@@ -136,3 +136,49 @@ fn supervisor_sync_persists_and_show_reads_the_state() {
     assert_eq!(show_body["children"], sync_body["children"]);
     assert_eq!(show_body["skippedEnvs"], sync_body["skippedEnvs"]);
 }
+
+#[test]
+fn supervisor_status_reports_missing_and_changed_state() {
+    let root = TestDir::new("supervisor-status");
+    let (cwd, env) = setup_supervisor_fixture(&root);
+
+    let before = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    assert!(before.status.success(), "{}", stderr(&before));
+    let before_body: Value = serde_json::from_slice(&before.stdout).unwrap();
+    assert_eq!(before_body["statePresent"], false);
+    assert_eq!(before_body["inSync"], false);
+    assert_eq!(before_body["missingChildren"].as_array().unwrap().len(), 2);
+
+    let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
+    assert!(sync.status.success(), "{}", stderr(&sync));
+
+    let after_sync = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    assert!(after_sync.status.success(), "{}", stderr(&after_sync));
+    let after_sync_body: Value = serde_json::from_slice(&after_sync.stdout).unwrap();
+    assert_eq!(after_sync_body["statePresent"], true);
+    assert_eq!(after_sync_body["inSync"], true);
+    assert!(
+        after_sync_body["changedChildren"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev-b", "--command", "openclaw --beta"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+    let rebind = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "dev-b"]);
+    assert!(rebind.status.success(), "{}", stderr(&rebind));
+
+    let after_change = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    assert!(after_change.status.success(), "{}", stderr(&after_change));
+    let after_change_body: Value = serde_json::from_slice(&after_change.stdout).unwrap();
+    assert_eq!(after_change_body["inSync"], false);
+    assert_eq!(
+        after_change_body["changedChildren"],
+        serde_json::json!(["demo"])
+    );
+}
