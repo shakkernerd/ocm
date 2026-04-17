@@ -1144,7 +1144,7 @@ pub fn service_help(cmd: &str) -> String {
 pub fn supervisor_help(cmd: &str) -> String {
     render_group(
         "Supervisor commands",
-        "Build, persist, and inspect the single-supervisor control-plane state for env-scoped gateway runtimes.",
+        "Build and inspect supervisor state, run the foreground supervisor, and manage the single supervisor daemon for the current OCM store.",
         vec![
             format!("{cmd} supervisor <command> [args]"),
             format!("{cmd} help supervisor <command>"),
@@ -1152,13 +1152,19 @@ pub fn supervisor_help(cmd: &str) -> String {
         &[(
             "Commands",
             &[
+                ("install", "Install and start the supervisor daemon"),
+                ("start", "Start or refresh the supervisor daemon"),
+                ("restart", "Restart the supervisor daemon"),
+                ("stop", "Stop the supervisor daemon"),
+                ("uninstall", "Remove the supervisor daemon definition"),
+                ("status", "Inspect the supervisor daemon service state"),
                 (
                     "plan",
                     "Compute the desired supervisor state from current envs",
                 ),
                 ("run", "Run the foreground OCM supervisor process"),
                 (
-                    "status",
+                    "drift",
                     "Compare planned supervisor state with the persisted state",
                 ),
                 (
@@ -1170,11 +1176,12 @@ pub fn supervisor_help(cmd: &str) -> String {
             ],
         )],
         vec![
+            format!("{cmd} supervisor install"),
             format!("{cmd} supervisor plan"),
             format!("{cmd} supervisor logs demo --tail 20"),
             format!("{cmd} supervisor run --once"),
             format!("{cmd} supervisor status"),
-            format!("{cmd} supervisor sync"),
+            format!("{cmd} supervisor drift"),
             format!("{cmd} supervisor show --json"),
         ],
         vec![format!("{cmd} help supervisor sync")],
@@ -2372,6 +2379,93 @@ pub fn supervisor_command_help(cmd: &str, action: &str) -> Option<String> {
                 "Without `--once`, the foreground supervisor restarts child gateway processes when they exit and stops on Ctrl-C.",
             ],
         ),
+        "install" => render_leaf(
+            "Install the supervisor daemon",
+            "Sync the current supervisor state, write one managed OS service definition for the OCM store, and start it.",
+            vec![format!("{cmd} supervisor install [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY receipt rendering",
+                ),
+                ("--json", "Print the supervisor daemon summary as JSON"),
+            ],
+            vec![format!("{cmd} supervisor install")],
+            &[
+                "This is the machine-level service for the current OCM store.",
+                "The daemon runs `ocm supervisor run` from the persisted state file.",
+            ],
+        ),
+        "start" => render_leaf(
+            "Start the supervisor daemon",
+            "Sync the current supervisor state, refresh the managed OS service definition, and start the supervisor daemon.",
+            vec![format!("{cmd} supervisor start [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY receipt rendering",
+                ),
+                ("--json", "Print the supervisor daemon summary as JSON"),
+            ],
+            vec![format!("{cmd} supervisor start")],
+            &["Use this after changing env bindings or service definitions."],
+        ),
+        "restart" => render_leaf(
+            "Restart the supervisor daemon",
+            "Sync the current supervisor state, refresh the managed OS service definition, and restart the supervisor daemon.",
+            vec![format!("{cmd} supervisor restart [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY receipt rendering",
+                ),
+                ("--json", "Print the supervisor daemon summary as JSON"),
+            ],
+            vec![format!("{cmd} supervisor restart")],
+            &["Use this when you want an explicit daemon bounce after state changes."],
+        ),
+        "stop" => render_leaf(
+            "Stop the supervisor daemon",
+            "Stop the managed supervisor daemon without removing its service definition.",
+            vec![format!("{cmd} supervisor stop [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY receipt rendering",
+                ),
+                ("--json", "Print the supervisor daemon summary as JSON"),
+            ],
+            vec![format!("{cmd} supervisor stop")],
+            &["This leaves the managed service definition installed."],
+        ),
+        "uninstall" => render_leaf(
+            "Uninstall the supervisor daemon",
+            "Stop the managed supervisor daemon and remove its service definition for the current OCM store.",
+            vec![format!("{cmd} supervisor uninstall [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY receipt rendering",
+                ),
+                ("--json", "Print the supervisor daemon summary as JSON"),
+            ],
+            vec![format!("{cmd} supervisor uninstall")],
+            &["This does not remove `.ocm/supervisor/state.json` or child logs."],
+        ),
+        "status" => render_leaf(
+            "Show supervisor daemon status",
+            "Inspect the managed OS service for the single OCM supervisor.",
+            vec![format!("{cmd} supervisor status [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY receipt rendering",
+                ),
+                ("--json", "Print the supervisor daemon summary as JSON"),
+            ],
+            vec![format!("{cmd} supervisor status")],
+            &["Use `supervisor drift` to compare planned and persisted child state."],
+        ),
         "logs" => render_leaf(
             "Read supervisor child logs",
             "Print stdout or stderr logs for one env child from the persisted supervisor state.",
@@ -2405,7 +2499,7 @@ pub fn supervisor_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!("{cmd} supervisor sync")],
             &[
                 "This writes `.ocm/supervisor/state.json` under the active OCM store.",
-                "The persisted state is the contract the future machine supervisor service will consume.",
+                "The persisted state is the contract the managed supervisor daemon consumes.",
             ],
         ),
         "show" => render_leaf(
@@ -2422,10 +2516,10 @@ pub fn supervisor_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!("{cmd} supervisor show")],
             &["Run `supervisor sync` first when the state file has not been written yet."],
         ),
-        "status" => render_leaf(
+        "drift" => render_leaf(
             "Show supervisor drift",
             "Compare the planned supervisor state from current env metadata with the persisted supervisor state on disk.",
-            vec![format!("{cmd} supervisor status [--raw] [--json]")],
+            vec![format!("{cmd} supervisor drift [--raw] [--json]")],
             &[
                 (
                     "--raw",
@@ -2433,7 +2527,7 @@ pub fn supervisor_command_help(cmd: &str, action: &str) -> Option<String> {
                 ),
                 ("--json", "Print supervisor drift details as JSON"),
             ],
-            vec![format!("{cmd} supervisor status")],
+            vec![format!("{cmd} supervisor drift")],
             &[
                 "Use this to see whether `supervisor sync` needs to be rerun after env or binding changes.",
             ],

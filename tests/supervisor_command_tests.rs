@@ -4,7 +4,10 @@ use std::fs;
 
 use serde_json::Value;
 
-use crate::support::{TestDir, ocm_env, path_string, run_ocm, stderr, write_executable_script};
+use crate::support::{
+    TestDir, install_fake_service_manager, managed_service_definition_path, ocm_env, path_string,
+    run_ocm, stderr, write_executable_script,
+};
 
 fn setup_supervisor_fixture(
     root: &TestDir,
@@ -276,11 +279,11 @@ fn supervisor_logs_read_stdout_and_stderr_from_persisted_child_paths() {
 }
 
 #[test]
-fn supervisor_status_reports_missing_and_changed_state() {
+fn supervisor_drift_reports_missing_and_changed_state() {
     let root = TestDir::new("supervisor-status");
     let (cwd, env) = setup_supervisor_fixture(&root);
 
-    let before = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    let before = run_ocm(&cwd, &env, &["supervisor", "drift", "--json"]);
     assert!(before.status.success(), "{}", stderr(&before));
     let before_body: Value = serde_json::from_slice(&before.stdout).unwrap();
     assert_eq!(before_body["statePresent"], false);
@@ -292,7 +295,7 @@ fn supervisor_status_reports_missing_and_changed_state() {
     let sync_body: Value = serde_json::from_slice(&sync.stdout).unwrap();
     let state_path = sync_body["statePath"].as_str().unwrap();
 
-    let after_sync = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    let after_sync = run_ocm(&cwd, &env, &["supervisor", "drift", "--json"]);
     assert!(after_sync.status.success(), "{}", stderr(&after_sync));
     let after_sync_body: Value = serde_json::from_slice(&after_sync.stdout).unwrap();
     assert_eq!(after_sync_body["statePresent"], true);
@@ -309,7 +312,7 @@ fn supervisor_status_reports_missing_and_changed_state() {
     children.retain(|child| child["envName"] != "prod");
     fs::write(state_path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
 
-    let after_change = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    let after_change = run_ocm(&cwd, &env, &["supervisor", "drift", "--json"]);
     assert!(after_change.status.success(), "{}", stderr(&after_change));
     let after_change_body: Value = serde_json::from_slice(&after_change.stdout).unwrap();
     assert_eq!(after_change_body["inSync"], false);
@@ -347,7 +350,7 @@ fn env_binding_changes_refresh_persisted_supervisor_state() {
         .unwrap();
     assert_eq!(demo["bindingName"], "dev-b");
 
-    let status = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    let status = run_ocm(&cwd, &env, &["supervisor", "drift", "--json"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let status_body: Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(status_body["inSync"], true);
@@ -427,7 +430,7 @@ fn launcher_removal_refreshes_persisted_supervisor_state() {
             .any(|entry| entry["envName"] == "demo")
     );
 
-    let status = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    let status = run_ocm(&cwd, &env, &["supervisor", "drift", "--json"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let status_body: Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(status_body["inSync"], true);
@@ -462,8 +465,92 @@ fn runtime_removal_refreshes_persisted_supervisor_state() {
             .any(|entry| entry["envName"] == "prod")
     );
 
-    let status = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    let status = run_ocm(&cwd, &env, &["supervisor", "drift", "--json"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let status_body: Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(status_body["inSync"], true);
+}
+
+#[test]
+fn supervisor_install_writes_and_starts_the_managed_daemon() {
+    let root = TestDir::new("supervisor-daemon-install");
+    let (cwd, mut env) = setup_supervisor_fixture(&root);
+    install_fake_service_manager(&root, &mut env);
+
+    let install = run_ocm(&cwd, &env, &["supervisor", "install", "--json"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+    let body: Value = serde_json::from_slice(&install.stdout).unwrap();
+    let definition_path = managed_service_definition_path(&env, &cwd, "supervisor");
+    let managed_label = body["managedLabel"].as_str().unwrap();
+
+    assert_eq!(body["action"], "install");
+    assert_eq!(body["definitionPath"], path_string(&definition_path));
+    assert_eq!(body["installed"], true);
+    assert_eq!(body["loaded"], true);
+    assert_eq!(body["running"], true);
+    assert!(managed_label.ends_with(".supervisor"));
+    assert!(fs::metadata(&definition_path).is_ok());
+
+    let definition = fs::read_to_string(&definition_path).unwrap();
+    assert!(definition.contains("supervisor"));
+    assert!(definition.contains("run"));
+    assert!(definition.contains(env!("CARGO_BIN_EXE_ocm")));
+
+    let status = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let status_body: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_body["action"], "status");
+    assert_eq!(status_body["managedLabel"], body["managedLabel"]);
+    assert_eq!(status_body["installed"], true);
+
+    if cfg!(target_os = "macos") {
+        let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
+        assert!(launchctl_log.contains("bootstrap gui/"));
+        assert!(launchctl_log.contains(managed_label));
+    } else {
+        let systemctl_log = fs::read_to_string(root.child("systemctl.log")).unwrap();
+        assert!(systemctl_log.contains(&format!("--user enable {managed_label}")));
+        assert!(systemctl_log.contains(&format!("--user restart {managed_label}")));
+    }
+}
+
+#[test]
+fn supervisor_stop_and_uninstall_manage_the_daemon_definition() {
+    let root = TestDir::new("supervisor-daemon-uninstall");
+    let (cwd, mut env) = setup_supervisor_fixture(&root);
+    install_fake_service_manager(&root, &mut env);
+
+    let install = run_ocm(&cwd, &env, &["supervisor", "install", "--json"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+    let install_body: Value = serde_json::from_slice(&install.stdout).unwrap();
+    let definition_path = managed_service_definition_path(&env, &cwd, "supervisor");
+    let managed_label = install_body["managedLabel"].as_str().unwrap();
+
+    let stop = run_ocm(&cwd, &env, &["supervisor", "stop", "--json"]);
+    assert!(stop.status.success(), "{}", stderr(&stop));
+    let stop_body: Value = serde_json::from_slice(&stop.stdout).unwrap();
+    assert_eq!(stop_body["action"], "stop");
+    assert_eq!(stop_body["managedLabel"], install_body["managedLabel"]);
+
+    let uninstall = run_ocm(&cwd, &env, &["supervisor", "uninstall", "--json"]);
+    assert!(uninstall.status.success(), "{}", stderr(&uninstall));
+    let uninstall_body: Value = serde_json::from_slice(&uninstall.stdout).unwrap();
+    assert_eq!(uninstall_body["action"], "uninstall");
+    assert_eq!(uninstall_body["installed"], false);
+    assert!(!definition_path.exists());
+
+    let status = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let status_body: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_body["installed"], false);
+
+    if cfg!(target_os = "macos") {
+        let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
+        assert!(launchctl_log.contains("bootout gui/"));
+        assert!(launchctl_log.contains(managed_label));
+    } else {
+        let systemctl_log = fs::read_to_string(root.child("systemctl.log")).unwrap();
+        assert!(systemctl_log.contains(&format!("--user stop {managed_label}")));
+        assert!(systemctl_log.contains(&format!("--user disable --now {managed_label}")));
+    }
 }

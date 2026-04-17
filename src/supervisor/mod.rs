@@ -14,15 +14,33 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::env::EnvironmentService;
+use crate::service::inspect::inspect_job;
+use crate::service::platform::{
+    ManagedServiceDefinition, activate_managed_service, managed_service_identity,
+    stop_managed_service, uninstall_managed_service, write_managed_service_definition,
+};
 use crate::store::{
     derive_env_paths, display_path, ensure_dir, ensure_store, list_environments, now_utc,
     read_json, resolve_ocm_home, supervisor_logs_dir, supervisor_state_path, write_json,
 };
 
 const SUPERVISOR_STATE_KIND: &str = "ocm-supervisor-state";
+const SUPERVISOR_SERVICE_NAME: &str = "supervisor";
 const DEFAULT_START_MODE: &str = "on-demand";
 const SUPERVISOR_POLL_INTERVAL_MS: u64 = 200;
 const SUPERVISOR_RESTART_DELAY_MS: u64 = 400;
+const DEFAULT_SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+const SERVICE_PROXY_ENV_KEYS: [&str; 8] = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+];
+const SERVICE_EXTRA_ENV_KEYS: [&str; 2] = ["NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA"];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +115,24 @@ pub struct SupervisorStatusSummary {
     pub extra_children: Vec<String>,
     pub changed_children: Vec<String>,
     pub skipped_env_changes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorDaemonSummary {
+    pub action: String,
+    pub managed_label: String,
+    pub definition_path: String,
+    pub state_path: String,
+    pub ocm_home: String,
+    pub executable_path: String,
+    pub stdout_path: String,
+    pub stderr_path: String,
+    pub installed: bool,
+    pub loaded: bool,
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub state: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -182,7 +218,7 @@ impl<'a> SupervisorService<'a> {
         self.run_until_stopped(&state_path, state)
     }
 
-    pub fn status(&self) -> Result<SupervisorStatusSummary, String> {
+    pub fn drift(&self) -> Result<SupervisorStatusSummary, String> {
         let planned = self.build_state()?;
         let state_path = supervisor_state_path(self.env, self.cwd)?;
         let persisted = if state_path.exists() {
@@ -267,6 +303,37 @@ impl<'a> SupervisorService<'a> {
         })
     }
 
+    pub fn install_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
+        self.refresh_daemon("install")
+    }
+
+    pub fn start_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
+        self.refresh_daemon("start")
+    }
+
+    pub fn restart_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
+        self.refresh_daemon("restart")
+    }
+
+    pub fn stop_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
+        let identity = managed_service_identity(SUPERVISOR_SERVICE_NAME, self.env, self.cwd)?;
+        stop_managed_service(&identity.label, self.env)?;
+        self.daemon_summary("stop")
+    }
+
+    pub fn uninstall_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
+        let identity = managed_service_identity(SUPERVISOR_SERVICE_NAME, self.env, self.cwd)?;
+        uninstall_managed_service(&identity.label, self.env)?;
+        if identity.definition_path.exists() {
+            fs::remove_file(&identity.definition_path).map_err(|error| error.to_string())?;
+        }
+        self.daemon_summary("uninstall")
+    }
+
+    pub fn daemon_status(&self) -> Result<SupervisorDaemonSummary, String> {
+        self.daemon_summary("status")
+    }
+
     pub fn logs(
         &self,
         env_name: &str,
@@ -281,7 +348,7 @@ impl<'a> SupervisorService<'a> {
             .find(|child| child.env_name == env_name)
             .ok_or_else(|| {
                 format!(
-                    "supervisor state does not include env \"{env_name}\"; run \"ocm supervisor status\" for drift details"
+                    "supervisor state does not include env \"{env_name}\"; run \"ocm supervisor drift\" for drift details"
                 )
             })?;
 
@@ -387,6 +454,73 @@ impl<'a> SupervisorService<'a> {
         }
         let state = read_json(&state_path)?;
         Ok((state_path, state))
+    }
+
+    fn refresh_daemon(&self, action: &str) -> Result<SupervisorDaemonSummary, String> {
+        let _ = self.sync()?;
+        let definition = self.supervisor_daemon_definition()?;
+        write_managed_service_definition(&definition, self.env)?;
+        activate_managed_service(&definition.label, &definition.definition_path, self.env)?;
+        self.daemon_summary(action)
+    }
+
+    fn daemon_summary(&self, action: &str) -> Result<SupervisorDaemonSummary, String> {
+        ensure_store(self.env, self.cwd)?;
+        let ocm_home = resolve_ocm_home(self.env, self.cwd)?;
+        let state_path = supervisor_state_path(self.env, self.cwd)?;
+        let identity = managed_service_identity(SUPERVISOR_SERVICE_NAME, self.env, self.cwd)?;
+        let logs_dir = supervisor_logs_dir(self.env, self.cwd)?;
+        let stdout_path = logs_dir.join("daemon.stdout.log");
+        let stderr_path = logs_dir.join("daemon.stderr.log");
+        let status = inspect_job(&identity.label, &identity.definition_path, self.env);
+        let executable_path = self.supervisor_executable_path()?;
+
+        Ok(SupervisorDaemonSummary {
+            action: action.to_string(),
+            managed_label: identity.label,
+            definition_path: display_path(&identity.definition_path),
+            state_path: display_path(&state_path),
+            ocm_home: display_path(&ocm_home),
+            executable_path: display_path(&executable_path),
+            stdout_path: display_path(&stdout_path),
+            stderr_path: display_path(&stderr_path),
+            installed: status.installed,
+            loaded: status.loaded,
+            running: status.running,
+            pid: status.pid,
+            state: status.state,
+        })
+    }
+
+    fn supervisor_daemon_definition(&self) -> Result<ManagedServiceDefinition, String> {
+        let ocm_home = resolve_ocm_home(self.env, self.cwd)?;
+        let identity = managed_service_identity(SUPERVISOR_SERVICE_NAME, self.env, self.cwd)?;
+        let logs_dir = supervisor_logs_dir(self.env, self.cwd)?;
+        let executable_path = self.supervisor_executable_path()?;
+
+        Ok(ManagedServiceDefinition {
+            label: identity.label,
+            description: format!(
+                "OCM supervisor service for store {}",
+                display_path(&ocm_home)
+            ),
+            definition_path: identity.definition_path,
+            program_arguments: vec![
+                display_path(&executable_path),
+                "supervisor".to_string(),
+                "run".to_string(),
+            ],
+            working_directory: ocm_home.clone(),
+            stdout_path: logs_dir.join("daemon.stdout.log"),
+            stderr_path: logs_dir.join("daemon.stderr.log"),
+            environment: supervisor_service_environment(self.env, &ocm_home, &executable_path),
+        })
+    }
+
+    fn supervisor_executable_path(&self) -> Result<PathBuf, String> {
+        std::env::current_exe().map_err(|error| {
+            format!("failed to resolve the current ocm executable for supervisor service: {error}")
+        })
     }
 
     fn run_once(
@@ -634,4 +768,51 @@ fn skipped_map(skipped_envs: &[SkippedSupervisorEnv]) -> BTreeMap<String, String
         .iter()
         .map(|skipped| (skipped.env_name.clone(), skipped.reason.clone()))
         .collect()
+}
+
+fn supervisor_service_environment(
+    process_env: &BTreeMap<String, String>,
+    ocm_home: &Path,
+    executable_path: &Path,
+) -> BTreeMap<String, String> {
+    let mut service_env = BTreeMap::new();
+    if let Some(home) = process_env
+        .get("HOME")
+        .filter(|value| !value.trim().is_empty())
+    {
+        service_env.insert("HOME".to_string(), home.trim().to_string());
+    }
+    service_env.insert(
+        "PATH".to_string(),
+        process_env
+            .get("PATH")
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|| DEFAULT_SERVICE_PATH.to_string()),
+    );
+    if let Some(tmpdir) = process_env
+        .get("TMPDIR")
+        .filter(|value| !value.trim().is_empty())
+    {
+        service_env.insert("TMPDIR".to_string(), tmpdir.trim().to_string());
+    }
+    for key in SERVICE_PROXY_ENV_KEYS {
+        if let Some(value) = process_env
+            .get(key)
+            .filter(|value| !value.trim().is_empty())
+        {
+            service_env.insert(key.to_string(), value.trim().to_string());
+        }
+    }
+    for key in SERVICE_EXTRA_ENV_KEYS {
+        if let Some(value) = process_env
+            .get(key)
+            .filter(|value| !value.trim().is_empty())
+        {
+            service_env.insert(key.to_string(), value.trim().to_string());
+        }
+    }
+    service_env.insert("OCM_HOME".to_string(), display_path(ocm_home));
+    service_env.insert("OCM_SELF".to_string(), display_path(executable_path));
+    service_env
 }

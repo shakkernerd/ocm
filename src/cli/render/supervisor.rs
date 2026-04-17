@@ -1,6 +1,8 @@
 use super::{RenderProfile, format_rfc3339};
 use crate::infra::terminal::{Cell, Tone, paint, render_table, terminal_width};
-use crate::supervisor::{SupervisorRunSummary, SupervisorStatusSummary, SupervisorView};
+use crate::supervisor::{
+    SupervisorDaemonSummary, SupervisorRunSummary, SupervisorStatusSummary, SupervisorView,
+};
 
 pub fn supervisor_state(summary: &SupervisorView, profile: RenderProfile) -> Vec<String> {
     supervisor_state_with_width(summary, profile, terminal_width())
@@ -91,12 +93,12 @@ fn supervisor_state_raw(summary: &SupervisorView) -> Vec<String> {
     lines
 }
 
-pub fn supervisor_status(summary: &SupervisorStatusSummary, profile: RenderProfile) -> Vec<String> {
+pub fn supervisor_drift(summary: &SupervisorStatusSummary, profile: RenderProfile) -> Vec<String> {
     if !profile.pretty {
-        return supervisor_status_raw(summary);
+        return supervisor_drift_raw(summary);
     }
 
-    let mut lines = vec![paint("Supervisor status", Tone::Strong, profile.color)];
+    let mut lines = vec![paint("Supervisor drift", Tone::Strong, profile.color)];
     lines.push(format!("State: {}", summary.state_path));
     lines.push(format!(
         "State file: {}",
@@ -144,7 +146,7 @@ pub fn supervisor_status(summary: &SupervisorStatusSummary, profile: RenderProfi
     lines
 }
 
-fn supervisor_status_raw(summary: &SupervisorStatusSummary) -> Vec<String> {
+fn supervisor_drift_raw(summary: &SupervisorStatusSummary) -> Vec<String> {
     let mut lines = vec![
         format!("statePath: {}", summary.state_path),
         format!("statePresent: {}", summary.state_present),
@@ -187,6 +189,60 @@ fn supervisor_status_raw(summary: &SupervisorStatusSummary) -> Vec<String> {
             "skippedEnvChanges: {}",
             summary.skipped_env_changes.join(",")
         ));
+    }
+    lines
+}
+
+pub fn supervisor_daemon(summary: &SupervisorDaemonSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return supervisor_daemon_raw(summary);
+    }
+
+    let mut lines = vec![paint("Supervisor daemon", Tone::Strong, profile.color)];
+    lines.push(format!("Action: {}", summary.action));
+    lines.push(format!("Label: {}", summary.managed_label));
+    lines.push(format!("Definition: {}", summary.definition_path));
+    lines.push(format!("State file: {}", summary.state_path));
+    lines.push(format!(
+        "Installed: {}",
+        if summary.installed { "yes" } else { "no" }
+    ));
+    lines.push(format!(
+        "Loaded: {}",
+        if summary.loaded { "yes" } else { "no" }
+    ));
+    lines.push(format!(
+        "Running: {}",
+        if summary.running { "yes" } else { "no" }
+    ));
+    if let Some(pid) = summary.pid {
+        lines.push(format!("PID: {pid}"));
+    }
+    if let Some(state) = &summary.state {
+        lines.push(format!("State: {state}"));
+    }
+    lines.push(format!("Stdout: {}", summary.stdout_path));
+    lines.push(format!("Stderr: {}", summary.stderr_path));
+    lines
+}
+
+fn supervisor_daemon_raw(summary: &SupervisorDaemonSummary) -> Vec<String> {
+    let mut lines = vec![
+        format!("action: {}", summary.action),
+        format!("managedLabel: {}", summary.managed_label),
+        format!("definitionPath: {}", summary.definition_path),
+        format!("statePath: {}", summary.state_path),
+        format!("installed: {}", summary.installed),
+        format!("loaded: {}", summary.loaded),
+        format!("running: {}", summary.running),
+        format!("stdoutPath: {}", summary.stdout_path),
+        format!("stderrPath: {}", summary.stderr_path),
+    ];
+    if let Some(pid) = summary.pid {
+        lines.push(format!("pid: {pid}"));
+    }
+    if let Some(state) = &summary.state {
+        lines.push(format!("state: {state}"));
     }
     lines
 }

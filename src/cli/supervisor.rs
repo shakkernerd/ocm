@@ -1,6 +1,44 @@
 use super::{Cli, render};
 
 impl Cli {
+    pub(super) fn handle_supervisor_daemon_action(
+        &self,
+        action: &str,
+        args: Vec<String>,
+    ) -> Result<i32, String> {
+        let command_name = format!("supervisor {action}");
+        let (args, json_flag, profile) = self.consume_human_output_flags(args, &command_name)?;
+        Self::assert_no_extra_args(&args)?;
+
+        let summary = self.with_progress(
+            match action {
+                "install" => "Installing supervisor daemon",
+                "start" => "Starting supervisor daemon",
+                "restart" => "Restarting supervisor daemon",
+                "stop" => "Stopping supervisor daemon",
+                "uninstall" => "Uninstalling supervisor daemon",
+                "status" => "Inspecting supervisor daemon",
+                _ => unreachable!("validated supervisor daemon action"),
+            },
+            || match action {
+                "install" => self.supervisor_service().install_daemon(),
+                "start" => self.supervisor_service().start_daemon(),
+                "restart" => self.supervisor_service().restart_daemon(),
+                "stop" => self.supervisor_service().stop_daemon(),
+                "uninstall" => self.supervisor_service().uninstall_daemon(),
+                "status" => self.supervisor_service().daemon_status(),
+                _ => unreachable!("validated supervisor daemon action"),
+            },
+        )?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::supervisor::supervisor_daemon(&summary, profile));
+        Ok(0)
+    }
+
     pub(super) fn handle_supervisor_logs(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, stderr_flag) = Self::consume_flag(args, "--stderr");
@@ -98,18 +136,18 @@ impl Cli {
         Ok(0)
     }
 
-    pub(super) fn handle_supervisor_status(&self, args: Vec<String>) -> Result<i32, String> {
+    pub(super) fn handle_supervisor_drift(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) =
-            self.consume_human_output_flags(args, "supervisor status")?;
+            self.consume_human_output_flags(args, "supervisor drift")?;
         Self::assert_no_extra_args(&args)?;
 
-        let summary = self.supervisor_service().status()?;
+        let summary = self.supervisor_service().drift()?;
         if json_flag {
             self.print_json(&summary)?;
             return Ok(0);
         }
 
-        self.stdout_lines(render::supervisor::supervisor_status(&summary, profile));
+        self.stdout_lines(render::supervisor::supervisor_drift(&summary, profile));
         Ok(0)
     }
 
@@ -123,11 +161,17 @@ impl Cli {
                 self.dispatch_help_command(vec!["supervisor".to_string()])
             }
             "plan" => self.handle_supervisor_plan(rest),
+            "install" => self.handle_supervisor_daemon_action("install", rest),
             "run" => self.handle_supervisor_run(rest),
+            "start" => self.handle_supervisor_daemon_action("start", rest),
+            "restart" => self.handle_supervisor_daemon_action("restart", rest),
+            "stop" => self.handle_supervisor_daemon_action("stop", rest),
+            "uninstall" => self.handle_supervisor_daemon_action("uninstall", rest),
+            "status" => self.handle_supervisor_daemon_action("status", rest),
+            "drift" => self.handle_supervisor_drift(rest),
             "logs" => self.handle_supervisor_logs(rest),
             "sync" => self.handle_supervisor_sync(rest),
             "show" => self.handle_supervisor_show(rest),
-            "status" => self.handle_supervisor_status(rest),
             _ => Err(format!("unknown supervisor command: {action}")),
         }
     }

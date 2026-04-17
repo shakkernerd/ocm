@@ -1,6 +1,6 @@
-mod inspect;
+pub(crate) mod inspect;
 mod manage;
-mod platform;
+pub(crate) mod platform;
 
 use std::collections::BTreeMap;
 use std::path::Path;
