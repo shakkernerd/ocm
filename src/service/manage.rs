@@ -9,12 +9,13 @@ use std::process::Command;
 use serde::Serialize;
 
 use super::inspect::{
-    GLOBAL_GATEWAY_LABEL, current_uid, global_plist_path, managed_plist_path,
-    managed_service_label, service_status,
+    GLOBAL_GATEWAY_LABEL, global_plist_path, managed_plist_path, managed_service_label,
+    service_status,
 };
 use super::platform::{
-    ServiceManagerKind, service_backend_support_error, service_manager_kind,
-    unsupported_service_manager_message,
+    ManagedServiceDefinition, ServiceManagerKind, activate_managed_service,
+    service_backend_support_error, service_manager_kind, stop_managed_service,
+    uninstall_managed_service, write_managed_service_definition,
 };
 use crate::env::resolve_gateway_process_spec;
 use crate::env::{EnvMeta, EnvironmentService};
@@ -27,8 +28,6 @@ use crate::store::{
 const DEFAULT_SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 const LAUNCH_AGENT_DIR_MODE: u32 = 0o755;
 const LAUNCH_AGENT_PLIST_MODE: u32 = 0o644;
-const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS: u32 = 1;
-const LAUNCH_AGENT_UMASK_DECIMAL: u32 = 0o077;
 const SERVICE_PROXY_ENV_KEYS: [&str; 8] = [
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -215,7 +214,7 @@ pub fn adopt_global_service(
     if !dry_run {
         write_service_definition(&adoption.prepared, env)?;
         backup_global_plist(&adoption.global.plist_path, &adoption.backup_plist_path)?;
-        bootout_global_service(env)?;
+        stop_managed_service(GLOBAL_GATEWAY_LABEL, env)?;
         if let Err(error) = activate_managed_service(
             &adoption.prepared.managed_label,
             &adoption.prepared.managed_plist_path,
@@ -256,9 +255,9 @@ pub fn restore_global_service(
     let restore = prepare_global_restore(name, env, cwd)?;
     if !dry_run {
         restore_global_plist(&restore.backup_plist_path, &restore.global_plist_path)?;
-        bootout_managed_service(&restore.managed_label, env)?;
+        stop_managed_service(&restore.managed_label, env)?;
         if let Err(error) =
-            activate_launch_agent(GLOBAL_GATEWAY_LABEL, &restore.global_plist_path, env)
+            activate_managed_service(GLOBAL_GATEWAY_LABEL, &restore.global_plist_path, env)
         {
             rollback_failed_global_restore(&restore, env)?;
             return Err(error);
@@ -333,7 +332,7 @@ pub fn stop_service(
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
     let existing = prepare_existing_service_ref(name, env, cwd)?;
-    stop_managed_service(&existing.managed_label, &existing.managed_plist_path, env)?;
+    stop_managed_service(&existing.managed_label, env)?;
 
     Ok(ServiceActionSummary {
         env_name: existing.env_meta.name,
@@ -378,7 +377,7 @@ pub fn uninstall_service(
     let managed_label = managed_service_label(&env_meta.name, env, cwd)?;
     let managed_plist_path = managed_plist_path(&env_meta.name, env, cwd)?;
 
-    uninstall_managed_service_by_label(&managed_label, &managed_plist_path, env)?;
+    uninstall_managed_service(&managed_label, env)?;
     let plist_path = display_path(&managed_plist_path);
     if managed_plist_path.exists() {
         fs::remove_file(&managed_plist_path).map_err(|error| error.to_string())?;
@@ -705,65 +704,24 @@ fn service_stderr_log_path(env_meta: &EnvMeta) -> PathBuf {
     service_log_dir(env_meta).join("gateway.err.log")
 }
 
-fn write_plist_file(
-    prepared: &PreparedService,
-    env: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    ensure_secure_dir(&prepared.log_dir)?;
-    if let Some(parent) = prepared.managed_plist_path.parent() {
-        ensure_secure_dir(parent)?;
-    }
-
-    let plist = build_launch_agent_plist(
-        &prepared.managed_label,
-        &format!(
-            "OCM-managed OpenClaw gateway service for env {}",
-            prepared.env_meta.name
-        ),
-        &prepared.program_arguments,
-        &prepared.run_dir,
-        &prepared.stdout_path,
-        &prepared.stderr_path,
-        &build_service_environment(&prepared.env_meta, &prepared.managed_label, env),
-    );
-    fs::write(&prepared.managed_plist_path, plist).map_err(|error| error.to_string())?;
-    set_mode(&prepared.managed_plist_path, LAUNCH_AGENT_PLIST_MODE)?;
-    Ok(())
-}
-
 fn write_service_definition(
     prepared: &PreparedService,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => write_plist_file(prepared, env),
-        ServiceManagerKind::SystemdUser => write_systemd_unit_file(prepared, env),
-        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
-    }
-}
-
-fn write_systemd_unit_file(
-    prepared: &PreparedService,
-    env: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    ensure_secure_dir(&prepared.log_dir)?;
-    if let Some(parent) = prepared.managed_plist_path.parent() {
-        ensure_secure_dir(parent)?;
-    }
-
-    let unit = build_systemd_unit(
-        &prepared.managed_label,
-        &format!(
+    let definition = ManagedServiceDefinition {
+        label: prepared.managed_label.clone(),
+        description: format!(
             "OCM-managed OpenClaw gateway service for env {}",
             prepared.env_meta.name
         ),
-        &prepared.program_arguments,
-        &prepared.run_dir,
-        &build_service_environment(&prepared.env_meta, &prepared.managed_label, env),
-    );
-    fs::write(&prepared.managed_plist_path, unit).map_err(|error| error.to_string())?;
-    set_mode(&prepared.managed_plist_path, LAUNCH_AGENT_PLIST_MODE)?;
-    Ok(())
+        definition_path: prepared.managed_plist_path.clone(),
+        program_arguments: prepared.program_arguments.clone(),
+        working_directory: prepared.run_dir.clone(),
+        stdout_path: prepared.stdout_path.clone(),
+        stderr_path: prepared.stderr_path.clone(),
+        environment: build_service_environment(&prepared.env_meta, &prepared.managed_label, env),
+    };
+    write_managed_service_definition(&definition, env)
 }
 
 fn prepare_global_adoption(
@@ -906,98 +864,6 @@ fn build_service_environment(
     service_env
 }
 
-fn build_launch_agent_plist(
-    label: &str,
-    comment: &str,
-    program_arguments: &[String],
-    working_directory: &Path,
-    stdout_path: &Path,
-    stderr_path: &Path,
-    environment: &BTreeMap<String, String>,
-) -> String {
-    let args_xml = program_arguments
-        .iter()
-        .map(|arg| format!("\n      <string>{}</string>", plist_escape(arg)))
-        .collect::<String>();
-    let env_xml = if environment.is_empty() {
-        String::new()
-    } else {
-        let items = environment
-            .iter()
-            .filter(|(_, value)| !value.trim().is_empty())
-            .map(|(key, value)| {
-                format!(
-                    "\n      <key>{}</key>\n      <string>{}</string>",
-                    plist_escape(key),
-                    plist_escape(value)
-                )
-            })
-            .collect::<String>();
-        format!("\n    <key>EnvironmentVariables</key>\n    <dict>{items}\n    </dict>")
-    };
-
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n  <dict>\n    <key>Label</key>\n    <string>{}</string>\n    <key>Comment</key>\n    <string>{}</string>\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n    <key>ThrottleInterval</key>\n    <integer>{}</integer>\n    <key>Umask</key>\n    <integer>{}</integer>\n    <key>ProgramArguments</key>\n    <array>{}\n    </array>\n    <key>WorkingDirectory</key>\n    <string>{}</string>\n    <key>StandardOutPath</key>\n    <string>{}</string>\n    <key>StandardErrorPath</key>\n    <string>{}</string>{}\n  </dict>\n</plist>\n",
-        plist_escape(label),
-        plist_escape(comment),
-        LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
-        LAUNCH_AGENT_UMASK_DECIMAL,
-        args_xml,
-        plist_escape(&display_path(working_directory)),
-        plist_escape(&display_path(stdout_path)),
-        plist_escape(&display_path(stderr_path)),
-        env_xml,
-    )
-}
-
-fn build_systemd_unit(
-    _label: &str,
-    description: &str,
-    program_arguments: &[String],
-    working_directory: &Path,
-    environment: &BTreeMap<String, String>,
-) -> String {
-    let exec_start = program_arguments
-        .iter()
-        .map(|arg| systemd_quote(arg))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let environment_lines = environment
-        .iter()
-        .filter(|(_, value)| !value.trim().is_empty())
-        .map(|(key, value)| {
-            format!(
-                "Environment=\"{}={}\"",
-                systemd_escape(key),
-                systemd_escape(value)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let environment_block = if environment_lines.is_empty() {
-        String::new()
-    } else {
-        format!("{environment_lines}\n")
-    };
-
-    format!(
-        "[Unit]\nDescription={}\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory={}\nExecStart={}\n{}Restart=always\nRestartSec=1\nUMask=0077\n\n[Install]\nWantedBy=default.target\n",
-        systemd_escape(description),
-        systemd_quote(&display_path(working_directory)),
-        exec_start,
-        environment_block,
-    )
-}
-
-fn plist_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
 fn ensure_secure_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|error| error.to_string())?;
     set_mode(path, LAUNCH_AGENT_DIR_MODE)
@@ -1019,76 +885,6 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
     }
 }
 
-fn activate_launch_agent(
-    label: &str,
-    plist_path: &Path,
-    env: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    let domain = gui_domain();
-    let plist_path = display_path(plist_path);
-    let _ = run_launchctl(env, ["bootout", domain.as_str(), plist_path.as_str()]);
-    let _ = run_launchctl(env, ["unload", plist_path.as_str()]);
-    let target = format!("{domain}/{label}");
-    let _ = run_launchctl(env, ["enable", target.as_str()]);
-    let bootstrap = run_launchctl(env, ["bootstrap", domain.as_str(), plist_path.as_str()])?;
-    if !bootstrap.status.success() {
-        return Err(format!(
-            "launchctl bootstrap failed: {}",
-            launchctl_detail(&bootstrap)
-        ));
-    }
-    Ok(())
-}
-
-fn activate_managed_service(
-    label: &str,
-    service_path: &Path,
-    env: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => activate_launch_agent(label, service_path, env),
-        ServiceManagerKind::SystemdUser => activate_systemd_user_service(label, env),
-        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
-    }
-}
-
-fn activate_systemd_user_service(
-    label: &str,
-    env: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
-    if !reload.status.success() {
-        return Err(format!(
-            "systemctl --user daemon-reload failed: {}",
-            systemctl_detail(&reload)
-        ));
-    }
-
-    let enable = run_systemctl(env, ["--user", "enable", label])?;
-    if !enable.status.success() {
-        return Err(format!(
-            "systemctl --user enable failed: {}",
-            systemctl_detail(&enable)
-        ));
-    }
-
-    let restart = run_systemctl(env, ["--user", "restart", label])?;
-    if restart.status.success() {
-        return Ok(());
-    }
-
-    let start = run_systemctl(env, ["--user", "start", label])?;
-    if !start.status.success() {
-        return Err(format!(
-            "systemctl --user restart/start failed: {}; {}",
-            systemctl_detail(&restart),
-            systemctl_detail(&start)
-        ));
-    }
-
-    Ok(())
-}
-
 fn backup_global_plist(source_path: &Path, backup_path: &Path) -> Result<(), String> {
     let Some(parent) = backup_path.parent() else {
         return Err("failed to resolve backup directory for global service plist".to_string());
@@ -1103,7 +899,7 @@ fn rollback_failed_global_adoption(
     adoption: &PreparedGlobalAdoption,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let _ = bootout_managed_service(&adoption.prepared.managed_label, env);
+    let _ = stop_managed_service(&adoption.prepared.managed_label, env);
     if adoption.prepared.managed_plist_path.exists() {
         fs::remove_file(&adoption.prepared.managed_plist_path).map_err(|error| {
             format!(
@@ -1112,14 +908,14 @@ fn rollback_failed_global_adoption(
             )
         })?;
     }
-    activate_launch_agent(GLOBAL_GATEWAY_LABEL, &adoption.global.plist_path, env)
+    activate_managed_service(GLOBAL_GATEWAY_LABEL, &adoption.global.plist_path, env)
 }
 
 fn rollback_failed_global_restore(
     restore: &PreparedGlobalRestore,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let _ = bootout_global_service(env);
+    let _ = stop_managed_service(GLOBAL_GATEWAY_LABEL, env);
     if restore.global_plist_path.exists() {
         fs::remove_file(&restore.global_plist_path).map_err(|error| {
             format!(
@@ -1222,93 +1018,12 @@ fn read_service_binding(plist_path: &Path) -> Result<GlobalServiceBinding, Strin
     })
 }
 
-fn bootout_global_service(env: &BTreeMap<String, String>) -> Result<(), String> {
-    let target = format!("{}/{}", gui_domain(), GLOBAL_GATEWAY_LABEL);
-    let bootout = run_launchctl(env, ["bootout", target.as_str()])?;
-    if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
-        return Err(format!(
-            "launchctl bootout failed: {}",
-            launchctl_detail(&bootout)
-        ));
-    }
-    Ok(())
-}
-
-fn bootout_managed_service(label: &str, env: &BTreeMap<String, String>) -> Result<(), String> {
-    let target = format!("{}/{}", gui_domain(), label);
-    let bootout = run_launchctl(env, ["bootout", target.as_str()])?;
-    if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
-        return Err(format!(
-            "launchctl bootout failed: {}",
-            launchctl_detail(&bootout)
-        ));
-    }
-    Ok(())
-}
-
 fn refresh_managed_service(
     prepared: &PreparedService,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     write_service_definition(prepared, env)?;
     activate_managed_service(&prepared.managed_label, &prepared.managed_plist_path, env)
-}
-
-fn stop_managed_service(
-    label: &str,
-    _service_path: &Path,
-    env: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => {
-            let target = format!("{}/{}", gui_domain(), label);
-            let bootout = run_launchctl(env, ["bootout", target.as_str()])?;
-            if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
-                return Err(format!(
-                    "launchctl bootout failed: {}",
-                    launchctl_detail(&bootout)
-                ));
-            }
-            Ok(())
-        }
-        ServiceManagerKind::SystemdUser => {
-            let stop = run_systemctl(env, ["--user", "stop", label])?;
-            if !stop.status.success() && !systemctl_not_loaded(&stop) {
-                return Err(format!(
-                    "systemctl --user stop failed: {}",
-                    systemctl_detail(&stop)
-                ));
-            }
-            Ok(())
-        }
-        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
-    }
-}
-
-fn uninstall_managed_service_by_label(
-    label: &str,
-    _service_path: &Path,
-    env: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => {
-            let target = format!("{}/{}", gui_domain(), label);
-            let _ = run_launchctl(env, ["bootout", target.as_str()]);
-            Ok(())
-        }
-        ServiceManagerKind::SystemdUser => {
-            let _ = run_systemctl(env, ["--user", "disable", "--now", label]);
-            let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
-            if !reload.status.success() {
-                return Err(format!(
-                    "systemctl --user daemon-reload failed: {}",
-                    systemctl_detail(&reload)
-                ));
-            }
-            Ok(())
-        }
-        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
-    }
 }
 
 fn read_launch_agent_environment_value(
@@ -1352,76 +1067,10 @@ fn plist_unescape(value: &str) -> String {
         .replace("&amp;", "&")
 }
 
-fn gui_domain() -> String {
-    current_uid()
-        .map(|uid| format!("gui/{uid}"))
-        .unwrap_or_else(|| "gui/501".to_string())
-}
-
-fn launchctl_binary(env: &BTreeMap<String, String>) -> String {
-    env.get("OCM_INTERNAL_LAUNCHCTL_BIN")
-        .cloned()
-        .unwrap_or_else(|| "launchctl".to_string())
-}
-
-fn systemctl_binary(env: &BTreeMap<String, String>) -> String {
-    env.get("OCM_INTERNAL_SYSTEMCTL_BIN")
-        .cloned()
-        .unwrap_or_else(|| "systemctl".to_string())
-}
-
 fn journalctl_binary(env: &BTreeMap<String, String>) -> String {
     env.get("OCM_INTERNAL_JOURNALCTL_BIN")
         .cloned()
         .unwrap_or_else(|| "journalctl".to_string())
-}
-
-fn run_launchctl<const N: usize>(
-    env: &BTreeMap<String, String>,
-    args: [&str; N],
-) -> Result<std::process::Output, String> {
-    Command::new(launchctl_binary(env))
-        .args(args)
-        .output()
-        .map_err(|error| format!("failed to run \"launchctl\": {error}"))
-}
-
-fn run_systemctl<const N: usize>(
-    env: &BTreeMap<String, String>,
-    args: [&str; N],
-) -> Result<std::process::Output, String> {
-    Command::new(systemctl_binary(env))
-        .args(args)
-        .output()
-        .map_err(|error| format!("failed to run \"systemctl\": {error}"))
-}
-
-fn launchctl_detail(output: &std::process::Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !stderr.is_empty() {
-        return stderr;
-    }
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-fn launchctl_not_loaded(output: &std::process::Output) -> bool {
-    let detail = launchctl_detail(output).to_ascii_lowercase();
-    detail.contains("no such process")
-        || detail.contains("could not find service")
-        || detail.contains("not found")
-}
-
-fn systemctl_detail(output: &std::process::Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !stderr.is_empty() {
-        return stderr;
-    }
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-fn systemctl_not_loaded(output: &std::process::Output) -> bool {
-    let detail = systemctl_detail(output).to_ascii_lowercase();
-    detail.contains("not loaded") || detail.contains("not found") || detail.contains("no such file")
 }
 
 fn read_systemd_service_logs(
@@ -1462,40 +1111,13 @@ fn ensure_service_backend_ready(env: &BTreeMap<String, String>) -> Result<(), St
     Ok(())
 }
 
-fn systemd_quote(value: &str) -> String {
-    if value.is_empty()
-        || value
-            .chars()
-            .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\\'))
-    {
-        format!("\"{}\"", systemd_escape(value))
-    } else {
-        systemd_escape(value)
-    }
-}
-
-fn systemd_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        build_launch_agent_plist, build_systemd_unit, plist_escape, plist_unescape,
-        read_launch_agent_environment_value, service_install_warnings, tail_text,
+        plist_unescape, read_launch_agent_environment_value, service_install_warnings, tail_text,
     };
-    use std::collections::BTreeMap;
     use std::fs;
-    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn plist_escape_handles_xml_special_characters() {
-        assert_eq!(
-            plist_escape("a&b<c>d\"e'f"),
-            "a&amp;b&lt;c&gt;d&quot;e&apos;f"
-        );
-    }
 
     #[test]
     fn install_warnings_explain_port_persistence_and_reassignment() {
@@ -1511,52 +1133,6 @@ mod tests {
                 "gateway port 18789 was unavailable; assigned 18790 to env \"test\" and saved it to env metadata"
             ]
         );
-    }
-
-    #[test]
-    fn launch_agent_plist_includes_program_arguments_and_environment() {
-        let mut environment = BTreeMap::new();
-        environment.insert("PATH".to_string(), "/usr/bin".to_string());
-        let plist = build_launch_agent_plist(
-            "ai.openclaw.gateway.ocm.test",
-            "test",
-            &[
-                "/bin/sh".to_string(),
-                "-lc".to_string(),
-                "openclaw gateway run".to_string(),
-            ],
-            Path::new("/tmp/work"),
-            Path::new("/tmp/stdout.log"),
-            Path::new("/tmp/stderr.log"),
-            &environment,
-        );
-        assert!(plist.contains("<key>Label</key>"));
-        assert!(plist.contains("ai.openclaw.gateway.ocm.test"));
-        assert!(plist.contains("openclaw gateway run"));
-        assert!(plist.contains("<key>EnvironmentVariables</key>"));
-        assert!(plist.contains("/tmp/stdout.log"));
-    }
-
-    #[test]
-    fn systemd_unit_includes_exec_start_and_environment() {
-        let mut environment = BTreeMap::new();
-        environment.insert("PATH".to_string(), "/usr/bin".to_string());
-        environment.insert("OPENCLAW_HOME".to_string(), "/tmp/demo".to_string());
-        let unit = build_systemd_unit(
-            "ai.openclaw.gateway.ocm.test",
-            "test",
-            &[
-                "/bin/sh".to_string(),
-                "-lc".to_string(),
-                "openclaw gateway run --port 18789".to_string(),
-            ],
-            Path::new("/tmp/work"),
-            &environment,
-        );
-        assert!(unit.contains("[Service]"));
-        assert!(unit.contains("ExecStart=/bin/sh -lc"));
-        assert!(unit.contains("WorkingDirectory=/tmp/work"));
-        assert!(unit.contains("Environment=\"OPENCLAW_HOME=/tmp/demo\""));
     }
 
     #[test]
