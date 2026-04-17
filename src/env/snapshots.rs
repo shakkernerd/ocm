@@ -8,6 +8,7 @@ use crate::store::{
     create_env_snapshot, get_env_snapshot, list_all_env_snapshots, list_env_snapshots, now_utc,
     remove_env_snapshot, restore_env_snapshot, summarize_snapshot,
 };
+use crate::supervisor::sync_supervisor_if_present;
 
 #[derive(Clone, Debug)]
 pub struct CreateEnvSnapshotOptions {
@@ -144,7 +145,9 @@ impl<'a> EnvironmentService<'a> {
         &self,
         options: RestoreEnvSnapshotOptions,
     ) -> Result<EnvSnapshotRestoreSummary, String> {
-        restore_env_snapshot(options, self.env, self.cwd)
+        let summary = restore_env_snapshot(options, self.env, self.cwd)?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(summary)
     }
 
     pub fn remove_snapshot(

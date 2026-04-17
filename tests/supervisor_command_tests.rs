@@ -164,6 +164,35 @@ fn supervisor_status_reports_missing_and_changed_state() {
             .is_empty()
     );
 
+    let removed_launcher = run_ocm(&cwd, &env, &["launcher", "remove", "dev"]);
+    assert!(
+        removed_launcher.status.success(),
+        "{}",
+        stderr(&removed_launcher)
+    );
+
+    let after_change = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    assert!(after_change.status.success(), "{}", stderr(&after_change));
+    let after_change_body: Value = serde_json::from_slice(&after_change.stdout).unwrap();
+    assert_eq!(after_change_body["inSync"], false);
+    assert_eq!(
+        after_change_body["extraChildren"],
+        serde_json::json!(["demo"])
+    );
+    assert_eq!(
+        after_change_body["skippedEnvChanges"],
+        serde_json::json!(["demo"])
+    );
+}
+
+#[test]
+fn env_binding_changes_refresh_persisted_supervisor_state() {
+    let root = TestDir::new("supervisor-auto-refresh-env-binding");
+    let (cwd, env) = setup_supervisor_fixture(&root);
+
+    let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
+    assert!(sync.status.success(), "{}", stderr(&sync));
+
     let add_launcher = run_ocm(
         &cwd,
         &env,
@@ -173,12 +202,64 @@ fn supervisor_status_reports_missing_and_changed_state() {
     let rebind = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "dev-b"]);
     assert!(rebind.status.success(), "{}", stderr(&rebind));
 
-    let after_change = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
-    assert!(after_change.status.success(), "{}", stderr(&after_change));
-    let after_change_body: Value = serde_json::from_slice(&after_change.stdout).unwrap();
-    assert_eq!(after_change_body["inSync"], false);
-    assert_eq!(
-        after_change_body["changedChildren"],
-        serde_json::json!(["demo"])
+    let show = run_ocm(&cwd, &env, &["supervisor", "show", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_body: Value = serde_json::from_slice(&show.stdout).unwrap();
+    let demo = show_body["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|child| child["envName"] == "demo")
+        .unwrap();
+    assert_eq!(demo["bindingName"], "dev-b");
+
+    let status = run_ocm(&cwd, &env, &["supervisor", "status", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let status_body: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_body["inSync"], true);
+}
+
+#[test]
+fn env_create_and_remove_refresh_persisted_supervisor_state() {
+    let root = TestDir::new("supervisor-auto-refresh-env-shape");
+    let (cwd, env) = setup_supervisor_fixture(&root);
+
+    let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
+    assert!(sync.status.success(), "{}", stderr(&sync));
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "extra", "--launcher", "dev"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let show_after_create = run_ocm(&cwd, &env, &["supervisor", "show", "--json"]);
+    assert!(
+        show_after_create.status.success(),
+        "{}",
+        stderr(&show_after_create)
+    );
+    let created_body: Value = serde_json::from_slice(&show_after_create.stdout).unwrap();
+    assert!(
+        created_body["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|child| child["envName"] == "extra")
+    );
+
+    let removed = run_ocm(&cwd, &env, &["env", "remove", "extra", "--force"]);
+    assert!(removed.status.success(), "{}", stderr(&removed));
+
+    let show_after_remove = run_ocm(&cwd, &env, &["supervisor", "show", "--json"]);
+    assert!(
+        show_after_remove.status.success(),
+        "{}",
+        stderr(&show_after_remove)
+    );
+    let removed_body: Value = serde_json::from_slice(&show_after_remove.stdout).unwrap();
+    assert!(
+        !removed_body["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|child| child["envName"] == "extra")
     );
 }

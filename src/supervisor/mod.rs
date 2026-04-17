@@ -93,6 +93,18 @@ pub struct SupervisorService<'a> {
     cwd: &'a Path,
 }
 
+pub fn sync_supervisor_if_present(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<bool, String> {
+    let state_path = supervisor_state_path(env, cwd)?;
+    if !state_path.exists() {
+        return Ok(false);
+    }
+    SupervisorService::new(env, cwd).sync()?;
+    Ok(true)
+}
+
 impl<'a> SupervisorService<'a> {
     pub fn new(env: &'a BTreeMap<String, String>, cwd: &'a Path) -> Self {
         Self { env, cwd }

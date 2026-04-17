@@ -14,6 +14,7 @@ use crate::store::{
     get_runtime_verified, import_environment, list_environments, now_utc, remove_environment,
     save_environment,
 };
+use crate::supervisor::sync_supervisor_if_present;
 
 const DEFAULT_GATEWAY_PORT: u32 = 18_789;
 
@@ -177,11 +178,15 @@ impl<'a> EnvironmentService<'a> {
         if let Some(launcher_name) = options.default_launcher.as_deref() {
             get_launcher(launcher_name, self.env, self.cwd)?;
         }
-        create_environment(options, self.env, self.cwd)
+        let meta = create_environment(options, self.env, self.cwd)?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(meta)
     }
 
     pub fn clone(&self, options: CloneEnvironmentOptions) -> Result<EnvMeta, String> {
-        clone_environment(options, self.env, self.cwd)
+        let meta = clone_environment(options, self.env, self.cwd)?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(meta)
     }
 
     pub fn export(&self, options: ExportEnvironmentOptions) -> Result<EnvExportSummary, String> {
@@ -189,7 +194,9 @@ impl<'a> EnvironmentService<'a> {
     }
 
     pub fn import(&self, options: ImportEnvironmentOptions) -> Result<EnvImportSummary, String> {
-        import_environment(options, self.env, self.cwd)
+        let summary = import_environment(options, self.env, self.cwd)?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(summary)
     }
 
     pub fn list(&self) -> Result<Vec<EnvMeta>, String> {
@@ -221,7 +228,9 @@ impl<'a> EnvironmentService<'a> {
     }
 
     pub fn remove(&self, name: &str, force: bool) -> Result<EnvMeta, String> {
-        remove_environment(name, force, self.env, self.cwd)
+        let meta = remove_environment(name, force, self.env, self.cwd)?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(meta)
     }
 
     pub fn prune_candidates(&self, older_than_days: i64) -> Result<Vec<EnvMeta>, String> {
@@ -234,6 +243,9 @@ impl<'a> EnvironmentService<'a> {
         let mut removed = Vec::with_capacity(candidates.len());
         for meta in candidates {
             removed.push(remove_environment(&meta.name, false, self.env, self.cwd)?);
+        }
+        if !removed.is_empty() {
+            sync_supervisor_if_present(self.env, self.cwd)?;
         }
         Ok(removed)
     }
