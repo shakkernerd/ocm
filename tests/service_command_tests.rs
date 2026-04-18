@@ -218,7 +218,7 @@ fn service_list_reports_env_and_ocm_service_state_in_json() {
     let output = run_ocm(&cwd, &env, &["service", "list", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = json_output(&output);
-    assert_eq!(body["daemonInstalled"], true);
+    assert_eq!(body["ocmServiceInstalled"], true);
     assert_eq!(body["services"][0]["envName"], "demo");
     assert_eq!(body["services"][0]["installed"], true);
     assert_eq!(body["services"][0]["desiredRunning"], true);

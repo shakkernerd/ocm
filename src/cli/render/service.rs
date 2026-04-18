@@ -6,7 +6,7 @@ use crate::service::{
     ServiceActionSummary, ServiceInstallSummary, ServiceSummary, ServiceSummaryList,
 };
 
-fn daemon_state(installed: bool, loaded: bool, running: bool) -> &'static str {
+fn ocm_service_state(installed: bool, loaded: bool, running: bool) -> &'static str {
     if running {
         "running"
     } else if loaded {
@@ -95,16 +95,16 @@ fn service_list_with_width(
                     state_tone(service_state(service)),
                 ),
                 Cell::new(
-                    daemon_state(
-                        service.daemon_installed,
-                        service.daemon_loaded,
-                        service.daemon_running,
+                    ocm_service_state(
+                        service.ocm_service_installed,
+                        service.ocm_service_loaded,
+                        service.ocm_service_running,
                     ),
                     crate::infra::terminal::Align::Left,
-                    state_tone(daemon_state(
-                        service.daemon_installed,
-                        service.daemon_loaded,
-                        service.daemon_running,
+                    state_tone(ocm_service_state(
+                        service.ocm_service_installed,
+                        service.ocm_service_loaded,
+                        service.ocm_service_running,
                     )),
                 ),
             ]
@@ -120,10 +120,10 @@ fn service_list_with_width(
     lines.push(paint(
         &format!(
             "OCM background service: {}",
-            daemon_state(
-                summary.daemon_installed,
-                summary.daemon_loaded,
-                summary.daemon_running
+            ocm_service_state(
+                summary.ocm_service_installed,
+                summary.ocm_service_loaded,
+                summary.ocm_service_running
             )
         ),
         Tone::Muted,
@@ -135,10 +135,10 @@ fn service_list_with_width(
 fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
     let mut lines = vec![format!(
         "ocmService state={}",
-        daemon_state(
-            summary.daemon_installed,
-            summary.daemon_loaded,
-            summary.daemon_running
+        ocm_service_state(
+            summary.ocm_service_installed,
+            summary.ocm_service_loaded,
+            summary.ocm_service_running
         )
     )];
     for service in &summary.services {
@@ -147,11 +147,11 @@ fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
             format!("port={}", service.gateway_port),
             format!("state={}", service_state(service)),
             format!(
-                "daemon={}",
-                daemon_state(
-                    service.daemon_installed,
-                    service.daemon_loaded,
-                    service.daemon_running
+                "ocmService={}",
+                ocm_service_state(
+                    service.ocm_service_installed,
+                    service.ocm_service_loaded,
+                    service.ocm_service_running
                 )
             ),
         ];
@@ -178,10 +178,10 @@ pub fn service_status(
         return service_status_raw(summary);
     }
 
-    let daemon = daemon_state(
-        summary.daemon_installed,
-        summary.daemon_loaded,
-        summary.daemon_running,
+    let daemon = ocm_service_state(
+        summary.ocm_service_installed,
+        summary.ocm_service_loaded,
+        summary.ocm_service_running,
     );
     let service = service_state(summary);
 
@@ -295,10 +295,10 @@ fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) ->
 }
 
 fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
-    let daemon = daemon_state(
-        summary.daemon_installed,
-        summary.daemon_loaded,
-        summary.daemon_running,
+    let daemon = ocm_service_state(
+        summary.ocm_service_installed,
+        summary.ocm_service_loaded,
+        summary.ocm_service_running,
     );
     vec![
         format!("envName: {}", summary.env_name),
@@ -478,11 +478,11 @@ mod tests {
             loaded: true,
             running: true,
             desired_running: true,
-            daemon_installed: true,
-            daemon_loaded: true,
-            daemon_running: true,
-            daemon_pid: Some(42),
-            daemon_state: Some("running".to_string()),
+            ocm_service_installed: true,
+            ocm_service_loaded: true,
+            ocm_service_running: true,
+            ocm_service_pid: Some(42),
+            ocm_service_state: Some("running".to_string()),
             child_pid: Some(99),
             child_restart_count: Some(0),
             child_port: Some(18789),
@@ -496,12 +496,12 @@ mod tests {
     fn service_list_pretty_renders_table() {
         let lines = service_list(
             &ServiceSummaryList {
-                daemon_label: "ocm.ocm".to_string(),
-                daemon_installed: true,
-                daemon_loaded: true,
-                daemon_running: true,
-                daemon_pid: Some(42),
-                daemon_state: Some("running".to_string()),
+                ocm_service_label: "ocm.ocm".to_string(),
+                ocm_service_installed: true,
+                ocm_service_loaded: true,
+                ocm_service_running: true,
+                ocm_service_pid: Some(42),
+                ocm_service_state: Some("running".to_string()),
                 services: vec![sample_service()],
             },
             RenderProfile::pretty(false),

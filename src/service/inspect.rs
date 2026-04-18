@@ -58,11 +58,11 @@ pub struct ServiceSummary {
     pub loaded: bool,
     pub running: bool,
     pub desired_running: bool,
-    pub daemon_installed: bool,
-    pub daemon_loaded: bool,
-    pub daemon_running: bool,
-    pub daemon_pid: Option<u32>,
-    pub daemon_state: Option<String>,
+    pub ocm_service_installed: bool,
+    pub ocm_service_loaded: bool,
+    pub ocm_service_running: bool,
+    pub ocm_service_pid: Option<u32>,
+    pub ocm_service_state: Option<String>,
     pub child_pid: Option<u32>,
     pub child_restart_count: Option<usize>,
     pub child_port: Option<u32>,
@@ -74,12 +74,12 @@ pub struct ServiceSummary {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceSummaryList {
-    pub daemon_label: String,
-    pub daemon_installed: bool,
-    pub daemon_loaded: bool,
-    pub daemon_running: bool,
-    pub daemon_pid: Option<u32>,
-    pub daemon_state: Option<String>,
+    pub ocm_service_label: String,
+    pub ocm_service_installed: bool,
+    pub ocm_service_loaded: bool,
+    pub ocm_service_running: bool,
+    pub ocm_service_pid: Option<u32>,
+    pub ocm_service_state: Option<String>,
     pub services: Vec<ServiceSummary>,
 }
 
@@ -126,12 +126,12 @@ pub fn list_services(
     }
 
     Ok(ServiceSummaryList {
-        daemon_label: daemon.managed_label,
-        daemon_installed: daemon.installed,
-        daemon_loaded: daemon.loaded,
-        daemon_running: daemon.running,
-        daemon_pid: daemon.pid,
-        daemon_state: daemon.state,
+        ocm_service_label: daemon.managed_label,
+        ocm_service_installed: daemon.installed,
+        ocm_service_loaded: daemon.loaded,
+        ocm_service_running: daemon.running,
+        ocm_service_pid: daemon.pid,
+        ocm_service_state: daemon.state,
         services,
     })
 }
@@ -289,11 +289,11 @@ fn build_service_summary(
         loaded,
         running,
         desired_running,
-        daemon_installed: daemon.installed,
-        daemon_loaded: daemon.loaded,
-        daemon_running: daemon.running,
-        daemon_pid: daemon.pid,
-        daemon_state: daemon.state.clone(),
+        ocm_service_installed: daemon.installed,
+        ocm_service_loaded: daemon.loaded,
+        ocm_service_running: daemon.running,
+        ocm_service_pid: daemon.pid,
+        ocm_service_state: daemon.state.clone(),
         child_pid: runtime_child.map(|child| child.pid),
         child_restart_count: runtime_child.map(|child| child.restart_count),
         child_port: runtime_child.map(|child| child.child_port),
