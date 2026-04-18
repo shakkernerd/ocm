@@ -46,9 +46,6 @@ impl Cli {
             ["runtime"] => Ok(render::help::runtime_help(&cmd)),
             ["runtime", action] => render::help::runtime_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown runtime command: {action}")),
-            ["supervisor"] => Ok(render::help::supervisor_help(&cmd)),
-            ["supervisor", action] => render::help::supervisor_command_help(&cmd, action)
-                .ok_or_else(|| format!("unknown supervisor command: {action}")),
             ["doctor", action] => render::help::doctor_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown doctor command: {action}")),
             ["service"] => Ok(render::help::service_help(&cmd)),
@@ -68,7 +65,6 @@ impl Cli {
                         | "release"
                         | "launcher"
                         | "runtime"
-                        | "supervisor"
                         | "service"
                         | "init"
                 ) =>
@@ -92,14 +88,7 @@ impl Cli {
             [group]
                 if matches!(
                     group.as_str(),
-                    "self"
-                        | "env"
-                        | "adopt"
-                        | "release"
-                        | "launcher"
-                        | "runtime"
-                        | "supervisor"
-                        | "service"
+                    "self" | "env" | "adopt" | "release" | "launcher" | "runtime" | "service"
                 ) =>
             {
                 Some(vec![group.as_str()])
@@ -124,7 +113,6 @@ impl Cli {
                         | "release"
                         | "launcher"
                         | "runtime"
-                        | "supervisor"
                         | "service"
                 ) && Self::is_help_token(next) =>
             {
@@ -147,7 +135,6 @@ impl Cli {
                         | "release"
                         | "launcher"
                         | "runtime"
-                        | "supervisor"
                         | "service"
                 ) && Self::is_help_flag(flag) =>
             {

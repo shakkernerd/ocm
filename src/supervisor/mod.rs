@@ -410,7 +410,7 @@ impl<'a> SupervisorService<'a> {
             .find(|child| child.env_name == env_name)
             .ok_or_else(|| {
                 format!(
-                    "supervisor state does not include env \"{env_name}\"; run \"ocm supervisor drift\" for drift details"
+                    "service state does not include env \"{env_name}\"; restart the env service to refresh the stored child registry"
                 )
             })?;
 
@@ -525,7 +525,7 @@ impl<'a> SupervisorService<'a> {
         let state_path = supervisor_state_path(self.env, self.cwd)?;
         if !state_path.exists() {
             return Err(
-                "supervisor state has not been synced yet; run \"ocm supervisor sync\"".to_string(),
+                "service state has not been written yet; run \"ocm service install <env>\" or \"ocm service start <env>\" first".to_string(),
             );
         }
         let state = read_json(&state_path)?;
@@ -583,7 +583,7 @@ impl<'a> SupervisorService<'a> {
             definition_path: identity.definition_path,
             program_arguments: vec![
                 display_path(&executable_path),
-                "supervisor".to_string(),
+                "__daemon".to_string(),
                 "run".to_string(),
             ],
             working_directory: ocm_home.clone(),

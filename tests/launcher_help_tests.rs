@@ -63,28 +63,18 @@ fn top_level_help_is_clean_and_points_to_topics() {
 }
 
 #[test]
-fn supervisor_help_is_available_from_help_and_bare_group() {
-    let root = TestDir::new("help-supervisor-group");
+fn supervisor_help_is_not_public_anymore() {
+    let root = TestDir::new("help-supervisor-removed");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
     let via_help = run_ocm(&cwd, &env, &["help", "supervisor"]);
     let bare = run_ocm(&cwd, &env, &["supervisor"]);
-    assert!(via_help.status.success(), "{}", stderr(&via_help));
-    assert!(bare.status.success(), "{}", stderr(&bare));
-
-    let output = stdout(&via_help);
-    assert_eq!(output, stdout(&bare));
-    assert!(output.contains("Supervisor commands"));
-    assert!(output.contains("ocm supervisor install"));
-    assert!(output.contains("ocm supervisor plan"));
-    assert!(output.contains("ocm supervisor logs demo --tail 20"));
-    assert!(output.contains("ocm supervisor runtime"));
-    assert!(output.contains("ocm supervisor run --once"));
-    assert!(output.contains("ocm supervisor status"));
-    assert!(output.contains("ocm supervisor drift"));
-    assert!(output.contains("ocm supervisor show --json"));
+    assert!(!via_help.status.success());
+    assert!(!bare.status.success());
+    assert!(stderr(&via_help).contains("unknown command group: supervisor"));
+    assert!(stderr(&bare).contains("unknown command group: supervisor"));
 }
 
 #[test]

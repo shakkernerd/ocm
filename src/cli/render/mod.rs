@@ -7,7 +7,6 @@ pub mod release;
 pub mod runtime;
 pub mod self_update;
 pub mod service;
-pub mod supervisor;
 pub mod upgrade;
 
 use std::collections::BTreeMap;

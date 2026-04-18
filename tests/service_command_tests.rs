@@ -277,7 +277,7 @@ fn systemd_service_install_writes_the_supervisor_unit() {
         path_string(&supervisor_path)
     );
     let unit = fs::read_to_string(supervisor_path).unwrap();
-    assert!(unit.contains("supervisor run"));
+    assert!(unit.contains("__daemon run"));
 }
 
 #[test]

@@ -2,6 +2,7 @@ mod doctor;
 mod env;
 mod help;
 mod init;
+mod internal;
 mod launcher;
 mod migrate;
 mod release;
@@ -11,7 +12,6 @@ mod self_cmd;
 mod service;
 mod setup;
 mod start;
-mod supervisor;
 mod upgrade;
 
 use std::collections::BTreeMap;
@@ -498,7 +498,7 @@ impl Cli {
             "release" => cli.dispatch_release_command(action.as_str(), rest),
             "launcher" => cli.dispatch_launcher_command(action.as_str(), rest),
             "runtime" => cli.dispatch_runtime_command(action.as_str(), rest),
-            "supervisor" => cli.dispatch_supervisor_command(action.as_str(), rest),
+            "__daemon" => cli.dispatch_internal_command(action.as_str(), rest),
             "service" => cli.dispatch_service_command(action.as_str(), rest),
             _ => Err(format!("unknown command group: {group}")),
         };
