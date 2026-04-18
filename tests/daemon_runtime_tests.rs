@@ -540,3 +540,51 @@ fn daemon_keeps_running_when_one_env_fails_to_spawn() {
 
     stop_process(&mut daemon);
 }
+
+#[test]
+fn daemon_stops_a_running_child_after_service_stop() {
+    let root = TestDir::new("daemon-run-service-stop");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+
+    let started = root.child("started.txt");
+    let stopped = root.child("stopped.txt");
+    let script = root.child("bin/openclaw");
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'printf \"stopped\\n\" >> \"{}\"; exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&started),
+            path_string(&stopped),
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", &path_string(&script)],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    set_service_enabled(&cwd, &env, "demo", true);
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    assert!(wait_for_file(&started, Duration::from_secs(5)));
+    wait_for_runtime_children(&runtime_path, 1, Some("demo"), Duration::from_secs(5))
+        .expect("daemon runtime state did not report the running child");
+
+    let stop = run_ocm(&cwd, &env, &["service", "stop", "demo"]);
+    assert!(stop.status.success(), "{}", stderr(&stop));
+
+    wait_for_runtime_children(&runtime_path, 0, None, Duration::from_secs(5))
+        .expect("daemon runtime state did not clear after service stop");
+    assert!(wait_for_file(&stopped, Duration::from_secs(5)));
+
+    stop_process(&mut daemon);
+}

@@ -504,7 +504,6 @@ impl<'a> SupervisorService<'a> {
                     exit_code,
                     restart_count,
                 ));
-                sleep(Duration::from_millis(SUPERVISOR_RESTART_DELAY_MS));
                 if stop_requested.load(Ordering::SeqCst) {
                     break;
                 }
@@ -525,7 +524,8 @@ impl<'a> SupervisorService<'a> {
                         PendingSupervisorChild {
                             spec: next_spec,
                             restart_count: next_restart_count,
-                            retry_at: Instant::now(),
+                            retry_at: Instant::now()
+                                + Duration::from_millis(SUPERVISOR_RESTART_DELAY_MS),
                         },
                     );
                 }
