@@ -1,6 +1,11 @@
 mod support;
 
+use std::collections::BTreeMap;
 use std::fs;
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -8,6 +13,43 @@ use crate::support::{
     TestDir, install_fake_service_manager, managed_service_definition_path, ocm_env, path_string,
     run_ocm, stderr, write_executable_script,
 };
+
+fn spawn_supervisor_process(cwd: &Path, env: &BTreeMap<String, String>) -> Child {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    command.current_dir(cwd);
+    command.args(["supervisor", "run"]);
+    command.env_clear();
+    command.envs(env);
+    command.stdout(Stdio::null());
+    command.stderr(Stdio::null());
+    command.spawn().unwrap()
+}
+
+fn wait_for_file(path: &Path, timeout: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if path.exists() {
+            return true;
+        }
+        sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+fn stop_process(child: &mut Child) {
+    let _ = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status();
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if child.try_wait().unwrap().is_some() {
+            return;
+        }
+        sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
 
 fn setup_supervisor_fixture(
     root: &TestDir,
@@ -553,4 +595,75 @@ fn supervisor_stop_and_uninstall_manage_the_daemon_definition() {
         assert!(systemctl_log.contains(&format!("--user stop {managed_label}")));
         assert!(systemctl_log.contains(&format!("--user disable --now {managed_label}")));
     }
+}
+
+#[test]
+fn supervisor_run_reconciles_state_changes_without_a_restart() {
+    let root = TestDir::new("supervisor-run-reconcile");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let old_started = root.child("old-started.txt");
+    let old_stopped = root.child("old-stopped.txt");
+    let new_started = root.child("new-started.txt");
+
+    let old_script = root.child("bin/launcher-old");
+    write_executable_script(
+        &old_script,
+        &format!(
+            "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'printf \"stopped\\n\" >> \"{}\"; exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&old_started),
+            path_string(&old_stopped),
+        ),
+    );
+    let new_script = root.child("bin/launcher-new");
+    write_executable_script(
+        &new_script,
+        &format!(
+            "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&new_started),
+        ),
+    );
+
+    let add_old = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "old",
+            "--command",
+            &path_string(&old_script),
+        ],
+    );
+    assert!(add_old.status.success(), "{}", stderr(&add_old));
+    let add_new = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "new",
+            "--command",
+            &path_string(&new_script),
+        ],
+    );
+    assert!(add_new.status.success(), "{}", stderr(&add_new));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "old"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
+    assert!(sync.status.success(), "{}", stderr(&sync));
+
+    let mut supervisor = spawn_supervisor_process(&cwd, &env);
+    assert!(wait_for_file(&old_started, Duration::from_secs(5)));
+
+    let switch = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "new"]);
+    assert!(switch.status.success(), "{}", stderr(&switch));
+
+    assert!(wait_for_file(&old_stopped, Duration::from_secs(5)));
+    assert!(wait_for_file(&new_started, Duration::from_secs(5)));
+
+    stop_process(&mut supervisor);
 }

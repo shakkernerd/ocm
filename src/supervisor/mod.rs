@@ -563,53 +563,83 @@ impl<'a> SupervisorService<'a> {
         })
         .map_err(|error| format!("failed to install supervisor signal handler: {error}"))?;
 
-        let mut running = state
+        let mut active_state = state;
+        let mut running = active_state
             .children
-            .into_iter()
-            .map(|spec| spawn_running_child(spec, 0))
-            .collect::<Result<Vec<_>, _>>()?;
-        let managed_child_count = running.len();
+            .iter()
+            .cloned()
+            .map(|spec| {
+                let env_name = spec.env_name.clone();
+                Ok((env_name, spawn_running_child(spec, 0)?))
+            })
+            .collect::<Result<BTreeMap<_, _>, String>>()?;
+        let mut managed_child_count = running.len();
         let mut child_results = Vec::new();
 
         while !stop_requested.load(Ordering::SeqCst) {
-            for running_child in &mut running {
+            if let Some(next_state) = read_updated_supervisor_state(state_path, &active_state) {
+                reconcile_running_children(&mut running, &next_state)?;
+                active_state = next_state;
+                managed_child_count = running.len();
+            }
+
+            let mut exited = Vec::new();
+            for (env_name, running_child) in &mut running {
                 if let Some(status) = running_child.child.try_wait().map_err(|error| {
                     format!(
                         "failed to poll env \"{}\": {error}",
                         running_child.spec.env_name
                     )
                 })? {
-                    let exit_code = status.code();
-                    eprintln!(
-                        "ocm supervisor: {} exited with {}; restarting",
-                        running_child.spec.env_name,
-                        exit_code
-                            .map(|code| code.to_string())
-                            .unwrap_or_else(|| "signal".to_string())
-                    );
-                    child_results.push(child_run_result(
-                        &running_child.spec,
-                        exit_code,
-                        running_child.restart_count,
-                    ));
-                    sleep(Duration::from_millis(SUPERVISOR_RESTART_DELAY_MS));
-                    if stop_requested.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    *running_child = spawn_running_child(
-                        running_child.spec.clone(),
-                        running_child.restart_count + 1,
-                    )?;
+                    exited.push((env_name.clone(), status.code(), running_child.restart_count));
                 }
             }
+
+            for (env_name, exit_code, restart_count) in exited {
+                let Some(previous_child) = running.remove(&env_name) else {
+                    continue;
+                };
+                eprintln!(
+                    "ocm supervisor: {} exited with {}; restarting",
+                    previous_child.spec.env_name,
+                    exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "signal".to_string())
+                );
+                child_results.push(child_run_result(
+                    &previous_child.spec,
+                    exit_code,
+                    restart_count,
+                ));
+                sleep(Duration::from_millis(SUPERVISOR_RESTART_DELAY_MS));
+                if stop_requested.load(Ordering::SeqCst) {
+                    break;
+                }
+                if let Some(next_state) = read_updated_supervisor_state(state_path, &active_state) {
+                    reconcile_running_children(&mut running, &next_state)?;
+                    active_state = next_state;
+                    managed_child_count = running.len();
+                }
+                if let Some(next_spec) = active_child_spec(&active_state, &env_name).cloned() {
+                    let next_restart_count = if next_spec == previous_child.spec {
+                        restart_count + 1
+                    } else {
+                        0
+                    };
+                    running.insert(
+                        env_name,
+                        spawn_running_child(next_spec, next_restart_count)?,
+                    );
+                }
+            }
+
             if !stop_requested.load(Ordering::SeqCst) {
                 sleep(Duration::from_millis(SUPERVISOR_POLL_INTERVAL_MS));
             }
         }
 
-        for mut running_child in running {
-            let _ = running_child.child.kill();
-            let _ = running_child.child.wait();
+        for (_, mut running_child) in running {
+            stop_supervisor_child(&mut running_child);
         }
 
         Ok(SupervisorRunSummary {
@@ -768,6 +798,110 @@ fn skipped_map(skipped_envs: &[SkippedSupervisorEnv]) -> BTreeMap<String, String
         .iter()
         .map(|skipped| (skipped.env_name.clone(), skipped.reason.clone()))
         .collect()
+}
+
+fn read_updated_supervisor_state(
+    state_path: &Path,
+    active_state: &SupervisorState,
+) -> Option<SupervisorState> {
+    let next_state = match read_json::<SupervisorState>(state_path) {
+        Ok(state) => state,
+        Err(error) => {
+            eprintln!(
+                "ocm supervisor: failed reading updated state {}: {}",
+                display_path(state_path),
+                error
+            );
+            return None;
+        }
+    };
+    if supervisor_state_equivalent(active_state, &next_state) {
+        return None;
+    }
+    Some(next_state)
+}
+
+fn reconcile_running_children(
+    running: &mut BTreeMap<String, RunningSupervisorChild>,
+    desired_state: &SupervisorState,
+) -> Result<(), String> {
+    let desired = child_map(&desired_state.children);
+    let active_names = running.keys().cloned().collect::<Vec<_>>();
+    for env_name in active_names {
+        let Some(next_spec) = desired.get(&env_name) else {
+            if let Some(mut existing) = running.remove(&env_name) {
+                eprintln!(
+                    "ocm supervisor: stopping removed env {}",
+                    existing.spec.env_name
+                );
+                stop_supervisor_child(&mut existing);
+            }
+            continue;
+        };
+        let needs_restart = running
+            .get(&env_name)
+            .map(|existing| existing.spec != *next_spec)
+            .unwrap_or(false);
+        if needs_restart {
+            let mut existing = running
+                .remove(&env_name)
+                .expect("running child should exist when needs_restart is true");
+            eprintln!(
+                "ocm supervisor: reloading {} ({})",
+                existing.spec.env_name,
+                child_binding_label(next_spec)
+            );
+            stop_supervisor_child(&mut existing);
+            running.insert(env_name, spawn_running_child(next_spec.clone(), 0)?);
+        }
+    }
+    for (env_name, next_spec) in desired {
+        if running.contains_key(&env_name) {
+            continue;
+        }
+        eprintln!(
+            "ocm supervisor: starting new env {} ({})",
+            next_spec.env_name,
+            child_binding_label(&next_spec)
+        );
+        running.insert(env_name, spawn_running_child(next_spec, 0)?);
+    }
+    Ok(())
+}
+
+fn stop_supervisor_child(running_child: &mut RunningSupervisorChild) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &running_child.child.id().to_string()])
+            .status();
+        for _ in 0..20 {
+            match running_child.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => sleep(Duration::from_millis(50)),
+                Err(_) => break,
+            }
+        }
+    }
+    let _ = running_child.child.kill();
+    let _ = running_child.child.wait();
+}
+
+fn supervisor_state_equivalent(left: &SupervisorState, right: &SupervisorState) -> bool {
+    left.kind == right.kind
+        && left.ocm_home == right.ocm_home
+        && left.children == right.children
+        && left.skipped_envs == right.skipped_envs
+}
+
+fn active_child_spec<'a>(
+    state: &'a SupervisorState,
+    env_name: &str,
+) -> Option<&'a SupervisorChildSpec> {
+    state
+        .children
+        .iter()
+        .find(|child| child.env_name == env_name)
 }
 
 fn supervisor_service_environment(
