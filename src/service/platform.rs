@@ -286,61 +286,6 @@ pub(crate) fn activate_managed_service(
     }
 }
 
-pub(crate) fn stop_managed_service(
-    label: &str,
-    env: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => {
-            let target = format!("{}/{}", gui_domain(), label);
-            let bootout = run_launchctl(env, ["bootout", target.as_str()])?;
-            if !bootout.status.success() && !launchctl_not_loaded(&bootout) {
-                return Err(format!(
-                    "launchctl bootout failed: {}",
-                    launchctl_detail(&bootout)
-                ));
-            }
-            Ok(())
-        }
-        ServiceManagerKind::SystemdUser => {
-            let stop = run_systemctl(env, ["--user", "stop", label])?;
-            if !stop.status.success() && !systemctl_not_loaded(&stop) {
-                return Err(format!(
-                    "systemctl --user stop failed: {}",
-                    systemctl_detail(&stop)
-                ));
-            }
-            Ok(())
-        }
-        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
-    }
-}
-
-pub(crate) fn uninstall_managed_service(
-    label: &str,
-    env: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => {
-            let target = format!("{}/{}", gui_domain(), label);
-            let _ = run_launchctl(env, ["bootout", target.as_str()]);
-            Ok(())
-        }
-        ServiceManagerKind::SystemdUser => {
-            let _ = run_systemctl(env, ["--user", "disable", "--now", label]);
-            let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
-            if !reload.status.success() {
-                return Err(format!(
-                    "systemctl --user daemon-reload failed: {}",
-                    systemctl_detail(&reload)
-                ));
-            }
-            Ok(())
-        }
-        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
-    }
-}
-
 fn build_launch_agent_plist(
     label: &str,
     comment: &str,
@@ -558,24 +503,12 @@ fn launchctl_detail(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-fn launchctl_not_loaded(output: &Output) -> bool {
-    let detail = launchctl_detail(output).to_ascii_lowercase();
-    detail.contains("no such process")
-        || detail.contains("could not find service")
-        || detail.contains("not found")
-}
-
 fn systemctl_detail(output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if !stderr.is_empty() {
         return stderr;
     }
     String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-fn systemctl_not_loaded(output: &Output) -> bool {
-    let detail = systemctl_detail(output).to_ascii_lowercase();
-    detail.contains("not loaded") || detail.contains("not found") || detail.contains("no such file")
 }
 
 fn systemd_quote(value: &str) -> String {

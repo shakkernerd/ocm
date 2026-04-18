@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -17,7 +16,7 @@ use crate::env::EnvironmentService;
 use crate::service::inspect::inspect_job;
 use crate::service::platform::{
     ManagedServiceDefinition, activate_managed_service, managed_service_identity,
-    stop_managed_service, uninstall_managed_service, write_managed_service_definition,
+    write_managed_service_definition,
 };
 use crate::store::{
     derive_env_paths, display_path, ensure_dir, ensure_store, list_environments, now_utc,
@@ -101,26 +100,6 @@ pub struct SupervisorView {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SupervisorStatusSummary {
-    pub state_path: String,
-    pub state_present: bool,
-    pub in_sync: bool,
-    #[serde(with = "time::serde::rfc3339")]
-    pub planned_generated_at: OffsetDateTime,
-    #[serde(default, with = "time::serde::rfc3339::option")]
-    pub persisted_generated_at: Option<OffsetDateTime>,
-    pub planned_child_count: usize,
-    pub persisted_child_count: usize,
-    pub planned_skipped_env_count: usize,
-    pub persisted_skipped_env_count: usize,
-    pub missing_children: Vec<String>,
-    pub extra_children: Vec<String>,
-    pub changed_children: Vec<String>,
-    pub skipped_env_changes: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SupervisorDaemonSummary {
     pub action: String,
     pub managed_label: String,
@@ -193,16 +172,6 @@ pub struct SupervisorRuntimeView {
     pub children: Vec<SupervisorRuntimeChild>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SupervisorLogSummary {
-    pub env_name: String,
-    pub stream: String,
-    pub path: String,
-    pub tail_lines: Option<usize>,
-    pub content: String,
-}
-
 pub struct SupervisorService<'a> {
     env: &'a BTreeMap<String, String>,
     cwd: &'a Path,
@@ -242,11 +211,6 @@ impl<'a> SupervisorService<'a> {
         Ok(view_from_state(&state_path, true, state))
     }
 
-    pub fn show(&self) -> Result<SupervisorView, String> {
-        let (state_path, state) = self.read_persisted_state()?;
-        Ok(view_from_state(&state_path, true, state))
-    }
-
     pub fn runtime(&self) -> Result<SupervisorRuntimeView, String> {
         let runtime_path = supervisor_runtime_path(self.env, self.cwd)?;
         if !runtime_path.exists() {
@@ -280,168 +244,13 @@ impl<'a> SupervisorService<'a> {
         self.run_until_stopped(&state_path, state)
     }
 
-    pub fn drift(&self) -> Result<SupervisorStatusSummary, String> {
-        let planned = self.build_state()?;
-        let state_path = supervisor_state_path(self.env, self.cwd)?;
-        let persisted = if state_path.exists() {
-            Some(read_json::<SupervisorState>(&state_path)?)
-        } else {
-            None
-        };
-
-        let planned_children = child_map(&planned.children);
-        let planned_skipped = skipped_map(&planned.skipped_envs);
-        let persisted_children = persisted
-            .as_ref()
-            .map(|state| child_map(&state.children))
-            .unwrap_or_default();
-        let persisted_skipped = persisted
-            .as_ref()
-            .map(|state| skipped_map(&state.skipped_envs))
-            .unwrap_or_default();
-
-        let mut missing_children = planned_children
-            .keys()
-            .filter(|name| !persisted_children.contains_key(*name))
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut extra_children = persisted_children
-            .keys()
-            .filter(|name| !planned_children.contains_key(*name))
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut changed_children = planned_children
-            .iter()
-            .filter_map(|(name, child)| match persisted_children.get(name) {
-                Some(existing) if existing == child => None,
-                Some(_) => Some(name.clone()),
-                None => None,
-            })
-            .collect::<Vec<_>>();
-        let mut skipped_env_changes = planned_skipped
-            .iter()
-            .filter_map(|(name, reason)| match persisted_skipped.get(name) {
-                Some(existing) if existing == reason => None,
-                _ => Some(name.clone()),
-            })
-            .collect::<Vec<_>>();
-        skipped_env_changes.extend(
-            persisted_skipped
-                .keys()
-                .filter(|name| !planned_skipped.contains_key(*name))
-                .cloned(),
-        );
-
-        missing_children.sort();
-        extra_children.sort();
-        changed_children.sort();
-        skipped_env_changes.sort();
-        skipped_env_changes.dedup();
-
-        Ok(SupervisorStatusSummary {
-            state_path: display_path(&state_path),
-            state_present: persisted.is_some(),
-            in_sync: persisted.is_some()
-                && missing_children.is_empty()
-                && extra_children.is_empty()
-                && changed_children.is_empty()
-                && skipped_env_changes.is_empty(),
-            planned_generated_at: planned.generated_at,
-            persisted_generated_at: persisted.as_ref().map(|state| state.generated_at),
-            planned_child_count: planned.children.len(),
-            persisted_child_count: persisted
-                .as_ref()
-                .map(|state| state.children.len())
-                .unwrap_or(0),
-            planned_skipped_env_count: planned.skipped_envs.len(),
-            persisted_skipped_env_count: persisted
-                .as_ref()
-                .map(|state| state.skipped_envs.len())
-                .unwrap_or(0),
-            missing_children,
-            extra_children,
-            changed_children,
-            skipped_env_changes,
-        })
-    }
-
     pub fn install_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
         self.refresh_daemon("install")
-    }
-
-    pub fn start_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
-        self.refresh_daemon("start")
-    }
-
-    pub fn restart_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
-        self.refresh_daemon("restart")
-    }
-
-    pub fn stop_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
-        let identity = managed_service_identity(DAEMON_SERVICE_NAME, self.env, self.cwd)?;
-        stop_managed_service(&identity.label, self.env)?;
-        self.daemon_summary("stop")
-    }
-
-    pub fn uninstall_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
-        let identity = managed_service_identity(DAEMON_SERVICE_NAME, self.env, self.cwd)?;
-        uninstall_managed_service(&identity.label, self.env)?;
-        if identity.definition_path.exists() {
-            fs::remove_file(&identity.definition_path).map_err(|error| error.to_string())?;
-        }
-        self.daemon_summary("uninstall")
     }
 
     pub fn daemon_status(&self) -> Result<SupervisorDaemonSummary, String> {
         self.daemon_summary("status")
     }
-
-    pub fn logs(
-        &self,
-        env_name: &str,
-        stream: &str,
-        tail_lines: Option<usize>,
-    ) -> Result<SupervisorLogSummary, String> {
-        let (_, state) = self.read_persisted_state()?;
-        let stream = normalize_log_stream(stream)?;
-        let child = state
-            .children
-            .into_iter()
-            .find(|child| child.env_name == env_name)
-            .ok_or_else(|| {
-                format!(
-                    "service state does not include env \"{env_name}\"; restart the env service to refresh the stored child registry"
-                )
-            })?;
-
-        let log_path = match stream {
-            "stdout" => child.stdout_path,
-            "stderr" => child.stderr_path,
-            _ => unreachable!("normalize_log_stream validates supervisor log stream"),
-        };
-        if !Path::new(&log_path).exists() {
-            return Err(format!(
-                "{} log does not exist for env \"{}\": {}",
-                stream, env_name, log_path
-            ));
-        }
-
-        let raw = fs::read_to_string(&log_path).map_err(|error| error.to_string())?;
-        let content = if let Some(tail_lines) = tail_lines {
-            tail_text(&raw, tail_lines)
-        } else {
-            raw
-        };
-
-        Ok(SupervisorLogSummary {
-            env_name: env_name.to_string(),
-            stream: stream.to_string(),
-            path: log_path,
-            tail_lines,
-            content,
-        })
-    }
-
     fn build_state(&self) -> Result<SupervisorState, String> {
         ensure_store(self.env, self.cwd)?;
         let ocm_home = resolve_ocm_home(self.env, self.cwd)?;
@@ -838,34 +647,6 @@ fn child_run_result(
     }
 }
 
-fn normalize_log_stream(stream: &str) -> Result<&'static str, String> {
-    match stream.trim() {
-        "" | "stdout" => Ok("stdout"),
-        "stderr" => Ok("stderr"),
-        other => Err(format!(
-            "unsupported log stream \"{other}\"; expected stdout or stderr"
-        )),
-    }
-}
-
-fn tail_text(raw: &str, tail_lines: usize) -> String {
-    if tail_lines == 0 {
-        return String::new();
-    }
-
-    let mut lines = raw.lines().collect::<Vec<_>>();
-    if lines.len() <= tail_lines {
-        return raw.to_string();
-    }
-
-    lines = lines[lines.len() - tail_lines..].to_vec();
-    let mut content = lines.join("\n");
-    if raw.ends_with('\n') {
-        content.push('\n');
-    }
-    content
-}
-
 fn view_from_state(state_path: &Path, persisted: bool, state: SupervisorState) -> SupervisorView {
     SupervisorView {
         state_path: display_path(state_path),
@@ -883,13 +664,6 @@ fn child_map(children: &[SupervisorChildSpec]) -> BTreeMap<String, SupervisorChi
         .iter()
         .cloned()
         .map(|child| (child.env_name.clone(), child))
-        .collect()
-}
-
-fn skipped_map(skipped_envs: &[SkippedSupervisorEnv]) -> BTreeMap<String, String> {
-    skipped_envs
-        .iter()
-        .map(|skipped| (skipped.env_name.clone(), skipped.reason.clone()))
         .collect()
 }
 

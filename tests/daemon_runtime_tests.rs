@@ -63,6 +63,10 @@ fn wait_for_runtime_children(
     None
 }
 
+fn read_persisted_service_state(path: &Path) -> Value {
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
 fn stop_process(child: &mut Child) {
     let _ = Command::new("kill")
         .args(["-INT", &child.id().to_string()])
@@ -333,6 +337,7 @@ fn env_changes_refresh_persisted_service_state_without_extra_commands() {
     let root = TestDir::new("service-state-refresh");
     let (cwd, env) = setup_service_fixture(&root);
     let service = SupervisorService::new(&env, &cwd);
+    let state_path = root.child("ocm-home/supervisor/state.json");
 
     service.sync().unwrap();
 
@@ -345,7 +350,7 @@ fn env_changes_refresh_persisted_service_state_without_extra_commands() {
     let rebind = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "dev-b"]);
     assert!(rebind.status.success(), "{}", stderr(&rebind));
 
-    let show_body = to_value(service.show().unwrap()).unwrap();
+    let show_body = read_persisted_service_state(&state_path);
     let demo = show_body["children"]
         .as_array()
         .unwrap()
@@ -358,7 +363,7 @@ fn env_changes_refresh_persisted_service_state_without_extra_commands() {
     assert!(created.status.success(), "{}", stderr(&created));
     set_service_enabled(&cwd, &env, "extra", true);
 
-    let show_body = to_value(service.show().unwrap()).unwrap();
+    let show_body = read_persisted_service_state(&state_path);
     assert!(
         show_body["children"]
             .as_array()
@@ -369,7 +374,7 @@ fn env_changes_refresh_persisted_service_state_without_extra_commands() {
 
     let removed = run_ocm(&cwd, &env, &["env", "remove", "extra", "--force"]);
     assert!(removed.status.success(), "{}", stderr(&removed));
-    let show_body = to_value(service.show().unwrap()).unwrap();
+    let show_body = read_persisted_service_state(&state_path);
     assert!(
         !show_body["children"]
             .as_array()
