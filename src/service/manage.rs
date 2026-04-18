@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::inspect::{ServiceSummary, service_status_fast};
+use super::inspect::ServiceSummary;
 use crate::env::EnvironmentService;
 use crate::supervisor::SupervisorService;
 
@@ -102,7 +102,7 @@ pub fn service_logs(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceLogSummary, String> {
-    let summary = service_status_fast(name, env, cwd)?;
+    let summary = super::inspect::service_status_fast(name, env, cwd)?;
     let stream = normalize_stream(stream)?;
     let path = match stream {
         "stdout" => summary.stdout_path.clone(),
@@ -160,7 +160,7 @@ fn action_summary(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
-    let summary = service_status_fast(name, env, cwd)?;
+    let summary = super::inspect::service_status_fast(name, env, cwd)?;
     Ok(service_action_summary(action, summary, warnings))
 }
 

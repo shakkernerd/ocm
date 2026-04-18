@@ -164,7 +164,7 @@ impl Cli {
 
     fn upgrade_env(&self, name: &str, target: &UpgradeTarget) -> Result<UpgradeEnvSummary, String> {
         let env = self.environment_service().get(name)?;
-        let service = self.service_service().status_fast(name)?;
+        let service = self.service_service().status(name)?;
 
         if let Some(runtime_name) = env.default_runtime.as_deref() {
             return self.upgrade_runtime_bound_env(name, runtime_name, target, Some(&service));

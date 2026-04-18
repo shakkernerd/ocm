@@ -809,7 +809,7 @@ impl Cli {
         force: bool,
     ) -> Result<EnvDestroySummary, String> {
         let env_meta = self.environment_service().get(name)?;
-        let service = self.service_service().status_fast(name)?;
+        let service = self.service_service().status(name)?;
         let marker_path = derive_env_paths(Path::new(&env_meta.root)).marker_path;
         let marker_present = marker_path.exists();
         let snapshots = self.environment_service().list_snapshots(Some(name))?;

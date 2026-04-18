@@ -65,7 +65,7 @@ impl<'a> EnvironmentService<'a> {
             issue: None,
         };
 
-        if let Ok(service) = ServiceService::new(self.env, self.cwd).status_fast(name) {
+        if let Ok(service) = ServiceService::new(self.env, self.cwd).status(name) {
             summary.managed_service_state = Some(service_managed_state(&service));
             summary.openclaw_state = Some(if service.running {
                 "running".to_string()

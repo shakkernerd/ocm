@@ -6,6 +6,7 @@ use std::process::Command;
 use serde::Serialize;
 
 use super::platform::{ServiceManagerKind, service_manager_kind};
+use crate::env::GatewayProcessSpec;
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::store::{display_path, list_environments, supervisor_logs_dir};
 use crate::supervisor::{
@@ -83,6 +84,13 @@ pub struct ServiceSummaryList {
     pub services: Vec<ServiceSummary>,
 }
 
+struct ServiceSnapshot {
+    daemon: SupervisorDaemonSummary,
+    planned_children: BTreeMap<String, SupervisorChildSpec>,
+    skipped_envs: BTreeMap<String, String>,
+    runtime_children: BTreeMap<String, SupervisorRuntimeChild>,
+}
+
 pub fn list_services(
     env: &BTreeMap<String, String>,
     cwd: &Path,
@@ -91,25 +99,7 @@ pub fn list_services(
     let mut envs = list_environments(env, cwd)?;
     envs.sort_by(|left, right| left.name.cmp(&right.name));
 
-    let supervisor = SupervisorService::new(env, cwd);
-    let plan = supervisor.plan()?;
-    let runtime = supervisor.runtime()?;
-    let daemon = supervisor.daemon_status()?;
-    let planned_children = plan
-        .children
-        .into_iter()
-        .map(|child| (child.env_name.clone(), child))
-        .collect::<BTreeMap<_, _>>();
-    let skipped_envs = plan
-        .skipped_envs
-        .into_iter()
-        .map(|skipped| (skipped.env_name, skipped.reason))
-        .collect::<BTreeMap<_, _>>();
-    let runtime_children = runtime
-        .children
-        .into_iter()
-        .map(|child| (child.env_name.clone(), child))
-        .collect::<BTreeMap<_, _>>();
+    let snapshot = load_service_snapshot(env, cwd)?;
 
     let mut services = Vec::with_capacity(envs.len());
     for meta in envs {
@@ -118,30 +108,22 @@ pub fn list_services(
             &meta,
             env,
             cwd,
-            planned_children.get(&meta.name),
-            skipped_envs.get(&meta.name),
-            runtime_children.get(&meta.name),
-            &daemon,
+            snapshot.planned_children.get(&meta.name),
+            snapshot.skipped_envs.get(&meta.name),
+            snapshot.runtime_children.get(&meta.name),
+            &snapshot.daemon,
         )?);
     }
 
     Ok(ServiceSummaryList {
-        ocm_service_label: daemon.managed_label,
-        ocm_service_installed: daemon.installed,
-        ocm_service_loaded: daemon.loaded,
-        ocm_service_running: daemon.running,
-        ocm_service_pid: daemon.pid,
-        ocm_service_state: daemon.state,
+        ocm_service_label: snapshot.daemon.managed_label,
+        ocm_service_installed: snapshot.daemon.installed,
+        ocm_service_loaded: snapshot.daemon.loaded,
+        ocm_service_running: snapshot.daemon.running,
+        ocm_service_pid: snapshot.daemon.pid,
+        ocm_service_state: snapshot.daemon.state,
         services,
     })
-}
-
-pub fn service_status(
-    name: &str,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<ServiceSummary, String> {
-    service_status_fast(name, env, cwd)
 }
 
 pub fn service_status_fast(
@@ -151,28 +133,52 @@ pub fn service_status_fast(
 ) -> Result<ServiceSummary, String> {
     let env_service = EnvironmentService::new(env, cwd);
     let meta = env_service.get(name)?;
-    let supervisor = SupervisorService::new(env, cwd);
-    let plan = supervisor.plan()?;
-    let runtime = supervisor.runtime()?;
-    let daemon = supervisor.daemon_status()?;
-    let planned_child = plan.children.iter().find(|child| child.env_name == name);
-    let skipped_reason = plan
-        .skipped_envs
-        .iter()
-        .find(|skipped| skipped.env_name == name)
-        .map(|skipped| &skipped.reason);
-    let runtime_child = runtime.children.iter().find(|child| child.env_name == name);
+    let snapshot = load_service_snapshot(env, cwd)?;
 
     build_service_summary(
         &env_service,
         &meta,
         env,
         cwd,
-        planned_child,
-        skipped_reason,
-        runtime_child,
-        &daemon,
+        snapshot.planned_children.get(name),
+        snapshot.skipped_envs.get(name),
+        snapshot.runtime_children.get(name),
+        &snapshot.daemon,
     )
+}
+
+fn load_service_snapshot(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ServiceSnapshot, String> {
+    let supervisor = SupervisorService::new(env, cwd);
+    let plan = supervisor.plan()?;
+    let daemon = supervisor.daemon_status()?;
+    let runtime_children = if daemon.running {
+        supervisor
+            .runtime()?
+            .children
+            .into_iter()
+            .map(|child| (child.env_name.clone(), child))
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
+
+    Ok(ServiceSnapshot {
+        daemon,
+        planned_children: plan
+            .children
+            .into_iter()
+            .map(|child| (child.env_name.clone(), child))
+            .collect(),
+        skipped_envs: plan
+            .skipped_envs
+            .into_iter()
+            .map(|skipped| (skipped.env_name, skipped.reason))
+            .collect(),
+        runtime_children,
+    })
 }
 
 fn build_service_summary(
@@ -186,8 +192,11 @@ fn build_service_summary(
     daemon: &SupervisorDaemonSummary,
 ) -> Result<ServiceSummary, String> {
     let (gateway_port, _) = env_service.resolve_effective_gateway_port(meta)?;
-    let resolved_process = env_service.resolve_gateway_process(&meta.name, true);
-    let resolved_issue = resolved_process.as_ref().err().cloned();
+    let resolved_process = resolve_summary_process(env_service, &meta.name, planned_child);
+    let resolved_issue = resolved_process
+        .as_ref()
+        .and_then(|result| result.as_ref().err().cloned());
+    let resolved_process = resolved_process.and_then(Result::ok);
     let logs_dir = supervisor_logs_dir(env, cwd)?;
     let fallback_stdout = display_path(&logs_dir.join(format!("{}.stdout.log", meta.name)));
     let fallback_stderr = display_path(&logs_dir.join(format!("{}.stderr.log", meta.name)));
@@ -213,7 +222,6 @@ fn build_service_summary(
             .or_else(|| {
                 resolved_process
                     .as_ref()
-                    .ok()
                     .map(|process| process.binding_kind.clone())
             })
             .or_else(|| binding.as_ref().map(|(kind, _)| kind.clone())),
@@ -222,7 +230,6 @@ fn build_service_summary(
             .or_else(|| {
                 resolved_process
                     .as_ref()
-                    .ok()
                     .map(|process| process.binding_name.clone())
             })
             .or_else(|| binding.as_ref().map(|(_, name)| name.clone())),
@@ -231,7 +238,6 @@ fn build_service_summary(
             .or_else(|| {
                 resolved_process
                     .as_ref()
-                    .ok()
                     .and_then(|process| process.command.clone())
             }),
         binary_path: planned_child
@@ -239,7 +245,6 @@ fn build_service_summary(
             .or_else(|| {
                 resolved_process
                     .as_ref()
-                    .ok()
                     .and_then(|process| process.binary_path.clone())
             }),
         runtime_source_kind: planned_child
@@ -247,7 +252,6 @@ fn build_service_summary(
             .or_else(|| {
                 resolved_process
                     .as_ref()
-                    .ok()
                     .and_then(|process| process.runtime_source_kind.clone())
             }),
         runtime_release_version: planned_child
@@ -255,7 +259,6 @@ fn build_service_summary(
             .or_else(|| {
                 resolved_process
                     .as_ref()
-                    .ok()
                     .and_then(|process| process.runtime_release_version.clone())
             }),
         runtime_release_channel: planned_child
@@ -263,7 +266,6 @@ fn build_service_summary(
             .or_else(|| {
                 resolved_process
                     .as_ref()
-                    .ok()
                     .and_then(|process| process.runtime_release_channel.clone())
             }),
         args: planned_child
@@ -271,7 +273,6 @@ fn build_service_summary(
             .or_else(|| {
                 resolved_process
                     .as_ref()
-                    .ok()
                     .map(|process| process.args.clone())
             })
             .unwrap_or_default(),
@@ -280,7 +281,6 @@ fn build_service_summary(
             .or_else(|| {
                 resolved_process
                     .as_ref()
-                    .ok()
                     .map(|process| display_path(&process.run_dir))
             })
             .unwrap_or_else(|| meta.root.clone()),
@@ -307,6 +307,17 @@ fn build_service_summary(
             .or(Some(fallback_stderr)),
         issue,
     })
+}
+
+fn resolve_summary_process(
+    env_service: &EnvironmentService<'_>,
+    name: &str,
+    planned_child: Option<&SupervisorChildSpec>,
+) -> Option<Result<GatewayProcessSpec, String>> {
+    if planned_child.is_some() {
+        return None;
+    }
+    Some(env_service.resolve_gateway_process(name, true))
 }
 
 fn binding_from_meta(meta: &EnvMeta) -> Option<(String, String)> {

@@ -4,6 +4,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use ocm::env::EnvironmentService;
+use ocm::store::{now_utc, supervisor_runtime_path};
+use ocm::supervisor::{SupervisorRuntimeChild, SupervisorRuntimeState};
 use serde_json::Value;
 
 use crate::support::{
@@ -356,4 +359,49 @@ fn service_status_uses_runtime_bindings_too() {
     assert_eq!(body["bindingKind"], "runtime");
     assert_eq!(body["bindingName"], "stable");
     assert_eq!(body["binaryPath"], path_string(&runtime_path));
+}
+
+#[test]
+fn service_status_ignores_stale_runtime_children_when_the_daemon_is_down() {
+    let root = TestDir::new("service-status-stale-runtime");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = launchd_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    EnvironmentService::new(&env, &cwd)
+        .set_service_policy("demo", Some(true), Some(true))
+        .unwrap();
+
+    let runtime_path = supervisor_runtime_path(&env, &cwd).unwrap();
+    fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
+    let stale_runtime = SupervisorRuntimeState {
+        kind: "ocm-supervisor-runtime".to_string(),
+        ocm_home: path_string(&root.child("ocm-home")),
+        updated_at: now_utc(),
+        children: vec![SupervisorRuntimeChild {
+            env_name: "demo".to_string(),
+            binding_kind: "launcher".to_string(),
+            binding_name: "stable".to_string(),
+            pid: 4242,
+            restart_count: 3,
+            child_port: 18789,
+            stdout_path: path_string(&root.child("stale.stdout.log")),
+            stderr_path: path_string(&root.child("stale.stderr.log")),
+        }],
+    };
+    fs::write(&runtime_path, serde_json::to_vec(&stale_runtime).unwrap()).unwrap();
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = json_output(&output);
+    assert_eq!(body["running"], false);
+    assert_eq!(body["childPid"], Value::Null);
+    assert_eq!(body["childRestartCount"], Value::Null);
+    assert!(
+        body["issue"]
+            .as_str()
+            .unwrap()
+            .contains("OCM background service is not installed")
+    );
 }
