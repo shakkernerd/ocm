@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -32,12 +31,6 @@ pub(crate) struct LaunchdJobStatus {
     pub(crate) running: bool,
     pub(crate) pid: Option<u32>,
     pub(crate) state: Option<String>,
-    pub(crate) config_path: Option<String>,
-    pub(crate) state_dir: Option<String>,
-    pub(crate) openclaw_home: Option<String>,
-    pub(crate) gateway_port: Option<u32>,
-    pub(crate) program_arguments: Vec<String>,
-    pub(crate) working_directory: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -372,24 +365,6 @@ pub(crate) fn inspect_job(
         ..LaunchdJobStatus::default()
     };
 
-    if status.installed {
-        status.config_path =
-            read_service_environment_value(service_path, "OPENCLAW_CONFIG_PATH", env)
-                .ok()
-                .flatten();
-        status.state_dir = read_service_environment_value(service_path, "OPENCLAW_STATE_DIR", env)
-            .ok()
-            .flatten();
-        status.openclaw_home = read_service_environment_value(service_path, "OPENCLAW_HOME", env)
-            .ok()
-            .flatten();
-        status.gateway_port =
-            read_service_environment_value(service_path, "OPENCLAW_GATEWAY_PORT", env)
-                .ok()
-                .flatten()
-                .and_then(|value| value.parse::<u32>().ok());
-    }
-
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => {
             let Some(uid) = current_uid() else {
@@ -458,13 +433,10 @@ fn parse_launchctl_print(raw: &str, status: &mut LaunchdJobStatus) {
             status.pid = value.trim().parse::<u32>().ok();
             continue;
         }
-        if let Some(value) = trimmed.strip_prefix("OPENCLAW_CONFIG_PATH => ") {
-            status.config_path = Some(value.trim().to_string());
+        if trimmed.starts_with("OPENCLAW_CONFIG_PATH => ") {
             continue;
         }
-        if let Some(value) = trimmed.strip_prefix("OPENCLAW_GATEWAY_PORT => ") {
-            status.gateway_port = value.trim().parse::<u32>().ok();
-        }
+        if trimmed.starts_with("OPENCLAW_GATEWAY_PORT => ") {}
     }
 }
 
@@ -494,20 +466,13 @@ fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
             status.pid = value.trim().parse::<u32>().ok().filter(|pid| *pid > 0);
             continue;
         }
-        if let Some(value) = line.strip_prefix("ExecStart=") {
-            status.program_arguments = parse_systemctl_exec_start(value.trim());
+        if line.starts_with("ExecStart=") {
             continue;
         }
-        if let Some(value) = line.strip_prefix("WorkingDirectory=") {
-            let value = value.trim();
-            if !value.is_empty() {
-                status.working_directory = Some(value.to_string());
-            }
+        if line.starts_with("WorkingDirectory=") {
             continue;
         }
-        if let Some(value) = line.strip_prefix("Environment=") {
-            parse_systemctl_environment(value.trim(), status);
-        }
+        if line.starts_with("Environment=") {}
     }
 
     status.loaded = load_state.as_deref() == Some("loaded")
@@ -516,179 +481,4 @@ fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
             .is_some_and(|value| !matches!(value, "not-found" | "masked"));
     status.running = active_state.as_deref() == Some("active");
     status.state = sub_state.or(active_state);
-}
-
-fn parse_systemctl_exec_start(raw: &str) -> Vec<String> {
-    if raw.is_empty() {
-        return Vec::new();
-    }
-    if !raw.starts_with('{') {
-        return parse_systemd_words(raw).unwrap_or_default();
-    }
-    let Some(argv_index) = raw.find("argv[]=") else {
-        return Vec::new();
-    };
-    let argv = &raw[argv_index + "argv[]=".len()..];
-    let end = argv.find(" ;").unwrap_or(argv.len());
-    parse_systemd_words(argv[..end].trim()).unwrap_or_default()
-}
-
-fn parse_systemctl_environment(raw: &str, status: &mut LaunchdJobStatus) {
-    for entry in parse_systemd_words(raw).unwrap_or_default() {
-        let unquoted = systemd_unquote(&entry);
-        let Some((key, value)) = unquoted.split_once('=') else {
-            continue;
-        };
-        match key {
-            "OPENCLAW_CONFIG_PATH" => status.config_path = Some(value.to_string()),
-            "OPENCLAW_STATE_DIR" => status.state_dir = Some(value.to_string()),
-            "OPENCLAW_HOME" => status.openclaw_home = Some(value.to_string()),
-            "OPENCLAW_GATEWAY_PORT" => {
-                status.gateway_port = value.parse::<u32>().ok();
-            }
-            _ => {}
-        }
-    }
-}
-
-pub(crate) fn read_service_environment_value(
-    service_path: &Path,
-    key: &str,
-    env: &BTreeMap<String, String>,
-) -> Result<Option<String>, String> {
-    match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => read_launch_agent_environment_value(service_path, key),
-        ServiceManagerKind::SystemdUser => read_systemd_environment_value(service_path, key),
-        ServiceManagerKind::Unsupported => Ok(None),
-    }
-}
-
-fn read_launch_agent_environment_value(
-    plist_path: &Path,
-    key: &str,
-) -> Result<Option<String>, String> {
-    let raw = fs::read_to_string(plist_path).map_err(|error| error.to_string())?;
-    let Some(env_section_start) = raw.find("<key>EnvironmentVariables</key>") else {
-        return Ok(None);
-    };
-    let env_section = &raw[env_section_start..];
-    let Some(dict_start_offset) = env_section.find("<dict>") else {
-        return Ok(None);
-    };
-    let env_section = &env_section[dict_start_offset + "<dict>".len()..];
-    let Some(dict_end_offset) = env_section.find("</dict>") else {
-        return Ok(None);
-    };
-    let env_section = &env_section[..dict_end_offset];
-    let key_marker = format!("<key>{key}</key>");
-    read_plist_string_value_from_section(env_section, &key_marker)
-}
-
-fn read_systemd_environment_value(
-    service_path: &Path,
-    key: &str,
-) -> Result<Option<String>, String> {
-    for entry in read_systemd_directive_values(service_path, "Environment")? {
-        let unquoted = systemd_unquote(&entry);
-        if let Some((entry_key, value)) = unquoted.split_once('=') {
-            if entry_key == key {
-                return Ok(Some(value.to_string()));
-            }
-        }
-    }
-    Ok(None)
-}
-
-fn read_systemd_directive_values(service_path: &Path, key: &str) -> Result<Vec<String>, String> {
-    let raw = fs::read_to_string(service_path).map_err(|error| error.to_string())?;
-    let mut values = Vec::new();
-    let mut in_service = false;
-
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_service = trimmed.eq_ignore_ascii_case("[Service]");
-            continue;
-        }
-        if !in_service || trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';')
-        {
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix(&format!("{key}=")) {
-            values.push(value.trim().to_string());
-        }
-    }
-
-    Ok(values)
-}
-
-fn parse_systemd_words(raw: &str) -> Result<Vec<String>, String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let mut chars = raw.chars().peekable();
-    let mut in_quotes = false;
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => in_quotes = !in_quotes,
-            '\\' => {
-                let Some(next) = chars.next() else {
-                    return Err("invalid systemd escape sequence".to_string());
-                };
-                current.push(next);
-            }
-            ch if ch.is_whitespace() && !in_quotes => {
-                if !current.is_empty() {
-                    words.push(std::mem::take(&mut current));
-                }
-            }
-            _ => current.push(ch),
-        }
-    }
-
-    if in_quotes {
-        return Err("unterminated quoted systemd value".to_string());
-    }
-    if !current.is_empty() {
-        words.push(current);
-    }
-    Ok(words)
-}
-
-fn systemd_unquote(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-        trimmed[1..trimmed.len() - 1]
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\")
-    } else {
-        trimmed.to_string()
-    }
-}
-
-fn read_plist_string_value_from_section(
-    section: &str,
-    key_marker: &str,
-) -> Result<Option<String>, String> {
-    let Some(key_offset) = section.find(key_marker) else {
-        return Ok(None);
-    };
-    let entry = &section[key_offset + key_marker.len()..];
-    let Some(string_start_offset) = entry.find("<string>") else {
-        return Ok(None);
-    };
-    let entry = &entry[string_start_offset + "<string>".len()..];
-    let Some(string_end_offset) = entry.find("</string>") else {
-        return Ok(None);
-    };
-    Ok(Some(plist_unescape(&entry[..string_end_offset])))
-}
-
-fn plist_unescape(value: &str) -> String {
-    value
-        .replace("&apos;", "'")
-        .replace("&quot;", "\"")
-        .replace("&gt;", ">")
-        .replace("&lt;", "<")
-        .replace("&amp;", "&")
 }
