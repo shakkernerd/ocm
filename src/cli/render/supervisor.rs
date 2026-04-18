@@ -1,7 +1,8 @@
 use super::{RenderProfile, format_rfc3339};
 use crate::infra::terminal::{Cell, Tone, paint, render_table, terminal_width};
 use crate::supervisor::{
-    SupervisorDaemonSummary, SupervisorRunSummary, SupervisorStatusSummary, SupervisorView,
+    SupervisorDaemonSummary, SupervisorRunSummary, SupervisorRuntimeView, SupervisorStatusSummary,
+    SupervisorView,
 };
 
 pub fn supervisor_state(summary: &SupervisorView, profile: RenderProfile) -> Vec<String> {
@@ -188,6 +189,78 @@ fn supervisor_drift_raw(summary: &SupervisorStatusSummary) -> Vec<String> {
         lines.push(format!(
             "skippedEnvChanges: {}",
             summary.skipped_env_changes.join(",")
+        ));
+    }
+    lines
+}
+
+pub fn supervisor_runtime(summary: &SupervisorRuntimeView, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return supervisor_runtime_raw(summary);
+    }
+
+    let mut lines = vec![paint("Supervisor runtime", Tone::Strong, profile.color)];
+    lines.push(format!("Runtime: {}", summary.runtime_path));
+    lines.push(format!(
+        "State file: {}",
+        if summary.present {
+            "present"
+        } else {
+            "missing"
+        }
+    ));
+    lines.push(format!(
+        "Updated: {}",
+        format_rfc3339(summary.updated_at).unwrap_or_else(|_| summary.updated_at.to_string())
+    ));
+    lines.push(format!("Running children: {}", summary.children.len()));
+
+    if !summary.children.is_empty() {
+        lines.push(String::new());
+        let rows = summary
+            .children
+            .iter()
+            .map(|child| {
+                vec![
+                    Cell::accent(child.env_name.clone()),
+                    Cell::plain(format!("{}:{}", child.binding_kind, child.binding_name)),
+                    Cell::right(child.pid.to_string(), Tone::Accent),
+                    Cell::right(child.restart_count.to_string(), Tone::Muted),
+                    Cell::right(child.child_port.to_string(), Tone::Accent),
+                ]
+            })
+            .collect::<Vec<_>>();
+        lines.extend(render_table(
+            &["Env", "Binding", "PID", "Restarts", "Port"],
+            &rows,
+            profile.color,
+        ));
+    }
+
+    lines
+}
+
+fn supervisor_runtime_raw(summary: &SupervisorRuntimeView) -> Vec<String> {
+    let mut lines = vec![
+        format!("runtimePath: {}", summary.runtime_path),
+        format!("present: {}", summary.present),
+        format!(
+            "updatedAt: {}",
+            format_rfc3339(summary.updated_at).unwrap_or_else(|_| summary.updated_at.to_string())
+        ),
+        format!("children: {}", summary.children.len()),
+    ];
+    for child in &summary.children {
+        lines.push(format!(
+            "{}  binding={}:{}  pid={}  restarts={}  port={}  stdout={}  stderr={}",
+            child.env_name,
+            child.binding_kind,
+            child.binding_name,
+            child.pid,
+            child.restart_count,
+            child.child_port,
+            child.stdout_path,
+            child.stderr_path
         ));
     }
     lines

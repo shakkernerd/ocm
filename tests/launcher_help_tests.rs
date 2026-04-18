@@ -77,6 +77,7 @@ fn supervisor_help_is_available_from_help_and_bare_group() {
     assert!(output.contains("ocm supervisor install"));
     assert!(output.contains("ocm supervisor plan"));
     assert!(output.contains("ocm supervisor logs demo --tail 20"));
+    assert!(output.contains("ocm supervisor runtime"));
     assert!(output.contains("ocm supervisor run --once"));
     assert!(output.contains("ocm supervisor status"));
     assert!(output.contains("ocm supervisor drift"));

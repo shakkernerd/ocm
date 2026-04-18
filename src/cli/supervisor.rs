@@ -136,6 +136,21 @@ impl Cli {
         Ok(0)
     }
 
+    pub(super) fn handle_supervisor_runtime(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "supervisor runtime")?;
+        Self::assert_no_extra_args(&args)?;
+
+        let summary = self.supervisor_service().runtime()?;
+        if json_flag {
+            self.print_json(&summary)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::supervisor::supervisor_runtime(&summary, profile));
+        Ok(0)
+    }
+
     pub(super) fn handle_supervisor_drift(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) =
             self.consume_human_output_flags(args, "supervisor drift")?;
@@ -170,6 +185,7 @@ impl Cli {
             "status" => self.handle_supervisor_daemon_action("status", rest),
             "drift" => self.handle_supervisor_drift(rest),
             "logs" => self.handle_supervisor_logs(rest),
+            "runtime" => self.handle_supervisor_runtime(rest),
             "sync" => self.handle_supervisor_sync(rest),
             "show" => self.handle_supervisor_show(rest),
             _ => Err(format!("unknown supervisor command: {action}")),

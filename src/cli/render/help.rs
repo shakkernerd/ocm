@@ -1158,6 +1158,7 @@ pub fn supervisor_help(cmd: &str) -> String {
                 ("stop", "Stop the supervisor daemon"),
                 ("uninstall", "Remove the supervisor daemon definition"),
                 ("status", "Inspect the supervisor daemon service state"),
+                ("runtime", "Inspect live supervisor child runtime state"),
                 (
                     "plan",
                     "Compute the desired supervisor state from current envs",
@@ -1179,6 +1180,7 @@ pub fn supervisor_help(cmd: &str) -> String {
             format!("{cmd} supervisor install"),
             format!("{cmd} supervisor plan"),
             format!("{cmd} supervisor logs demo --tail 20"),
+            format!("{cmd} supervisor runtime"),
             format!("{cmd} supervisor run --once"),
             format!("{cmd} supervisor status"),
             format!("{cmd} supervisor drift"),
@@ -2465,6 +2467,23 @@ pub fn supervisor_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             vec![format!("{cmd} supervisor status")],
             &["Use `supervisor drift` to compare planned and persisted child state."],
+        ),
+        "runtime" => render_leaf(
+            "Show supervisor runtime",
+            "Read the live child runtime state that the running supervisor process persists for the current OCM store.",
+            vec![format!("{cmd} supervisor runtime [--raw] [--json]")],
+            &[
+                (
+                    "--raw",
+                    "Force plain line output instead of TTY table rendering",
+                ),
+                ("--json", "Print the live supervisor runtime state as JSON"),
+            ],
+            vec![format!("{cmd} supervisor runtime")],
+            &[
+                "This reads `.ocm/supervisor/runtime.json` under the active OCM store.",
+                "The file is updated while `supervisor run` or the managed supervisor daemon is active.",
+            ],
         ),
         "logs" => render_leaf(
             "Read supervisor child logs",

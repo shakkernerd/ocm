@@ -183,6 +183,18 @@ pub struct SupervisorRuntimeState {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SupervisorRuntimeView {
+    pub runtime_path: String,
+    pub present: bool,
+    pub kind: String,
+    pub ocm_home: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+    pub children: Vec<SupervisorRuntimeChild>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SupervisorLogSummary {
     pub env_name: String,
     pub stream: String,
@@ -233,6 +245,31 @@ impl<'a> SupervisorService<'a> {
     pub fn show(&self) -> Result<SupervisorView, String> {
         let (state_path, state) = self.read_persisted_state()?;
         Ok(view_from_state(&state_path, true, state))
+    }
+
+    pub fn runtime(&self) -> Result<SupervisorRuntimeView, String> {
+        let runtime_path = supervisor_runtime_path(self.env, self.cwd)?;
+        if !runtime_path.exists() {
+            let ocm_home = resolve_ocm_home(self.env, self.cwd)?;
+            return Ok(SupervisorRuntimeView {
+                runtime_path: display_path(&runtime_path),
+                present: false,
+                kind: SUPERVISOR_RUNTIME_KIND.to_string(),
+                ocm_home: display_path(&ocm_home),
+                updated_at: now_utc(),
+                children: Vec::new(),
+            });
+        }
+
+        let runtime = read_json::<SupervisorRuntimeState>(&runtime_path)?;
+        Ok(SupervisorRuntimeView {
+            runtime_path: display_path(&runtime_path),
+            present: true,
+            kind: runtime.kind,
+            ocm_home: runtime.ocm_home,
+            updated_at: runtime.updated_at,
+            children: runtime.children,
+        })
     }
 
     pub fn run(&self, once: bool) -> Result<SupervisorRunSummary, String> {
@@ -661,7 +698,11 @@ impl<'a> SupervisorService<'a> {
                 if let Some(next_state) = read_updated_supervisor_state(state_path, &active_state) {
                     reconcile_running_children(&mut running, &next_state)?;
                     active_state = next_state;
-                    write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
+                    write_supervisor_runtime_state(
+                        &runtime_path,
+                        &active_state.ocm_home,
+                        &running,
+                    )?;
                     managed_child_count = running.len();
                 }
                 if let Some(next_spec) = active_child_spec(&active_state, &env_name).cloned() {
@@ -674,7 +715,11 @@ impl<'a> SupervisorService<'a> {
                         env_name,
                         spawn_running_child(next_spec, next_restart_count)?,
                     );
-                    write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
+                    write_supervisor_runtime_state(
+                        &runtime_path,
+                        &active_state.ocm_home,
+                        &running,
+                    )?;
                 }
             }
 

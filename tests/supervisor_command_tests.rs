@@ -312,10 +312,39 @@ fn supervisor_run_persists_live_runtime_children() {
     assert!(demo["pid"].as_u64().unwrap() > 0);
     assert_eq!(demo["restartCount"], 0);
 
+    let runtime_command = run_ocm(&cwd, &env, &["supervisor", "runtime", "--json"]);
+    assert!(
+        runtime_command.status.success(),
+        "{}",
+        stderr(&runtime_command)
+    );
+    let runtime_body: Value = serde_json::from_slice(&runtime_command.stdout).unwrap();
+    assert_eq!(runtime_body["present"], true);
+    assert_eq!(runtime_body["runtimePath"], path_string(&runtime_path));
+    assert_eq!(runtime_body["children"].as_array().unwrap().len(), 2);
+
     stop_process(&mut supervisor);
     let cleared = wait_for_runtime_children(&runtime_path, 0, None, Duration::from_secs(5))
         .expect("supervisor runtime state did not clear after shutdown");
     assert!(cleared["updatedAt"].as_str().is_some());
+}
+
+#[test]
+fn supervisor_runtime_reports_missing_state_before_the_daemon_runs() {
+    let root = TestDir::new("supervisor-runtime-missing");
+    let (cwd, env) = setup_supervisor_fixture(&root);
+
+    let output = run_ocm(&cwd, &env, &["supervisor", "runtime", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["present"], false);
+    assert_eq!(body["children"], serde_json::json!([]));
+    assert!(
+        body["runtimePath"]
+            .as_str()
+            .unwrap()
+            .ends_with("/supervisor/runtime.json")
+    );
 }
 
 #[test]
