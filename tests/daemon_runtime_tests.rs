@@ -455,3 +455,88 @@ fn daemon_run_reloads_children_after_binding_changes() {
 
     stop_process(&mut daemon);
 }
+
+#[test]
+fn daemon_keeps_running_when_one_env_fails_to_spawn() {
+    let root = TestDir::new("daemon-run-spawn-failure");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+
+    let good_started = root.child("good-started.txt");
+    let bad_started = root.child("bad-started.txt");
+    let missing_cwd = root.child("missing-cwd");
+
+    let good_script = root.child("bin/good-openclaw");
+    write_executable_script(
+        &good_script,
+        &format!(
+            "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&good_started),
+        ),
+    );
+    let bad_script = root.child("bin/bad-openclaw");
+    write_executable_script(
+        &bad_script,
+        &format!(
+            "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&bad_started),
+        ),
+    );
+
+    let good_launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "good",
+            "--command",
+            &path_string(&good_script),
+        ],
+    );
+    assert!(good_launcher.status.success(), "{}", stderr(&good_launcher));
+    let bad_launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "bad",
+            "--command",
+            &path_string(&bad_script),
+            "--cwd",
+            &path_string(&missing_cwd),
+        ],
+    );
+    assert!(bad_launcher.status.success(), "{}", stderr(&bad_launcher));
+
+    let good_env = run_ocm(&cwd, &env, &["env", "create", "good", "--launcher", "good"]);
+    assert!(good_env.status.success(), "{}", stderr(&good_env));
+    set_service_enabled(&cwd, &env, "good", true);
+
+    let bad_env = run_ocm(&cwd, &env, &["env", "create", "bad", "--launcher", "bad"]);
+    assert!(bad_env.status.success(), "{}", stderr(&bad_env));
+    set_service_enabled(&cwd, &env, "bad", true);
+
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    assert!(wait_for_file(&good_started, Duration::from_secs(5)));
+    let runtime = wait_for_runtime_children(&runtime_path, 1, Some("good"), Duration::from_secs(5))
+        .expect("daemon runtime state did not keep the healthy child running");
+    assert_eq!(runtime["children"][0]["envName"], "good");
+    assert!(!bad_started.exists());
+    assert!(daemon.try_wait().unwrap().is_none());
+
+    fs::create_dir_all(&missing_cwd).unwrap();
+
+    let runtime = wait_for_runtime_children(&runtime_path, 2, Some("bad"), Duration::from_secs(5))
+        .expect("daemon runtime state did not recover the previously failing child");
+    assert_eq!(runtime["children"].as_array().unwrap().len(), 2);
+    assert!(wait_for_file(&bad_started, Duration::from_secs(5)));
+
+    stop_process(&mut daemon);
+}

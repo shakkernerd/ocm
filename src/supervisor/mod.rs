@@ -7,7 +7,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -452,25 +452,27 @@ impl<'a> SupervisorService<'a> {
 
         let runtime_path = supervisor_runtime_path(self.env, self.cwd)?;
         let mut active_state = state;
-        let mut running = active_state
-            .children
-            .iter()
-            .cloned()
-            .map(|spec| {
-                let env_name = spec.env_name.clone();
-                Ok((env_name, spawn_running_child(spec, 0)?))
-            })
-            .collect::<Result<BTreeMap<_, _>, String>>()?;
+        let mut running = BTreeMap::new();
+        let mut pending = BTreeMap::new();
+        queue_missing_children(
+            &mut pending,
+            &running,
+            &active_state.children,
+            0,
+            Instant::now(),
+        );
+        start_due_children(&mut running, &mut pending)?;
         write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
-        let mut managed_child_count = running.len();
+        let mut managed_child_count = active_state.children.len();
         let mut child_results = Vec::new();
 
         while !stop_requested.load(Ordering::SeqCst) {
+            let mut runtime_dirty = false;
             if let Some(next_state) = read_updated_supervisor_state(state_path, &active_state) {
-                reconcile_running_children(&mut running, &next_state)?;
+                runtime_dirty |=
+                    reconcile_running_children(&mut running, &mut pending, &next_state);
                 active_state = next_state;
-                write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
-                managed_child_count = running.len();
+                managed_child_count = active_state.children.len();
             }
 
             let mut exited = Vec::new();
@@ -489,7 +491,7 @@ impl<'a> SupervisorService<'a> {
                 let Some(previous_child) = running.remove(&env_name) else {
                     continue;
                 };
-                write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
+                runtime_dirty = true;
                 eprintln!(
                     "ocm service: {} exited with {}; restarting",
                     previous_child.spec.env_name,
@@ -507,14 +509,10 @@ impl<'a> SupervisorService<'a> {
                     break;
                 }
                 if let Some(next_state) = read_updated_supervisor_state(state_path, &active_state) {
-                    reconcile_running_children(&mut running, &next_state)?;
+                    runtime_dirty |=
+                        reconcile_running_children(&mut running, &mut pending, &next_state);
                     active_state = next_state;
-                    write_supervisor_runtime_state(
-                        &runtime_path,
-                        &active_state.ocm_home,
-                        &running,
-                    )?;
-                    managed_child_count = running.len();
+                    managed_child_count = active_state.children.len();
                 }
                 if let Some(next_spec) = active_child_spec(&active_state, &env_name).cloned() {
                     let next_restart_count = if next_spec == previous_child.spec {
@@ -522,16 +520,20 @@ impl<'a> SupervisorService<'a> {
                     } else {
                         0
                     };
-                    running.insert(
+                    pending.insert(
                         env_name,
-                        spawn_running_child(next_spec, next_restart_count)?,
+                        PendingSupervisorChild {
+                            spec: next_spec,
+                            restart_count: next_restart_count,
+                            retry_at: Instant::now(),
+                        },
                     );
-                    write_supervisor_runtime_state(
-                        &runtime_path,
-                        &active_state.ocm_home,
-                        &running,
-                    )?;
                 }
+            }
+
+            runtime_dirty |= start_due_children(&mut running, &mut pending)?;
+            if runtime_dirty {
+                write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
             }
 
             if !stop_requested.load(Ordering::SeqCst) {
@@ -558,6 +560,13 @@ struct RunningSupervisorChild {
     spec: SupervisorChildSpec,
     child: Child,
     restart_count: usize,
+}
+
+#[derive(Clone)]
+struct PendingSupervisorChild {
+    spec: SupervisorChildSpec,
+    restart_count: usize,
+    retry_at: Instant,
 }
 
 fn spawn_running_child(
@@ -690,9 +699,37 @@ fn read_updated_supervisor_state(
 
 fn reconcile_running_children(
     running: &mut BTreeMap<String, RunningSupervisorChild>,
+    pending: &mut BTreeMap<String, PendingSupervisorChild>,
     desired_state: &SupervisorState,
-) -> Result<(), String> {
+) -> bool {
     let desired = child_map(&desired_state.children);
+    let mut runtime_dirty = false;
+
+    let pending_names = pending.keys().cloned().collect::<Vec<_>>();
+    for env_name in pending_names {
+        match desired.get(&env_name) {
+            Some(next_spec) => {
+                let should_replace = pending
+                    .get(&env_name)
+                    .map(|entry| entry.spec != *next_spec)
+                    .unwrap_or(false);
+                if should_replace {
+                    pending.insert(
+                        env_name,
+                        PendingSupervisorChild {
+                            spec: next_spec.clone(),
+                            restart_count: 0,
+                            retry_at: Instant::now(),
+                        },
+                    );
+                }
+            }
+            None => {
+                pending.remove(&env_name);
+            }
+        }
+    }
+
     let active_names = running.keys().cloned().collect::<Vec<_>>();
     for env_name in active_names {
         let Some(next_spec) = desired.get(&env_name) else {
@@ -702,6 +739,7 @@ fn reconcile_running_children(
                     existing.spec.env_name
                 );
                 stop_supervisor_child(&mut existing);
+                runtime_dirty = true;
             }
             continue;
         };
@@ -719,21 +757,80 @@ fn reconcile_running_children(
                 child_binding_label(next_spec)
             );
             stop_supervisor_child(&mut existing);
-            running.insert(env_name, spawn_running_child(next_spec.clone(), 0)?);
+            pending.insert(
+                env_name,
+                PendingSupervisorChild {
+                    spec: next_spec.clone(),
+                    restart_count: 0,
+                    retry_at: Instant::now(),
+                },
+            );
+            runtime_dirty = true;
         }
     }
-    for (env_name, next_spec) in desired {
-        if running.contains_key(&env_name) {
+    queue_missing_children(pending, running, &desired_state.children, 0, Instant::now());
+    runtime_dirty
+}
+
+fn queue_missing_children(
+    pending: &mut BTreeMap<String, PendingSupervisorChild>,
+    running: &BTreeMap<String, RunningSupervisorChild>,
+    desired_children: &[SupervisorChildSpec],
+    restart_count: usize,
+    retry_at: Instant,
+) {
+    for next_spec in desired_children {
+        if running.contains_key(&next_spec.env_name) || pending.contains_key(&next_spec.env_name) {
             continue;
         }
         eprintln!(
             "ocm service: starting new env {} ({})",
             next_spec.env_name,
-            child_binding_label(&next_spec)
+            child_binding_label(next_spec)
         );
-        running.insert(env_name, spawn_running_child(next_spec, 0)?);
+        pending.insert(
+            next_spec.env_name.clone(),
+            PendingSupervisorChild {
+                spec: next_spec.clone(),
+                restart_count,
+                retry_at,
+            },
+        );
     }
-    Ok(())
+}
+
+fn start_due_children(
+    running: &mut BTreeMap<String, RunningSupervisorChild>,
+    pending: &mut BTreeMap<String, PendingSupervisorChild>,
+) -> Result<bool, String> {
+    let now = Instant::now();
+    let due = pending
+        .iter()
+        .filter_map(|(env_name, child)| (child.retry_at <= now).then_some(env_name.clone()))
+        .collect::<Vec<_>>();
+    let mut runtime_dirty = false;
+
+    for env_name in due {
+        let Some(next_child) = pending.get(&env_name).cloned() else {
+            continue;
+        };
+        match spawn_running_child(next_child.spec.clone(), next_child.restart_count) {
+            Ok(running_child) => {
+                pending.remove(&env_name);
+                running.insert(env_name, running_child);
+                runtime_dirty = true;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                if let Some(entry) = pending.get_mut(&env_name) {
+                    entry.retry_at =
+                        Instant::now() + Duration::from_millis(SUPERVISOR_RESTART_DELAY_MS);
+                }
+            }
+        }
+    }
+
+    Ok(runtime_dirty)
 }
 
 fn stop_supervisor_child(running_child: &mut RunningSupervisorChild) {
