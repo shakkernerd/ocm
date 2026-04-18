@@ -105,14 +105,6 @@ pub fn root_help(cmd: &str) -> String {
                 "Fast path: create or reuse an env and keep it running",
             ),
             (
-                "sync",
-                "Reconcile an existing env from an optional ocm.yaml manifest",
-            ),
-            (
-                "up",
-                "Apply an optional ocm.yaml manifest from the current directory",
-            ),
-            (
                 "upgrade",
                 "Update one env or all envs and restart services when needed",
             ),
@@ -124,10 +116,6 @@ pub fn root_help(cmd: &str) -> String {
             (
                 "env",
                 "Environment lifecycle, binding, execution, snapshots, and repair",
-            ),
-            (
-                "manifest",
-                "Inspect optional ocm.yaml manifests without changing env state",
             ),
             ("migrate", "Bring an existing plain OpenClaw home into OCM"),
             (
@@ -157,8 +145,6 @@ pub fn root_help(cmd: &str) -> String {
             format!("{cmd} start mira"),
             format!("{cmd} migrate mira"),
             format!("{cmd} adopt inspect"),
-            format!("{cmd} sync --dry-run"),
-            format!("{cmd} up --dry-run"),
             format!("{cmd} @mira -- onboard"),
             format!("{cmd} @mira -- status"),
             format!("{cmd} upgrade mira"),
@@ -176,14 +162,11 @@ pub fn root_help(cmd: &str) -> String {
             format!("{cmd} help start"),
             format!("{cmd} help migrate"),
             format!("{cmd} help adopt"),
-            format!("{cmd} help sync"),
-            format!("{cmd} help up"),
             format!("{cmd} help upgrade"),
             format!("{cmd} help doctor"),
             format!("{cmd} doctor host"),
             format!("{cmd} help self"),
             format!("{cmd} help env"),
-            format!("{cmd} help manifest"),
             format!("{cmd} help release"),
             format!("{cmd} help supervisor"),
             format!("{cmd} help service"),
@@ -192,73 +175,6 @@ pub fn root_help(cmd: &str) -> String {
         ]),
     );
     finish(lines)
-}
-
-pub fn up_help(cmd: &str) -> String {
-    render_leaf(
-        "Apply a manifest",
-        "Discover an optional ocm.yaml from the current directory or an explicit path, preview its plan, or reconcile the target environment to match it.",
-        vec![format!(
-            "{cmd} up [path] [--manifest <path>] [--dry-run] [--raw] [--json]"
-        )],
-        &[
-            (
-                "--manifest <path>",
-                "Use a specific manifest file or search root",
-            ),
-            (
-                "--dry-run",
-                "Show the manifest plan without changing the environment",
-            ),
-            ("--raw", "Print raw key=value style output"),
-            ("--json", "Print a machine-readable up summary"),
-        ],
-        vec![
-            format!("{cmd} up --dry-run"),
-            format!("{cmd} up"),
-            format!("{cmd} up --manifest ./ocm.yaml --dry-run"),
-        ],
-        &[
-            "`up` is optional project-mode behavior. Normal personal flows still start with `setup` or `start`.",
-            "When a manifest is found, `up` can create the env, reconcile its runtime or launcher binding, and apply service install intent.",
-            "When `up` applies changes to an existing env, it snapshots that env first and rolls it back if a later reconcile step fails.",
-            "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
-            "Use `--dry-run` first when you want to preview what `up` would change.",
-        ],
-    )
-}
-
-pub fn sync_help(cmd: &str) -> String {
-    render_leaf(
-        "Synchronize an existing env from a manifest",
-        "Discover an optional ocm.yaml from the current directory or an explicit path and reconcile an already existing environment to match it.",
-        vec![format!(
-            "{cmd} sync [path] [--manifest <path>] [--dry-run] [--raw] [--json]"
-        )],
-        &[
-            (
-                "--manifest <path>",
-                "Use a specific manifest file or search root",
-            ),
-            (
-                "--dry-run",
-                "Show the manifest plan without changing the environment",
-            ),
-            ("--raw", "Print raw key=value style output"),
-            ("--json", "Print a machine-readable sync summary"),
-        ],
-        vec![
-            format!("{cmd} sync --dry-run"),
-            format!("{cmd} sync"),
-            format!("{cmd} sync --manifest ./ocm.yaml --dry-run"),
-        ],
-        &[
-            "`sync` expects the manifest env to already exist. Use `up` first when the env has not been created yet.",
-            "When a manifest is found, `sync` reuses the same reconcile path as `up` but does not create missing envs.",
-            "When `sync` applies changes to an existing env, it snapshots that env first and rolls it back if a later reconcile step fails.",
-            "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
-        ],
-    )
 }
 
 pub fn setup_help(cmd: &str) -> String {
@@ -279,57 +195,12 @@ pub fn setup_help(cmd: &str) -> String {
     )
 }
 
-pub fn manifest_help(cmd: &str) -> String {
-    render_group(
-        "Manifest commands",
-        "Inspect optional ocm.yaml manifests discovered from the current working directory or an explicit path.",
-        vec![format!("{cmd} manifest <command> [args]")],
-        &[(
-            "Commands",
-            &[
-                ("path", "Show the discovered manifest path, if one exists"),
-                (
-                    "drift",
-                    "Show whether the discovered manifest already matches env bindings",
-                ),
-                (
-                    "plan",
-                    "Show the apply plan a discovered manifest would need right now",
-                ),
-                (
-                    "resolve",
-                    "Show the env a discovered manifest resolves to right now",
-                ),
-                (
-                    "show",
-                    "Show the discovered manifest contents, if one exists",
-                ),
-            ],
-        )],
-        vec![
-            format!("{cmd} manifest path"),
-            format!("{cmd} manifest drift"),
-            format!("{cmd} manifest plan"),
-            format!("{cmd} manifest resolve"),
-            format!("{cmd} manifest show"),
-            format!("{cmd} manifest path /path/to/workspace"),
-        ],
-        vec![
-            format!("{cmd} help manifest path"),
-            format!("{cmd} help manifest drift"),
-            format!("{cmd} help manifest plan"),
-            format!("{cmd} help manifest resolve"),
-            format!("{cmd} help manifest show"),
-        ],
-    )
-}
-
 pub fn migrate_help(cmd: &str) -> String {
     render_leaf(
         "Migrate an existing OpenClaw home",
         "Create a managed env from an existing plain OpenClaw home in one step, keeping your durable user state and rewriting it for the new OCM-managed root.",
         vec![format!(
-            "{cmd} migrate <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
+            "{cmd} migrate <env> [<source-home>] [--root <path>] [--raw] [--json]"
         )],
         &[
             ("<env>", "Target env name OCM should create"),
@@ -338,17 +209,12 @@ pub fn migrate_help(cmd: &str) -> String {
                 "Optional explicit .openclaw home path to import",
             ),
             ("--root <path>", "Optional explicit target env root"),
-            (
-                "--manifest <path>",
-                "Optional ocm.yaml path to write after importing",
-            ),
             ("--raw", "Print machine-friendly key/value output"),
             ("--json", "Print JSON output"),
         ],
         vec![
             format!("{cmd} migrate mira"),
             format!("{cmd} migrate mira /path/to/.openclaw"),
-            format!("{cmd} migrate mira --manifest ./ocm.yaml"),
             format!("{cmd} migrate --name mira --json"),
         ],
         &[
@@ -356,7 +222,6 @@ pub fn migrate_help(cmd: &str) -> String {
             "Migrate preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets.",
             "If `openclaw` is already available on PATH, migrate also binds the imported env to an env-local migrated launcher so you can keep going through OCM immediately.",
             "Use `adopt inspect` or `adopt plan` if you want read-only preview commands before importing.",
-            "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
         ],
     )
 }
@@ -377,9 +242,7 @@ pub fn adopt_help(cmd: &str) -> String {
         vec![
             format!("{cmd} adopt inspect"),
             format!("{cmd} adopt plan --name mira"),
-            format!("{cmd} adopt plan --name mira --manifest ./ocm.yaml"),
             format!("{cmd} adopt import --name mira"),
-            format!("{cmd} adopt import --name mira --manifest ./ocm.yaml"),
             format!("{cmd} adopt inspect /path/to/.openclaw"),
         ],
         vec![
@@ -390,154 +253,13 @@ pub fn adopt_help(cmd: &str) -> String {
     )
 }
 
-pub fn manifest_command_help(cmd: &str, action: &str) -> Option<String> {
-    match action {
-        "path" => Some(render_leaf(
-            "Show the discovered manifest path",
-            "Search upward from the current working directory or one explicit path, or inspect one explicit manifest file, and report the manifest path without changing any environment state.",
-            vec![format!(
-                "{cmd} manifest path [<path>] [--manifest <path>] [--raw] [--json]"
-            )],
-            &[
-                ("[path]", "Optional directory or file path to search from"),
-                (
-                    "--manifest <path>",
-                    "Use a specific manifest file or search root",
-                ),
-                ("--raw", "Print machine-friendly key/value output"),
-                ("--json", "Print JSON output"),
-            ],
-            vec![
-                format!("{cmd} manifest path"),
-                format!("{cmd} manifest path /path/to/workspace"),
-                format!("{cmd} manifest path --manifest ./ocm.yaml"),
-                format!("{cmd} manifest path --json"),
-            ],
-            &[
-                "If no manifest is present, the command still succeeds and reports that nothing was found.",
-                "This is a read-only inspection command.",
-                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
-            ],
-        )),
-        "resolve" => Some(render_leaf(
-            "Resolve a manifest into env state",
-            "Search upward from the current working directory or one explicit path, or load one explicit manifest file, and show which env it points at plus whether that env already exists.",
-            vec![format!(
-                "{cmd} manifest resolve [<path>] [--manifest <path>] [--raw] [--json]"
-            )],
-            &[
-                ("[path]", "Optional directory or file path to search from"),
-                (
-                    "--manifest <path>",
-                    "Use a specific manifest file or search root",
-                ),
-                ("--raw", "Print machine-friendly key/value output"),
-                ("--json", "Print JSON output"),
-            ],
-            vec![
-                format!("{cmd} manifest resolve"),
-                format!("{cmd} manifest resolve /path/to/workspace"),
-                format!("{cmd} manifest resolve --manifest ./ocm.yaml"),
-                format!("{cmd} manifest resolve --json"),
-            ],
-            &[
-                "If no manifest is present, the command still succeeds and reports that nothing was found.",
-                "This is a read-only inspection command.",
-                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
-            ],
-        )),
-        "plan" => Some(render_leaf(
-            "Show the manifest apply plan",
-            "Search upward from the current working directory or one explicit path, or load one explicit manifest file, and show the create-or-reconcile work that would be needed without applying it.",
-            vec![format!(
-                "{cmd} manifest plan [<path>] [--manifest <path>] [--raw] [--json]"
-            )],
-            &[
-                ("[path]", "Optional directory or file path to search from"),
-                (
-                    "--manifest <path>",
-                    "Use a specific manifest file or search root",
-                ),
-                ("--raw", "Print machine-friendly key/value output"),
-                ("--json", "Print JSON output"),
-            ],
-            vec![
-                format!("{cmd} manifest plan"),
-                format!("{cmd} manifest plan /path/to/workspace"),
-                format!("{cmd} manifest plan --manifest ./ocm.yaml"),
-                format!("{cmd} manifest plan --json"),
-            ],
-            &[
-                "If no manifest is present, the command still succeeds and reports that nothing was found.",
-                "This is a read-only inspection command.",
-                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
-            ],
-        )),
-        "drift" => Some(render_leaf(
-            "Show manifest binding drift",
-            "Search upward from the current working directory or one explicit path, or load one explicit manifest file, and compare its desired runtime and launcher selectors against the current env state.",
-            vec![format!(
-                "{cmd} manifest drift [<path>] [--manifest <path>] [--raw] [--json]"
-            )],
-            &[
-                ("[path]", "Optional directory or file path to search from"),
-                (
-                    "--manifest <path>",
-                    "Use a specific manifest file or search root",
-                ),
-                ("--raw", "Print machine-friendly key/value output"),
-                ("--json", "Print JSON output"),
-            ],
-            vec![
-                format!("{cmd} manifest drift"),
-                format!("{cmd} manifest drift /path/to/workspace"),
-                format!("{cmd} manifest drift --manifest ./ocm.yaml"),
-                format!("{cmd} manifest drift --json"),
-            ],
-            &[
-                "If no manifest is present, the command still succeeds and reports that nothing was found.",
-                "This is a read-only inspection command.",
-                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
-            ],
-        )),
-        "show" => Some(render_leaf(
-            "Show the discovered manifest",
-            "Search upward from the current working directory or one explicit path, or load one explicit manifest file, and print its resolved contents without changing any environment state.",
-            vec![format!(
-                "{cmd} manifest show [<path>] [--manifest <path>] [--raw] [--json]"
-            )],
-            &[
-                ("[path]", "Optional directory or file path to search from"),
-                (
-                    "--manifest <path>",
-                    "Use a specific manifest file or search root",
-                ),
-                ("--raw", "Print machine-friendly key/value output"),
-                ("--json", "Print JSON output"),
-            ],
-            vec![
-                format!("{cmd} manifest show"),
-                format!("{cmd} manifest show /path/to/workspace"),
-                format!("{cmd} manifest show --manifest ./ocm.yaml"),
-                format!("{cmd} manifest show --json"),
-            ],
-            &[
-                "If no manifest is present, the command still succeeds and reports that nothing was found.",
-                "This is a read-only inspection command.",
-                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
-            ],
-        )),
-        _ => None,
-    }
-}
-
 pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
     match action {
         "import" => Some(render_leaf(
             "Import a plain OpenClaw home",
             "Create a managed env from a plain OpenClaw home, preserve config, auth, sessions, and logs, and clear only live runtime residue like locks, pid files, and sockets.",
             vec![format!(
-                "{cmd} adopt import --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
+                "{cmd} adopt import --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
             )],
             &[
                 ("--name <env>", "Target env name OCM should create"),
@@ -546,10 +268,6 @@ pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
                     "Optional explicit .openclaw home path to import",
                 ),
                 ("--root <path>", "Optional explicit target env root"),
-                (
-                    "--manifest <path>",
-                    "Optional ocm.yaml path to write after importing",
-                ),
                 ("--raw", "Print machine-friendly key/value output"),
                 ("--json", "Print JSON output"),
             ],
@@ -557,13 +275,11 @@ pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} adopt import --name mira"),
                 format!("{cmd} adopt import --name mira /path/to/.openclaw"),
                 format!("{cmd} adopt import --name mira --root /tmp/mira"),
-                format!("{cmd} adopt import --name mira --manifest ./ocm.yaml"),
             ],
             &[
                 "Without an explicit source path, OCM imports from the default plain OpenClaw home under the current user home.",
                 "This creates a managed env and rewrites env-scoped OpenClaw paths for the new target.",
                 "If `openclaw` is already available on PATH, import also binds the env to an env-local migrated launcher so it is immediately runnable through OCM.",
-                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
             ],
         )),
         "inspect" => Some(render_leaf(
@@ -592,9 +308,9 @@ pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
         )),
         "plan" => Some(render_leaf(
             "Plan a migration target",
-            "Show the env name and target root OCM would use for a migration without creating or importing anything, and optionally preview a minimal manifest write.",
+            "Show the env name and target root OCM would use for a migration without creating or importing anything.",
             vec![format!(
-                "{cmd} adopt plan --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
+                "{cmd} adopt plan --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
             )],
             &[
                 ("--name <env>", "Target env name OCM would create or update"),
@@ -603,10 +319,6 @@ pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
                     "Optional explicit .openclaw home path to inspect",
                 ),
                 ("--root <path>", "Optional explicit target env root"),
-                (
-                    "--manifest <path>",
-                    "Optional ocm.yaml path to preview without writing",
-                ),
                 ("--raw", "Print machine-friendly key/value output"),
                 ("--json", "Print JSON output"),
             ],
@@ -614,12 +326,10 @@ pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} adopt plan --name mira"),
                 format!("{cmd} adopt plan --name mira /path/to/.openclaw"),
                 format!("{cmd} adopt plan --name mira --root /tmp/mira"),
-                format!("{cmd} adopt plan --name mira --manifest ./ocm.yaml"),
             ],
             &[
                 "Without an explicit source path, OCM plans from the default plain OpenClaw home under the current user home.",
-                "This command is read-only. It does not create, import, write manifests, or modify any env.",
-                "Relative manifest file paths passed through `--manifest` are resolved from the current working directory.",
+                "This command is read-only. It does not create, import, or modify any env.",
             ],
         )),
         _ => None,
@@ -1110,7 +820,10 @@ pub fn service_help(cmd: &str) -> String {
             (
                 "Lifecycle",
                 &[
-                    ("install", "Enable an env under the supervisor without starting it"),
+                    (
+                        "install",
+                        "Enable an env under the supervisor without starting it",
+                    ),
                     ("start", "Start an env service"),
                     ("stop", "Stop an env service without uninstalling it"),
                     ("restart", "Restart one env under the supervisor"),

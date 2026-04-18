@@ -605,9 +605,8 @@ mod tests {
 
     use super::{
         ManagedServiceDefinition, ManagedServiceIdentity, ServiceManagerKind,
-        global_service_definition_path, managed_service_identity, managed_service_label,
-        service_backend_support_error, service_definition_dir, service_manager_kind,
-        write_managed_service_definition,
+        managed_service_identity, managed_service_label, service_backend_support_error,
+        service_definition_dir, service_manager_kind, write_managed_service_definition,
     };
 
     #[test]
@@ -740,10 +739,6 @@ mod tests {
                 "/tmp/home/.config/systemd/user/{}.service",
                 managed_service_label("demo", &env, Path::new("/tmp")).unwrap()
             )
-        );
-        assert_eq!(
-            global_service_definition_path(&env).display().to_string(),
-            "/tmp/home/.config/systemd/user/ai.openclaw.gateway.service"
         );
     }
 

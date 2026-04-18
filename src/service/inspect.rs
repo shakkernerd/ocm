@@ -5,12 +5,12 @@ use std::process::Command;
 
 use serde::Serialize;
 
+use super::platform::{ServiceManagerKind, service_manager_kind};
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::store::{display_path, list_environments, supervisor_logs_dir};
 use crate::supervisor::{
     SupervisorChildSpec, SupervisorDaemonSummary, SupervisorRuntimeChild, SupervisorService,
 };
-use super::platform::{ServiceManagerKind, service_manager_kind};
 
 fn launchctl_binary(env: &BTreeMap<String, String>) -> String {
     env.get("OCM_INTERNAL_LAUNCHCTL_BIN")

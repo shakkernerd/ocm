@@ -2,7 +2,9 @@ use super::RenderProfile;
 use crate::infra::terminal::{
     Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, terminal_width,
 };
-use crate::service::{ServiceActionSummary, ServiceInstallSummary, ServiceSummary, ServiceSummaryList};
+use crate::service::{
+    ServiceActionSummary, ServiceInstallSummary, ServiceSummary, ServiceSummaryList,
+};
 
 fn daemon_state(installed: bool, loaded: bool, running: bool) -> &'static str {
     if running {
@@ -109,7 +111,11 @@ fn service_list_with_width(
         })
         .collect::<Vec<_>>();
 
-    let mut lines = render_table(&["Env", "Binding", "Port", "Service", "Daemon"], &rows, profile.color);
+    let mut lines = render_table(
+        &["Env", "Binding", "Port", "Service", "Daemon"],
+        &rows,
+        profile.color,
+    );
     lines.push(String::new());
     lines.push(paint(
         &format!(
@@ -214,7 +220,10 @@ pub fn service_status(
             optional_value_row("Release version", summary.runtime_release_version.clone()),
             optional_value_row("Release channel", summary.runtime_release_channel.clone()),
             optional_value_row("Source", summary.runtime_source_kind.clone()),
-            optional_value_row("Child pid", summary.child_pid.map(|value| value.to_string())),
+            optional_value_row(
+                "Child pid",
+                summary.child_pid.map(|value| value.to_string()),
+            ),
             optional_value_row(
                 "Restart count",
                 summary.child_restart_count.map(|value| value.to_string()),
@@ -359,7 +368,11 @@ pub fn service_action(
     };
 
     let mut lines = vec![paint(
-        &format!("{} service {}", action_verb(&summary.action), summary.env_name),
+        &format!(
+            "{} service {}",
+            action_verb(&summary.action),
+            summary.env_name
+        ),
         Tone::Strong,
         profile.color,
     )];

@@ -28,7 +28,11 @@ fn systemd_env(root: &TestDir) -> BTreeMap<String, String> {
 }
 
 fn setup_launcher_env(cwd: &Path, env: &BTreeMap<String, String>) {
-    let launcher = run_ocm(cwd, env, &["launcher", "add", "stable", "--command", "openclaw"]);
+    let launcher = run_ocm(
+        cwd,
+        env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
     assert!(launcher.status.success(), "{}", stderr(&launcher));
     let created = run_ocm(cwd, env, &["env", "create", "demo", "--launcher", "stable"]);
     assert!(created.status.success(), "{}", stderr(&created));
@@ -109,7 +113,11 @@ fn service_install_enables_the_env_and_installs_the_supervisor_daemon() {
     assert_eq!(env_body["serviceRunning"], false);
 
     let supervisor_path = managed_service_definition_path(&env, &cwd, "supervisor");
-    assert!(supervisor_path.exists(), "missing {}", path_string(&supervisor_path));
+    assert!(
+        supervisor_path.exists(),
+        "missing {}",
+        path_string(&supervisor_path)
+    );
 }
 
 #[test]
@@ -263,7 +271,11 @@ fn systemd_service_install_writes_the_supervisor_unit() {
     assert_eq!(body["installed"], true);
 
     let supervisor_path = managed_service_definition_path(&env, &cwd, "supervisor");
-    assert!(supervisor_path.exists(), "missing {}", path_string(&supervisor_path));
+    assert!(
+        supervisor_path.exists(),
+        "missing {}",
+        path_string(&supervisor_path)
+    );
     let unit = fs::read_to_string(supervisor_path).unwrap();
     assert!(unit.contains("supervisor run"));
 }
@@ -302,10 +314,12 @@ fn service_status_reports_missing_binding_issue() {
     let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
     assert!(status.status.success(), "{}", stderr(&status));
     let body = json_output(&status);
-    assert!(body["issue"]
-        .as_str()
-        .unwrap()
-        .contains("has no default runtime or launcher"));
+    assert!(
+        body["issue"]
+            .as_str()
+            .unwrap()
+            .contains("has no default runtime or launcher")
+    );
 }
 
 #[test]
@@ -320,10 +334,20 @@ fn service_status_uses_runtime_bindings_too() {
     let runtime = run_ocm(
         &cwd,
         &env,
-        &["runtime", "add", "stable", "--path", &path_string(&runtime_path)],
+        &[
+            "runtime",
+            "add",
+            "stable",
+            "--path",
+            &path_string(&runtime_path),
+        ],
     );
     assert!(runtime.status.success(), "{}", stderr(&runtime));
-    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--runtime", "stable"]);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
     assert!(created.status.success(), "{}", stderr(&created));
 
     let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);

@@ -1,8 +1,6 @@
 mod support;
 
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
@@ -11,8 +9,8 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, install_fake_launchctl, install_fake_node_and_npm,
-    managed_service_definition_path, ocm_env, run_ocm, stderr, stdout,
+    TestDir, TestHttpServer, install_fake_launchctl, install_fake_node_and_npm, ocm_env, run_ocm,
+    stderr, stdout,
 };
 
 fn append_tar_file(
@@ -60,21 +58,8 @@ fn sha512_integrity(body: &[u8]) -> String {
     )
 }
 
-fn write_executable_script(path: &std::path::Path, contents: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).unwrap();
-    }
-    fs::write(path, contents).unwrap();
-    #[cfg(unix)]
-    {
-        let mut permissions = fs::metadata(path).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).unwrap();
-    }
-}
-
 #[test]
-fn upgrade_updates_a_tracked_runtime_and_restarts_the_service() {
+fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     let root = TestDir::new("upgrade-tracked-runtime");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -138,7 +123,7 @@ fn upgrade_updates_a_tracked_runtime_and_restarts_the_service() {
     assert!(upgrade.status.success(), "{}", stderr(&upgrade));
     let output = stdout(&upgrade);
     assert!(output.contains("outcome=updated"), "{output}");
-    assert!(output.contains("service=restarted"), "{output}");
+    assert!(output.contains("service=started"), "{output}");
     assert!(output.contains("version=2026.3.25"), "{output}");
 
     let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
@@ -254,7 +239,7 @@ fn upgrade_can_switch_a_local_launcher_env_to_a_published_runtime() {
 }
 
 #[test]
-fn upgrade_refreshes_a_stopped_installed_service_through_service_start() {
+fn upgrade_keeps_a_stopped_installed_service_stopped() {
     let root = TestDir::new("upgrade-stopped-service-start");
     let cwd = root.child("workspace");
     let project_dir = cwd.join("openclaw");
@@ -304,196 +289,12 @@ fn upgrade_refreshes_a_stopped_installed_service_through_service_start() {
     let stop = run_ocm(&cwd, &env, &["service", "stop", "hacking"]);
     assert!(stop.status.success(), "{}", stderr(&stop));
 
-    let stopped_launchctl = root.child("fake-launchctl-stopped/launchctl");
-    write_executable_script(
-        &stopped_launchctl,
-        "#!/bin/sh\ncase \"$1\" in\n  print)\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
-    );
-    env.insert(
-        "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
-        stopped_launchctl.display().to_string(),
-    );
-
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "hacking", "--channel", "stable"]);
     assert!(upgrade.status.success(), "{}", stderr(&upgrade));
     let output = stdout(&upgrade);
     assert!(output.contains("from=launcher:hacking.local"), "{output}");
     assert!(output.contains("to=runtime:stable"), "{output}");
-    assert!(output.contains("service=started"), "{output}");
-}
-
-#[test]
-fn upgrade_restarts_running_services_when_only_the_definition_has_drifted() {
-    let root = TestDir::new("upgrade-definition-drift-restart");
-    let cwd = root.child("workspace");
-    fs::create_dir_all(&cwd).unwrap();
-
-    let tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
-    let integrity = sha512_integrity(&tarball);
-    let tarball_server = TestHttpServer::serve_bytes(
-        "/openclaw-2026.3.24.tgz",
-        "application/octet-stream",
-        &tarball,
-    );
-    let packument = format!(
-        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
-        tarball_server.url(),
-        integrity
-    );
-    let packument_server =
-        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 3);
-
-    let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
-    install_fake_launchctl(&root, &mut env);
-    env.insert(
-        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
-        packument_server.url(),
-    );
-    env.insert(
-        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
-        "launchd".to_string(),
-    );
-
-    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-onboard"]);
-    assert!(start.status.success(), "{}", stderr(&start));
-
-    let plist_path = managed_service_definition_path(&env, &cwd, "demo");
-    let plist = fs::read_to_string(&plist_path).unwrap();
-    fs::write(
-        &plist_path,
-        plist.replace("openclaw.mjs", "openclaw-stale.mjs"),
-    )
-    .unwrap();
-
-    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
-    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
-    let output = stdout(&upgrade);
-    assert!(output.contains("outcome=up-to-date"), "{output}");
-    assert!(output.contains("service=restarted"), "{output}");
-}
-
-#[test]
-fn upgrade_starts_stopped_services_when_only_the_definition_has_drifted() {
-    let root = TestDir::new("upgrade-definition-drift-start");
-    let cwd = root.child("workspace");
-    fs::create_dir_all(&cwd).unwrap();
-
-    let tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
-    let integrity = sha512_integrity(&tarball);
-    let tarball_server = TestHttpServer::serve_bytes(
-        "/openclaw-2026.3.24.tgz",
-        "application/octet-stream",
-        &tarball,
-    );
-    let packument = format!(
-        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
-        tarball_server.url(),
-        integrity
-    );
-    let packument_server =
-        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 3);
-
-    let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
-    install_fake_launchctl(&root, &mut env);
-    env.insert(
-        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
-        packument_server.url(),
-    );
-    env.insert(
-        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
-        "launchd".to_string(),
-    );
-
-    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-onboard"]);
-    assert!(start.status.success(), "{}", stderr(&start));
-
-    let stop = run_ocm(&cwd, &env, &["service", "stop", "demo"]);
-    assert!(stop.status.success(), "{}", stderr(&stop));
-
-    let stopped_launchctl = root.child("fake-launchctl-stopped/launchctl");
-    write_executable_script(
-        &stopped_launchctl,
-        "#!/bin/sh\ncase \"$1\" in\n  print)\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
-    );
-    env.insert(
-        "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
-        stopped_launchctl.display().to_string(),
-    );
-
-    let plist_path = managed_service_definition_path(&env, &cwd, "demo");
-    let plist = fs::read_to_string(&plist_path).unwrap();
-    fs::write(
-        &plist_path,
-        plist.replace("openclaw.mjs", "openclaw-stale.mjs"),
-    )
-    .unwrap();
-
-    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
-    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
-    let output = stdout(&upgrade);
-    assert!(output.contains("outcome=up-to-date"), "{output}");
-    assert!(output.contains("service=started"), "{output}");
-}
-
-#[test]
-fn upgrade_starts_orphaned_loaded_services_when_the_definition_file_is_missing() {
-    let root = TestDir::new("upgrade-orphaned-loaded-service");
-    let cwd = root.child("workspace");
-    fs::create_dir_all(&cwd).unwrap();
-
-    let tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
-    let integrity = sha512_integrity(&tarball);
-    let tarball_server = TestHttpServer::serve_bytes(
-        "/openclaw-2026.3.24.tgz",
-        "application/octet-stream",
-        &tarball,
-    );
-    let packument = format!(
-        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
-        tarball_server.url(),
-        integrity
-    );
-    let packument_server =
-        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 3);
-    let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
-    install_fake_launchctl(&root, &mut env);
-    env.insert(
-        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
-        packument_server.url(),
-    );
-    env.insert(
-        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
-        "launchd".to_string(),
-    );
-
-    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-onboard"]);
-    assert!(start.status.success(), "{}", stderr(&start));
-
-    let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
-    assert!(status.status.success(), "{}", stderr(&status));
-    let status_json: Value = serde_json::from_str(&stdout(&status)).unwrap();
-    let assigned_port = status_json["gatewayPort"].as_u64().unwrap();
-
-    let plist_path = managed_service_definition_path(&env, &cwd, "demo");
-    fs::remove_file(&plist_path).unwrap();
-    fs::write(
-        root.child("launchctl-print.txt"),
-        format!(
-            "state = running\npid = 4242\nenvironment = {{\n  OPENCLAW_GATEWAY_PORT => {assigned_port}\n  OPENCLAW_CONFIG_PATH => {}\n}}\n",
-            root.child("ocm-home/envs/demo/.openclaw/openclaw.json")
-                .display()
-        ),
-    )
-    .unwrap();
-
-    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
-    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
-    let output = stdout(&upgrade);
-    assert!(output.contains("outcome=up-to-date"), "{output}");
-    assert!(output.contains("service=started"), "{output}");
+    assert!(!output.contains("service="), "{output}");
 }
 
 #[test]

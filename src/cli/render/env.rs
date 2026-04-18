@@ -1704,7 +1704,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("machine-wide OpenClaw service"))
+                .any(|line| line.contains("manual review required before destroying this env"))
         );
     }
 

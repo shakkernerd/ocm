@@ -2,10 +2,8 @@ use std::path::Path;
 
 use super::{Cli, render};
 use crate::migrate::{
-    MigrateHomeOptions, inspect_migration_source, migrate_plain_openclaw_home_with_manifest,
-    plan_migration,
+    MigrateHomeOptions, inspect_migration_source, migrate_plain_openclaw_home, plan_migration,
 };
-use crate::store::resolve_absolute_path;
 
 impl Cli {
     fn prepend_human_output_flags(
@@ -32,11 +30,11 @@ impl Cli {
             if arg.starts_with("--name=") {
                 return saw_positional;
             }
-            if matches!(arg.as_str(), "--manifest" | "--root") {
+            if arg == "--root" {
                 index += 2;
                 continue;
             }
-            if arg.starts_with("--manifest=") || arg.starts_with("--root=") {
+            if arg.starts_with("--root=") {
                 index += 1;
                 continue;
             }
@@ -53,15 +51,12 @@ impl Cli {
         let mut saw_frontdoor_flag = false;
         while index < args.len() {
             let arg = &args[index];
-            if matches!(arg.as_str(), "--manifest" | "--root" | "--name") {
+            if matches!(arg.as_str(), "--root" | "--name") {
                 saw_frontdoor_flag = true;
                 index += 2;
                 continue;
             }
-            if arg.starts_with("--manifest=")
-                || arg.starts_with("--root=")
-                || arg.starts_with("--name=")
-            {
+            if arg.starts_with("--root=") || arg.starts_with("--name=") {
                 saw_frontdoor_flag = true;
                 index += 1;
                 continue;
@@ -139,8 +134,6 @@ impl Cli {
         }
         Self::reject_mixed_migrate_alias_syntax(&args)?;
 
-        let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
-        let manifest_value = Self::require_option_value(manifest_value, "--manifest")?;
         let (args, root_value) = Self::consume_option(args, "--root")?;
         let root_value = Self::require_option_value(root_value, "--root")?;
         let name_follows_positional = Self::migration_name_option_follows_positional(&args);
@@ -148,18 +141,13 @@ impl Cli {
         let name_value = Self::require_option_value(name_value, "--name")?;
         let (env_name, source_home) =
             Self::parse_migrate_target(args, name_value, name_follows_positional)?;
-        let manifest_path = manifest_value
-            .as_deref()
-            .map(|path| resolve_absolute_path(path, &self.env, &self.cwd))
-            .transpose()?;
         let summary = self.with_progress("Migrating existing OpenClaw into OCM", || {
-            migrate_plain_openclaw_home_with_manifest(
+            migrate_plain_openclaw_home(
                 MigrateHomeOptions {
                     source_home,
                     name: env_name.clone(),
                     root: root_value.clone(),
                 },
-                manifest_path.as_deref(),
                 &self.env,
                 &self.cwd,
             )
@@ -180,25 +168,18 @@ impl Cli {
 
     fn handle_adopt_import(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "adopt import")?;
-        let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
-        let manifest_value = Self::require_option_value(manifest_value, "--manifest")?;
         let (args, root_value) = Self::consume_option(args, "--root")?;
         let root_value = Self::require_option_value(root_value, "--root")?;
         let (args, name_value) = Self::consume_option(args, "--name")?;
         let name_value = Self::require_option_value(name_value, "--name")?;
         let (env_name, source_home) = Self::parse_adopt_target(args, name_value)?;
-        let manifest_path = manifest_value
-            .as_deref()
-            .map(|path| resolve_absolute_path(path, &self.env, &self.cwd))
-            .transpose()?;
         let summary = self.with_progress("Migrating plain OpenClaw home", || {
-            migrate_plain_openclaw_home_with_manifest(
+            migrate_plain_openclaw_home(
                 MigrateHomeOptions {
                     source_home,
                     name: env_name.clone(),
                     root: root_value.clone(),
                 },
-                manifest_path.as_deref(),
                 &self.env,
                 &self.cwd,
             )
@@ -237,21 +218,14 @@ impl Cli {
 
     fn handle_adopt_plan(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "adopt plan")?;
-        let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
-        let manifest_value = Self::require_option_value(manifest_value, "--manifest")?;
         let (args, root_value) = Self::consume_option(args, "--root")?;
         let root_value = Self::require_option_value(root_value, "--root")?;
         let (args, name_value) = Self::consume_option(args, "--name")?;
         let name_value = Self::require_option_value(name_value, "--name")?;
         let (env_name, source_home) = Self::parse_adopt_target(args, name_value)?;
         let explicit = source_home.as_deref().map(Path::new);
-        let manifest_path = manifest_value
-            .as_deref()
-            .map(|path| resolve_absolute_path(path, &self.env, &self.cwd))
-            .transpose()?;
         let summary = plan_migration(
             explicit,
-            manifest_path.as_deref(),
             &env_name,
             root_value.as_deref(),
             &self.env,

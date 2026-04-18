@@ -21,14 +21,11 @@ impl Cli {
             ["help"] | ["--help"] | ["-h"] => Ok(render::help::root_help(&cmd)),
             ["setup"] => Ok(render::help::setup_help(&cmd)),
             ["start"] => Ok(render::help::start_help(&cmd)),
-            ["sync"] => Ok(render::help::sync_help(&cmd)),
-            ["up"] => Ok(render::help::up_help(&cmd)),
             ["upgrade"] => Ok(render::help::upgrade_help(&cmd)),
             ["doctor"] => Ok(render::help::doctor_help(&cmd)),
             ["init"] => Ok(render::help::init_help(&cmd)),
             ["self"] => Ok(render::help::self_help(&cmd)),
             ["env"] => Ok(render::help::env_help(&cmd)),
-            ["manifest"] => Ok(render::help::manifest_help(&cmd)),
             ["migrate"] => Ok(render::help::migrate_help(&cmd)),
             ["adopt"] => Ok(render::help::adopt_help(&cmd)),
             ["release"] => Ok(render::help::release_help(&cmd)),
@@ -41,8 +38,6 @@ impl Cli {
                 .ok_or_else(|| format!("unknown env command: {action}")),
             ["release", action] => render::help::release_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown release command: {action}")),
-            ["manifest", action] => render::help::manifest_command_help(&cmd, action)
-                .ok_or_else(|| format!("unknown manifest command: {action}")),
             ["env", "snapshot", action] => render::help::env_snapshot_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown env snapshot command: {action}")),
             ["launcher"] => Ok(render::help::launcher_help(&cmd)),
@@ -64,13 +59,10 @@ impl Cli {
                     *group,
                     "setup"
                         | "start"
-                        | "sync"
-                        | "up"
                         | "upgrade"
                         | "doctor"
                         | "self"
                         | "env"
-                        | "manifest"
                         | "migrate"
                         | "adopt"
                         | "release"
@@ -102,15 +94,12 @@ impl Cli {
                     group.as_str(),
                     "self"
                         | "env"
-                        | "manifest"
                         | "adopt"
                         | "release"
                         | "launcher"
                         | "runtime"
                         | "supervisor"
                         | "service"
-                        | "sync"
-                        | "up"
                 ) =>
             {
                 Some(vec![group.as_str()])
@@ -121,8 +110,6 @@ impl Cli {
             }
             [group, flag] if group == "setup" && Self::is_help_flag(flag) => Some(vec!["setup"]),
             [group, flag] if group == "start" && Self::is_help_flag(flag) => Some(vec!["start"]),
-            [group, flag] if group == "sync" && Self::is_help_flag(flag) => Some(vec!["sync"]),
-            [group, flag] if group == "up" && Self::is_help_flag(flag) => Some(vec!["up"]),
             [group, flag] if group == "upgrade" && Self::is_help_flag(flag) => {
                 Some(vec!["upgrade"])
             }
@@ -132,7 +119,6 @@ impl Cli {
                     group.as_str(),
                     "self"
                         | "env"
-                        | "manifest"
                         | "migrate"
                         | "adopt"
                         | "release"
@@ -140,8 +126,6 @@ impl Cli {
                         | "runtime"
                         | "supervisor"
                         | "service"
-                        | "sync"
-                        | "up"
                 ) && Self::is_help_token(next) =>
             {
                 let mut topic = vec![group.as_str()];
@@ -158,7 +142,6 @@ impl Cli {
                     group.as_str(),
                     "self"
                         | "env"
-                        | "manifest"
                         | "migrate"
                         | "adopt"
                         | "release"
@@ -166,8 +149,6 @@ impl Cli {
                         | "runtime"
                         | "supervisor"
                         | "service"
-                        | "sync"
-                        | "up"
                 ) && Self::is_help_flag(flag) =>
             {
                 Some(vec![group.as_str(), action.as_str()])

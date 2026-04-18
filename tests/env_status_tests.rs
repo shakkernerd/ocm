@@ -7,8 +7,7 @@ use serde_json::Value;
 
 use crate::support::{
     TestDir, TestHttpServer, install_fake_node_and_npm, install_fake_service_manager, ocm_env,
-    openclaw_package_tarball, run_ocm, sha512_integrity, stderr, stdout,
-    write_executable_script,
+    openclaw_package_tarball, run_ocm, sha512_integrity, stderr, stdout, write_executable_script,
 };
 
 fn allocate_free_port() -> u16 {

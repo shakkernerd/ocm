@@ -3,7 +3,6 @@ mod env;
 mod help;
 mod init;
 mod launcher;
-mod manifest;
 mod migrate;
 mod release;
 mod render;
@@ -13,13 +12,11 @@ mod service;
 mod setup;
 mod start;
 mod supervisor;
-mod sync;
-mod up;
 mod upgrade;
 
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -29,7 +26,7 @@ use crate::env::EnvironmentService;
 use crate::launcher::LauncherService;
 use crate::runtime::RuntimeService;
 use crate::service::ServiceService;
-use crate::store::{ensure_store, resolve_absolute_path};
+use crate::store::ensure_store;
 use crate::supervisor::SupervisorService;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -379,47 +376,6 @@ impl Cli {
             })
     }
 
-    fn resolve_manifest_input(&self, args: Vec<String>, command: &str) -> Result<PathBuf, String> {
-        let (args, manifest_value) = Self::consume_option(args, "--manifest")?;
-        let explicit_manifest = Self::require_option_value(manifest_value, "--manifest")?;
-        if explicit_manifest.is_some() && !args.is_empty() {
-            return Err(format!(
-                "{command} accepts only one of [path] or --manifest <path>"
-            ));
-        }
-        if args.len() > 1 {
-            return Err(format!("unexpected arguments: {}", args.join(" ")));
-        }
-
-        if let Some(path) = explicit_manifest.as_ref() {
-            let path = resolve_absolute_path(path, &self.env, &self.cwd)?;
-            if Self::looks_like_manifest_file_path(&path) && !path.exists() {
-                return Err(format!("manifest file does not exist: {}", path.display()));
-            }
-            Ok(path)
-        } else {
-            Ok(args
-                .first()
-                .map(|value| self.resolve_manifest_search_root(value))
-                .transpose()?
-                .unwrap_or_else(|| self.cwd.clone()))
-        }
-    }
-
-    fn looks_like_manifest_file_path(path: &Path) -> bool {
-        if path
-            .file_name()
-            .is_some_and(|value| value == std::ffi::OsStr::new("ocm.yaml"))
-        {
-            return true;
-        }
-
-        matches!(
-            path.extension().and_then(|value| value.to_str()),
-            Some("yaml" | "yml")
-        )
-    }
-
     fn handle_active_env_run_shorthand(&self, openclaw_args: Vec<String>) -> Result<i32, String> {
         let mut args = vec![self.active_env_name()?, "--".to_string()];
         args.extend(openclaw_args);
@@ -534,12 +490,9 @@ impl Cli {
             "init" => cli.handle_init_command(&action, rest),
             "setup" => cli.handle_setup_command(args[1..].to_vec()),
             "start" => cli.handle_start_command(args[1..].to_vec()),
-            "sync" => cli.handle_sync_command(args[1..].to_vec()),
-            "up" => cli.handle_up_command(args[1..].to_vec()),
             "upgrade" => cli.handle_upgrade_command(args[1..].to_vec()),
             "doctor" => cli.dispatch_doctor_command(action.as_str(), rest),
             "env" => cli.dispatch_env_command(action.as_str(), rest),
-            "manifest" => cli.dispatch_manifest_command(action.as_str(), rest),
             "migrate" => cli.handle_migrate_command(args[1..].to_vec()),
             "adopt" => cli.dispatch_adopt_command(action.as_str(), rest),
             "release" => cli.dispatch_release_command(action.as_str(), rest),

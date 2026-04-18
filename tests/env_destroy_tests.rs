@@ -2,11 +2,10 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
 
 use crate::support::{
     TestDir, managed_service_definition_path, ocm_env, path_string, run_ocm, stderr, stdout,
-    write_executable_script, write_text,
+    write_executable_script,
 };
 
 fn install_fake_launchctl(root: &TestDir, env: &mut BTreeMap<String, String>) {
@@ -35,29 +34,6 @@ fn ocm_launchd_env(root: &TestDir) -> BTreeMap<String, String> {
         "launchd".to_string(),
     );
     env
-}
-
-fn write_launch_agent_plist(path: &Path, label: &str, env_vars: &[(&str, &str)]) {
-    let env_section = env_vars
-        .iter()
-        .map(|(key, value)| format!("      <key>{key}</key>\n      <string>{value}</string>\n"))
-        .collect::<String>();
-    write_text(
-        path,
-        &format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-  <dict>
-    <key>Label</key>
-    <string>{label}</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-{env_section}    </dict>
-  </dict>
-</plist>
-"#
-        ),
-    );
 }
 
 #[test]

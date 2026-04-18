@@ -4,7 +4,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_text};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
 fn install_fake_openclaw_on_path(
     root: &TestDir,
@@ -42,7 +42,6 @@ fn migrate_help_is_available() {
     assert!(body.contains("Migrate an existing OpenClaw home"));
     assert!(body.contains("ocm migrate <env> [<source-home>]"));
     assert!(body.contains("ocm migrate mira"));
-    assert!(body.contains("ocm migrate mira --manifest ./ocm.yaml"));
     assert!(body.contains("migrated launcher"));
     assert!(body.contains("Use `adopt inspect` or `adopt plan`"));
 }
@@ -160,13 +159,9 @@ fn help_adopt_import_is_available() {
         "preserve config, auth, sessions, and logs, and clear only live runtime residue like locks, pid files, and sockets."
     ));
     assert!(body.contains(
-        "ocm adopt import --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
+        "ocm adopt import --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
     ));
-    assert!(body.contains("--manifest <path>"));
     assert!(body.contains("migrated launcher"));
-    assert!(body.contains(
-        "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
-    ));
 }
 
 #[test]
@@ -224,36 +219,6 @@ fn adopt_plan_accepts_an_explicit_target_root() {
 }
 
 #[test]
-fn adopt_plan_can_preview_a_manifest_write() {
-    let root = TestDir::new("adopt-plan-manifest");
-    let cwd = root.child("workspace");
-    let manifest_path = cwd.join("ocm.yaml");
-    fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
-
-    let output = run_ocm(
-        &cwd,
-        &env,
-        &[
-            "adopt",
-            "plan",
-            "--name",
-            "mira",
-            "--manifest",
-            "ocm.yaml",
-            "--json",
-        ],
-    );
-    assert!(output.status.success(), "{}", stderr(&output));
-    let body = stdout(&output);
-    assert!(body.contains("\"manifestPath\":"));
-    assert!(body.contains(&manifest_path.to_string_lossy().to_string()));
-    assert!(body.contains("\"manifestPreview\":"));
-    assert!(body.contains("schema: ocm/v1"));
-    assert!(body.contains("name: mira"));
-}
-
-#[test]
 fn migrate_legacy_plan_accepts_leading_raw_flag() {
     let root = TestDir::new("migrate-legacy-plan-raw");
     let cwd = root.child("workspace");
@@ -278,13 +243,11 @@ fn help_adopt_plan_is_available() {
     assert!(output.status.success(), "{}", stderr(&output));
     let body = stdout(&output);
     assert!(body.contains("Plan a migration target"));
-    assert!(body.contains(
-        "ocm adopt plan --name <env> [<source-home>] [--root <path>] [--manifest <path>] [--raw] [--json]"
-    ));
-    assert!(body.contains("--manifest <path>"));
-    assert!(body.contains(
-        "Relative manifest file paths passed through `--manifest` are resolved from the current working directory."
-    ));
+    assert!(
+        body.contains(
+            "ocm adopt plan --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
+        )
+    );
 }
 
 #[test]
@@ -360,29 +323,6 @@ fn migrate_import_alias_requires_name() {
     );
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("--name is required"));
-}
-
-#[test]
-fn migrate_rejects_alias_after_manifest_flag_with_clear_error() {
-    let root = TestDir::new("migrate-mixed-alias-manifest");
-    let cwd = root.child("workspace");
-    fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
-
-    let output = run_ocm(
-        &cwd,
-        &env,
-        &[
-            "migrate",
-            "--manifest",
-            "ocm.yaml",
-            "plan",
-            "--name",
-            "mira",
-        ],
-    );
-    assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("mixed migrate syntax"));
 }
 
 #[test]
@@ -564,128 +504,4 @@ fn migrate_rejects_multiple_env_names() {
     assert!(
         stderr(&output).contains("migrate accepts only one env name from <env> or --name <env>")
     );
-}
-
-#[test]
-fn migrate_can_write_a_manifest() {
-    let root = TestDir::new("migrate-direct-manifest");
-    let cwd = root.child("workspace");
-    let source_home = root.child("legacy-home/.openclaw");
-    let manifest_path = cwd.join("ocm.yaml");
-    fs::create_dir_all(&cwd).unwrap();
-    seed_plain_openclaw_home(&source_home);
-    let env = ocm_env(&root);
-
-    let output = run_ocm(
-        &cwd,
-        &env,
-        &[
-            "migrate",
-            "mira",
-            source_home.to_string_lossy().as_ref(),
-            "--manifest",
-            manifest_path.to_string_lossy().as_ref(),
-            "--json",
-        ],
-    );
-    assert!(output.status.success(), "{}", stderr(&output));
-    let body = stdout(&output);
-    assert!(body.contains("\"manifestPath\":"));
-    assert!(manifest_path.exists());
-    let manifest_raw = fs::read_to_string(&manifest_path).unwrap();
-    assert!(manifest_raw.contains("schema: ocm/v1"));
-    assert!(manifest_raw.contains("name: mira"));
-}
-
-#[test]
-fn migrate_can_write_a_nested_manifest_path() {
-    let root = TestDir::new("migrate-direct-nested-manifest");
-    let cwd = root.child("workspace");
-    let source_home = root.child("legacy-home/.openclaw");
-    let manifest_path = cwd.join("nested/project/ocm.yaml");
-    fs::create_dir_all(&cwd).unwrap();
-    seed_plain_openclaw_home(&source_home);
-    let env = ocm_env(&root);
-
-    let output = run_ocm(
-        &cwd,
-        &env,
-        &[
-            "migrate",
-            "mira",
-            source_home.to_string_lossy().as_ref(),
-            "--manifest",
-            "./nested/project/ocm.yaml",
-            "--json",
-        ],
-    );
-    assert!(output.status.success(), "{}", stderr(&output));
-    let body = stdout(&output);
-    assert!(body.contains("\"manifestPath\":"));
-    assert!(body.contains(&manifest_path.to_string_lossy().to_string()));
-
-    let manifest_raw = fs::read_to_string(&manifest_path).unwrap();
-    assert!(manifest_raw.contains("schema: ocm/v1"));
-    assert!(manifest_raw.contains("name: mira"));
-}
-
-#[test]
-fn migrate_resolves_relative_manifest_paths_from_cwd() {
-    let root = TestDir::new("migrate-direct-manifest-relative");
-    let cwd = root.child("workspace");
-    let source_home = root.child("legacy-home/.openclaw");
-    let manifest_path = cwd.join("ocm.yaml");
-    fs::create_dir_all(&cwd).unwrap();
-    seed_plain_openclaw_home(&source_home);
-    let env = ocm_env(&root);
-
-    let output = run_ocm(
-        &cwd,
-        &env,
-        &[
-            "migrate",
-            "mira",
-            source_home.to_string_lossy().as_ref(),
-            "--manifest",
-            "ocm.yaml",
-            "--json",
-        ],
-    );
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(manifest_path.exists());
-    let body = stdout(&output);
-    assert!(body.contains("\"manifestPath\":"));
-}
-
-#[test]
-fn migrate_rejects_manifest_targets_under_regular_files_before_importing() {
-    let root = TestDir::new("migrate-direct-manifest-parent-file");
-    let cwd = root.child("workspace");
-    let source_home = root.child("legacy-home/.openclaw");
-    fs::create_dir_all(&cwd).unwrap();
-    seed_plain_openclaw_home(&source_home);
-    write_text(&cwd.join("occupied"), "not a directory\n");
-    let env = ocm_env(&root);
-
-    let output = run_ocm(
-        &cwd,
-        &env,
-        &[
-            "migrate",
-            "mira",
-            source_home.to_string_lossy().as_ref(),
-            "--manifest",
-            "occupied/ocm.yaml",
-        ],
-    );
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        stderr(&output).contains("manifest parent is not a directory"),
-        "{}",
-        stderr(&output)
-    );
-
-    let env_show = run_ocm(&cwd, &env, &["env", "show", "mira"]);
-    assert_eq!(env_show.status.code(), Some(1));
-    assert!(stderr(&env_show).contains("environment \"mira\" does not exist"));
 }

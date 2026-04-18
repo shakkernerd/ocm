@@ -55,6 +55,10 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("ocm help supervisor"));
     assert!(output.contains("ocm help runtime install"));
     assert!(output.contains("ocm --color always env list"));
+    assert!(!output.contains("ocm help sync"));
+    assert!(!output.contains("ocm help manifest"));
+    assert!(!output.contains("Reconcile an existing env from an optional ocm.yaml manifest"));
+    assert!(!output.contains("Inspect optional ocm.yaml manifests without changing env state"));
     assert!(!output.contains("env snapshot restore <name> <snapshot>"));
     assert!(!output.contains("service restore-global"));
     assert!(!output.contains("service discover"));
