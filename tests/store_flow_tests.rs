@@ -7,7 +7,7 @@ use ocm::env::{
     EnvironmentService, ExportEnvironmentOptions, ImportEnvironmentOptions,
     RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
 };
-use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive};
+use ocm::infra::archive::{EnvArchiveMetadata, extract_env_archive};
 use ocm::launcher::AddLauncherOptions;
 use ocm::runtime::{AddRuntimeOptions, InstallRuntimeOptions, RuntimeSourceKind};
 use ocm::store::{
@@ -552,13 +552,13 @@ fn environment_export_writes_a_portable_archive() {
     );
 
     let extract_dir = root.child("extracted");
-    let extracted = extract_env_archive::<EnvArchiveManifest>(
+    let extracted = extract_env_archive::<EnvArchiveMetadata>(
         std::path::Path::new(&summary.archive_path),
         &extract_dir,
     )
     .unwrap();
-    assert_eq!(extracted.manifest.env.name, "source");
-    assert_eq!(extracted.manifest.env.gateway_port, Some(19789));
+    assert_eq!(extracted.metadata.env.name, "source");
+    assert_eq!(extracted.metadata.env.gateway_port, Some(19789));
     assert_eq!(
         fs::read_to_string(extracted.root_dir.join(".openclaw/workspace/notes.txt")).unwrap(),
         "hello export"
@@ -790,12 +790,12 @@ fn environment_snapshot_captures_a_named_point_in_time() {
     assert_eq!(fetched.id, snapshot.id);
 
     let extract_dir = root.child("snapshot-extracted");
-    let extracted = extract_env_archive::<EnvArchiveManifest>(
+    let extracted = extract_env_archive::<EnvArchiveMetadata>(
         std::path::Path::new(&snapshot.archive_path),
         &extract_dir,
     )
     .unwrap();
-    assert_eq!(extracted.manifest.env.name, "source");
+    assert_eq!(extracted.metadata.env.name, "source");
     assert_eq!(
         fs::read_to_string(extracted.root_dir.join(".openclaw/workspace/notes.txt")).unwrap(),
         "hello snapshot"

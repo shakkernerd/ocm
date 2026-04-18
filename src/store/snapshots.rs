@@ -9,7 +9,7 @@ use crate::env::{
     RestoreEnvSnapshotOptions, default_service_enabled, default_service_running,
 };
 use crate::infra::archive::{
-    ArchivedEnvMeta, EnvArchiveManifest, extract_env_archive, write_env_archive,
+    ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -83,7 +83,7 @@ pub fn create_env_snapshot(
     let archive_path = snapshot_archive_path(&env_name, &snapshot_id, env, cwd)?;
     let meta_path = snapshot_meta_path(&env_name, &snapshot_id, env, cwd)?;
 
-    let manifest = EnvArchiveManifest {
+    let metadata = EnvArchiveMetadata {
         kind: "ocm-env-archive".to_string(),
         format_version: 1,
         exported_at: created_at,
@@ -119,7 +119,7 @@ pub fn create_env_snapshot(
     };
 
     let result = (|| {
-        write_env_archive(&manifest, &env_paths.root, &archive_path)?;
+        write_env_archive(&metadata, &env_paths.root, &archive_path)?;
         write_json(&meta_path, &snapshot)?;
         Ok(snapshot)
     })();
@@ -202,20 +202,20 @@ pub fn restore_env_snapshot(
     }
 
     let result = (|| {
-        let extracted = extract_env_archive::<EnvArchiveManifest>(
+        let extracted = extract_env_archive::<EnvArchiveMetadata>(
             Path::new(&snapshot.archive_path),
             &staging_dir,
         )?;
-        if extracted.manifest.kind != "ocm-env-archive" {
+        if extracted.metadata.kind != "ocm-env-archive" {
             return Err(format!(
                 "unsupported archive kind: {}",
-                extracted.manifest.kind
+                extracted.metadata.kind
             ));
         }
-        if extracted.manifest.format_version != 1 {
+        if extracted.metadata.format_version != 1 {
             return Err(format!(
                 "unsupported archive format version: {}",
-                extracted.manifest.format_version
+                extracted.metadata.format_version
             ));
         }
         if !path_exists(&extracted.root_dir.join(".ocm-env.json")) {
@@ -233,7 +233,7 @@ pub fn restore_env_snapshot(
             rewrite_openclaw_config_for_target(
                 &current_paths,
                 Some(Path::new(&snapshot.source_root)),
-                extracted.manifest.env.gateway_port,
+                extracted.metadata.env.gateway_port,
             )?;
             let marker = EnvMarker {
                 kind: "ocm-env-marker".to_string(),
@@ -246,12 +246,12 @@ pub fn restore_env_snapshot(
                 kind: "ocm-env".to_string(),
                 name: current.name.clone(),
                 root: current.root.clone(),
-                gateway_port: extracted.manifest.env.gateway_port,
-                service_enabled: extracted.manifest.env.service_enabled,
-                service_running: extracted.manifest.env.service_running,
-                default_runtime: extracted.manifest.env.default_runtime.clone(),
-                default_launcher: extracted.manifest.env.default_launcher.clone(),
-                protected: extracted.manifest.env.protected,
+                gateway_port: extracted.metadata.env.gateway_port,
+                service_enabled: extracted.metadata.env.service_enabled,
+                service_running: extracted.metadata.env.service_running,
+                default_runtime: extracted.metadata.env.default_runtime.clone(),
+                default_launcher: extracted.metadata.env.default_launcher.clone(),
+                protected: extracted.metadata.env.protected,
                 created_at: current.created_at,
                 updated_at: current.updated_at,
                 last_used_at: current.last_used_at,

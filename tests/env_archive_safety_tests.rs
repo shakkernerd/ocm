@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive, write_env_archive};
+use ocm::infra::archive::{EnvArchiveMetadata, extract_env_archive, write_env_archive};
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, write_text};
 
@@ -53,7 +53,7 @@ fn env_import_refuses_archives_without_the_marker_file() {
     assert!(export.status.success(), "{}", stderr(&export));
 
     let extract_dir = root.child("tampered-archive");
-    let extracted = extract_env_archive::<EnvArchiveManifest>(
+    let extracted = extract_env_archive::<EnvArchiveMetadata>(
         &cwd.join("archives/source-backup.tar"),
         &extract_dir,
     )
@@ -61,7 +61,7 @@ fn env_import_refuses_archives_without_the_marker_file() {
     fs::remove_file(extracted.root_dir.join(".ocm-env.json")).unwrap();
     let broken_archive_path = cwd.join("archives/source-without-marker.tar");
     write_env_archive(
-        &extracted.manifest,
+        &extracted.metadata,
         &extracted.root_dir,
         &broken_archive_path,
     )

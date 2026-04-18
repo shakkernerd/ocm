@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive};
+use ocm::infra::archive::{EnvArchiveMetadata, extract_env_archive};
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_text};
 
@@ -33,9 +33,9 @@ fn env_export_writes_the_default_archive_path() {
     assert!(archive_path.exists());
 
     let extract_dir = root.child("extract-default");
-    let extracted = extract_env_archive::<EnvArchiveManifest>(&archive_path, &extract_dir).unwrap();
-    assert_eq!(extracted.manifest.env.name, "source");
-    assert_eq!(extracted.manifest.env.gateway_port, Some(19789));
+    let extracted = extract_env_archive::<EnvArchiveMetadata>(&archive_path, &extract_dir).unwrap();
+    assert_eq!(extracted.metadata.env.name, "source");
+    assert_eq!(extracted.metadata.env.gateway_port, Some(19789));
     assert_eq!(
         fs::read_to_string(extracted.root_dir.join(".openclaw/workspace/notes.txt")).unwrap(),
         "hello export"

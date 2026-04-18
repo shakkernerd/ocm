@@ -9,7 +9,7 @@ use crate::env::{
     EnvMarker, EnvMarkerRepairSummary, EnvMeta, ExportEnvironmentOptions, ImportEnvironmentOptions,
 };
 use crate::infra::archive::{
-    ArchivedEnvMeta, EnvArchiveManifest, extract_env_archive, write_env_archive,
+    ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive,
 };
 
 use super::common::{
@@ -348,7 +348,7 @@ pub fn export_environment(
         ));
     }
 
-    let manifest = EnvArchiveManifest {
+    let metadata = EnvArchiveMetadata {
         kind: "ocm-env-archive".to_string(),
         format_version: 1,
         exported_at: now_utc(),
@@ -367,7 +367,7 @@ pub fn export_environment(
         },
     };
 
-    let result = write_env_archive(&manifest, &env_paths.root, &output_path);
+    let result = write_env_archive(&metadata, &env_paths.root, &output_path);
     if result.is_err() {
         let _ = fs::remove_file(&output_path);
     }
@@ -395,21 +395,21 @@ pub fn import_environment(
     }
 
     let result = (|| {
-        let extracted = extract_env_archive::<EnvArchiveManifest>(&archive_path, &staging_dir)?;
-        if extracted.manifest.kind != "ocm-env-archive" {
+        let extracted = extract_env_archive::<EnvArchiveMetadata>(&archive_path, &staging_dir)?;
+        if extracted.metadata.kind != "ocm-env-archive" {
             return Err(format!(
                 "unsupported archive kind: {}",
-                extracted.manifest.kind
+                extracted.metadata.kind
             ));
         }
-        if extracted.manifest.format_version != 1 {
+        if extracted.metadata.format_version != 1 {
             return Err(format!(
                 "unsupported archive format version: {}",
-                extracted.manifest.format_version
+                extracted.metadata.format_version
             ));
         }
 
-        let source_name = extracted.manifest.env.name.clone();
+        let source_name = extracted.metadata.env.name.clone();
         let name = if let Some(name) = options.name.as_deref() {
             validate_name(name, "Environment name")?
         } else {
@@ -448,8 +448,8 @@ pub fn import_environment(
             copy_dir_recursive(&extracted.root_dir, &target_paths.root)?;
             rewrite_openclaw_config_for_target(
                 &target_paths,
-                extracted.manifest.env.source_root.as_deref().map(Path::new),
-                extracted.manifest.env.gateway_port,
+                extracted.metadata.env.source_root.as_deref().map(Path::new),
+                extracted.metadata.env.gateway_port,
             )?;
             clear_nonportable_runtime_state(&target_paths)?;
 
@@ -465,12 +465,12 @@ pub fn import_environment(
                 kind: "ocm-env".to_string(),
                 name: name.clone(),
                 root: display_path(&target_paths.root),
-                gateway_port: extracted.manifest.env.gateway_port,
-                service_enabled: extracted.manifest.env.service_enabled,
-                service_running: extracted.manifest.env.service_running,
-                default_runtime: extracted.manifest.env.default_runtime.clone(),
-                default_launcher: extracted.manifest.env.default_launcher.clone(),
-                protected: extracted.manifest.env.protected,
+                gateway_port: extracted.metadata.env.gateway_port,
+                service_enabled: extracted.metadata.env.service_enabled,
+                service_running: extracted.metadata.env.service_running,
+                default_runtime: extracted.metadata.env.default_runtime.clone(),
+                default_launcher: extracted.metadata.env.default_launcher.clone(),
+                protected: extracted.metadata.env.protected,
                 created_at,
                 updated_at: created_at,
                 last_used_at: None,

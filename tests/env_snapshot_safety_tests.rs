@@ -3,7 +3,7 @@ mod support;
 use std::fs;
 use std::path::Path;
 
-use ocm::infra::archive::{EnvArchiveManifest, extract_env_archive, write_env_archive};
+use ocm::infra::archive::{EnvArchiveMetadata, extract_env_archive, write_env_archive};
 use ocm::store::list_env_snapshots;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr};
@@ -69,14 +69,14 @@ fn env_snapshot_restore_refuses_tampered_snapshot_archives_without_markers() {
     let snapshots = list_env_snapshots("source", &env, &cwd).unwrap();
     let snapshot_meta = &snapshots[0];
     let extract_dir = root.child("snapshot-extracted");
-    let extracted = extract_env_archive::<EnvArchiveManifest>(
+    let extracted = extract_env_archive::<EnvArchiveMetadata>(
         Path::new(&snapshot_meta.archive_path),
         &extract_dir,
     )
     .unwrap();
     fs::remove_file(extracted.root_dir.join(".ocm-env.json")).unwrap();
     write_env_archive(
-        &extracted.manifest,
+        &extracted.metadata,
         &extracted.root_dir,
         Path::new(&snapshot_meta.archive_path),
     )
