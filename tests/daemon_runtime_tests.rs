@@ -234,7 +234,6 @@ fn service_state_plans_runnable_children_and_skips_disabled_envs() {
         .find(|child| child["envName"] == "demo")
         .unwrap();
     assert_eq!(demo["bindingKind"], "launcher");
-    assert_eq!(demo["startMode"], "on-demand");
     assert_eq!(demo["childPort"], 18789);
     assert!(
         demo["processEnv"]["OPENCLAW_HOME"]
@@ -585,6 +584,101 @@ fn daemon_stops_a_running_child_after_service_stop() {
     wait_for_runtime_children(&runtime_path, 0, None, Duration::from_secs(5))
         .expect("daemon runtime state did not clear after service stop");
     assert!(wait_for_file(&stopped, Duration::from_secs(5)));
+
+    stop_process(&mut daemon);
+}
+
+#[test]
+fn live_runtime_changes_recreate_missing_supervisor_state() {
+    let root = TestDir::new("daemon-runtime-recovers-missing-state");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+    let state_path = root.child("ocm-home/supervisor/state.json");
+
+    let first_started = root.child("first-started.txt");
+    let second_started = root.child("second-started.txt");
+    let first_script = root.child("bin/first-openclaw");
+    write_executable_script(
+        &first_script,
+        &format!(
+            "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&first_started),
+        ),
+    );
+    let second_script = root.child("bin/second-openclaw");
+    write_executable_script(
+        &second_script,
+        &format!(
+            "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&second_started),
+        ),
+    );
+
+    let first_launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "first",
+            "--command",
+            &path_string(&first_script),
+        ],
+    );
+    assert!(
+        first_launcher.status.success(),
+        "{}",
+        stderr(&first_launcher)
+    );
+    let second_launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "second",
+            "--command",
+            &path_string(&second_script),
+        ],
+    );
+    assert!(
+        second_launcher.status.success(),
+        "{}",
+        stderr(&second_launcher)
+    );
+
+    let demo = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "first"],
+    );
+    assert!(demo.status.success(), "{}", stderr(&demo));
+    set_service_enabled(&cwd, &env, "demo", true);
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    assert!(wait_for_file(&first_started, Duration::from_secs(5)));
+    wait_for_runtime_children(&runtime_path, 1, Some("demo"), Duration::from_secs(5))
+        .expect("daemon runtime state did not report the first child");
+
+    fs::remove_file(&state_path).unwrap();
+    assert!(!state_path.exists());
+
+    let extra = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "extra", "--launcher", "second"],
+    );
+    assert!(extra.status.success(), "{}", stderr(&extra));
+    set_service_enabled(&cwd, &env, "extra", true);
+
+    assert!(wait_for_file(&state_path, Duration::from_secs(5)));
+    wait_for_runtime_children(&runtime_path, 2, Some("extra"), Duration::from_secs(5))
+        .expect("daemon did not recover after the supervisor state file was recreated");
+    assert!(wait_for_file(&second_started, Duration::from_secs(5)));
 
     stop_process(&mut daemon);
 }

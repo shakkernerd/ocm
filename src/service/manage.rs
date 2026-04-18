@@ -144,6 +144,7 @@ fn ensure_gateway_binding(
 
 fn ensure_supervisor_daemon(env: &BTreeMap<String, String>, cwd: &Path) -> Result<(), String> {
     let supervisor = SupervisorService::new(env, cwd);
+    supervisor.sync()?;
     let status = supervisor.daemon_status()?;
     if status.running {
         return Ok(());

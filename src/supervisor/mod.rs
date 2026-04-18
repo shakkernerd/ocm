@@ -27,7 +27,6 @@ use crate::store::{
 const SUPERVISOR_STATE_KIND: &str = "ocm-supervisor-state";
 const SUPERVISOR_RUNTIME_KIND: &str = "ocm-supervisor-runtime";
 const DAEMON_SERVICE_NAME: &str = "ocm";
-const DEFAULT_START_MODE: &str = "on-demand";
 const SUPERVISOR_POLL_INTERVAL_MS: u64 = 200;
 const SUPERVISOR_RESTART_DELAY_MS: u64 = 400;
 const DEFAULT_SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
@@ -47,7 +46,6 @@ const SERVICE_EXTRA_ENV_KEYS: [&str; 2] = ["NODE_EXTRA_CA_CERTS", "NODE_USE_SYST
 #[serde(rename_all = "camelCase")]
 pub struct SupervisorChildSpec {
     pub env_name: String,
-    pub start_mode: String,
     pub binding_kind: String,
     pub binding_name: String,
     pub command: Option<String>,
@@ -182,7 +180,8 @@ pub fn sync_supervisor_if_present(
     cwd: &Path,
 ) -> Result<bool, String> {
     let state_path = supervisor_state_path(env, cwd)?;
-    if !state_path.exists() {
+    let runtime_path = supervisor_runtime_path(env, cwd)?;
+    if !state_path.exists() && !runtime_path.exists() {
         return Ok(false);
     }
     SupervisorService::new(env, cwd).sync()?;
@@ -290,7 +289,6 @@ impl<'a> SupervisorService<'a> {
                         .map_err(|_| format!("failed to parse child port for env \"{name}\""))?;
                     children.push(SupervisorChildSpec {
                         env_name: name,
-                        start_mode: DEFAULT_START_MODE.to_string(),
                         binding_kind: process.binding_kind,
                         binding_name: process.binding_name,
                         command: process.command,
