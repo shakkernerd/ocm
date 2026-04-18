@@ -1753,7 +1753,7 @@ mod tests {
             service_installed: true,
             service_loaded: true,
             service_running: false,
-            service_label: "supervisor".to_string(),
+            service_label: "ocm".to_string(),
             blockers: if blocked {
                 vec!["manual review required before destroying this env".to_string()]
             } else {

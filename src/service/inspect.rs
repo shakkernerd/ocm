@@ -335,17 +335,17 @@ fn service_issue(
         return None;
     }
     if !daemon.installed {
-        return Some("supervisor daemon is not installed".to_string());
+        return Some("OCM background service is not installed".to_string());
     }
     if desired_running {
         if let Some(reason) = skipped_reason {
             return Some(reason.clone());
         }
         if !daemon.running {
-            return Some("supervisor daemon is not running".to_string());
+            return Some("OCM background service is not running".to_string());
         }
         if !running {
-            return Some("env child is not running under the supervisor".to_string());
+            return Some("env child is not running under the OCM background service".to_string());
         }
     }
     None

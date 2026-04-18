@@ -15,7 +15,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(help.status.success(), "{}", stderr(&help));
     let output = stdout(&help);
     assert!(output.contains(&format!("OpenClaw Manager v{}", env!("CARGO_PKG_VERSION"))));
-    assert!(output.contains("Manage isolated OpenClaw environments, releases, runtimes, launchers, services, and supervisor state."));
+    assert!(output.contains("Manage isolated OpenClaw environments, releases, runtimes, launchers, and background services."));
     assert!(output.contains("ocm [--color <mode>] <command> [args]"));
     assert!(output.contains("Fast path: create or reuse an env and keep it running"));
     assert!(output.contains("Guided setup for release and local-dev flows"));
@@ -24,7 +24,6 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("Update the installed ocm binary"));
     assert!(output.contains("Bring an existing plain OpenClaw home into OCM"));
     assert!(output.contains("Inspect and control the explicit OpenClaw adoption flow"));
-    assert!(output.contains("Supervisor state for many env-scoped gateway runtimes"));
     assert!(output.contains("--color <mode>"));
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
@@ -52,7 +51,6 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("ocm help start"));
     assert!(output.contains("ocm help env"));
     assert!(output.contains("ocm help release"));
-    assert!(output.contains("ocm help supervisor"));
     assert!(output.contains("ocm help runtime install"));
     assert!(output.contains("ocm --color always env list"));
     assert!(!output.contains("ocm help sync"));
@@ -452,6 +450,7 @@ fn env_and_service_status_style_help_mentions_raw_mode() {
     let output = stdout(&service_install);
     assert!(output.contains("ocm service install <env> [--raw] [--json]"));
     assert!(output.contains("Use `service start` to start the env after it is installed."));
+    assert!(output.contains("shared OCM background service"));
 }
 
 #[test]
@@ -522,7 +521,7 @@ fn runtime_and_service_leaf_help_are_command_specific() {
     let service = run_ocm(&cwd, &env, &["service", "start", "--help"]);
     assert!(service.status.success(), "{}", stderr(&service));
     let output = stdout(&service);
-    assert!(output.contains("Start a service"));
+    assert!(output.contains("Start an env in the background"));
     assert!(output.contains("ocm service start <env> [--raw] [--json]"));
 }
 

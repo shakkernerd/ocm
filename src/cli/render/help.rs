@@ -75,7 +75,7 @@ pub fn root_help(cmd: &str) -> String {
     let lines = vec![
         format!("OpenClaw Manager v{}", env!("CARGO_PKG_VERSION")),
         String::new(),
-        "Manage isolated OpenClaw environments, releases, runtimes, launchers, services, and supervisor state."
+        "Manage isolated OpenClaw environments, releases, runtimes, launchers, and background services."
             .to_string(),
     ];
     let mut lines = lines;
@@ -128,11 +128,7 @@ pub fn root_help(cmd: &str) -> String {
                 "runtime",
                 "Registered and installer-managed OpenClaw runtimes",
             ),
-            (
-                "supervisor",
-                "Supervisor state for many env-scoped gateway runtimes",
-            ),
-            ("service", "Persistent OpenClaw services for environments"),
+            ("service", "Background OpenClaw services for environments"),
             ("init", "Shell setup snippets for using ocm"),
             ("help", "Show help for a command or command group"),
             ("--version", "Show the installed ocm version"),
@@ -168,7 +164,6 @@ pub fn root_help(cmd: &str) -> String {
             format!("{cmd} help self"),
             format!("{cmd} help env"),
             format!("{cmd} help release"),
-            format!("{cmd} help supervisor"),
             format!("{cmd} help service"),
             format!("{cmd} help runtime install"),
             format!("{cmd} --color always env list"),
@@ -803,7 +798,7 @@ pub fn doctor_command_help(cmd: &str, action: &str) -> Option<String> {
 pub fn service_help(cmd: &str) -> String {
     render_group(
         "Service commands",
-        "Manage env gateway service policy through the single OCM supervisor daemon.",
+        "Manage background OpenClaw envs through the single OCM background service.",
         vec![
             format!("{cmd} service <command> [args]"),
             format!("{cmd} help service <command>"),
@@ -820,14 +815,11 @@ pub fn service_help(cmd: &str) -> String {
             (
                 "Lifecycle",
                 &[
-                    (
-                        "install",
-                        "Enable an env under the supervisor without starting it",
-                    ),
-                    ("start", "Start an env service"),
-                    ("stop", "Stop an env service without uninstalling it"),
-                    ("restart", "Restart one env under the supervisor"),
-                    ("uninstall", "Disable an env under the supervisor"),
+                    ("install", "Enable an env without starting it yet"),
+                    ("start", "Start an env in the background"),
+                    ("stop", "Stop an env without disabling it"),
+                    ("restart", "Restart one env in the background"),
+                    ("uninstall", "Disable an env in the background"),
                 ],
             ),
         ],
@@ -1853,8 +1845,8 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
 pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
     Some(match action {
         "install" => render_leaf(
-            "Install an env service",
-            "Enable one env under the single OCM supervisor without marking it as running yet.",
+            "Enable background service for an env",
+            "Enable one env in the shared OCM background service without marking it as running yet.",
             vec![format!("{cmd} service install <env> [--raw] [--json]")],
             &[
                 (
@@ -1866,7 +1858,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!("{cmd} service install mira")],
             &[
                 "Use `service start` to start the env after it is installed.",
-                "The shared supervisor daemon is installed automatically when needed.",
+                "The shared OCM background service is installed automatically when needed.",
             ],
         ),
         "list" => render_leaf(
@@ -1884,8 +1876,8 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             &["TTY output renders a table by default. Piped output stays plain."],
         ),
         "status" => render_leaf(
-            "Show service status",
-            "Inspect one env service or every environment service.",
+            "Show background service status",
+            "Inspect one env or every env managed by the background service.",
             vec![
                 format!("{cmd} service status <env> [--raw] [--json]"),
                 format!("{cmd} service status --all [--raw] [--json]"),
@@ -1903,8 +1895,8 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             &["TTY output uses cards for one env and a table for `--all` by default."],
         ),
         "logs" => render_leaf(
-            "Read service logs",
-            "Print service stdout or stderr logs for one env child managed by the supervisor.",
+            "Read background service logs",
+            "Print stdout or stderr logs for one env child managed by the background service.",
             vec![format!(
                 "{cmd} service logs <env> [--stderr] [--tail <count>] [--json]"
             )],
@@ -1920,8 +1912,8 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             &["Plain-text output is intentionally raw so it can be piped directly."],
         ),
         "start" => render_leaf(
-            "Start a service",
-            "Mark one env as running under the supervisor and ensure the supervisor daemon is running.",
+            "Start an env in the background",
+            "Mark one env as running and ensure the shared OCM background service is running.",
             vec![format!("{cmd} service start <env> [--raw] [--json]")],
             &[
                 (
@@ -1934,8 +1926,8 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             &[],
         ),
         "stop" => render_leaf(
-            "Stop a service",
-            "Mark one env as stopped under the supervisor without uninstalling it.",
+            "Stop an env in the background",
+            "Mark one env as stopped without disabling it.",
             vec![format!("{cmd} service stop <env> [--raw] [--json]")],
             &[
                 (
@@ -1948,8 +1940,8 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             &[],
         ),
         "restart" => render_leaf(
-            "Restart a service",
-            "Restart one env under the supervisor.",
+            "Restart an env in the background",
+            "Restart one env under the shared OCM background service.",
             vec![format!("{cmd} service restart <env> [--raw] [--json]")],
             &[
                 (
@@ -1962,8 +1954,8 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             &[],
         ),
         "uninstall" => render_leaf(
-            "Uninstall a service",
-            "Disable one env under the supervisor.",
+            "Disable background service for an env",
+            "Disable one env in the shared OCM background service.",
             vec![format!("{cmd} service uninstall <env> [--raw] [--json]")],
             &[
                 (
@@ -1973,7 +1965,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the action summary as JSON"),
             ],
             vec![format!("{cmd} service uninstall mira")],
-            &["This does not remove the shared supervisor daemon."],
+            &["This does not remove the shared OCM background service."],
         ),
         _ => return None,
     })

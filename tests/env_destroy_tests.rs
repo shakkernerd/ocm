@@ -80,9 +80,9 @@ fn env_destroy_preview_reports_service_snapshot_and_env_steps() {
     let output = stdout(&preview);
     assert!(output.contains("Destroy preview for env demo"));
     assert!(output.contains("snapshots: 1"));
-    assert!(output.contains("service: supervisor"));
+    assert!(output.contains("service: ocm"));
     assert!(output.contains("snapshots: remove 1 env snapshot(s)"));
-    assert!(output.contains("service: disable env service under the supervisor"));
+    assert!(output.contains("service: disable env service in the OCM background service"));
     assert!(output.contains("env: remove env root and metadata"));
     assert!(output.contains("re-run with --yes to destroy it"));
 
@@ -135,7 +135,7 @@ fn env_destroy_yes_uninstalls_service_removes_snapshots_and_deletes_env() {
     let output = stdout(&destroy);
     assert!(output.contains("Destroyed env demo"));
     assert!(output.contains("snapshots removed: 1"));
-    assert!(output.contains("service removed: supervisor"));
+    assert!(output.contains("service removed: ocm"));
 
     let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
     assert!(!show.status.success());

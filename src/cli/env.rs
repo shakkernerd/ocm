@@ -834,7 +834,7 @@ impl Cli {
         if service.installed || service.loaded || service.running {
             steps.push(EnvDestroyStepSummary {
                 kind: "service".to_string(),
-                description: "disable env service under the supervisor".to_string(),
+                description: "disable env service in the OCM background service".to_string(),
             });
         }
         steps.push(EnvDestroyStepSummary {
@@ -854,7 +854,7 @@ impl Cli {
             service_installed: service.installed,
             service_loaded: service.loaded,
             service_running: service.running,
-            service_label: "supervisor".to_string(),
+            service_label: "ocm".to_string(),
             blockers,
             steps,
             snapshots_removed: 0,

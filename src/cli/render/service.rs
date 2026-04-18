@@ -112,14 +112,14 @@ fn service_list_with_width(
         .collect::<Vec<_>>();
 
     let mut lines = render_table(
-        &["Env", "Binding", "Port", "Service", "Daemon"],
+        &["Env", "Binding", "Port", "Service", "OCM"],
         &rows,
         profile.color,
     );
     lines.push(String::new());
     lines.push(paint(
         &format!(
-            "Supervisor daemon: {}",
+            "OCM background service: {}",
             daemon_state(
                 summary.daemon_installed,
                 summary.daemon_loaded,
@@ -134,7 +134,7 @@ fn service_list_with_width(
 
 fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
     let mut lines = vec![format!(
-        "supervisor state={}",
+        "ocmService state={}",
         daemon_state(
             summary.daemon_installed,
             summary.daemon_loaded,
@@ -197,7 +197,7 @@ pub fn service_status(
             KeyValueRow::plain("Type", summary.service_kind.clone()),
             KeyValueRow::accent("Port", summary.gateway_port.to_string()),
             KeyValueRow::new("State", service, state_tone(service)),
-            KeyValueRow::new("Daemon", daemon, state_tone(daemon)),
+            KeyValueRow::new("OCM service", daemon, state_tone(daemon)),
             KeyValueRow::plain("Desired running", summary.desired_running.to_string()),
         ],
         profile.color,
@@ -284,10 +284,7 @@ fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) ->
                 "Restart",
                 format!("{command_example} service restart {}", summary.env_name),
             ),
-            KeyValueRow::plain(
-                "Inspect daemon",
-                format!("{command_example} supervisor status"),
-            ),
+            KeyValueRow::plain("Inspect", format!("{command_example} service list")),
         ];
     }
 
@@ -311,7 +308,7 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
         format!("installed: {}", summary.installed),
         format!("desiredRunning: {}", summary.desired_running),
         format!("running: {}", summary.running),
-        format!("daemon: {daemon}"),
+        format!("ocmService: {daemon}"),
         format!(
             "childPid: {}",
             summary
@@ -510,7 +507,11 @@ mod tests {
             RenderProfile::pretty(false),
         );
         assert!(lines.iter().any(|line| line.contains("demo")));
-        assert!(lines.iter().any(|line| line.contains("Supervisor daemon")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("OCM background service"))
+        );
     }
 
     #[test]
