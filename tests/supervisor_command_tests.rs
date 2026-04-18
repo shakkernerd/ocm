@@ -53,9 +53,9 @@ fn stop_process(child: &mut Child) {
 }
 
 fn set_service_enabled(cwd: &Path, env: &BTreeMap<String, String>, name: &str, enabled: bool) {
-    EnvironmentService::new(env, cwd)
-        .set_service_enabled(name, enabled)
-        .unwrap();
+    let service = EnvironmentService::new(env, cwd);
+    service.set_service_enabled(name, enabled).unwrap();
+    service.set_service_running(name, enabled).unwrap();
 }
 
 fn setup_supervisor_fixture(
@@ -232,6 +232,34 @@ fn supervisor_plan_reports_runnable_children_and_skipped_envs() {
     assert_eq!(skipped.len(), 1);
     assert_eq!(skipped[0]["envName"], "bare");
     assert_eq!(skipped[0]["reason"], "service is disabled");
+}
+
+#[test]
+fn supervisor_plan_skips_enabled_envs_that_are_stopped() {
+    let root = TestDir::new("supervisor-plan-stopped");
+    let (cwd, env) = setup_supervisor_fixture(&root);
+    EnvironmentService::new(&env, &cwd)
+        .set_service_running("demo", false)
+        .unwrap();
+
+    let output = run_ocm(&cwd, &env, &["supervisor", "plan", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        !body["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|child| child["envName"] == "demo")
+    );
+    assert!(
+        body["skippedEnvs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["envName"] == "demo" && entry["reason"] == "service is stopped")
+    );
 }
 
 #[test]

@@ -73,6 +73,7 @@ pub fn summarize_env(meta: &EnvMeta) -> EnvSummary {
         workspace_dir: display_path(&paths.workspace_dir),
         gateway_port: meta.gateway_port,
         service_enabled: meta.service_enabled,
+        service_running: meta.service_running,
         default_runtime: meta.default_runtime.clone(),
         default_launcher: meta.default_launcher.clone(),
         protected: meta.protected,

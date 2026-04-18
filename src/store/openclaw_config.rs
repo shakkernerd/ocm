@@ -521,6 +521,7 @@ mod tests {
             root: root.to_string(),
             gateway_port,
             service_enabled: true,
+            service_running: true,
             default_runtime: None,
             default_launcher: None,
             protected: false,

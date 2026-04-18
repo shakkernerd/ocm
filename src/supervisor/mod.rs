@@ -399,6 +399,13 @@ impl<'a> SupervisorService<'a> {
                 });
                 continue;
             }
+            if !env_meta.service_running {
+                skipped_envs.push(SkippedSupervisorEnv {
+                    env_name: name,
+                    reason: "service is stopped".to_string(),
+                });
+                continue;
+            }
             match env_service.resolve_gateway_process(&name, false) {
                 Ok(process) => {
                     let paths = derive_env_paths(Path::new(&env_meta.root));

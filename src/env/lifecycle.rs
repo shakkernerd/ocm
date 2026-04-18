@@ -22,6 +22,10 @@ pub fn default_service_enabled() -> bool {
     true
 }
 
+pub fn default_service_running() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvMeta {
@@ -31,6 +35,8 @@ pub struct EnvMeta {
     pub gateway_port: Option<u32>,
     #[serde(default = "default_service_enabled")]
     pub service_enabled: bool,
+    #[serde(default = "default_service_running")]
+    pub service_running: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
@@ -53,6 +59,7 @@ pub struct EnvSummary {
     pub workspace_dir: String,
     pub gateway_port: Option<u32>,
     pub service_enabled: bool,
+    pub service_running: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
@@ -77,6 +84,7 @@ pub struct CreateEnvironmentOptions {
     pub root: Option<String>,
     pub gateway_port: Option<u32>,
     pub service_enabled: bool,
+    pub service_running: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
@@ -242,6 +250,18 @@ impl<'a> EnvironmentService<'a> {
     ) -> Result<EnvMeta, String> {
         let mut meta = get_environment(name, self.env, self.cwd)?;
         meta.service_enabled = service_enabled;
+        let saved = save_environment(meta, self.env, self.cwd)?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(saved)
+    }
+
+    pub fn set_service_running(
+        &self,
+        name: &str,
+        service_running: bool,
+    ) -> Result<EnvMeta, String> {
+        let mut meta = get_environment(name, self.env, self.cwd)?;
+        meta.service_running = service_running;
         let saved = save_environment(meta, self.env, self.cwd)?;
         sync_supervisor_if_present(self.env, self.cwd)?;
         Ok(saved)

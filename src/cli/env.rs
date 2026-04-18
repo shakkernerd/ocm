@@ -271,6 +271,7 @@ impl Cli {
                 root,
                 gateway_port,
                 service_enabled: false,
+                service_running: false,
                 default_runtime: runtime_name,
                 default_launcher: launcher_name,
                 protected: protect,

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::env::{
     CreateEnvSnapshotOptions, EnvMarker, EnvMeta, EnvSnapshotRemoveSummary,
     EnvSnapshotRestoreSummary, EnvSnapshotSummary, RemoveEnvSnapshotOptions,
-    RestoreEnvSnapshotOptions, default_service_enabled,
+    RestoreEnvSnapshotOptions, default_service_enabled, default_service_running,
 };
 use crate::infra::archive::{
     ArchivedEnvMeta, EnvArchiveManifest, extract_env_archive, write_env_archive,
@@ -39,6 +39,8 @@ pub struct EnvSnapshotMeta {
     pub gateway_port: Option<u32>,
     #[serde(default = "default_service_enabled")]
     pub service_enabled: bool,
+    #[serde(default = "default_service_running")]
+    pub service_running: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
@@ -90,6 +92,7 @@ pub fn create_env_snapshot(
             source_root: Some(meta.root.clone()),
             gateway_port: meta.gateway_port,
             service_enabled: meta.service_enabled,
+            service_running: meta.service_running,
             default_runtime: meta.default_runtime.clone(),
             default_launcher: meta.default_launcher.clone(),
             protected: meta.protected,
@@ -108,6 +111,7 @@ pub fn create_env_snapshot(
         source_root: meta.root.clone(),
         gateway_port: meta.gateway_port,
         service_enabled: meta.service_enabled,
+        service_running: meta.service_running,
         default_runtime: meta.default_runtime.clone(),
         default_launcher: meta.default_launcher.clone(),
         protected: meta.protected,
@@ -159,6 +163,7 @@ pub fn summarize_snapshot(meta: &EnvSnapshotMeta) -> EnvSnapshotSummary {
         source_root: meta.source_root.clone(),
         gateway_port: meta.gateway_port,
         service_enabled: meta.service_enabled,
+        service_running: meta.service_running,
         default_runtime: meta.default_runtime.clone(),
         default_launcher: meta.default_launcher.clone(),
         protected: meta.protected,
@@ -243,6 +248,7 @@ pub fn restore_env_snapshot(
                 root: current.root.clone(),
                 gateway_port: extracted.manifest.env.gateway_port,
                 service_enabled: extracted.manifest.env.service_enabled,
+                service_running: extracted.manifest.env.service_running,
                 default_runtime: extracted.manifest.env.default_runtime.clone(),
                 default_launcher: extracted.manifest.env.default_launcher.clone(),
                 protected: extracted.manifest.env.protected,

@@ -143,6 +143,7 @@ fn migrate_plain_openclaw_home_inner(
         root: options.root.clone(),
         gateway_port: None,
         service_enabled: false,
+        service_running: false,
         default_runtime: None,
         default_launcher: None,
         protected: false,

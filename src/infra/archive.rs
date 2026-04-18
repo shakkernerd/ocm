@@ -9,7 +9,7 @@ use tar::{Archive, Builder, Header};
 use time::OffsetDateTime;
 use zip::ZipArchive;
 
-use crate::env::default_service_enabled;
+use crate::env::{default_service_enabled, default_service_running};
 
 pub const ENV_ARCHIVE_MANIFEST_PATH: &str = "meta/env.json";
 pub const ENV_ARCHIVE_ROOT_DIR: &str = "root";
@@ -23,6 +23,8 @@ pub struct ArchivedEnvMeta {
     pub gateway_port: Option<u32>,
     #[serde(default = "default_service_enabled")]
     pub service_enabled: bool,
+    #[serde(default = "default_service_running")]
+    pub service_running: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
@@ -195,6 +197,7 @@ mod tests {
                 source_root: Some(source_root.display().to_string()),
                 gateway_port: Some(19789),
                 service_enabled: true,
+                service_running: true,
                 default_runtime: Some("stable".to_string()),
                 default_launcher: Some("shell".to_string()),
                 protected: true,

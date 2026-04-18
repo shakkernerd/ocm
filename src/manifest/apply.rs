@@ -53,6 +53,7 @@ pub fn ensure_manifest_env(
         root: None,
         gateway_port: None,
         service_enabled: false,
+        service_running: false,
         default_runtime: None,
         default_launcher: None,
         protected: false,
