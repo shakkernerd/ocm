@@ -93,7 +93,7 @@ fn unknown_service_commands_use_service_specific_errors() {
 }
 
 #[test]
-fn service_install_enables_the_env_and_installs_the_supervisor_daemon() {
+fn service_install_enables_the_env_and_installs_the_ocm_service() {
     let root = TestDir::new("service-install");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -112,11 +112,11 @@ fn service_install_enables_the_env_and_installs_the_supervisor_daemon() {
     assert_eq!(env_body["serviceEnabled"], true);
     assert_eq!(env_body["serviceRunning"], false);
 
-    let supervisor_path = managed_service_definition_path(&env, &cwd, "supervisor");
+    let service_path = managed_service_definition_path(&env, &cwd, "ocm");
     assert!(
-        supervisor_path.exists(),
+        service_path.exists(),
         "missing {}",
-        path_string(&supervisor_path)
+        path_string(&service_path)
     );
 }
 
@@ -205,7 +205,7 @@ fn service_uninstall_disables_the_env_service() {
 }
 
 #[test]
-fn service_list_reports_env_and_supervisor_state_in_json() {
+fn service_list_reports_env_and_ocm_service_state_in_json() {
     let root = TestDir::new("service-list");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -258,7 +258,7 @@ fn service_logs_read_from_the_planned_child_log_paths() {
 }
 
 #[test]
-fn systemd_service_install_writes_the_supervisor_unit() {
+fn systemd_service_install_writes_the_ocm_unit() {
     let root = TestDir::new("service-systemd-install");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -270,13 +270,13 @@ fn systemd_service_install_writes_the_supervisor_unit() {
     let body = json_output(&output);
     assert_eq!(body["installed"], true);
 
-    let supervisor_path = managed_service_definition_path(&env, &cwd, "supervisor");
+    let service_path = managed_service_definition_path(&env, &cwd, "ocm");
     assert!(
-        supervisor_path.exists(),
+        service_path.exists(),
         "missing {}",
-        path_string(&supervisor_path)
+        path_string(&service_path)
     );
-    let unit = fs::read_to_string(supervisor_path).unwrap();
+    let unit = fs::read_to_string(service_path).unwrap();
     assert!(unit.contains("__daemon run"));
 }
 

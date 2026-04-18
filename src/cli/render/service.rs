@@ -496,7 +496,7 @@ mod tests {
     fn service_list_pretty_renders_table() {
         let lines = service_list(
             &ServiceSummaryList {
-                daemon_label: "ocm.supervisor".to_string(),
+                daemon_label: "ocm.ocm".to_string(),
                 daemon_installed: true,
                 daemon_loaded: true,
                 daemon_running: true,

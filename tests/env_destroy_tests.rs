@@ -128,7 +128,7 @@ fn env_destroy_yes_uninstalls_service_removes_snapshots_and_deletes_env() {
 
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert!(install.status.success(), "{}", stderr(&install));
-    let supervisor_path = managed_service_definition_path(&env, &cwd, "supervisor");
+    let service_path = managed_service_definition_path(&env, &cwd, "ocm");
 
     let destroy = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--yes"]);
     assert!(destroy.status.success(), "{}", stderr(&destroy));
@@ -141,7 +141,7 @@ fn env_destroy_yes_uninstalls_service_removes_snapshots_and_deletes_env() {
     assert!(!show.status.success());
     assert!(stderr(&show).contains("environment \"demo\" does not exist"));
 
-    assert!(supervisor_path.exists());
+    assert!(service_path.exists());
     assert!(!root.child("ocm-home/snapshots/demo").exists());
 }
 

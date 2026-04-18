@@ -27,7 +27,7 @@ use crate::store::{
 
 const SUPERVISOR_STATE_KIND: &str = "ocm-supervisor-state";
 const SUPERVISOR_RUNTIME_KIND: &str = "ocm-supervisor-runtime";
-const SUPERVISOR_SERVICE_NAME: &str = "supervisor";
+const DAEMON_SERVICE_NAME: &str = "ocm";
 const DEFAULT_START_MODE: &str = "on-demand";
 const SUPERVISOR_POLL_INTERVAL_MS: u64 = 200;
 const SUPERVISOR_RESTART_DELAY_MS: u64 = 400;
@@ -378,13 +378,13 @@ impl<'a> SupervisorService<'a> {
     }
 
     pub fn stop_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
-        let identity = managed_service_identity(SUPERVISOR_SERVICE_NAME, self.env, self.cwd)?;
+        let identity = managed_service_identity(DAEMON_SERVICE_NAME, self.env, self.cwd)?;
         stop_managed_service(&identity.label, self.env)?;
         self.daemon_summary("stop")
     }
 
     pub fn uninstall_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
-        let identity = managed_service_identity(SUPERVISOR_SERVICE_NAME, self.env, self.cwd)?;
+        let identity = managed_service_identity(DAEMON_SERVICE_NAME, self.env, self.cwd)?;
         uninstall_managed_service(&identity.label, self.env)?;
         if identity.definition_path.exists() {
             fs::remove_file(&identity.definition_path).map_err(|error| error.to_string())?;
@@ -544,7 +544,7 @@ impl<'a> SupervisorService<'a> {
         ensure_store(self.env, self.cwd)?;
         let ocm_home = resolve_ocm_home(self.env, self.cwd)?;
         let state_path = supervisor_state_path(self.env, self.cwd)?;
-        let identity = managed_service_identity(SUPERVISOR_SERVICE_NAME, self.env, self.cwd)?;
+        let identity = managed_service_identity(DAEMON_SERVICE_NAME, self.env, self.cwd)?;
         let logs_dir = supervisor_logs_dir(self.env, self.cwd)?;
         let stdout_path = logs_dir.join("daemon.stdout.log");
         let stderr_path = logs_dir.join("daemon.stderr.log");
@@ -570,14 +570,14 @@ impl<'a> SupervisorService<'a> {
 
     fn supervisor_daemon_definition(&self) -> Result<ManagedServiceDefinition, String> {
         let ocm_home = resolve_ocm_home(self.env, self.cwd)?;
-        let identity = managed_service_identity(SUPERVISOR_SERVICE_NAME, self.env, self.cwd)?;
+        let identity = managed_service_identity(DAEMON_SERVICE_NAME, self.env, self.cwd)?;
         let logs_dir = supervisor_logs_dir(self.env, self.cwd)?;
         let executable_path = self.supervisor_executable_path()?;
 
         Ok(ManagedServiceDefinition {
             label: identity.label,
             description: format!(
-                "OCM supervisor service for store {}",
+                "OCM background service for store {}",
                 display_path(&ocm_home)
             ),
             definition_path: identity.definition_path,
@@ -595,7 +595,9 @@ impl<'a> SupervisorService<'a> {
 
     fn supervisor_executable_path(&self) -> Result<PathBuf, String> {
         std::env::current_exe().map_err(|error| {
-            format!("failed to resolve the current ocm executable for supervisor service: {error}")
+            format!(
+                "failed to resolve the current ocm executable for the OCM background service: {error}"
+            )
         })
     }
 
@@ -607,7 +609,7 @@ impl<'a> SupervisorService<'a> {
         let mut child_results = Vec::with_capacity(state.children.len());
         for spec in state.children {
             eprintln!(
-                "ocm supervisor: starting {} ({})",
+                "ocm service: starting {} ({})",
                 spec.env_name,
                 child_binding_label(&spec)
             );
@@ -637,7 +639,7 @@ impl<'a> SupervisorService<'a> {
         ctrlc::set_handler(move || {
             signal_flag.store(true, Ordering::SeqCst);
         })
-        .map_err(|error| format!("failed to install supervisor signal handler: {error}"))?;
+        .map_err(|error| format!("failed to install service signal handler: {error}"))?;
 
         let runtime_path = supervisor_runtime_path(self.env, self.cwd)?;
         let mut active_state = state;
@@ -680,7 +682,7 @@ impl<'a> SupervisorService<'a> {
                 };
                 write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
                 eprintln!(
-                    "ocm supervisor: {} exited with {}; restarting",
+                    "ocm service: {} exited with {}; restarting",
                     previous_child.spec.env_name,
                     exit_code
                         .map(|code| code.to_string())
@@ -754,7 +756,7 @@ fn spawn_running_child(
     restart_count: usize,
 ) -> Result<RunningSupervisorChild, String> {
     eprintln!(
-        "ocm supervisor: starting {} ({})",
+        "ocm service: starting {} ({})",
         spec.env_name,
         child_binding_label(&spec)
     );
@@ -768,7 +770,7 @@ fn spawn_running_child(
 fn spawn_supervisor_child(spec: &SupervisorChildSpec) -> Result<Child, String> {
     let Some(program) = spec.program_arguments.first() else {
         return Err(format!(
-            "supervisor child env \"{}\" is missing program arguments",
+            "service child env \"{}\" is missing program arguments",
             spec.env_name
         ));
     };
@@ -899,7 +901,7 @@ fn read_updated_supervisor_state(
         Ok(state) => state,
         Err(error) => {
             eprintln!(
-                "ocm supervisor: failed reading updated state {}: {}",
+                "ocm service: failed reading updated state {}: {}",
                 display_path(state_path),
                 error
             );
@@ -922,7 +924,7 @@ fn reconcile_running_children(
         let Some(next_spec) = desired.get(&env_name) else {
             if let Some(mut existing) = running.remove(&env_name) {
                 eprintln!(
-                    "ocm supervisor: stopping removed env {}",
+                    "ocm service: stopping removed env {}",
                     existing.spec.env_name
                 );
                 stop_supervisor_child(&mut existing);
@@ -938,7 +940,7 @@ fn reconcile_running_children(
                 .remove(&env_name)
                 .expect("running child should exist when needs_restart is true");
             eprintln!(
-                "ocm supervisor: reloading {} ({})",
+                "ocm service: reloading {} ({})",
                 existing.spec.env_name,
                 child_binding_label(next_spec)
             );
@@ -951,7 +953,7 @@ fn reconcile_running_children(
             continue;
         }
         eprintln!(
-            "ocm supervisor: starting new env {} ({})",
+            "ocm service: starting new env {} ({})",
             next_spec.env_name,
             child_binding_label(&next_spec)
         );
