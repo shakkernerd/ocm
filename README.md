@@ -127,33 +127,20 @@ ocm start rowan --channel beta
 ocm start ember --version 2026.3.24
 ```
 
-### Apply an optional project manifest
-
-```bash
-ocm up --dry-run
-ocm up
-ocm sync --dry-run
-```
-
-If a folder has an optional `ocm.yaml`, `up` can create or apply the env, binding, and service changes it declares, and `sync` can reconcile an env that already exists. Existing env applies are snapshotted first and rolled back if a later reconcile step fails. This is project mode, not a requirement for normal `setup` or `start` usage.
-When you pass `--manifest <path>`, relative file paths are resolved from your current working directory.
-
 ### Inspect an existing plain OpenClaw home before migrating it
 
 ```bash
 ocm migrate mira
 ocm migrate mira /path/to/.openclaw
-ocm migrate mira --manifest ./ocm.yaml
 ocm adopt inspect
 ocm adopt plan --name mira
 ```
 
 `migrate` is the simple front door for existing OpenClaw users. It imports a plain OpenClaw home into a managed env in one step.
 
-`migrate` preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets. If `openclaw` is already available on `PATH`, it also binds the imported env to an env-local migrated launcher so you can keep using it through OCM immediately. Add `--manifest <path>` if you also want OCM to write a minimal `ocm.yaml` after the import.
+`migrate` preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets. If `openclaw` is already available on `PATH`, it also binds the imported env to an env-local migrated launcher so you can keep using it through OCM immediately.
 
 `adopt inspect` and `adopt plan` are the explicit read-only preview tools. Use them when you want to inspect the plain OpenClaw home OCM would read or preview the target env/root before importing.
-Relative manifest file paths passed through `--manifest` are resolved from your current working directory.
 
 ### Keep background services visible
 
