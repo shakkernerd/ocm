@@ -18,6 +18,10 @@ use crate::supervisor::sync_supervisor_if_present;
 
 const DEFAULT_GATEWAY_PORT: u32 = 18_789;
 
+pub fn default_service_enabled() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvMeta {
@@ -25,6 +29,8 @@ pub struct EnvMeta {
     pub name: String,
     pub root: String,
     pub gateway_port: Option<u32>,
+    #[serde(default = "default_service_enabled")]
+    pub service_enabled: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
@@ -46,6 +52,7 @@ pub struct EnvSummary {
     pub config_path: String,
     pub workspace_dir: String,
     pub gateway_port: Option<u32>,
+    pub service_enabled: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
@@ -69,6 +76,7 @@ pub struct CreateEnvironmentOptions {
     pub name: String,
     pub root: Option<String>,
     pub gateway_port: Option<u32>,
+    pub service_enabled: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
@@ -225,6 +233,18 @@ impl<'a> EnvironmentService<'a> {
         let mut meta = get_environment(name, self.env, self.cwd)?;
         meta.protected = protected;
         save_environment(meta, self.env, self.cwd)
+    }
+
+    pub fn set_service_enabled(
+        &self,
+        name: &str,
+        service_enabled: bool,
+    ) -> Result<EnvMeta, String> {
+        let mut meta = get_environment(name, self.env, self.cwd)?;
+        meta.service_enabled = service_enabled;
+        let saved = save_environment(meta, self.env, self.cwd)?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(saved)
     }
 
     pub fn remove(&self, name: &str, force: bool) -> Result<EnvMeta, String> {

@@ -392,6 +392,13 @@ impl<'a> SupervisorService<'a> {
         let mut skipped_envs = Vec::new();
         for env_meta in envs {
             let name = env_meta.name.clone();
+            if !env_meta.service_enabled {
+                skipped_envs.push(SkippedSupervisorEnv {
+                    env_name: name,
+                    reason: "service is disabled".to_string(),
+                });
+                continue;
+            }
             match env_service.resolve_gateway_process(&name, false) {
                 Ok(process) => {
                     let paths = derive_env_paths(Path::new(&env_meta.root));

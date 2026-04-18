@@ -611,6 +611,8 @@ mod tests {
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use crate::store::display_path;
+
     use super::{
         ManagedServiceDefinition, ManagedServiceIdentity, ServiceManagerKind,
         global_service_definition_path, managed_service_identity, managed_service_label,

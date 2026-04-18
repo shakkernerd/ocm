@@ -7,6 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use ocm::env::EnvironmentService;
 use serde_json::Value;
 
 use crate::support::{
@@ -51,6 +52,12 @@ fn stop_process(child: &mut Child) {
     let _ = child.wait();
 }
 
+fn set_service_enabled(cwd: &Path, env: &BTreeMap<String, String>, name: &str, enabled: bool) {
+    EnvironmentService::new(env, cwd)
+        .set_service_enabled(name, enabled)
+        .unwrap();
+}
+
 fn setup_supervisor_fixture(
     root: &TestDir,
 ) -> (
@@ -85,6 +92,7 @@ fn setup_supervisor_fixture(
 
     let demo = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
     assert!(demo.status.success(), "{}", stderr(&demo));
+    set_service_enabled(&cwd, &env, "demo", true);
 
     let prod = run_ocm(
         &cwd,
@@ -92,6 +100,7 @@ fn setup_supervisor_fixture(
         &["env", "create", "prod", "--runtime", "managed"],
     );
     assert!(prod.status.success(), "{}", stderr(&prod));
+    set_service_enabled(&cwd, &env, "prod", true);
 
     let bare = run_ocm(&cwd, &env, &["env", "create", "bare"]);
     assert!(bare.status.success(), "{}", stderr(&bare));
@@ -159,6 +168,7 @@ fn setup_supervisor_run_fixture(
 
     let demo = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
     assert!(demo.status.success(), "{}", stderr(&demo));
+    set_service_enabled(&cwd, &env, "demo", true);
 
     let prod = run_ocm(
         &cwd,
@@ -166,6 +176,7 @@ fn setup_supervisor_run_fixture(
         &["env", "create", "prod", "--runtime", "managed"],
     );
     assert!(prod.status.success(), "{}", stderr(&prod));
+    set_service_enabled(&cwd, &env, "prod", true);
 
     (cwd, env, launcher_marker, runtime_marker)
 }
@@ -220,12 +231,7 @@ fn supervisor_plan_reports_runnable_children_and_skipped_envs() {
     let skipped = body["skippedEnvs"].as_array().unwrap();
     assert_eq!(skipped.len(), 1);
     assert_eq!(skipped[0]["envName"], "bare");
-    assert!(
-        skipped[0]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("has no default runtime or launcher")
-    );
+    assert_eq!(skipped[0]["reason"], "service is disabled");
 }
 
 #[test]
@@ -408,6 +414,7 @@ fn env_create_and_remove_refresh_persisted_supervisor_state() {
 
     let created = run_ocm(&cwd, &env, &["env", "create", "extra", "--launcher", "dev"]);
     assert!(created.status.success(), "{}", stderr(&created));
+    set_service_enabled(&cwd, &env, "extra", true);
 
     let show_after_create = run_ocm(&cwd, &env, &["supervisor", "show", "--json"]);
     assert!(
@@ -653,6 +660,7 @@ fn supervisor_run_reconciles_state_changes_without_a_restart() {
 
     let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "old"]);
     assert!(create.status.success(), "{}", stderr(&create));
+    set_service_enabled(&cwd, &env, "demo", true);
     let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
     assert!(sync.status.success(), "{}", stderr(&sync));
 

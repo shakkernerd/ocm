@@ -147,6 +147,7 @@ mod tests {
             name: "mira".to_string(),
             root: "/tmp/mira".to_string(),
             gateway_port: None,
+            service_enabled: true,
             default_runtime: None,
             default_launcher: Some("dev".to_string()),
             protected: false,

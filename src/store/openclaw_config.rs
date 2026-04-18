@@ -520,6 +520,7 @@ mod tests {
             name: name.to_string(),
             root: root.to_string(),
             gateway_port,
+            service_enabled: true,
             default_runtime: None,
             default_launcher: None,
             protected: false,

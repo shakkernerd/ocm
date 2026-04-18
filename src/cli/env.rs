@@ -270,6 +270,7 @@ impl Cli {
                 name: name.clone(),
                 root,
                 gateway_port,
+                service_enabled: false,
                 default_runtime: runtime_name,
                 default_launcher: launcher_name,
                 protected: protect,

@@ -16,6 +16,7 @@ fn sample_env(default_runtime: Option<&str>, default_launcher: Option<&str>) -> 
         name: "demo".to_string(),
         root: "/tmp/demo".to_string(),
         gateway_port: None,
+        service_enabled: true,
         default_runtime: default_runtime.map(str::to_string),
         default_launcher: default_launcher.map(str::to_string),
         protected: false,

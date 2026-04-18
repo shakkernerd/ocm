@@ -52,6 +52,7 @@ pub fn ensure_manifest_env(
         name: manifest.env.name.clone(),
         root: None,
         gateway_port: None,
+        service_enabled: false,
         default_runtime: None,
         default_launcher: None,
         protected: false,

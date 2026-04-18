@@ -21,7 +21,7 @@ pub use inspect::EnvStatusSummary;
 pub use lifecycle::{
     CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
     EnvMarker, EnvMeta, EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
-    select_prune_candidates,
+    default_service_enabled, select_prune_candidates,
 };
 pub use snapshots::{
     CreateEnvSnapshotOptions, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,

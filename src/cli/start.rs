@@ -209,6 +209,7 @@ impl Cli {
                     name: request.name.clone(),
                     root: request.root.clone(),
                     gateway_port: request.gateway_port,
+                    service_enabled: request.service_requested,
                     default_runtime: match desired_binding.as_ref() {
                         Some(StartBinding::Runtime(runtime_name)) => Some(runtime_name.clone()),
                         _ => None,
