@@ -5,12 +5,8 @@ pub(crate) mod platform;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub use inspect::{DiscoveredServiceList, DiscoveredServiceSummary};
 pub use inspect::{ServiceSummary, ServiceSummaryList};
-pub use manage::{
-    ServiceActionSummary, ServiceAdoptionSummary, ServiceInstallSummary, ServiceLogSummary,
-    ServiceRestoreSummary,
-};
+pub use manage::{ServiceActionSummary, ServiceInstallSummary, ServiceLogSummary};
 pub(crate) use platform::{
     ServiceManagerKind, service_backend_support_error, service_manager_kind,
 };
@@ -37,28 +33,8 @@ impl<'a> ServiceService<'a> {
         inspect::service_status_fast(name, self.env, self.cwd)
     }
 
-    pub fn discover(&self) -> Result<DiscoveredServiceList, String> {
-        inspect::discover_services(self.env, self.cwd)
-    }
-
     pub fn install(&self, name: &str) -> Result<ServiceInstallSummary, String> {
         manage::install_service(name, self.env, self.cwd)
-    }
-
-    pub fn adopt_global(
-        &self,
-        name: &str,
-        dry_run: bool,
-    ) -> Result<ServiceAdoptionSummary, String> {
-        manage::adopt_global_service(name, self.env, self.cwd, dry_run)
-    }
-
-    pub fn restore_global(
-        &self,
-        name: &str,
-        dry_run: bool,
-    ) -> Result<ServiceRestoreSummary, String> {
-        manage::restore_global_service(name, self.env, self.cwd, dry_run)
     }
 
     pub fn start(&self, name: &str) -> Result<ServiceActionSummary, String> {

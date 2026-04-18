@@ -9,75 +9,6 @@ impl Cli {
         Ok(())
     }
 
-    pub(super) fn handle_service_discover(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag, profile) =
-            self.consume_human_output_flags(args, "service discover")?;
-        Self::assert_no_extra_args(&args)?;
-
-        let services = self.service_service().discover()?;
-        if json_flag {
-            self.print_json(&services)?;
-            return Ok(0);
-        }
-
-        self.stdout_lines(render::service::service_discover(&services, profile));
-        Ok(0)
-    }
-
-    pub(super) fn handle_service_restore_global(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag, profile) =
-            self.consume_human_output_flags(args, "service restore-global")?;
-        let (args, dry_run) = Self::consume_flag(args, "--dry-run");
-        let Some(name) = args.first() else {
-            return Err("service restore-global requires <env>".to_string());
-        };
-        Self::assert_no_extra_args(&args[1..])?;
-        self.ensure_service_backend_mutation_supported()?;
-
-        let summary = self.with_progress(
-            if dry_run {
-                format!("Planning global service restore for {name}")
-            } else {
-                format!("Restoring global service for {name}")
-            },
-            || self.service_service().restore_global(name, dry_run),
-        )?;
-        if json_flag {
-            self.print_json(&summary)?;
-            return Ok(0);
-        }
-
-        self.stdout_lines(render::service::service_restored(&summary, profile));
-        Ok(0)
-    }
-
-    pub(super) fn handle_service_adopt_global(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag, profile) =
-            self.consume_human_output_flags(args, "service adopt-global")?;
-        let (args, dry_run) = Self::consume_flag(args, "--dry-run");
-        let Some(name) = args.first() else {
-            return Err("service adopt-global requires <env>".to_string());
-        };
-        Self::assert_no_extra_args(&args[1..])?;
-        self.ensure_service_backend_mutation_supported()?;
-
-        let summary = self.with_progress(
-            if dry_run {
-                format!("Planning global service adoption for {name}")
-            } else {
-                format!("Adopting global service for {name}")
-            },
-            || self.service_service().adopt_global(name, dry_run),
-        )?;
-        if json_flag {
-            self.print_json(&summary)?;
-            return Ok(0);
-        }
-
-        self.stdout_lines(render::service::service_adopted(&summary, profile));
-        Ok(0)
-    }
-
     pub(super) fn handle_service_logs(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, stderr_flag) = Self::consume_flag(args, "--stderr");
@@ -277,9 +208,6 @@ impl Cli {
         rest: Vec<String>,
     ) -> Result<i32, String> {
         match action {
-            "discover" => self.handle_service_discover(rest),
-            "adopt-global" => self.handle_service_adopt_global(rest),
-            "restore-global" => self.handle_service_restore_global(rest),
             "install" => self.handle_service_install(rest),
             "list" => self.handle_service_list(rest),
             "status" => self.handle_service_status(rest),

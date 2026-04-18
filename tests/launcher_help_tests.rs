@@ -56,7 +56,8 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("ocm help runtime install"));
     assert!(output.contains("ocm --color always env list"));
     assert!(!output.contains("env snapshot restore <name> <snapshot>"));
-    assert!(!output.contains("service restore-global <env> [--dry-run] [--json]"));
+    assert!(!output.contains("service restore-global"));
+    assert!(!output.contains("service discover"));
 }
 
 #[test]
@@ -446,9 +447,7 @@ fn env_and_service_status_style_help_mentions_raw_mode() {
     );
     let output = stdout(&service_install);
     assert!(output.contains("ocm service install <env> [--raw] [--json]"));
-    assert!(output.contains(
-        "Managed services currently support launchd on macOS and systemd --user on Linux."
-    ));
+    assert!(output.contains("Use `service start` to start the env after it is installed."));
 }
 
 #[test]
@@ -516,11 +515,11 @@ fn runtime_and_service_leaf_help_are_command_specific() {
         "Use `ocm doctor host` only if you want a full machine check or an explicit host-tool fix like git."
     ));
 
-    let service = run_ocm(&cwd, &env, &["service", "discover", "--help"]);
+    let service = run_ocm(&cwd, &env, &["service", "start", "--help"]);
     assert!(service.status.success(), "{}", stderr(&service));
     let output = stdout(&service);
-    assert!(output.contains("Discover OpenClaw services"));
-    assert!(output.contains("ocm service discover [--raw] [--json]"));
+    assert!(output.contains("Start a service"));
+    assert!(output.contains("ocm service start <env> [--raw] [--json]"));
 }
 
 #[test]

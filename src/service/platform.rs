@@ -9,8 +9,6 @@ use sha2::{Digest, Sha256};
 
 use crate::store::{display_path, resolve_ocm_home, resolve_user_home};
 
-use super::inspect::GLOBAL_GATEWAY_LABEL;
-
 pub(crate) const OCM_GATEWAY_LABEL_PREFIX: &str = "ai.openclaw.gateway.ocm.";
 const SERVICE_MANAGER_OVERRIDE: &str = "OCM_INTERNAL_SERVICE_MANAGER";
 const LAUNCHCTL_BIN_OVERRIDE: &str = "OCM_INTERNAL_LAUNCHCTL_BIN";
@@ -197,14 +195,6 @@ pub(crate) fn managed_service_identity(
         )),
         label,
     })
-}
-
-pub(crate) fn global_service_definition_path(env: &BTreeMap<String, String>) -> PathBuf {
-    service_definition_dir(env).join(format!(
-        "{}.{}",
-        GLOBAL_GATEWAY_LABEL,
-        service_definition_extension(service_manager_kind(env))
-    ))
 }
 
 pub(crate) fn service_definition_dir(env: &BTreeMap<String, String>) -> PathBuf {

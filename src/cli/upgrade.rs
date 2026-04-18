@@ -392,16 +392,14 @@ impl Cli {
         let Some(service) = service else {
             return Ok((None, None));
         };
-        let live_service = service.loaded || service.running;
-        if !service.installed && !live_service {
+        if !service.installed || !service.desired_running {
             return Ok((None, None));
         }
-        let definition_changed = service.definition_drift;
-        if !binding_changed && !runtime_changed && !definition_changed {
+        if !binding_changed && !runtime_changed {
             return Ok((None, None));
         }
 
-        if live_service && service.installed {
+        if service.running {
             let restart = self
                 .with_progress(format!("Restarting service for {env_name}"), || {
                     self.service_service().restart(env_name)
@@ -410,7 +408,7 @@ impl Cli {
             return Ok((Some("restarted".to_string()), note));
         }
 
-        if binding_changed || runtime_changed || definition_changed {
+        if binding_changed || runtime_changed {
             let start = self.with_progress(format!("Starting service for {env_name}"), || {
                 self.service_service().start(env_name)
             })?;

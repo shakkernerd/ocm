@@ -1093,50 +1093,39 @@ pub fn doctor_command_help(cmd: &str, action: &str) -> Option<String> {
 pub fn service_help(cmd: &str) -> String {
     render_group(
         "Service commands",
-        "Inspect, install, operate, and migrate persistent OpenClaw services for environments.",
+        "Manage env gateway service policy through the single OCM supervisor daemon.",
         vec![
             format!("{cmd} service <command> [args]"),
             format!("{cmd} help service <command>"),
         ],
         &[
             (
-                "Inventory",
+                "Inspect",
                 &[
-                    ("list", "List env-scoped service state"),
+                    ("list", "List env service state"),
                     ("status", "Show one service or all services"),
-                    ("discover", "Inventory discovered OpenClaw services"),
                     ("logs", "Read service logs"),
                 ],
             ),
             (
                 "Lifecycle",
                 &[
-                    ("install", "Install an env-scoped service"),
-                    ("start", "Start a service"),
-                    ("stop", "Stop a service"),
-                    ("restart", "Restart a service"),
-                    ("uninstall", "Remove a service"),
-                ],
-            ),
-            (
-                "Migration",
-                &[
-                    ("adopt-global", "Adopt the legacy global OpenClaw service"),
-                    (
-                        "restore-global",
-                        "Restore the legacy global service from backup",
-                    ),
+                    ("install", "Enable an env under the supervisor without starting it"),
+                    ("start", "Start an env service"),
+                    ("stop", "Stop an env service without uninstalling it"),
+                    ("restart", "Restart one env under the supervisor"),
+                    ("uninstall", "Disable an env under the supervisor"),
                 ],
             ),
         ],
         vec![
             format!("{cmd} service list"),
             format!("{cmd} service install mira"),
-            format!("{cmd} service adopt-global mira --dry-run"),
+            format!("{cmd} service start mira"),
         ],
         vec![
             format!("{cmd} help service install"),
-            format!("{cmd} help service discover"),
+            format!("{cmd} help service status"),
         ],
     )
 }
@@ -2150,66 +2139,9 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
 
 pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
     Some(match action {
-        "discover" => render_leaf(
-            "Discover OpenClaw services",
-            "Inventory OCM-managed, legacy, and foreign OpenClaw services on the current machine.",
-            vec![format!("{cmd} service discover [--raw] [--json]")],
-            &[
-                (
-                    "--raw",
-                    "Force plain line output instead of TTY table rendering",
-                ),
-                ("--json", "Print discovered services as JSON"),
-            ],
-            vec![
-                format!("{cmd} service discover"),
-                format!("{cmd} service discover --json"),
-            ],
-            &[],
-        ),
-        "adopt-global" => render_leaf(
-            "Adopt the legacy global service",
-            "Move the legacy machine-wide OpenClaw service into the env-scoped OCM service model.",
-            vec![format!(
-                "{cmd} service adopt-global <env> [--dry-run] [--raw] [--json]"
-            )],
-            &[
-                (
-                    "--dry-run",
-                    "Preview adoption without mutating files or service-manager state",
-                ),
-                (
-                    "--raw",
-                    "Force plain line output instead of the TTY receipt view",
-                ),
-                ("--json", "Print the adoption summary as JSON"),
-            ],
-            vec![format!("{cmd} service adopt-global mira --dry-run")],
-            &["Adoption is intentionally conservative and only targets the legacy global label."],
-        ),
-        "restore-global" => render_leaf(
-            "Restore the legacy global service",
-            "Restore a previously adopted global OpenClaw service from backup.",
-            vec![format!(
-                "{cmd} service restore-global <env> [--dry-run] [--raw] [--json]"
-            )],
-            &[
-                (
-                    "--dry-run",
-                    "Preview the restore without mutating files or service-manager state",
-                ),
-                (
-                    "--raw",
-                    "Force plain line output instead of the TTY receipt view",
-                ),
-                ("--json", "Print the restore summary as JSON"),
-            ],
-            vec![format!("{cmd} service restore-global mira --dry-run")],
-            &[],
-        ),
         "install" => render_leaf(
-            "Install an env-scoped service",
-            "Create a persistent service for an environment using the current binding and effective port.",
+            "Install an env service",
+            "Enable one env under the single OCM supervisor without marking it as running yet.",
             vec![format!("{cmd} service install <env> [--raw] [--json]")],
             &[
                 (
@@ -2220,12 +2152,12 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             vec![format!("{cmd} service install mira")],
             &[
-                "If the preferred port is busy, OCM auto-provisions the next free port and warns.",
-                "Managed services currently support launchd on macOS and systemd --user on Linux.",
+                "Use `service start` to start the env after it is installed.",
+                "The shared supervisor daemon is installed automatically when needed.",
             ],
         ),
         "list" => render_leaf(
-            "List env-scoped services",
+            "List env services",
             "Show service state for every known environment.",
             vec![format!("{cmd} service list [--raw] [--json]")],
             &[
@@ -2240,7 +2172,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "status" => render_leaf(
             "Show service status",
-            "Inspect one environment service or every environment service.",
+            "Inspect one env service or every environment service.",
             vec![
                 format!("{cmd} service status <env> [--raw] [--json]"),
                 format!("{cmd} service status --all [--raw] [--json]"),
@@ -2259,7 +2191,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "logs" => render_leaf(
             "Read service logs",
-            "Print service stdout or stderr logs from the environment root.",
+            "Print service stdout or stderr logs for one env child managed by the supervisor.",
             vec![format!(
                 "{cmd} service logs <env> [--stderr] [--tail <count>] [--json]"
             )],
@@ -2276,7 +2208,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "start" => render_leaf(
             "Start a service",
-            "Start an installed env-scoped service after refreshing it from the env's current binding.",
+            "Mark one env as running under the supervisor and ensure the supervisor daemon is running.",
             vec![format!("{cmd} service start <env> [--raw] [--json]")],
             &[
                 (
@@ -2286,13 +2218,11 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the action summary as JSON"),
             ],
             vec![format!("{cmd} service start mira")],
-            &[
-                "Use this after changing an env's launcher or runtime so the installed service picks up the new command.",
-            ],
+            &[],
         ),
         "stop" => render_leaf(
             "Stop a service",
-            "Stop an installed env-scoped service.",
+            "Mark one env as stopped under the supervisor without uninstalling it.",
             vec![format!("{cmd} service stop <env> [--raw] [--json]")],
             &[
                 (
@@ -2306,7 +2236,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "restart" => render_leaf(
             "Restart a service",
-            "Restart an installed env-scoped service after refreshing it from the env's current binding.",
+            "Restart one env under the supervisor.",
             vec![format!("{cmd} service restart <env> [--raw] [--json]")],
             &[
                 (
@@ -2316,13 +2246,11 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the action summary as JSON"),
             ],
             vec![format!("{cmd} service restart mira")],
-            &[
-                "Restart rewrites the managed service definition before reloading it, so launcher or runtime changes take effect.",
-            ],
+            &[],
         ),
         "uninstall" => render_leaf(
             "Uninstall a service",
-            "Remove an env-scoped service definition.",
+            "Disable one env under the supervisor.",
             vec![format!("{cmd} service uninstall <env> [--raw] [--json]")],
             &[
                 (
@@ -2332,7 +2260,7 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the action summary as JSON"),
             ],
             vec![format!("{cmd} service uninstall mira")],
-            &[],
+            &["This does not remove the shared supervisor daemon."],
         ),
         _ => return None,
     })

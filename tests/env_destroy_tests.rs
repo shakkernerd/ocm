@@ -5,8 +5,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::support::{
-    TestDir, managed_service_definition_path, managed_service_label, ocm_env, path_string, run_ocm,
-    stderr, stdout, write_executable_script, write_text,
+    TestDir, managed_service_definition_path, ocm_env, path_string, run_ocm, stderr, stdout,
+    write_executable_script, write_text,
 };
 
 fn install_fake_launchctl(root: &TestDir, env: &mut BTreeMap<String, String>) {
@@ -98,16 +98,15 @@ fn env_destroy_preview_reports_service_snapshot_and_env_steps() {
 
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert!(install.status.success(), "{}", stderr(&install));
-    let managed_label = managed_service_label(&env, &cwd, "demo");
 
     let preview = run_ocm(&cwd, &env, &["env", "destroy", "demo"]);
     assert!(preview.status.success(), "{}", stderr(&preview));
     let output = stdout(&preview);
     assert!(output.contains("Destroy preview for env demo"));
     assert!(output.contains("snapshots: 1"));
-    assert!(output.contains(&format!("service: {managed_label}")));
+    assert!(output.contains("service: supervisor"));
     assert!(output.contains("snapshots: remove 1 env snapshot(s)"));
-    assert!(output.contains(&format!("service: remove OCM service {managed_label}")));
+    assert!(output.contains("service: disable env service under the supervisor"));
     assert!(output.contains("env: remove env root and metadata"));
     assert!(output.contains("re-run with --yes to destroy it"));
 
@@ -153,65 +152,21 @@ fn env_destroy_yes_uninstalls_service_removes_snapshots_and_deletes_env() {
 
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert!(install.status.success(), "{}", stderr(&install));
-    let managed_label = managed_service_label(&env, &cwd, "demo");
-    let managed_path = managed_service_definition_path(&env, &cwd, "demo");
+    let supervisor_path = managed_service_definition_path(&env, &cwd, "supervisor");
 
     let destroy = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--yes"]);
     assert!(destroy.status.success(), "{}", stderr(&destroy));
     let output = stdout(&destroy);
     assert!(output.contains("Destroyed env demo"));
     assert!(output.contains("snapshots removed: 1"));
-    assert!(output.contains(&format!("service removed: {managed_label}")));
+    assert!(output.contains("service removed: supervisor"));
 
     let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
     assert!(!show.status.success());
     assert!(stderr(&show).contains("environment \"demo\" does not exist"));
 
-    assert!(!managed_path.exists());
+    assert!(supervisor_path.exists());
     assert!(!root.child("ocm-home/snapshots/demo").exists());
-
-    let launchctl_log = fs::read_to_string(root.child("launchctl.log")).unwrap();
-    assert!(launchctl_log.contains("bootout gui/"));
-}
-
-#[test]
-fn env_destroy_refuses_when_machine_wide_openclaw_matches_the_env() {
-    let root = TestDir::new("env-destroy-global-block");
-    let cwd = root.child("workspace");
-    fs::create_dir_all(&cwd).unwrap();
-    let mut env = ocm_launchd_env(&root);
-    install_fake_launchctl(&root, &mut env);
-
-    let launcher = run_ocm(
-        &cwd,
-        &env,
-        &["launcher", "add", "stable", "--command", "openclaw"],
-    );
-    assert!(launcher.status.success(), "{}", stderr(&launcher));
-
-    let created = run_ocm(
-        &cwd,
-        &env,
-        &["env", "create", "demo", "--launcher", "stable"],
-    );
-    assert!(created.status.success(), "{}", stderr(&created));
-
-    let config_path = root.child("ocm-home/envs/demo/.openclaw/openclaw.json");
-    write_launch_agent_plist(
-        &root.child("home/Library/LaunchAgents/ai.openclaw.gateway.plist"),
-        "ai.openclaw.gateway",
-        &[("OPENCLAW_CONFIG_PATH", &path_string(&config_path))],
-    );
-
-    let destroy = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--yes"]);
-    assert!(!destroy.status.success());
-    let output = stdout(&destroy);
-    assert!(output.contains("Destroy preview for env demo"));
-    assert!(output.contains("blocked:"));
-    assert!(output.contains("machine-wide OpenClaw service is using this env"));
-
-    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
-    assert!(show.status.success(), "{}", stderr(&show));
 }
 
 #[test]

@@ -67,11 +67,17 @@ impl<'a> EnvironmentService<'a> {
 
         if let Ok(service) = ServiceService::new(self.env, self.cwd).status_fast(name) {
             summary.managed_service_state = Some(service_managed_state(&service));
-            summary.openclaw_state = Some(service.openclaw_state.clone());
-            summary.global_service_state = Some(service_global_state(&service));
-            summary.service_definition_drift = Some(service.definition_drift);
-            summary.service_live_exec_unverified = Some(service.live_exec_unverified);
-            summary.service_orphaned_live = Some(service.orphaned_live_service);
+            summary.openclaw_state = Some(if service.running {
+                "running".to_string()
+            } else if service.desired_running {
+                "pending".to_string()
+            } else {
+                "stopped".to_string()
+            });
+            summary.global_service_state = None;
+            summary.service_definition_drift = None;
+            summary.service_live_exec_unverified = None;
+            summary.service_orphaned_live = None;
             summary.service_issue = service.issue.clone();
         }
 
@@ -132,20 +138,6 @@ fn service_managed_state(summary: &crate::service::ServiceSummary) -> String {
         "loaded".to_string()
     } else if summary.installed {
         "installed".to_string()
-    } else {
-        "absent".to_string()
-    }
-}
-
-fn service_global_state(summary: &crate::service::ServiceSummary) -> String {
-    if summary.global_matches_env {
-        "match".to_string()
-    } else if summary.global_running {
-        "running-other".to_string()
-    } else if summary.global_loaded {
-        "loaded-other".to_string()
-    } else if summary.global_installed {
-        "installed-other".to_string()
     } else {
         "absent".to_string()
     }

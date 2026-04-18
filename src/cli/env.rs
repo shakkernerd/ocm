@@ -34,8 +34,6 @@ pub(crate) struct EnvDestroySummary {
     pub service_loaded: bool,
     pub service_running: bool,
     pub service_label: String,
-    pub global_openclaw_env_name: Option<String>,
-    pub global_openclaw_blocks_destroy: bool,
     pub blockers: Vec<String>,
     pub steps: Vec<EnvDestroyStepSummary>,
     pub snapshots_removed: usize,
@@ -826,13 +824,6 @@ impl Cli {
                 display_path(&marker_path)
             ));
         }
-        if service.global_matches_env {
-            blockers.push(
-                "the machine-wide OpenClaw service is using this env; move or remove that service first"
-                    .to_string(),
-            );
-        }
-
         let mut steps = Vec::new();
         if !snapshots.is_empty() {
             steps.push(EnvDestroyStepSummary {
@@ -843,7 +834,7 @@ impl Cli {
         if service.installed || service.loaded || service.running {
             steps.push(EnvDestroyStepSummary {
                 kind: "service".to_string(),
-                description: format!("remove OCM service {}", service.managed_label),
+                description: "disable env service under the supervisor".to_string(),
             });
         }
         steps.push(EnvDestroyStepSummary {
@@ -863,9 +854,7 @@ impl Cli {
             service_installed: service.installed,
             service_loaded: service.loaded,
             service_running: service.running,
-            service_label: service.managed_label,
-            global_openclaw_env_name: service.global_env_name,
-            global_openclaw_blocks_destroy: service.global_matches_env,
+            service_label: "supervisor".to_string(),
             blockers,
             steps,
             snapshots_removed: 0,

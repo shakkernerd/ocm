@@ -1753,18 +1753,9 @@ mod tests {
             service_installed: true,
             service_loaded: true,
             service_running: false,
-            service_label: "ai.openclaw.gateway.ocm.demo".to_string(),
-            global_openclaw_env_name: if blocked {
-                Some("demo".to_string())
-            } else {
-                Some("other".to_string())
-            },
-            global_openclaw_blocks_destroy: blocked,
+            service_label: "supervisor".to_string(),
             blockers: if blocked {
-                vec![
-                    "the machine-wide OpenClaw service is using this env; move or remove that service first"
-                        .to_string(),
-                ]
+                vec!["manual review required before destroying this env".to_string()]
             } else {
                 Vec::new()
             },
