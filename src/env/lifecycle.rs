@@ -248,11 +248,7 @@ impl<'a> EnvironmentService<'a> {
         name: &str,
         service_enabled: bool,
     ) -> Result<EnvMeta, String> {
-        let mut meta = get_environment(name, self.env, self.cwd)?;
-        meta.service_enabled = service_enabled;
-        let saved = save_environment(meta, self.env, self.cwd)?;
-        sync_supervisor_if_present(self.env, self.cwd)?;
-        Ok(saved)
+        self.set_service_policy(name, Some(service_enabled), None)
     }
 
     pub fn set_service_running(
@@ -260,8 +256,22 @@ impl<'a> EnvironmentService<'a> {
         name: &str,
         service_running: bool,
     ) -> Result<EnvMeta, String> {
+        self.set_service_policy(name, None, Some(service_running))
+    }
+
+    pub fn set_service_policy(
+        &self,
+        name: &str,
+        service_enabled: Option<bool>,
+        service_running: Option<bool>,
+    ) -> Result<EnvMeta, String> {
         let mut meta = get_environment(name, self.env, self.cwd)?;
-        meta.service_running = service_running;
+        if let Some(service_enabled) = service_enabled {
+            meta.service_enabled = service_enabled;
+        }
+        if let Some(service_running) = service_running {
+            meta.service_running = service_running;
+        }
         let saved = save_environment(meta, self.env, self.cwd)?;
         sync_supervisor_if_present(self.env, self.cwd)?;
         Ok(saved)

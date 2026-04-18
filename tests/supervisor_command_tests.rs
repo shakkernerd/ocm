@@ -82,8 +82,9 @@ fn stop_process(child: &mut Child) {
 
 fn set_service_enabled(cwd: &Path, env: &BTreeMap<String, String>, name: &str, enabled: bool) {
     let service = EnvironmentService::new(env, cwd);
-    service.set_service_enabled(name, enabled).unwrap();
-    service.set_service_running(name, enabled).unwrap();
+    service
+        .set_service_policy(name, Some(enabled), Some(enabled))
+        .unwrap();
 }
 
 fn setup_supervisor_fixture(
