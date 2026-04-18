@@ -19,9 +19,9 @@ use crate::service::platform::{
     write_managed_service_definition,
 };
 use crate::store::{
-    derive_env_paths, display_path, ensure_dir, ensure_store, list_environments, now_utc,
-    read_json, resolve_ocm_home, supervisor_logs_dir, supervisor_runtime_path,
-    supervisor_state_path, write_json,
+    display_path, ensure_dir, ensure_store, list_environments, now_utc, read_json,
+    resolve_ocm_home, supervisor_logs_dir, supervisor_runtime_path, supervisor_state_path,
+    write_json,
 };
 
 const SUPERVISOR_STATE_KIND: &str = "ocm-supervisor-state";
@@ -54,12 +54,8 @@ pub struct SupervisorChildSpec {
     pub runtime_release_version: Option<String>,
     pub runtime_release_channel: Option<String>,
     pub args: Vec<String>,
-    pub program_arguments: Vec<String>,
     pub run_dir: String,
     pub child_port: u32,
-    pub openclaw_home: String,
-    pub openclaw_state_dir: String,
-    pub openclaw_config_path: String,
     pub stdout_path: String,
     pub stderr_path: String,
     pub process_env: BTreeMap<String, String>,
@@ -278,8 +274,6 @@ impl<'a> SupervisorService<'a> {
             }
             match env_service.resolve_gateway_process(&name, false) {
                 Ok(process) => {
-                    let paths = derive_env_paths(Path::new(&env_meta.root));
-                    let program_arguments = process.program_arguments();
                     let args = process.args.clone();
                     let child_port = process
                         .process_env
@@ -297,12 +291,8 @@ impl<'a> SupervisorService<'a> {
                         runtime_release_version: process.runtime_release_version,
                         runtime_release_channel: process.runtime_release_channel,
                         args,
-                        program_arguments,
                         run_dir: display_path(&process.run_dir),
                         child_port,
-                        openclaw_home: display_path(&paths.openclaw_home),
-                        openclaw_state_dir: display_path(&paths.state_dir),
-                        openclaw_config_path: display_path(&paths.config_path),
                         stdout_path: display_path(
                             &logs_dir.join(format!("{}.stdout.log", process.env_name)),
                         ),
@@ -584,7 +574,8 @@ fn spawn_running_child(
 }
 
 fn spawn_supervisor_child(spec: &SupervisorChildSpec) -> Result<Child, String> {
-    let Some(program) = spec.program_arguments.first() else {
+    let program_arguments = supervisor_program_arguments(spec);
+    let Some(program) = program_arguments.first() else {
         return Err(format!(
             "service child env \"{}\" is missing program arguments",
             spec.env_name
@@ -618,7 +609,7 @@ fn spawn_supervisor_child(spec: &SupervisorChildSpec) -> Result<Child, String> {
         })?;
 
     Command::new(program)
-        .args(spec.program_arguments.iter().skip(1))
+        .args(program_arguments.iter().skip(1))
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
@@ -633,6 +624,28 @@ fn spawn_supervisor_child(spec: &SupervisorChildSpec) -> Result<Child, String> {
                 child_binding_label(spec)
             )
         })
+}
+
+fn supervisor_program_arguments(spec: &SupervisorChildSpec) -> Vec<String> {
+    match (&spec.command, &spec.binary_path) {
+        (Some(command), _) => {
+            if cfg!(windows) {
+                vec!["cmd".to_string(), "/C".to_string(), command.to_string()]
+            } else {
+                vec![
+                    "/bin/sh".to_string(),
+                    "-lc".to_string(),
+                    command.to_string(),
+                ]
+            }
+        }
+        (None, Some(binary_path)) => {
+            let mut program_arguments = vec![binary_path.clone()];
+            program_arguments.extend(spec.args.iter().cloned());
+            program_arguments
+        }
+        (None, None) => Vec::new(),
+    }
 }
 
 fn child_binding_label(spec: &SupervisorChildSpec) -> String {
