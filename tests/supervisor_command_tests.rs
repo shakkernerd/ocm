@@ -37,9 +37,37 @@ fn wait_for_file(path: &Path, timeout: Duration) -> bool {
     false
 }
 
+fn wait_for_runtime_children(
+    path: &Path,
+    expected_children: usize,
+    env_name: Option<&str>,
+    timeout: Duration,
+) -> Option<Value> {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if let Ok(raw) = fs::read(path)
+            && let Ok(body) = serde_json::from_slice::<Value>(&raw)
+            && body["children"].as_array().map(|children| children.len()) == Some(expected_children)
+        {
+            let matches_env = env_name.is_none_or(|name| {
+                body["children"]
+                    .as_array()
+                    .unwrap_or(&Vec::new())
+                    .iter()
+                    .any(|child| child["envName"] == name)
+            });
+            if matches_env {
+                return Some(body);
+            }
+        }
+        sleep(Duration::from_millis(50));
+    }
+    None
+}
+
 fn stop_process(child: &mut Child) {
     let _ = Command::new("kill")
-        .args(["-TERM", &child.id().to_string()])
+        .args(["-INT", &child.id().to_string()])
         .status();
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
@@ -260,6 +288,34 @@ fn supervisor_plan_skips_enabled_envs_that_are_stopped() {
             .iter()
             .any(|entry| entry["envName"] == "demo" && entry["reason"] == "service is stopped")
     );
+}
+
+#[test]
+fn supervisor_run_persists_live_runtime_children() {
+    let root = TestDir::new("supervisor-run-runtime-state");
+    let (cwd, env, _, _) = setup_supervisor_run_fixture(&root);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+
+    let sync = run_ocm(&cwd, &env, &["supervisor", "sync"]);
+    assert!(sync.status.success(), "{}", stderr(&sync));
+
+    let mut supervisor = spawn_supervisor_process(&cwd, &env);
+    let runtime = wait_for_runtime_children(&runtime_path, 2, Some("demo"), Duration::from_secs(5))
+        .expect("supervisor runtime state did not report running children");
+    assert_eq!(runtime["kind"], "ocm-supervisor-runtime");
+    let demo = runtime["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|child| child["envName"] == "demo")
+        .unwrap();
+    assert!(demo["pid"].as_u64().unwrap() > 0);
+    assert_eq!(demo["restartCount"], 0);
+
+    stop_process(&mut supervisor);
+    let cleared = wait_for_runtime_children(&runtime_path, 0, None, Duration::from_secs(5))
+        .expect("supervisor runtime state did not clear after shutdown");
+    assert!(cleared["updatedAt"].as_str().is_some());
 }
 
 #[test]

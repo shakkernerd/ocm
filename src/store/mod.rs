@@ -25,7 +25,7 @@ pub use layout::{
     env_meta_path, launcher_meta_path, resolve_absolute_path, resolve_ocm_home,
     resolve_store_paths, resolve_user_home, runtime_install_files_dir, runtime_install_root,
     runtime_meta_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
-    supervisor_logs_dir, supervisor_state_path, validate_name,
+    supervisor_logs_dir, supervisor_runtime_path, supervisor_state_path, validate_name,
 };
 pub(crate) use openclaw_config::{
     OpenClawConfigAudit, audit_openclaw_config, repair_openclaw_config,

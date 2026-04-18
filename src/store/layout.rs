@@ -271,6 +271,14 @@ pub fn supervisor_state_path(
     Ok(stores.supervisor_dir.join("state.json"))
 }
 
+pub fn supervisor_runtime_path(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let stores = resolve_store_paths(env, cwd)?;
+    Ok(stores.supervisor_dir.join("runtime.json"))
+}
+
 pub fn supervisor_logs_dir(env: &BTreeMap<String, String>, cwd: &Path) -> Result<PathBuf, String> {
     let stores = resolve_store_paths(env, cwd)?;
     Ok(stores.supervisor_dir.join("logs"))

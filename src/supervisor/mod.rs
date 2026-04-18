@@ -21,10 +21,12 @@ use crate::service::platform::{
 };
 use crate::store::{
     derive_env_paths, display_path, ensure_dir, ensure_store, list_environments, now_utc,
-    read_json, resolve_ocm_home, supervisor_logs_dir, supervisor_state_path, write_json,
+    read_json, resolve_ocm_home, supervisor_logs_dir, supervisor_runtime_path,
+    supervisor_state_path, write_json,
 };
 
 const SUPERVISOR_STATE_KIND: &str = "ocm-supervisor-state";
+const SUPERVISOR_RUNTIME_KIND: &str = "ocm-supervisor-runtime";
 const SUPERVISOR_SERVICE_NAME: &str = "supervisor";
 const DEFAULT_START_MODE: &str = "on-demand";
 const SUPERVISOR_POLL_INTERVAL_MS: u64 = 200;
@@ -154,6 +156,29 @@ pub struct SupervisorRunSummary {
     pub child_count: usize,
     pub stopped_by_signal: bool,
     pub child_results: Vec<SupervisorChildRunResult>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorRuntimeChild {
+    pub env_name: String,
+    pub binding_kind: String,
+    pub binding_name: String,
+    pub pid: u32,
+    pub restart_count: usize,
+    pub child_port: u32,
+    pub stdout_path: String,
+    pub stderr_path: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorRuntimeState {
+    pub kind: String,
+    pub ocm_home: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+    pub children: Vec<SupervisorRuntimeChild>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -577,6 +602,7 @@ impl<'a> SupervisorService<'a> {
         })
         .map_err(|error| format!("failed to install supervisor signal handler: {error}"))?;
 
+        let runtime_path = supervisor_runtime_path(self.env, self.cwd)?;
         let mut active_state = state;
         let mut running = active_state
             .children
@@ -587,6 +613,7 @@ impl<'a> SupervisorService<'a> {
                 Ok((env_name, spawn_running_child(spec, 0)?))
             })
             .collect::<Result<BTreeMap<_, _>, String>>()?;
+        write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
         let mut managed_child_count = running.len();
         let mut child_results = Vec::new();
 
@@ -594,6 +621,7 @@ impl<'a> SupervisorService<'a> {
             if let Some(next_state) = read_updated_supervisor_state(state_path, &active_state) {
                 reconcile_running_children(&mut running, &next_state)?;
                 active_state = next_state;
+                write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
                 managed_child_count = running.len();
             }
 
@@ -613,6 +641,7 @@ impl<'a> SupervisorService<'a> {
                 let Some(previous_child) = running.remove(&env_name) else {
                     continue;
                 };
+                write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
                 eprintln!(
                     "ocm supervisor: {} exited with {}; restarting",
                     previous_child.spec.env_name,
@@ -632,6 +661,7 @@ impl<'a> SupervisorService<'a> {
                 if let Some(next_state) = read_updated_supervisor_state(state_path, &active_state) {
                     reconcile_running_children(&mut running, &next_state)?;
                     active_state = next_state;
+                    write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
                     managed_child_count = running.len();
                 }
                 if let Some(next_spec) = active_child_spec(&active_state, &env_name).cloned() {
@@ -644,6 +674,7 @@ impl<'a> SupervisorService<'a> {
                         env_name,
                         spawn_running_child(next_spec, next_restart_count)?,
                     );
+                    write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
                 }
             }
 
@@ -655,6 +686,7 @@ impl<'a> SupervisorService<'a> {
         for (_, mut running_child) in running {
             stop_supervisor_child(&mut running_child);
         }
+        write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &BTreeMap::new())?;
 
         Ok(SupervisorRunSummary {
             state_path: display_path(state_path),
@@ -963,4 +995,43 @@ fn supervisor_service_environment(
     service_env.insert("OCM_HOME".to_string(), display_path(ocm_home));
     service_env.insert("OCM_SELF".to_string(), display_path(executable_path));
     service_env
+}
+
+fn write_supervisor_runtime_state(
+    runtime_path: &Path,
+    ocm_home: &str,
+    running: &BTreeMap<String, RunningSupervisorChild>,
+) -> Result<(), String> {
+    if let Some(parent) = runtime_path.parent() {
+        ensure_dir(parent)?;
+    }
+
+    let mut children = running
+        .values()
+        .map(supervisor_runtime_child)
+        .collect::<Vec<_>>();
+    children.sort_by(|left, right| left.env_name.cmp(&right.env_name));
+
+    write_json(
+        runtime_path,
+        &SupervisorRuntimeState {
+            kind: SUPERVISOR_RUNTIME_KIND.to_string(),
+            ocm_home: ocm_home.to_string(),
+            updated_at: now_utc(),
+            children,
+        },
+    )
+}
+
+fn supervisor_runtime_child(running_child: &RunningSupervisorChild) -> SupervisorRuntimeChild {
+    SupervisorRuntimeChild {
+        env_name: running_child.spec.env_name.clone(),
+        binding_kind: running_child.spec.binding_kind.clone(),
+        binding_name: running_child.spec.binding_name.clone(),
+        pid: running_child.child.id(),
+        restart_count: running_child.restart_count,
+        child_port: running_child.spec.child_port,
+        stdout_path: running_child.spec.stdout_path.clone(),
+        stderr_path: running_child.spec.stderr_path.clone(),
+    }
 }
