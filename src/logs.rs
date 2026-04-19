@@ -83,20 +83,27 @@ impl<'a> LogService<'a> {
         let supervisor_path =
             supervisor_logs_dir(self.env, self.cwd)?.join(format!("{}.{}.log", name, stream));
 
-        if gateway_path.exists() || !supervisor_path.exists() {
-            return Ok(LogTarget {
-                env_name: name.to_string(),
-                stream,
-                source_kind: "gateway".to_string(),
-                path: gateway_path,
-            });
-        }
+        let gateway_modified = modified_at(&gateway_path);
+        let supervisor_modified = modified_at(&supervisor_path);
+
+        let (source_kind, path) = match (gateway_modified, supervisor_modified) {
+            (Some(gateway_time), Some(supervisor_time)) => {
+                if supervisor_time > gateway_time {
+                    ("service", supervisor_path)
+                } else {
+                    ("gateway", gateway_path)
+                }
+            }
+            (Some(_), None) => ("gateway", gateway_path),
+            (None, Some(_)) => ("service", supervisor_path),
+            (None, None) => ("gateway", gateway_path),
+        };
 
         Ok(LogTarget {
             env_name: name.to_string(),
             stream,
-            source_kind: "service-fallback".to_string(),
-            path: supervisor_path,
+            source_kind: source_kind.to_string(),
+            path,
         })
     }
 
@@ -147,6 +154,10 @@ impl<'a> LogService<'a> {
             sleep(Duration::from_millis(FOLLOW_POLL_INTERVAL_MS));
         }
     }
+}
+
+fn modified_at(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path).ok()?.modified().ok()
 }
 
 fn normalize_stream(stream: &str) -> Result<&str, String> {
@@ -213,6 +224,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::Path;
+    use std::thread::sleep;
+    use std::time::Duration;
 
     #[test]
     fn tail_text_keeps_the_last_requested_lines() {
@@ -221,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn target_prefers_gateway_logs_when_present() {
+    fn target_prefers_the_newer_service_log_when_gateway_log_is_stale() {
         let root = std::env::temp_dir().join(format!(
             "ocm-log-target-{}-{}",
             std::process::id(),
@@ -232,6 +245,7 @@ mod tests {
         let env_root = ocm_home.join("envs/demo");
         ensure_dir(&cwd).unwrap();
         ensure_dir(&env_root.join(".openclaw/logs")).unwrap();
+        ensure_dir(&ocm_home.join("supervisor/logs")).unwrap();
         fs::write(
             ocm_home.join("envs.json"),
             format!(
@@ -241,6 +255,12 @@ mod tests {
         )
         .unwrap();
         fs::write(env_root.join(".openclaw/logs/gateway.log"), "hello\n").unwrap();
+        sleep(Duration::from_millis(1100));
+        fs::write(
+            ocm_home.join("supervisor/logs/demo.stdout.log"),
+            "newer service output\n",
+        )
+        .unwrap();
 
         let mut env = BTreeMap::new();
         env.insert("HOME".to_string(), root.join("home").display().to_string());
@@ -248,8 +268,8 @@ mod tests {
         let target = LogService::new(&env, Path::new(&cwd))
             .target("demo", "stdout")
             .unwrap();
-        assert_eq!(target.source_kind, "gateway");
-        assert!(target.path.ends_with(".openclaw/logs/gateway.log"));
+        assert_eq!(target.source_kind, "service");
+        assert!(target.path.ends_with("supervisor/logs/demo.stdout.log"));
 
         let _ = fs::remove_dir_all(&root);
     }

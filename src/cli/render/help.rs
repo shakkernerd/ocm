@@ -208,7 +208,7 @@ pub fn setup_help(cmd: &str) -> String {
 pub fn logs_help(cmd: &str) -> String {
     render_leaf(
         "Read env logs",
-        "Tail one env gateway log with follow support. OCM reads the env's own OpenClaw gateway logs first and falls back to the OCM background service child logs when needed.",
+        "Tail one env log with follow support. OCM chooses the active log file between the env's OpenClaw gateway logs and the OCM background service child logs.",
         vec![format!(
             "{cmd} logs <env> [--stderr] [--tail <count>] [--follow] [--raw] [--json]"
         )],
@@ -227,7 +227,8 @@ pub fn logs_help(cmd: &str) -> String {
         &[
             "Default output shows the last 50 lines.",
             "Follow mode cannot be combined with --json.",
-            "Foreground runs still work because OCM prefers the env's own gateway log files.",
+            "When both env and service logs exist, OCM reads the newer active file.",
+            "Foreground runs still work because OCM can still read the env's own gateway log files directly.",
         ],
     )
 }

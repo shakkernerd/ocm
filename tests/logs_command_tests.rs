@@ -69,9 +69,34 @@ fn logs_fall_back_to_supervisor_logs_when_gateway_logs_are_missing() {
     let output = run_ocm(&cwd, &env, &["logs", "demo", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body: Value = serde_json::from_str(&stdout(&output)).unwrap();
-    assert_eq!(body["sourceKind"], "service-fallback");
+    assert_eq!(body["sourceKind"], "service");
     assert_eq!(body["path"], path_string(&fallback));
     assert_eq!(body["content"], "hello from supervisor stdout\n");
+}
+
+#[test]
+fn logs_prefer_the_newer_service_log_when_gateway_log_is_stale() {
+    let root = TestDir::new("logs-prefer-newer-service");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    let (gateway_path, _) = gateway_log_paths(&root);
+    fs::create_dir_all(gateway_path.parent().unwrap()).unwrap();
+    fs::write(&gateway_path, "old gateway output\n").unwrap();
+    thread::sleep(Duration::from_millis(1100));
+
+    let service_path = root.child("ocm-home/supervisor/logs/demo.stdout.log");
+    fs::create_dir_all(service_path.parent().unwrap()).unwrap();
+    fs::write(&service_path, "new service output\n").unwrap();
+
+    let output = run_ocm(&cwd, &env, &["logs", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(body["sourceKind"], "service");
+    assert_eq!(body["path"], path_string(&service_path));
+    assert_eq!(body["content"], "new service output\n");
 }
 
 #[test]

@@ -1,6 +1,52 @@
 use std::io::{self, Write};
 
+use super::render::RenderProfile;
 use super::{Cli, render};
+
+struct PrettyLogWriter<'a, W: Write> {
+    inner: &'a mut W,
+    profile: RenderProfile,
+    pending: String,
+}
+
+impl<'a, W: Write> PrettyLogWriter<'a, W> {
+    fn new(inner: &'a mut W, profile: RenderProfile) -> Self {
+        Self {
+            inner,
+            profile,
+            pending: String::new(),
+        }
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let rendered = render::logs::render_log_text(&self.pending, self.profile);
+        self.inner
+            .write_all(rendered.as_bytes())
+            .map_err(|error| error.to_string())?;
+        self.pending.clear();
+        self.inner.flush().map_err(|error| error.to_string())
+    }
+}
+
+impl<W: Write> Write for PrettyLogWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pending.push_str(&String::from_utf8_lossy(buf));
+        while let Some(newline_index) = self.pending.find('\n') {
+            let line = self.pending[..=newline_index].to_string();
+            self.pending.drain(..=newline_index);
+            let rendered = render::logs::render_log_text(&line, self.profile);
+            self.inner.write_all(rendered.as_bytes())?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
 
 impl Cli {
     pub(super) fn handle_logs_command(&self, args: Vec<String>) -> Result<i32, String> {
@@ -42,8 +88,15 @@ impl Cli {
             }
             let stdout = io::stdout();
             let mut handle = stdout.lock();
-            self.log_service()
-                .follow(name, stream, tail_lines, &mut handle)?;
+            if profile.pretty {
+                let mut writer = PrettyLogWriter::new(&mut handle, profile);
+                self.log_service()
+                    .follow(name, stream, tail_lines, &mut writer)?;
+                writer.finish()?;
+            } else {
+                self.log_service()
+                    .follow(name, stream, tail_lines, &mut handle)?;
+            }
             return Ok(0);
         }
 
@@ -66,8 +119,13 @@ impl Cli {
 
         let stdout = io::stdout();
         let mut handle = stdout.lock();
+        let content = if profile.pretty {
+            render::logs::render_log_text(&summary.content, profile)
+        } else {
+            summary.content
+        };
         handle
-            .write_all(summary.content.as_bytes())
+            .write_all(content.as_bytes())
             .map_err(|error| error.to_string())?;
         Ok(0)
     }
