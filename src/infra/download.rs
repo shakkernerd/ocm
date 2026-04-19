@@ -58,7 +58,7 @@ fn open_url_reader(url: &str) -> Result<Box<dyn io::Read>, String> {
     let response = ureq::get(trimmed)
         .call()
         .map_err(|error| format!("failed to download runtime URL \"{trimmed}\": {error}"))?;
-    Ok(Box::new(response.into_reader()))
+    Ok(Box::new(response.into_body().into_reader()))
 }
 
 pub fn file_sha256(path: &Path) -> Result<String, String> {

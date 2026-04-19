@@ -280,10 +280,10 @@ impl Cli {
         };
 
         let response = ureq::get(&url)
-            .set("User-Agent", &format!("ocm/{}", env!("CARGO_PKG_VERSION")))
+            .header("User-Agent", &format!("ocm/{}", env!("CARGO_PKG_VERSION")))
             .call()
             .map_err(|error| format!("failed to query ocm releases: {error}"))?;
-        serde_json::from_reader(response.into_reader())
+        serde_json::from_reader(response.into_body().into_reader())
             .map_err(|error| format!("failed to parse ocm release metadata: {error}"))
     }
 }
