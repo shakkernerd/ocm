@@ -94,11 +94,12 @@ If you are developing OpenClaw itself, use the dev path:
 
 ```bash
 ocm dev shaks
+ocm dev shaks --root /tmp/shaks
 ocm dev shaks --watch
 ocm dev shaks --onboard
 ```
 
-`dev` creates or reuses an isolated env, provisions an OpenClaw worktree under the repo's own `.worktrees/`, bootstraps the minimum local config so the gateway can run immediately, and then starts the gateway in the foreground. `--watch` keeps a source-run gateway rebuilding in place. `--onboard` runs local onboarding first and then starts the dev gateway.
+`dev` creates or reuses an isolated env, provisions an OpenClaw worktree under the repo's own `.worktrees/`, bootstraps the minimum local config so the gateway can run immediately, and then starts the gateway in the foreground. `--root` lets you place that env anywhere. `--watch` keeps a source-run gateway rebuilding in place. `--onboard` runs local onboarding first and then starts the dev gateway.
 
 If you already have a plain `~/.openclaw` home you care about, use `ocm migrate <env>` instead of starting fresh. `setup` and `start` now point that out when they detect an existing plain OpenClaw home.
 
@@ -125,6 +126,7 @@ ocm upgrade --all
 
 ```bash
 ocm dev luna
+ocm dev luna --root ~/scratch/luna
 ocm dev luna --watch
 ```
 
