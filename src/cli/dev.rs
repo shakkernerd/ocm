@@ -102,13 +102,13 @@ impl Cli {
             .dev
             .as_ref()
             .ok_or_else(|| format!("environment \"{}\" is missing its dev binding", meta.name))?;
-
-        self.stderr_line(format!(
-            "{} dev env {} on port {} from {}",
-            if created { "Prepared" } else { "Using" },
-            meta.name,
-            meta.gateway_port.unwrap_or_default(),
-            dev.worktree_root,
+        let stderr_profile = self.dev_stderr_profile();
+        self.stderr_lines(render_dev_run_summary(
+            &meta,
+            created,
+            watch,
+            onboard,
+            stderr_profile,
         ));
 
         let install_code = self.ensure_dev_dependencies(&meta)?;
@@ -117,6 +117,11 @@ impl Cli {
         }
 
         if onboard {
+            self.stderr_lines(render_dev_run_step(
+                "Onboarding",
+                format!("Running local onboarding in {}", dev.worktree_root),
+                stderr_profile,
+            ));
             let code = self.run_dev_onboard(&meta)?;
             if code != 0 {
                 return Ok(code);
@@ -124,11 +129,28 @@ impl Cli {
         }
 
         if watch {
-            self.stderr_line(format!("Watching {}", dev.worktree_root));
+            self.stderr_lines(render_dev_run_step(
+                "Watch",
+                format!(
+                    "Watching {} on port {}",
+                    dev.worktree_root,
+                    meta.gateway_port.unwrap_or_default()
+                ),
+                stderr_profile,
+            ));
             return self.run_dev_gateway_watch(&meta);
         }
 
-        self.stderr_line(format!("Starting gateway for {}", meta.name));
+        self.stderr_lines(render_dev_run_step(
+            "Gateway",
+            format!(
+                "Starting {} on port {} from {}",
+                meta.name,
+                meta.gateway_port.unwrap_or_default(),
+                dev.worktree_root
+            ),
+            stderr_profile,
+        ));
         self.run_dev_gateway(&meta)
     }
 
@@ -249,13 +271,30 @@ impl Cli {
             return Ok(0);
         }
 
-        self.stderr_line(format!("Installing dependencies in {}", dev.worktree_root));
+        self.stderr_lines(render_dev_run_step(
+            "Dependencies",
+            format!("Installing dependencies in {}", dev.worktree_root),
+            self.dev_stderr_profile(),
+        ));
         run_direct(
             "pnpm",
             &["install".to_string()],
             &build_openclaw_env(meta, &self.env),
             worktree_root,
         )
+    }
+
+    fn dev_stderr_profile(&self) -> RenderProfile {
+        let color_mode = self.color_mode();
+        let pretty_enabled =
+            self.stderr_is_terminal() || matches!(color_mode, super::ColorMode::Always);
+        if pretty_enabled {
+            RenderProfile::pretty(
+                self.color_output_enabled_for(self.stderr_is_terminal(), color_mode),
+            )
+        } else {
+            RenderProfile::raw()
+        }
     }
 
     fn run_dev_onboard(&self, meta: &EnvMeta) -> Result<i32, String> {
@@ -379,6 +418,76 @@ fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<
         profile.color,
     ));
     lines
+}
+
+fn render_dev_run_summary(
+    meta: &EnvMeta,
+    created: bool,
+    watch: bool,
+    onboard: bool,
+    profile: RenderProfile,
+) -> Vec<String> {
+    let Some(dev) = meta.dev.as_ref() else {
+        return Vec::new();
+    };
+    if !profile.pretty {
+        return vec![
+            format!(
+                "{} dev env {}",
+                if created { "prepared" } else { "using" },
+                meta.name
+            ),
+            format!("port={}", meta.gateway_port.unwrap_or_default()),
+            format!("repo={}", dev.repo_root),
+            format!("worktree={}", dev.worktree_root),
+            format!("mode={}", if watch { "watch" } else { "run" }),
+            format!("onboard={onboard}"),
+        ];
+    }
+
+    let mut lines = vec![paint(
+        &format!("Dev env {}", meta.name),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.extend(render_key_value_card(
+        "Environment",
+        &[
+            KeyValueRow::new(
+                "State",
+                if created { "prepared" } else { "reusing" },
+                Tone::Accent,
+            ),
+            KeyValueRow::accent("Port", meta.gateway_port.unwrap_or_default().to_string()),
+            KeyValueRow::plain("Root", meta.root.clone()),
+        ],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "Source",
+        &[
+            KeyValueRow::plain("Repo", dev.repo_root.clone()),
+            KeyValueRow::plain("Worktree", dev.worktree_root.clone()),
+        ],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "Launch",
+        &[
+            KeyValueRow::plain("Mode", if watch { "watch" } else { "run" }),
+            KeyValueRow::plain("Onboard first", onboard.to_string()),
+        ],
+        profile.color,
+    ));
+    lines
+}
+
+fn render_dev_run_step(title: &str, detail: String, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return vec![detail];
+    }
+
+    render_key_value_card(title, &[KeyValueRow::accent("Step", detail)], profile.color)
 }
 
 fn render_dev_status_list(summaries: &[DevStatusSummary], profile: RenderProfile) -> Vec<String> {
