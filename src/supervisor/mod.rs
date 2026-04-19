@@ -624,8 +624,13 @@ fn spawn_supervisor_child(spec: &SupervisorChildSpec) -> Result<Child, String> {
 }
 
 fn supervisor_program_arguments(spec: &SupervisorChildSpec) -> Vec<String> {
-    match (&spec.command, &spec.binary_path) {
-        (Some(command), _) => {
+    match (&spec.binary_path, &spec.command) {
+        (Some(binary_path), _) => {
+            let mut program_arguments = vec![binary_path.clone()];
+            program_arguments.extend(spec.args.iter().cloned());
+            program_arguments
+        }
+        (None, Some(command)) => {
             if cfg!(windows) {
                 vec!["cmd".to_string(), "/C".to_string(), command.to_string()]
             } else {
@@ -635,11 +640,6 @@ fn supervisor_program_arguments(spec: &SupervisorChildSpec) -> Vec<String> {
                     command.to_string(),
                 ]
             }
-        }
-        (None, Some(binary_path)) => {
-            let mut program_arguments = vec![binary_path.clone()];
-            program_arguments.extend(spec.args.iter().cloned());
-            program_arguments
         }
         (None, None) => Vec::new(),
     }

@@ -5,7 +5,9 @@ use serde::Serialize;
 
 use super::{EnvMeta, EnvironmentService};
 use crate::infra::shell::build_openclaw_env;
-use crate::launcher::{build_launcher_command, resolve_launcher_run_dir};
+use crate::launcher::{
+    build_launcher_command, resolve_direct_launcher_command, resolve_launcher_run_dir,
+};
 use crate::runtime::resolve_runtime_launch;
 use crate::store::{get_launcher, get_runtime_verified};
 
@@ -117,17 +119,19 @@ pub fn resolve_gateway_process_spec(
     match resolve_execution_binding(env_meta, None, None)? {
         ExecutionBinding::Launcher(binding_name) => {
             let launcher = get_launcher(&binding_name, process_env, cwd)?;
+            let run_dir = resolve_launcher_run_dir(&launcher, Path::new(&env_meta.root));
+            let direct = resolve_direct_launcher_command(&launcher, &gateway_args, &run_dir);
             Ok(GatewayProcessSpec {
                 env_name: env_meta.name.clone(),
                 binding_kind: "launcher".to_string(),
                 binding_name,
                 command: Some(build_launcher_command(&launcher, &gateway_args)),
-                binary_path: None,
+                binary_path: direct.as_ref().map(|command| command.program.clone()),
                 runtime_source_kind: None,
                 runtime_release_version: None,
                 runtime_release_channel: None,
-                args: Vec::new(),
-                run_dir: resolve_launcher_run_dir(&launcher, Path::new(&env_meta.root)),
+                args: direct.map(|command| command.args).unwrap_or_default(),
+                run_dir,
                 process_env: build_openclaw_env(env_meta, process_env),
             })
         }
@@ -203,13 +207,13 @@ pub enum ResolvedExecution {
 
 impl GatewayProcessSpec {
     pub fn program_arguments(&self) -> Vec<String> {
-        match (&self.command, &self.binary_path) {
-            (Some(command), _) => gateway_shell_program_arguments(command),
-            (None, Some(binary_path)) => {
+        match (&self.binary_path, &self.command) {
+            (Some(binary_path), _) => {
                 let mut program_arguments = vec![binary_path.clone()];
                 program_arguments.extend(self.args.iter().cloned());
                 program_arguments
             }
+            (None, Some(command)) => gateway_shell_program_arguments(command),
             (None, None) => Vec::new(),
         }
     }

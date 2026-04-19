@@ -405,6 +405,40 @@ fn service_status_uses_runtime_bindings_too() {
 }
 
 #[test]
+fn service_status_keeps_simple_package_manager_launchers_as_direct_exec() {
+    let root = TestDir::new("service-status-package-manager-launcher");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = launchd_env(&root);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", "pnpm openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let body = json_output(&status);
+    assert_eq!(body["bindingKind"], "launcher");
+    assert_eq!(body["binaryPath"], "pnpm");
+    let gateway_port = body["gatewayPort"].as_u64().unwrap().to_string();
+    assert_eq!(
+        body["args"],
+        Value::Array(vec![
+            Value::String("openclaw".to_string()),
+            Value::String("gateway".to_string()),
+            Value::String("run".to_string()),
+            Value::String("--port".to_string()),
+            Value::String(gateway_port),
+        ])
+    );
+}
+
+#[test]
 fn service_status_ignores_stale_runtime_children_when_the_daemon_is_down() {
     let root = TestDir::new("service-status-stale-runtime");
     let cwd = root.child("workspace");

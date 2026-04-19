@@ -201,3 +201,38 @@ fn gateway_process_spec_direct_arguments_preserve_the_binary_and_args() {
         ]
     );
 }
+
+#[test]
+fn gateway_process_spec_prefers_direct_program_arguments_when_both_shapes_exist() {
+    let spec = GatewayProcessSpec {
+        env_name: "demo".to_string(),
+        binding_kind: "launcher".to_string(),
+        binding_name: "dev".to_string(),
+        command: Some("pnpm openclaw gateway run --port 18900".to_string()),
+        binary_path: Some("node".to_string()),
+        runtime_source_kind: None,
+        runtime_release_version: None,
+        runtime_release_channel: None,
+        args: vec![
+            "scripts/run-node.mjs".to_string(),
+            "gateway".to_string(),
+            "run".to_string(),
+            "--port".to_string(),
+            "18900".to_string(),
+        ],
+        run_dir: PathBuf::from("/tmp/demo"),
+        process_env: BTreeMap::new(),
+    };
+
+    assert_eq!(
+        spec.program_arguments(),
+        vec![
+            "node".to_string(),
+            "scripts/run-node.mjs".to_string(),
+            "gateway".to_string(),
+            "run".to_string(),
+            "--port".to_string(),
+            "18900".to_string()
+        ]
+    );
+}
