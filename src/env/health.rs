@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::{EnvMarker, EnvMeta, EnvironmentService, ExecutionBinding, resolve_execution_binding};
+use super::{EnvMeta, EnvironmentService, ExecutionBinding, resolve_execution_binding};
 use crate::store::{OpenClawStateAudit, audit_openclaw_state, derive_env_paths, display_path};
 use crate::store::{
     audit_openclaw_config, get_launcher, get_runtime, repair_environment_marker,
@@ -171,14 +171,23 @@ impl<'a> EnvironmentService<'a> {
 
         let marker_status = if env_paths.marker_path.exists() {
             match fs::read_to_string(&env_paths.marker_path) {
-                Ok(raw) => match serde_json::from_str::<EnvMarker>(&raw) {
-                    Ok(marker) if marker.name == env.name => "ok".to_string(),
-                    Ok(marker) => {
+                Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+                    Ok(value)
+                        if value.get("name").and_then(|field| field.as_str())
+                            == Some(env.name.as_str()) =>
+                    {
+                        "ok".to_string()
+                    }
+                    Ok(value) => {
+                        let found = value
+                            .get("name")
+                            .and_then(|field| field.as_str())
+                            .unwrap_or("<missing>");
                         push_issue(
                             &mut issues,
                             format!(
                                 "environment marker name mismatch: expected \"{}\", found \"{}\"",
-                                env.name, marker.name
+                                env.name, found
                             ),
                         );
                         "mismatch".to_string()

@@ -6,17 +6,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::env::{
     CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
-    EnvMarker, EnvMarkerRepairSummary, EnvMeta, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    EnvMarkerRepairSummary, EnvMeta, ExportEnvironmentOptions, ImportEnvironmentOptions,
 };
 use crate::infra::archive::{
     ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive,
 };
+use serde::{Deserialize, Serialize};
 
-use super::common::{
-    copy_dir_recursive, ensure_dir, load_json_files, path_exists, read_json, write_json,
-};
+use super::common::{copy_dir_recursive, ensure_dir, path_exists, read_json, write_json};
 use super::layout::{
-    clean_path, default_env_root, derive_env_paths, display_path, env_meta_path,
+    clean_path, default_env_root, derive_env_paths, display_path, env_registry_path,
     resolve_absolute_path, validate_name,
 };
 use super::now_utc;
@@ -24,18 +23,63 @@ use super::{clear_nonportable_runtime_state, rewrite_openclaw_config_for_target}
 
 static NEXT_IMPORT_ID: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvRegistry {
+    kind: String,
+    envs: Vec<EnvMeta>,
+}
+
+fn empty_env_registry() -> EnvRegistry {
+    EnvRegistry {
+        kind: "ocm-env-registry".to_string(),
+        envs: Vec::new(),
+    }
+}
+
+fn load_env_registry(env: &BTreeMap<String, String>, cwd: &Path) -> Result<EnvRegistry, String> {
+    let path = env_registry_path(env, cwd)?;
+    if !path_exists(&path) {
+        return Ok(empty_env_registry());
+    }
+
+    let mut registry: EnvRegistry = read_json(&path)?;
+    registry.kind = "ocm-env-registry".to_string();
+    registry
+        .envs
+        .sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(registry)
+}
+
+fn write_env_registry(
+    mut registry: EnvRegistry,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<(), String> {
+    registry.kind = "ocm-env-registry".to_string();
+    registry
+        .envs
+        .sort_by(|left, right| left.name.cmp(&right.name));
+    let path = env_registry_path(env, cwd)?;
+    write_json(&path, &registry)
+}
+
+fn environment_exists(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<bool, String> {
+    Ok(load_env_registry(env, cwd)?
+        .envs
+        .iter()
+        .any(|meta| meta.name == name))
+}
+
 pub fn list_environments(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<Vec<EnvMeta>, String> {
-    let stores = super::ensure_store(env, cwd)?;
-    let files = load_json_files(&stores.envs_dir)?;
-    let mut out: Vec<EnvMeta> = Vec::with_capacity(files.len());
-    for file in files {
-        out.push(read_json(&file)?);
-    }
-    out.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(out)
+    Ok(load_env_registry(env, cwd)?.envs)
 }
 
 pub fn get_environment(
@@ -44,11 +88,11 @@ pub fn get_environment(
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
     let safe_name = validate_name(name, "Environment name")?;
-    let path = env_meta_path(&safe_name, env, cwd)?;
-    if !path_exists(&path) {
-        return Err(format!("environment \"{safe_name}\" does not exist"));
-    }
-    read_json(&path)
+    load_env_registry(env, cwd)?
+        .envs
+        .into_iter()
+        .find(|meta| meta.name == safe_name)
+        .ok_or_else(|| format!("environment \"{safe_name}\" does not exist"))
 }
 
 pub fn save_environment(
@@ -62,8 +106,14 @@ pub fn save_environment(
     meta.root = display_path(&clean_path(Path::new(&meta.root)));
     meta.updated_at = now_utc();
 
-    let path = env_meta_path(&meta.name, env, cwd)?;
-    write_json(&path, &meta)?;
+    let paths = derive_env_paths(Path::new(&meta.root));
+    write_json(&paths.marker_path, &meta)?;
+
+    let mut registry = load_env_registry(env, cwd)?;
+    registry.envs.retain(|entry| entry.name != meta.name);
+    registry.envs.push(meta.clone());
+    write_env_registry(registry, env, cwd)?;
+
     Ok(meta)
 }
 
@@ -81,12 +131,7 @@ pub fn repair_environment_marker(
         ));
     }
 
-    let marker = EnvMarker {
-        kind: "ocm-env-marker".to_string(),
-        name: meta.name.clone(),
-        created_at: now_utc(),
-    };
-    write_json(&paths.marker_path, &marker)?;
+    write_json(&paths.marker_path, &meta)?;
 
     Ok(EnvMarkerRepairSummary {
         env_name: meta.name,
@@ -101,8 +146,7 @@ pub fn create_environment(
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
     let name = validate_name(&options.name, "Environment name")?;
-    let meta_path = env_meta_path(&name, env, cwd)?;
-    if path_exists(&meta_path) {
+    if environment_exists(&name, env, cwd)? {
         return Err(format!("environment \"{name}\" already exists"));
     }
 
@@ -128,13 +172,6 @@ pub fn create_environment(
     ensure_dir(&paths.workspace_dir)?;
 
     let created_at = now_utc();
-    let marker = EnvMarker {
-        kind: "ocm-env-marker".to_string(),
-        name: name.clone(),
-        created_at,
-    };
-    write_json(&paths.marker_path, &marker)?;
-
     let meta = EnvMeta {
         kind: "ocm-env".to_string(),
         name,
@@ -159,8 +196,7 @@ pub fn clone_environment(
 ) -> Result<EnvMeta, String> {
     let source = get_environment(&options.source_name, env, cwd)?;
     let name = validate_name(&options.name, "Environment name")?;
-    let meta_path = env_meta_path(&name, env, cwd)?;
-    if path_exists(&meta_path) {
+    if environment_exists(&name, env, cwd)? {
         return Err(format!("environment \"{name}\" already exists"));
     }
 
@@ -203,12 +239,6 @@ pub fn clone_environment(
         copy_dir_recursive(&source_paths.root, &target_paths.root)?;
         let created_at = now_utc();
         let gateway_port = choose_cloned_gateway_port(&source, env, cwd)?;
-        let marker = EnvMarker {
-            kind: "ocm-env-marker".to_string(),
-            name: name.clone(),
-            created_at,
-        };
-        write_json(&target_paths.marker_path, &marker)?;
         rewrite_openclaw_config_for_target(
             &target_paths,
             Some(&source_paths.root),
@@ -234,7 +264,6 @@ pub fn clone_environment(
     })();
 
     if result.is_err() {
-        let _ = fs::remove_file(&meta_path);
         let _ = fs::remove_dir_all(&target_paths.root);
     }
 
@@ -415,8 +444,7 @@ pub fn import_environment(
         } else {
             validate_name(&source_name, "Environment name")?
         };
-        let meta_path = env_meta_path(&name, env, cwd)?;
-        if path_exists(&meta_path) {
+        if environment_exists(&name, env, cwd)? {
             return Err(format!("environment \"{name}\" already exists"));
         }
 
@@ -454,13 +482,6 @@ pub fn import_environment(
             clear_nonportable_runtime_state(&target_paths)?;
 
             let created_at = now_utc();
-            let marker = EnvMarker {
-                kind: "ocm-env-marker".to_string(),
-                name: name.clone(),
-                created_at,
-            };
-            write_json(&target_paths.marker_path, &marker)?;
-
             let meta = EnvMeta {
                 kind: "ocm-env".to_string(),
                 name: name.clone(),
@@ -489,7 +510,6 @@ pub fn import_environment(
                 protected: meta.protected,
             }),
             Err(error) => {
-                let _ = fs::remove_file(&meta_path);
                 let _ = fs::remove_dir_all(&target_paths.root);
                 Err(error)
             }
@@ -535,12 +555,9 @@ pub fn remove_environment(
         fs::remove_dir_all(&paths.root).map_err(|error| error.to_string())?;
     }
 
-    let meta_path = env_meta_path(&meta.name, env, cwd)?;
-    match fs::remove_file(meta_path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.to_string()),
-    }
+    let mut registry = load_env_registry(env, cwd)?;
+    registry.envs.retain(|entry| entry.name != meta.name);
+    write_env_registry(registry, env, cwd)?;
 
     Ok(meta)
 }

@@ -69,15 +69,6 @@ pub struct EnvSummary {
     pub last_used_at: Option<OffsetDateTime>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvMarker {
-    pub kind: String,
-    pub name: String,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-}
-
 #[derive(Clone, Debug)]
 pub struct CreateEnvironmentOptions {
     pub name: String,

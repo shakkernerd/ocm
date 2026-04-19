@@ -12,7 +12,7 @@ use ocm::launcher::AddLauncherOptions;
 use ocm::runtime::{AddRuntimeOptions, InstallRuntimeOptions, RuntimeSourceKind};
 use ocm::store::{
     add_launcher, add_runtime, clone_environment, create_env_snapshot, create_environment,
-    env_meta_path, export_environment, get_env_snapshot, get_environment, get_launcher,
+    env_registry_path, export_environment, get_env_snapshot, get_environment, get_launcher,
     get_runtime, import_environment, install_runtime, launcher_meta_path, list_all_env_snapshots,
     list_env_snapshots, list_environments, list_launchers, list_runtimes, remove_env_snapshot,
     remove_environment, remove_launcher, remove_runtime, repair_environment_marker,
@@ -44,8 +44,10 @@ fn environment_store_round_trip_covers_create_read_list_and_remove() {
     )
     .unwrap();
 
-    let meta_path = env_meta_path("alpha", &env, &cwd).unwrap();
-    assert!(meta_path.exists());
+    let registry_path = env_registry_path(&env, &cwd).unwrap();
+    assert!(registry_path.exists());
+    let root_meta_path = root.child("ocm-home/envs/alpha/.ocm-env.json");
+    assert!(root_meta_path.exists());
     assert!(created.protected);
     assert_eq!(created.gateway_port, Some(19789));
     assert_eq!(created.default_launcher.as_deref(), Some("stable"));
@@ -60,7 +62,8 @@ fn environment_store_round_trip_covers_create_read_list_and_remove() {
 
     let removed = remove_environment("alpha", true, &env, &cwd).unwrap();
     assert_eq!(removed.name, "alpha");
-    assert!(!meta_path.exists());
+    let registry_raw = fs::read_to_string(registry_path).unwrap();
+    assert!(!registry_raw.contains("\"name\": \"alpha\""));
     assert!(!std::path::Path::new(&removed.root).exists());
 }
 
@@ -270,6 +273,7 @@ fn environment_clone_copies_the_root_and_resets_identity_metadata() {
     assert_ne!(cloned.root, source.root);
 
     let marker_raw = fs::read_to_string(target_root.join(".ocm-env.json")).unwrap();
+    assert!(marker_raw.contains("\"kind\": \"ocm-env\""));
     assert!(marker_raw.contains("\"name\": \"target\""));
 }
 
@@ -656,6 +660,7 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
 
     let marker_raw =
         fs::read_to_string(root.child("workspace/imports/target-root/.ocm-env.json")).unwrap();
+    assert!(marker_raw.contains("\"kind\": \"ocm-env\""));
     assert!(marker_raw.contains("\"name\": \"target\""));
 }
 
@@ -1146,6 +1151,7 @@ fn environment_marker_repair_rewrites_the_marker_for_the_current_env_name() {
     assert_eq!(repaired.marker_path, marker_path.display().to_string());
 
     let marker_raw = fs::read_to_string(marker_path).unwrap();
+    assert!(marker_raw.contains("\"kind\": \"ocm-env\""));
     assert!(marker_raw.contains("\"name\": \"source\""));
 }
 
@@ -1243,16 +1249,15 @@ fn environment_cleanup_preview_identifies_safe_repairs_without_mutating_state() 
     let service = EnvironmentService::new(&env, &cwd);
     let preview = service.cleanup_preview("source").unwrap();
     assert!(!preview.apply);
-    assert_eq!(preview.actions.len(), 3);
-    assert_eq!(preview.actions[0].kind, "repair-marker");
-    assert_eq!(preview.actions[1].kind, "clear-missing-runtime");
-    assert_eq!(preview.actions[2].kind, "clear-missing-launcher");
+    assert_eq!(preview.actions.len(), 2);
+    assert_eq!(preview.actions[0].kind, "clear-missing-runtime");
+    assert_eq!(preview.actions[1].kind, "clear-missing-launcher");
     assert!(preview.actions.iter().all(|action| !action.applied));
 
     let current = get_environment("source", &env, &cwd).unwrap();
     assert_eq!(current.default_runtime.as_deref(), Some("ghost-runtime"));
     assert_eq!(current.default_launcher.as_deref(), Some("ghost-launcher"));
-    assert!(!marker_path.exists());
+    assert!(marker_path.exists());
 }
 
 #[test]
@@ -1293,7 +1298,7 @@ fn environment_cleanup_applies_marker_and_binding_repairs() {
     let service = EnvironmentService::new(&env, &cwd);
     let applied = service.cleanup("source").unwrap();
     assert!(applied.apply);
-    assert_eq!(applied.actions.len(), 3);
+    assert_eq!(applied.actions.len(), 2);
     assert!(applied.actions.iter().all(|action| action.applied));
 
     let current = get_environment("source", &env, &cwd).unwrap();
@@ -1301,6 +1306,7 @@ fn environment_cleanup_applies_marker_and_binding_repairs() {
     assert_eq!(current.default_launcher, None);
 
     let marker_raw = fs::read_to_string(marker_path).unwrap();
+    assert!(marker_raw.contains("\"kind\": \"ocm-env\""));
     assert!(marker_raw.contains("\"name\": \"source\""));
     assert_eq!(applied.healthy_after, Some(false));
     assert!(

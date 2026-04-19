@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use ocm::store::{clean_path, env_meta_path};
+use ocm::store::{clean_path, env_registry_path};
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr};
 
@@ -23,8 +23,9 @@ fn removing_a_protected_environment_requires_force() {
     let force_remove = run_ocm(&cwd, &env, &["env", "remove", "demo", "--force"]);
     assert!(force_remove.status.success(), "{}", stderr(&force_remove));
 
-    let meta_path = env_meta_path("demo", &env, &cwd).unwrap();
-    assert!(!meta_path.exists());
+    let registry_path = env_registry_path(&env, &cwd).unwrap();
+    let registry_raw = fs::read_to_string(registry_path).unwrap();
+    assert!(!registry_raw.contains("\"name\": \"demo\""));
 }
 
 #[test]

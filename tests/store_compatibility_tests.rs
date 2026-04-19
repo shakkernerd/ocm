@@ -4,23 +4,26 @@ use std::fs;
 
 use ocm::env::{EnvMeta, select_prune_candidates};
 use ocm::runtime::RuntimeSourceKind;
-use ocm::store::{ensure_store, get_environment, get_launcher, get_runtime, now_utc};
+use ocm::store::{
+    ensure_store, env_registry_path, get_environment, get_launcher, get_runtime, now_utc,
+};
 use time::Duration;
 
 use crate::support::{TestDir, ocm_env, path_string, write_text};
 
 #[test]
-fn get_environment_accepts_legacy_json_without_last_used_at() {
-    let root = TestDir::new("legacy-env-json");
+fn get_environment_accepts_registry_json_without_last_used_at() {
+    let root = TestDir::new("registry-env-json");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
-    let stores = ensure_store(&env, &cwd).unwrap();
+    ensure_store(&env, &cwd).unwrap();
+    fs::create_dir_all(root.child("env-root")).unwrap();
 
     write_text(
-        &stores.envs_dir.join("legacy.json"),
+        &env_registry_path(&env, &cwd).unwrap(),
         &format!(
-            "{{\n  \"kind\": \"ocm-env\",\n  \"name\": \"legacy\",\n  \"root\": \"{}\",\n  \"gatewayPort\": 19789,\n  \"defaultLauncher\": \"stable\",\n  \"protected\": false,\n  \"createdAt\": \"2026-03-20T10:00:00Z\",\n  \"updatedAt\": \"2026-03-20T10:00:00Z\"\n}}\n",
+            "{{\n  \"kind\": \"ocm-env-registry\",\n  \"envs\": [\n    {{\n      \"kind\": \"ocm-env\",\n      \"name\": \"legacy\",\n      \"root\": \"{}\",\n      \"gatewayPort\": 19789,\n      \"defaultLauncher\": \"stable\",\n      \"protected\": false,\n      \"createdAt\": \"2026-03-20T10:00:00Z\",\n      \"updatedAt\": \"2026-03-20T10:00:00Z\"\n    }}\n  ]\n}}\n",
             path_string(&root.child("env-root"))
         ),
     );

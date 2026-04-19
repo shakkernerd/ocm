@@ -6,6 +6,18 @@ use serde_json::Value;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
+fn update_first_registry_env(root: &TestDir, mutate: impl FnOnce(&mut Value)) {
+    let registry_path = root.child("ocm-home/envs.json");
+    let mut registry: Value =
+        serde_json::from_str(&fs::read_to_string(&registry_path).unwrap()).unwrap();
+    mutate(&mut registry["envs"][0]);
+    fs::write(
+        registry_path,
+        format!("{}\n", serde_json::to_string_pretty(&registry).unwrap()),
+    )
+    .unwrap();
+}
+
 #[test]
 fn env_cleanup_preview_reports_safe_repairs_without_applying_them() {
     let root = TestDir::new("env-cleanup-preview");
@@ -18,13 +30,10 @@ fn env_cleanup_preview_reports_safe_repairs_without_applying_them() {
 
     fs::remove_file(root.child("ocm-home/envs/demo/.ocm-env.json")).unwrap();
 
-    let meta_path = root.child("ocm-home/envs/demo.json");
-    let updated = "{\n  \"kind\": \"ocm-env\",\n  \"name\": \"demo\",\n  \"root\": \"REPLACE_ROOT\",\n  \"gatewayPort\": null,\n  \"defaultRuntime\": \"ghost-runtime\",\n  \"defaultLauncher\": \"ghost-launcher\",\n  \"protected\": false,\n  \"createdAt\": \"2026-03-25T00:00:00Z\",\n  \"updatedAt\": \"2026-03-25T00:00:00Z\",\n  \"lastUsedAt\": null\n}\n"
-        .replace(
-            "REPLACE_ROOT",
-            &root.child("ocm-home/envs/demo").display().to_string(),
-        );
-    fs::write(&meta_path, updated).unwrap();
+    update_first_registry_env(&root, |env| {
+        env["defaultRuntime"] = Value::String("ghost-runtime".to_string());
+        env["defaultLauncher"] = Value::String("ghost-launcher".to_string());
+    });
 
     let cleanup = run_ocm(&cwd, &env, &["env", "cleanup", "demo"]);
     assert!(cleanup.status.success(), "{}", stderr(&cleanup));
@@ -41,7 +50,7 @@ fn env_cleanup_preview_reports_safe_repairs_without_applying_them() {
     );
     assert!(output.contains("re-run with --yes to apply them"));
 
-    let persisted = fs::read_to_string(meta_path).unwrap();
+    let persisted = fs::read_to_string(root.child("ocm-home/envs.json")).unwrap();
     assert!(persisted.contains("\"defaultRuntime\": \"ghost-runtime\""));
     assert!(!root.child("ocm-home/envs/demo/.ocm-env.json").exists());
 }
@@ -58,13 +67,9 @@ fn env_cleanup_preview_json_reports_actions_and_current_issues() {
 
     fs::remove_file(root.child("ocm-home/envs/demo/.ocm-env.json")).unwrap();
 
-    let meta_path = root.child("ocm-home/envs/demo.json");
-    let updated = "{\n  \"kind\": \"ocm-env\",\n  \"name\": \"demo\",\n  \"root\": \"REPLACE_ROOT\",\n  \"gatewayPort\": null,\n  \"defaultRuntime\": null,\n  \"defaultLauncher\": \"ghost-launcher\",\n  \"protected\": false,\n  \"createdAt\": \"2026-03-25T00:00:00Z\",\n  \"updatedAt\": \"2026-03-25T00:00:00Z\",\n  \"lastUsedAt\": null\n}\n"
-        .replace(
-            "REPLACE_ROOT",
-            &root.child("ocm-home/envs/demo").display().to_string(),
-        );
-    fs::write(&meta_path, updated).unwrap();
+    update_first_registry_env(&root, |env| {
+        env["defaultLauncher"] = Value::String("ghost-launcher".to_string());
+    });
 
     let cleanup = run_ocm(&cwd, &env, &["env", "cleanup", "demo", "--json"]);
     assert!(cleanup.status.success(), "{}", stderr(&cleanup));
@@ -103,13 +108,9 @@ fn env_cleanup_yes_applies_safe_repairs() {
     )
     .unwrap();
 
-    let meta_path = root.child("ocm-home/envs/demo.json");
-    let updated = "{\n  \"kind\": \"ocm-env\",\n  \"name\": \"demo\",\n  \"root\": \"REPLACE_ROOT\",\n  \"gatewayPort\": null,\n  \"defaultRuntime\": null,\n  \"defaultLauncher\": \"ghost-launcher\",\n  \"protected\": false,\n  \"createdAt\": \"2026-03-25T00:00:00Z\",\n  \"updatedAt\": \"2026-03-25T00:00:00Z\",\n  \"lastUsedAt\": null\n}\n"
-        .replace(
-            "REPLACE_ROOT",
-            &root.child("ocm-home/envs/demo").display().to_string(),
-        );
-    fs::write(&meta_path, updated).unwrap();
+    update_first_registry_env(&root, |env| {
+        env["defaultLauncher"] = Value::String("ghost-launcher".to_string());
+    });
 
     let cleanup = run_ocm(&cwd, &env, &["env", "cleanup", "demo", "--yes"]);
     assert!(cleanup.status.success(), "{}", stderr(&cleanup));
@@ -122,7 +123,7 @@ fn env_cleanup_yes_applies_safe_repairs() {
             .contains("clear-missing-launcher: clear missing launcher binding \"ghost-launcher\"")
     );
 
-    let persisted = fs::read_to_string(meta_path).unwrap();
+    let persisted = fs::read_to_string(root.child("ocm-home/envs.json")).unwrap();
     assert!(persisted.contains("\"defaultLauncher\": null"));
 
     let marker_raw = fs::read_to_string(root.child("ocm-home/envs/demo/.ocm-env.json")).unwrap();

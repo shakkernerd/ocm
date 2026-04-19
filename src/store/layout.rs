@@ -201,13 +201,9 @@ pub fn default_env_root(
     Ok(stores.envs_dir.join(name))
 }
 
-pub fn env_meta_path(
-    name: &str,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<PathBuf, String> {
+pub fn env_registry_path(env: &BTreeMap<String, String>, cwd: &Path) -> Result<PathBuf, String> {
     let stores = resolve_store_paths(env, cwd)?;
-    Ok(stores.envs_dir.join(format!("{name}.json")))
+    Ok(stores.home.join("envs.json"))
 }
 
 pub fn launcher_meta_path(

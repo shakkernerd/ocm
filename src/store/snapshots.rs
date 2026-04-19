@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::env::{
-    CreateEnvSnapshotOptions, EnvMarker, EnvMeta, EnvSnapshotRemoveSummary,
-    EnvSnapshotRestoreSummary, EnvSnapshotSummary, RemoveEnvSnapshotOptions,
-    RestoreEnvSnapshotOptions, default_service_enabled, default_service_running,
+    CreateEnvSnapshotOptions, EnvMeta, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
+    EnvSnapshotSummary, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
+    default_service_enabled, default_service_running,
 };
 use crate::infra::archive::{
     ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive,
@@ -235,12 +235,6 @@ pub fn restore_env_snapshot(
                 Some(Path::new(&snapshot.source_root)),
                 extracted.metadata.env.gateway_port,
             )?;
-            let marker = EnvMarker {
-                kind: "ocm-env-marker".to_string(),
-                name: env_name.clone(),
-                created_at: now_utc(),
-            };
-            write_json(&current_paths.marker_path, &marker)?;
 
             let restored = EnvMeta {
                 kind: "ocm-env".to_string(),
