@@ -60,6 +60,18 @@ fn binding_label(summary: &ServiceSummary) -> String {
     }
 }
 
+fn gateway_state(summary: &ServiceSummary) -> &'static str {
+    service_state(summary)
+}
+
+fn ocm_background_service_state(summary: &ServiceSummary) -> &'static str {
+    ocm_service_state(
+        summary.ocm_service_installed,
+        summary.ocm_service_loaded,
+        summary.ocm_service_running,
+    )
+}
+
 pub fn service_list(summary: &ServiceSummaryList, profile: RenderProfile) -> Vec<String> {
     service_list_with_width(summary, profile, terminal_width())
 }
@@ -74,7 +86,7 @@ fn service_list_with_width(
     }
 
     if summary.services.is_empty() {
-        return vec!["No OCM services.".to_string()];
+        return vec!["No supervised env gateways.".to_string()];
     }
 
     let rows = summary
@@ -90,29 +102,21 @@ fn service_list_with_width(
                 },
                 Cell::right(service.gateway_port.to_string(), Tone::Accent),
                 Cell::new(
-                    service_state(service),
+                    gateway_state(service),
                     crate::infra::terminal::Align::Left,
-                    state_tone(service_state(service)),
+                    state_tone(gateway_state(service)),
                 ),
                 Cell::new(
-                    ocm_service_state(
-                        service.ocm_service_installed,
-                        service.ocm_service_loaded,
-                        service.ocm_service_running,
-                    ),
+                    ocm_background_service_state(service),
                     crate::infra::terminal::Align::Left,
-                    state_tone(ocm_service_state(
-                        service.ocm_service_installed,
-                        service.ocm_service_loaded,
-                        service.ocm_service_running,
-                    )),
+                    state_tone(ocm_background_service_state(service)),
                 ),
             ]
         })
         .collect::<Vec<_>>();
 
     let mut lines = render_table(
-        &["Env", "Binding", "Port", "Service", "OCM"],
+        &["Env", "Binding", "Port", "Gateway", "OCM"],
         &rows,
         profile.color,
     );
@@ -145,15 +149,8 @@ fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
         let mut bits = vec![
             service.env_name.clone(),
             format!("port={}", service.gateway_port),
-            format!("state={}", service_state(service)),
-            format!(
-                "ocmService={}",
-                ocm_service_state(
-                    service.ocm_service_installed,
-                    service.ocm_service_loaded,
-                    service.ocm_service_running
-                )
-            ),
+            format!("gateway={}", gateway_state(service)),
+            format!("ocmService={}", ocm_background_service_state(service)),
         ];
         if let (Some(kind), Some(name)) = (
             service.binding_kind.as_deref(),
@@ -178,28 +175,28 @@ pub fn service_status(
         return service_status_raw(summary);
     }
 
-    let daemon = ocm_service_state(
-        summary.ocm_service_installed,
-        summary.ocm_service_loaded,
-        summary.ocm_service_running,
-    );
-    let service = service_state(summary);
+    let daemon = ocm_background_service_state(summary);
+    let gateway = gateway_state(summary);
 
     let mut lines = vec![paint(
-        &format!("Service {}", summary.env_name),
+        &format!("Supervised env {}", summary.env_name),
         Tone::Strong,
         profile.color,
     )];
 
     lines.extend(render_key_value_card(
-        "Service",
+        "Gateway",
         &[
             KeyValueRow::plain("Type", summary.service_kind.clone()),
             KeyValueRow::accent("Port", summary.gateway_port.to_string()),
-            KeyValueRow::new("State", service, state_tone(service)),
-            KeyValueRow::new("OCM service", daemon, state_tone(daemon)),
+            KeyValueRow::new("State", gateway, state_tone(gateway)),
             KeyValueRow::plain("Desired running", summary.desired_running.to_string()),
         ],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "OCM background service",
+        &[KeyValueRow::new("State", daemon, state_tone(daemon))],
         profile.color,
     ));
 
@@ -261,7 +258,7 @@ fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) ->
     if !summary.installed {
         return vec![
             KeyValueRow::accent(
-                "Install",
+                "Enable",
                 format!("{command_example} service install {}", summary.env_name),
             ),
             KeyValueRow::plain(
@@ -308,6 +305,7 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
         format!("installed: {}", summary.installed),
         format!("desiredRunning: {}", summary.desired_running),
         format!("running: {}", summary.running),
+        format!("gatewayState: {}", gateway_state(summary)),
         format!("ocmService: {daemon}"),
         format!(
             "childPid: {}",
@@ -364,20 +362,12 @@ pub fn service_action(
         "disabled"
     };
 
-    let mut lines = vec![paint(
-        &format!(
-            "{} service {}",
-            action_verb(&summary.action),
-            summary.env_name
-        ),
-        Tone::Strong,
-        profile.color,
-    )];
+    let mut lines = vec![paint(&action_title(summary), Tone::Strong, profile.color)];
     lines.extend(render_key_value_card(
         "Result",
         &[
             KeyValueRow::plain("Action", summary.action.clone()),
-            KeyValueRow::new("State", state, state_tone(state)),
+            KeyValueRow::new("Gateway", state, state_tone(state)),
             KeyValueRow::accent("Port", summary.gateway_port.to_string()),
             optional_value_row(
                 "Binding",
@@ -444,14 +434,26 @@ fn service_action_raw(summary: &ServiceActionSummary, _command_example: &str) ->
     ]
 }
 
-fn action_verb(action: &str) -> &'static str {
-    match action {
-        "install" => "Installed",
-        "start" => "Started",
-        "stop" => "Stopped",
-        "restart" => "Restarted",
-        "uninstall" => "Uninstalled",
-        _ => "Updated",
+fn action_title(summary: &ServiceActionSummary) -> String {
+    match summary.action.as_str() {
+        "install" => format!("Enabled {} in the OCM background service", summary.env_name),
+        "start" => format!(
+            "Started {} under the OCM background service",
+            summary.env_name
+        ),
+        "stop" => format!(
+            "Stopped {} under the OCM background service",
+            summary.env_name
+        ),
+        "restart" => format!(
+            "Restarted {} under the OCM background service",
+            summary.env_name
+        ),
+        "uninstall" => format!(
+            "Disabled {} in the OCM background service",
+            summary.env_name
+        ),
+        _ => format!("Updated {} in the OCM background service", summary.env_name),
     }
 }
 

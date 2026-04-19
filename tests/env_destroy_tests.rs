@@ -82,7 +82,7 @@ fn env_destroy_preview_reports_service_snapshot_and_env_steps() {
     assert!(output.contains("snapshots: 1"));
     assert!(output.contains("service: ocm"));
     assert!(output.contains("snapshots: remove 1 env snapshot(s)"));
-    assert!(output.contains("service: disable env service in the OCM background service"));
+    assert!(output.contains("service: disable env gateway in the OCM background service"));
     assert!(output.contains("env: remove env root and metadata"));
     assert!(output.contains("re-run with --yes to destroy it"));
 

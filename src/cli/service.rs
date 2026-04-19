@@ -47,9 +47,10 @@ impl Cli {
         Self::assert_no_extra_args(&args[1..])?;
         self.ensure_service_backend_mutation_supported()?;
 
-        let summary = self.with_progress(format!("Installing service for {name}"), || {
-            self.service_service().install(name)
-        })?;
+        let summary = self.with_progress(
+            format!("Enabling {name} in the OCM background service"),
+            || self.service_service().install(name),
+        )?;
         if json_flag {
             self.print_json(&summary)?;
             return Ok(0);

@@ -805,7 +805,7 @@ impl Cli {
         if service.installed || service.loaded || service.running {
             steps.push(EnvDestroyStepSummary {
                 kind: "service".to_string(),
-                description: "disable env service in the OCM background service".to_string(),
+                description: "disable env gateway in the OCM background service".to_string(),
             });
         }
         steps.push(EnvDestroyStepSummary {

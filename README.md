@@ -2,7 +2,7 @@
 
 **Install, run, update, and manage OpenClaw — properly.**
 
-OCM gives OpenClaw one coherent workflow across stable releases, local checkouts, background services, upgrades, snapshots, and ongoing maintenance.
+OCM gives OpenClaw one coherent workflow across stable releases, local checkouts, supervised env gateways, upgrades, snapshots, and ongoing maintenance.
 
 OpenClaw is easy to start once. It gets messier when you want more than one setup, need stable and local development side by side, or want confidence about what is actually running. `ocm` fixes that.
 
@@ -33,7 +33,7 @@ Use `ocm` when you want:
 - one command path for OpenClaw itself through `ocm @<env> -- <command>`
 - published OpenClaw releases installed locally and updated safely
 - local checkout workflows that feel just as normal as released builds
-- background services that are easy to inspect, update, restart, and remove
+- one OCM background service that can supervise env gateways cleanly
 - snapshots, export/import, and safer cleanup
 
 ## Install
@@ -142,7 +142,7 @@ ocm adopt plan --name mira
 
 `adopt inspect` and `adopt plan` are the explicit read-only preview tools. Use them when you want to inspect the plain OpenClaw home OCM would read or preview the target env/root before importing.
 
-### Keep background services visible
+### Keep supervised envs visible
 
 ```bash
 ocm service list
@@ -159,7 +159,7 @@ Use `ocm` when you want:
 - more than one environment
 - clean runtime and launcher separation
 - stable and local-dev setups side by side
-- inspectable background services
+- inspectable supervised env gateways
 - safer upgrades, snapshots, and repair flows
 
 Manual setup works. `ocm` is what makes it feel organized.

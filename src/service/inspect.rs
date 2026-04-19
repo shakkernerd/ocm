@@ -349,7 +349,7 @@ fn service_issue(
             return Some("OCM background service is not running".to_string());
         }
         if !running {
-            return Some("env child is not running under the OCM background service".to_string());
+            return Some("env gateway is not running under the OCM background service".to_string());
         }
     }
     None
