@@ -284,7 +284,7 @@ fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) ->
 
     vec![KeyValueRow::accent(
         "Logs",
-        format!("{command_example} service logs {}", summary.env_name),
+        format!("{command_example} logs {}", summary.env_name),
     )]
 }
 
@@ -398,7 +398,7 @@ pub fn service_action(
             "Next",
             &[KeyValueRow::accent(
                 "Logs",
-                format!("{command_example} service logs {}", summary.env_name),
+                format!("{command_example} logs {}", summary.env_name),
             )],
             profile.color,
         ));
@@ -521,6 +521,6 @@ mod tests {
     #[test]
     fn service_status_pretty_shows_logs_next_step() {
         let lines = service_status(&sample_service(), RenderProfile::pretty(false), "ocm");
-        assert!(lines.iter().any(|line| line.contains("service logs demo")));
+        assert!(lines.iter().any(|line| line.contains("logs demo")));
     }
 }

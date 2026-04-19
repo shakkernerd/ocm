@@ -133,6 +133,10 @@ pub fn root_help(cmd: &str) -> String {
                 "Registered and installer-managed OpenClaw runtimes",
             ),
             (
+                "logs",
+                "Tail env gateway logs from the env log files or service fallback logs",
+            ),
+            (
                 "service",
                 "Supervise env gateways through the OCM background service",
             ),
@@ -174,6 +178,7 @@ pub fn root_help(cmd: &str) -> String {
             format!("{cmd} help self"),
             format!("{cmd} help env"),
             format!("{cmd} help release"),
+            format!("{cmd} help logs"),
             format!("{cmd} help service"),
             format!("{cmd} help runtime install"),
             format!("{cmd} --color always env list"),
@@ -196,6 +201,33 @@ pub fn setup_help(cmd: &str) -> String {
             "When run inside an OpenClaw checkout, local mode defaults to `pnpm openclaw` in that folder.",
             "If OCM detects an existing plain OpenClaw home, setup points you at `migrate` so you can bring that state under OCM instead of starting fresh.",
             "Use `start` when you already know the source you want.",
+        ],
+    )
+}
+
+pub fn logs_help(cmd: &str) -> String {
+    render_leaf(
+        "Read env logs",
+        "Tail one env gateway log with follow support. OCM reads the env's own OpenClaw gateway logs first and falls back to the OCM background service child logs when needed.",
+        vec![format!(
+            "{cmd} logs <env> [--stderr] [--tail <count>] [--follow] [--raw] [--json]"
+        )],
+        &[
+            ("--stderr", "Read stderr instead of stdout"),
+            ("--tail <count>", "Print the last N lines before streaming"),
+            ("--follow", "Keep following the log file like tail -f"),
+            ("--raw", "Print log content without the TTY header"),
+            ("--json", "Print log metadata and snapshot content as JSON"),
+        ],
+        vec![
+            format!("{cmd} logs mira"),
+            format!("{cmd} logs mira --follow"),
+            format!("{cmd} logs mira --stderr --tail 100"),
+        ],
+        &[
+            "Default output shows the last 50 lines.",
+            "Follow mode cannot be combined with --json.",
+            "Foreground runs still work because OCM prefers the env's own gateway log files.",
         ],
     )
 }
@@ -866,7 +898,6 @@ pub fn service_help(cmd: &str) -> String {
                 &[
                     ("list", "List supervised env gateways"),
                     ("status", "Show one env gateway or all supervised envs"),
-                    ("logs", "Read env child logs"),
                 ],
             ),
             (
@@ -1898,23 +1929,6 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} service status --all"),
             ],
             &["TTY output uses cards for one env and a table for `--all` by default."],
-        ),
-        "logs" => render_leaf(
-            "Read supervised env logs",
-            "Print stdout or stderr logs for one env child managed by the OCM background service.",
-            vec![format!(
-                "{cmd} service logs <env> [--stderr] [--tail <count>] [--json]"
-            )],
-            &[
-                ("--stderr", "Read stderr instead of stdout"),
-                ("--tail <count>", "Only print the last N lines"),
-                ("--json", "Print log metadata and content as JSON"),
-            ],
-            vec![
-                format!("{cmd} service logs mira"),
-                format!("{cmd} service logs mira --stderr --tail 50"),
-            ],
-            &["Plain-text output is intentionally raw so it can be piped directly."],
         ),
         "start" => render_leaf(
             "Start an env under the background service",

@@ -24,6 +24,7 @@ impl Cli {
             ["start"] => Ok(render::help::start_help(&cmd)),
             ["upgrade"] => Ok(render::help::upgrade_help(&cmd)),
             ["doctor"] => Ok(render::help::doctor_help(&cmd)),
+            ["logs"] => Ok(render::help::logs_help(&cmd)),
             ["init"] => Ok(render::help::init_help(&cmd)),
             ["self"] => Ok(render::help::self_help(&cmd)),
             ["env"] => Ok(render::help::env_help(&cmd)),
@@ -62,6 +63,7 @@ impl Cli {
                         | "start"
                         | "upgrade"
                         | "doctor"
+                        | "logs"
                         | "self"
                         | "env"
                         | "migrate"
@@ -100,6 +102,7 @@ impl Cli {
                         | "runtime"
                         | "service"
                         | "dev"
+                        | "logs"
                 ) =>
             {
                 Some(vec![group.as_str()])
@@ -120,6 +123,7 @@ impl Cli {
                     "self"
                         | "env"
                         | "dev"
+                        | "logs"
                         | "migrate"
                         | "adopt"
                         | "release"
@@ -149,6 +153,7 @@ impl Cli {
                         | "launcher"
                         | "runtime"
                         | "service"
+                        | "logs"
                 ) && Self::is_help_flag(flag) =>
             {
                 Some(vec![group.as_str(), action.as_str()])

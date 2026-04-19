@@ -219,6 +219,15 @@ fn env_and_service_detail_commands_accept_raw_output_mode() {
     assert!(stdout(&service_status).contains("desiredRunning: false"));
     assert!(stdout(&service_status).contains("running: false"));
     assert!(!stdout(&service_status).contains("┌"));
+
+    let gateway_log = root.child("ocm-home/envs/demo/.openclaw/logs/gateway.log");
+    fs::create_dir_all(gateway_log.parent().unwrap()).unwrap();
+    fs::write(&gateway_log, "hello from logs\n").unwrap();
+
+    let logs = run_ocm(&cwd, &env, &["logs", "demo", "--raw"]);
+    assert!(logs.status.success(), "{}", stderr(&logs));
+    assert_eq!(stdout(&logs), "hello from logs\n");
+    assert!(!stdout(&logs).contains("┌"));
 }
 
 #[test]

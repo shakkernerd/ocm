@@ -69,13 +69,17 @@ fn env_clone_prints_the_effective_gateway_port_for_the_cloned_env() {
     );
     assert!(created.status.success(), "{}", stderr(&created));
     let created_output = stdout(&created);
-    let source_port = extract_port(&created_output, "effective gateway port");
+    assert!(created_output.contains("effective gateway port"));
 
     let cloned = run_ocm(&cwd, &env, &["env", "clone", "demo", "copy"]);
     assert!(cloned.status.success(), "{}", stderr(&cloned));
     let output = stdout(&cloned);
     assert!(output.contains("Cloned env copy from demo"));
     let cloned_port = extract_port(&output, "gateway port");
+    let source_status = run_ocm(&cwd, &env, &["env", "status", "demo", "--json"]);
+    assert!(source_status.status.success(), "{}", stderr(&source_status));
+    let source_body: serde_json::Value = serde_json::from_str(&stdout(&source_status)).unwrap();
+    let source_port = source_body["gatewayPort"].as_u64().unwrap() as u32;
     assert_ne!(cloned_port, source_port);
     assert!(output.contains("service: not copied from source"));
     assert!(output.contains("start: ocm start copy"));

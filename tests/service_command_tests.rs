@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::support::{
     TestDir, install_fake_launchctl, install_fake_systemd_tools, managed_service_definition_path,
-    ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
+    ocm_env, path_string, run_ocm, stderr, write_executable_script,
 };
 
 fn launchd_env(root: &TestDir) -> BTreeMap<String, String> {
@@ -268,39 +268,6 @@ fn service_list_reports_env_and_ocm_service_state_in_json() {
     assert_eq!(body["services"][0]["envName"], "demo");
     assert_eq!(body["services"][0]["installed"], true);
     assert_eq!(body["services"][0]["desiredRunning"], true);
-}
-
-#[test]
-fn service_logs_read_from_the_planned_child_log_paths() {
-    let root = TestDir::new("service-logs");
-    let cwd = root.child("workspace");
-    fs::create_dir_all(&cwd).unwrap();
-    let env = launchd_env(&root);
-    setup_launcher_env(&cwd, &env);
-
-    let installed = run_ocm(&cwd, &env, &["service", "install", "demo"]);
-    assert!(installed.status.success(), "{}", stderr(&installed));
-
-    let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
-    assert!(status.status.success(), "{}", stderr(&status));
-    let body = json_output(&status);
-    let stdout_path = body["stdoutPath"].as_str().unwrap();
-    let stderr_path = body["stderrPath"].as_str().unwrap();
-    fs::write(stdout_path, "hello from stdout\n").unwrap();
-    fs::write(stderr_path, "hello from stderr\n").unwrap();
-
-    let stdout_log = run_ocm(&cwd, &env, &["service", "logs", "demo"]);
-    assert!(stdout_log.status.success(), "{}", stderr(&stdout_log));
-    assert_eq!(stdout(&stdout_log), "hello from stdout\n");
-
-    let stderr_log = run_ocm(
-        &cwd,
-        &env,
-        &["service", "logs", "demo", "--stderr", "--json"],
-    );
-    assert!(stderr_log.status.success(), "{}", stderr(&stderr_log));
-    let stderr_body = json_output(&stderr_log);
-    assert_eq!(stderr_body["content"], "hello from stderr\n");
 }
 
 #[test]

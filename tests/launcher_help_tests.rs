@@ -45,6 +45,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("ocm help adopt"));
     assert!(output.contains("ocm help upgrade"));
     assert!(output.contains("ocm help doctor"));
+    assert!(output.contains("ocm help logs"));
     assert!(output.contains("ocm help self"));
     assert!(output.contains("ocm start mira"));
     assert!(output.contains("ocm start mira --channel beta"));
@@ -67,6 +68,28 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(!output.contains("env snapshot restore <name> <snapshot>"));
     assert!(!output.contains("service restore-global"));
     assert!(!output.contains("service discover"));
+}
+
+#[test]
+fn logs_help_is_available_from_help_and_flag() {
+    let root = TestDir::new("help-logs");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "logs"]);
+    let via_flag = run_ocm(&cwd, &env, &["logs", "--help"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(via_flag.status.success(), "{}", stderr(&via_flag));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&via_flag));
+    assert!(output.contains("Read env logs"));
+    assert!(
+        output.contains("ocm logs <env> [--stderr] [--tail <count>] [--follow] [--raw] [--json]")
+    );
+    assert!(output.contains("ocm logs mira --follow"));
+    assert!(output.contains("Default output shows the last 50 lines."));
 }
 
 #[test]

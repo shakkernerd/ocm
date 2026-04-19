@@ -300,7 +300,6 @@ fn clone_environment_skips_busy_ports_when_assigning_a_new_identity() {
         &cwd,
     )
     .unwrap();
-
     let cloned = clone_environment(
         CloneEnvironmentOptions {
             source_name: source.name,
@@ -340,7 +339,6 @@ fn clone_environment_assigns_a_new_port_when_the_source_only_had_a_computed_port
         &cwd,
     )
     .unwrap();
-
     let cloned = clone_environment(
         CloneEnvironmentOptions {
             source_name: source.name,
@@ -398,7 +396,6 @@ fn clone_environment_skips_the_global_openclaw_port_family() {
         &cwd,
     )
     .unwrap();
-
     assert_eq!(source.gateway_port, None);
     assert!(cloned.gateway_port.unwrap() >= 19_011);
 }

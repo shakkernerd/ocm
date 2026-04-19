@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub use inspect::{ServiceSummary, ServiceSummaryList};
-pub use manage::{ServiceActionSummary, ServiceInstallSummary, ServiceLogSummary};
+pub use manage::{ServiceActionSummary, ServiceInstallSummary};
 pub(crate) use platform::{
     ServiceManagerKind, service_backend_support_error, service_manager_kind,
 };
@@ -47,14 +47,5 @@ impl<'a> ServiceService<'a> {
 
     pub fn uninstall(&self, name: &str) -> Result<ServiceActionSummary, String> {
         manage::uninstall_service(name, self.env, self.cwd)
-    }
-
-    pub fn logs(
-        &self,
-        name: &str,
-        stream: &str,
-        tail_lines: Option<usize>,
-    ) -> Result<ServiceLogSummary, String> {
-        manage::service_logs(name, stream, tail_lines, self.env, self.cwd)
     }
 }

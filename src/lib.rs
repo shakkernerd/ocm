@@ -3,6 +3,7 @@ pub mod env;
 pub mod host;
 pub mod infra;
 pub mod launcher;
+pub mod logs;
 pub mod managed_node;
 pub mod migrate;
 mod openclaw_repo;

@@ -2,6 +2,7 @@ pub mod doctor;
 pub mod env;
 pub mod help;
 pub mod launcher;
+pub mod logs;
 pub mod migrate;
 pub mod release;
 pub mod runtime;

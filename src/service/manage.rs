@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use serde::Serialize;
@@ -33,17 +32,6 @@ pub type ServiceInstallSummary = ServiceActionSummary;
 enum ServiceSupervisorPolicy {
     LeaveAsIs,
     EnsureRunning,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServiceLogSummary {
-    pub env_name: String,
-    pub service_kind: String,
-    pub stream: String,
-    pub path: String,
-    pub tail_lines: Option<usize>,
-    pub content: String,
 }
 
 pub fn install_service(
@@ -136,43 +124,6 @@ pub fn uninstall_service(
     )
 }
 
-pub fn service_logs(
-    name: &str,
-    stream: &str,
-    tail_lines: Option<usize>,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<ServiceLogSummary, String> {
-    let summary = super::inspect::service_status_fast(name, env, cwd)?;
-    let stream = normalize_stream(stream)?;
-    let path = match stream {
-        "stdout" => summary.stdout_path.clone(),
-        "stderr" => summary.stderr_path.clone(),
-        _ => unreachable!("normalize_stream validates the log stream"),
-    }
-    .ok_or_else(|| format!("no {stream} log path is available for env \"{name}\""))?;
-    if !Path::new(&path).exists() {
-        return Err(format!(
-            "{stream} log does not exist for env \"{name}\": {path}"
-        ));
-    }
-
-    let raw = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-    let content = match tail_lines {
-        Some(limit) => tail_text(&raw, limit),
-        None => raw,
-    };
-
-    Ok(ServiceLogSummary {
-        env_name: name.to_string(),
-        service_kind: "gateway".to_string(),
-        stream: stream.to_string(),
-        path,
-        tail_lines,
-        content,
-    })
-}
-
 fn ensure_gateway_binding(
     name: &str,
     env: &BTreeMap<String, String>,
@@ -243,24 +194,4 @@ fn service_action_summary(
         stderr_path: summary.stderr_path,
         warnings,
     }
-}
-
-fn normalize_stream(stream: &str) -> Result<&str, String> {
-    match stream {
-        "stdout" | "stderr" => Ok(stream),
-        _ => Err(format!("unsupported log stream: {stream}")),
-    }
-}
-
-fn tail_text(text: &str, tail_lines: usize) -> String {
-    if tail_lines == 0 {
-        return String::new();
-    }
-    let lines = text.lines().collect::<Vec<_>>();
-    let start = lines.len().saturating_sub(tail_lines);
-    let mut output = lines[start..].join("\n");
-    if text.ends_with('\n') && !output.is_empty() {
-        output.push('\n');
-    }
-    output
 }

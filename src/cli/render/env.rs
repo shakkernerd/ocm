@@ -1368,7 +1368,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("ocm service logs demo --tail 50"))
+                .any(|line| line.contains("ocm logs demo --tail 50"))
         );
     }
 
@@ -2065,10 +2065,7 @@ fn env_status_next_steps(status: &EnvStatusSummary, command_example: &str) -> Ve
                     ),
                     KeyValueRow::accent(
                         "Logs",
-                        format!(
-                            "{command_example} service logs {} --tail 50",
-                            status.env_name
-                        ),
+                        format!("{command_example} logs {} --tail 50", status.env_name),
                     ),
                 ];
             }
@@ -2080,10 +2077,7 @@ fn env_status_next_steps(status: &EnvStatusSummary, command_example: &str) -> Ve
                     ),
                     KeyValueRow::accent(
                         "Logs",
-                        format!(
-                            "{command_example} service logs {} --tail 50",
-                            status.env_name
-                        ),
+                        format!("{command_example} logs {} --tail 50", status.env_name),
                     ),
                 ];
             }

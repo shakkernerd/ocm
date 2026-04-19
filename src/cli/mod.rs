@@ -5,6 +5,7 @@ mod help;
 mod init;
 mod internal;
 mod launcher;
+mod logs;
 mod migrate;
 mod release;
 pub(crate) mod render;
@@ -25,6 +26,7 @@ use serde::Serialize;
 
 use crate::env::EnvironmentService;
 use crate::launcher::LauncherService;
+use crate::logs::LogService;
 use crate::runtime::RuntimeService;
 use crate::service::ServiceService;
 use crate::store::ensure_store;
@@ -105,6 +107,10 @@ impl Cli {
         ServiceService::new(&self.env, &self.cwd)
     }
 
+    fn log_service(&self) -> LogService<'_> {
+        LogService::new(&self.env, &self.cwd)
+    }
+
     fn supervisor_service(&self) -> SupervisorService<'_> {
         SupervisorService::new(&self.env, &self.cwd)
     }
@@ -125,6 +131,16 @@ impl Cli {
 
     fn stderr_line(&self, line: impl AsRef<str>) {
         eprintln!("{}", line.as_ref());
+    }
+
+    fn stderr_lines<I, S>(&self, lines: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for line in lines {
+            self.stderr_line(line);
+        }
     }
 
     fn print_json<T: Serialize>(&self, value: &T) -> Result<(), String> {
@@ -500,6 +516,7 @@ impl Cli {
             "release" => cli.dispatch_release_command(action.as_str(), rest),
             "launcher" => cli.dispatch_launcher_command(action.as_str(), rest),
             "runtime" => cli.dispatch_runtime_command(action.as_str(), rest),
+            "logs" => cli.handle_logs_command(args[1..].to_vec()),
             "__daemon" => cli.dispatch_internal_command(action.as_str(), rest),
             "service" => cli.dispatch_service_command(action.as_str(), rest),
             _ => Err(format!("unknown command group: {group}")),
