@@ -75,7 +75,7 @@ fn create_environment_normalizes_relative_custom_root() {
 
     let expected_root = clean_path(&cwd.join("env-roots/demo"));
     assert_eq!(meta.root, path_string(&expected_root));
-    assert!(expected_root.join(".ocm-env.json").exists());
+    assert!(expected_root.exists());
 }
 
 #[test]
@@ -164,5 +164,5 @@ fn clone_environment_normalizes_relative_custom_root() {
 
     let expected_root = clean_path(&cwd.join("env-clones/target"));
     assert_eq!(meta.root, path_string(&expected_root));
-    assert!(expected_root.join(".ocm-env.json").exists());
+    assert!(expected_root.exists());
 }

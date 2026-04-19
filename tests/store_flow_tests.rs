@@ -15,8 +15,8 @@ use ocm::store::{
     env_registry_path, export_environment, get_env_snapshot, get_environment, get_launcher,
     get_runtime, import_environment, install_runtime, launcher_meta_path, list_all_env_snapshots,
     list_env_snapshots, list_environments, list_launchers, list_runtimes, remove_env_snapshot,
-    remove_environment, remove_launcher, remove_runtime, repair_environment_marker,
-    restore_env_snapshot, runtime_install_root, runtime_meta_path,
+    remove_environment, remove_launcher, remove_runtime, restore_env_snapshot,
+    runtime_install_root, runtime_meta_path,
 };
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
@@ -46,8 +46,6 @@ fn environment_store_round_trip_covers_create_read_list_and_remove() {
 
     let registry_path = env_registry_path(&env, &cwd).unwrap();
     assert!(registry_path.exists());
-    let root_meta_path = root.child("ocm-home/envs/alpha/.ocm-env.json");
-    assert!(root_meta_path.exists());
     assert!(created.protected);
     assert_eq!(created.gateway_port, Some(19789));
     assert_eq!(created.default_launcher.as_deref(), Some("stable"));
@@ -271,10 +269,6 @@ fn environment_clone_copies_the_root_and_resets_identity_metadata() {
     assert!(cloned.protected);
     assert!(cloned.last_used_at.is_none());
     assert_ne!(cloned.root, source.root);
-
-    let marker_raw = fs::read_to_string(target_root.join(".ocm-env.json")).unwrap();
-    assert!(marker_raw.contains("\"kind\": \"ocm-env\""));
-    assert!(marker_raw.contains("\"name\": \"target\""));
 }
 
 #[test]
@@ -657,11 +651,6 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
         .join(".openclaw/workspace");
     assert_eq!(actual_workspace, expected_workspace);
     assert_eq!(imported_config["gateway"]["port"].as_u64(), Some(19789));
-
-    let marker_raw =
-        fs::read_to_string(root.child("workspace/imports/target-root/.ocm-env.json")).unwrap();
-    assert!(marker_raw.contains("\"kind\": \"ocm-env\""));
-    assert!(marker_raw.contains("\"name\": \"target\""));
 }
 
 #[test]
@@ -1118,44 +1107,6 @@ fn environment_snapshot_remove_deletes_snapshot_artifacts_and_metadata() {
 }
 
 #[test]
-fn environment_marker_repair_rewrites_the_marker_for_the_current_env_name() {
-    let root = TestDir::new("store-env-marker-repair");
-    let cwd = root.child("workspace");
-    fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
-
-    let created = create_environment(
-        CreateEnvironmentOptions {
-            name: "source".to_string(),
-            root: None,
-            gateway_port: None,
-            service_enabled: false,
-            service_running: false,
-            default_runtime: None,
-            default_launcher: None,
-            protected: false,
-        },
-        &env,
-        &cwd,
-    )
-    .unwrap();
-    let marker_path = std::path::Path::new(&created.root).join(".ocm-env.json");
-    fs::write(
-        &marker_path,
-        "{\n  \"kind\": \"ocm-env-marker\",\n  \"name\": \"other\",\n  \"createdAt\": \"2026-03-25T00:00:00Z\"\n}\n",
-    )
-    .unwrap();
-
-    let repaired = repair_environment_marker("source", &env, &cwd).unwrap();
-    assert_eq!(repaired.env_name, "source");
-    assert_eq!(repaired.marker_path, marker_path.display().to_string());
-
-    let marker_raw = fs::read_to_string(marker_path).unwrap();
-    assert!(marker_raw.contains("\"kind\": \"ocm-env\""));
-    assert!(marker_raw.contains("\"name\": \"source\""));
-}
-
-#[test]
 fn environment_snapshot_prune_keeps_the_newest_snapshot_in_scope() {
     let root = TestDir::new("store-env-snapshot-prune");
     let cwd = root.child("workspace");
@@ -1238,9 +1189,6 @@ fn environment_cleanup_preview_identifies_safe_repairs_without_mutating_state() 
     )
     .unwrap();
 
-    let marker_path = root.child("ocm-home/envs/source/.ocm-env.json");
-    fs::remove_file(&marker_path).unwrap();
-
     let mut drifted = get_environment("source", &env, &cwd).unwrap();
     drifted.default_runtime = Some("ghost-runtime".to_string());
     drifted.default_launcher = Some("ghost-launcher".to_string());
@@ -1257,11 +1205,10 @@ fn environment_cleanup_preview_identifies_safe_repairs_without_mutating_state() 
     let current = get_environment("source", &env, &cwd).unwrap();
     assert_eq!(current.default_runtime.as_deref(), Some("ghost-runtime"));
     assert_eq!(current.default_launcher.as_deref(), Some("ghost-launcher"));
-    assert!(marker_path.exists());
 }
 
 #[test]
-fn environment_cleanup_applies_marker_and_binding_repairs() {
+fn environment_cleanup_applies_binding_repairs() {
     let root = TestDir::new("store-env-cleanup-apply");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -1283,13 +1230,6 @@ fn environment_cleanup_applies_marker_and_binding_repairs() {
     )
     .unwrap();
 
-    let marker_path = root.child("ocm-home/envs/source/.ocm-env.json");
-    fs::write(
-        &marker_path,
-        "{\n  \"kind\": \"ocm-env-marker\",\n  \"name\": \"other\",\n  \"createdAt\": \"2026-03-25T00:00:00Z\"\n}\n",
-    )
-    .unwrap();
-
     let mut drifted = get_environment("source", &env, &cwd).unwrap();
     drifted.default_runtime = Some("ghost-runtime".to_string());
     drifted.default_launcher = Some("ghost-launcher".to_string());
@@ -1304,10 +1244,6 @@ fn environment_cleanup_applies_marker_and_binding_repairs() {
     let current = get_environment("source", &env, &cwd).unwrap();
     assert_eq!(current.default_runtime, None);
     assert_eq!(current.default_launcher, None);
-
-    let marker_raw = fs::read_to_string(marker_path).unwrap();
-    assert!(marker_raw.contains("\"kind\": \"ocm-env\""));
-    assert!(marker_raw.contains("\"name\": \"source\""));
     assert_eq!(applied.healthy_after, Some(false));
     assert!(
         applied
@@ -1356,7 +1292,9 @@ fn environment_cleanup_all_limits_results_to_envs_with_safe_repairs() {
     )
     .unwrap();
 
-    fs::remove_file(root.child("ocm-home/envs/broken/.ocm-env.json")).unwrap();
+    let mut broken = get_environment("broken", &env, &cwd).unwrap();
+    broken.default_launcher = Some("ghost-launcher".to_string());
+    ocm::store::save_environment(broken, &env, &cwd).unwrap();
 
     let service = EnvironmentService::new(&env, &cwd);
     let preview = service.cleanup_all_preview().unwrap();
@@ -1368,6 +1306,8 @@ fn environment_cleanup_all_limits_results_to_envs_with_safe_repairs() {
     let applied = service.cleanup_all().unwrap();
     assert!(applied.apply);
     assert_eq!(applied.count, 1);
-    assert!(root.child("ocm-home/envs/broken/.ocm-env.json").exists());
-    assert!(root.child("ocm-home/envs/healthy/.ocm-env.json").exists());
+    let broken = get_environment("broken", &env, &cwd).unwrap();
+    let healthy = get_environment("healthy", &env, &cwd).unwrap();
+    assert_eq!(broken.default_launcher, None);
+    assert_eq!(healthy.default_launcher, None);
 }

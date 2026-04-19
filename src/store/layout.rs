@@ -9,7 +9,6 @@ pub struct EnvPaths {
     pub state_dir: PathBuf,
     pub config_path: PathBuf,
     pub workspace_dir: PathBuf,
-    pub marker_path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -188,7 +187,6 @@ pub fn derive_env_paths(root: impl AsRef<Path>) -> EnvPaths {
         state_dir: state_dir.clone(),
         config_path: state_dir.join("openclaw.json"),
         workspace_dir: state_dir.join("workspace"),
-        marker_path: clean_root.join(".ocm-env.json"),
     }
 }
 

@@ -10,7 +10,7 @@ use crate::env::{
 };
 use crate::infra::process::{run_direct, run_shell};
 use crate::infra::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
-use crate::store::{derive_env_paths, display_path, summarize_env, validate_name};
+use crate::store::{derive_env_paths, summarize_env, validate_name};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,8 +24,6 @@ pub(crate) struct EnvDestroyStepSummary {
 pub(crate) struct EnvDestroySummary {
     pub env_name: String,
     pub root: String,
-    pub marker_path: String,
-    pub marker_present: bool,
     pub protected: bool,
     pub apply: bool,
     pub force: bool,
@@ -458,24 +456,6 @@ impl Cli {
         Ok(0)
     }
 
-    pub(super) fn handle_env_repair_marker(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag, profile) =
-            self.consume_human_output_flags(args, "env repair-marker")?;
-        let Some(name) = args.first() else {
-            return Err("environment name is required".to_string());
-        };
-        Self::assert_no_extra_args(&args[1..])?;
-
-        let repaired = self.environment_service().repair_marker(name)?;
-        if json_flag {
-            self.print_json(&repaired)?;
-            return Ok(0);
-        }
-
-        self.stdout_lines(render::env::env_marker_repaired(&repaired, profile));
-        Ok(0)
-    }
-
     pub(super) fn handle_env_list(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "env list")?;
         Self::assert_no_extra_args(&args)?;
@@ -785,7 +765,6 @@ impl Cli {
             "status" => self.handle_env_status(args),
             "doctor" => self.handle_env_doctor(args),
             "cleanup" => self.handle_env_cleanup(args),
-            "repair-marker" => self.handle_env_repair_marker(args),
             "use" => self.handle_env_use(args),
             "exec" => self.handle_env_exec(args),
             "resolve" => self.handle_env_resolve(args),
@@ -810,19 +789,11 @@ impl Cli {
     ) -> Result<EnvDestroySummary, String> {
         let env_meta = self.environment_service().get(name)?;
         let service = self.service_service().status(name)?;
-        let marker_path = derive_env_paths(Path::new(&env_meta.root)).marker_path;
-        let marker_present = marker_path.exists();
         let snapshots = self.environment_service().list_snapshots(Some(name))?;
         let mut blockers = Vec::new();
 
         if env_meta.protected && !force {
             blockers.push("env is protected; re-run with --force to destroy it".to_string());
-        }
-        if !marker_present && !force {
-            blockers.push(format!(
-                "marker file is missing at {}; re-run with --force if you still want to destroy it",
-                display_path(&marker_path)
-            ));
         }
         let mut steps = Vec::new();
         if !snapshots.is_empty() {
@@ -845,8 +816,6 @@ impl Cli {
         Ok(EnvDestroySummary {
             env_name: env_meta.name,
             root: env_meta.root,
-            marker_path: display_path(&marker_path),
-            marker_present,
             protected: env_meta.protected,
             apply,
             force,

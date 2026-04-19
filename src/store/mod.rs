@@ -17,7 +17,7 @@ use crate::env::EnvSummary;
 pub(crate) use common::{copy_dir_recursive, ensure_dir, read_json, write_json};
 pub use envs::{
     clone_environment, create_environment, export_environment, get_environment, import_environment,
-    list_environments, remove_environment, repair_environment_marker, save_environment,
+    list_environments, remove_environment, save_environment,
 };
 pub use launchers::{add_launcher, get_launcher, list_launchers, remove_launcher};
 pub use layout::{

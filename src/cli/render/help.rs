@@ -550,7 +550,6 @@ pub fn env_help(cmd: &str) -> String {
                 &[
                     ("doctor", "Inspect environment problems"),
                     ("cleanup", "Preview or apply safe repairs"),
-                    ("repair-marker", "Rewrite the environment marker file"),
                     ("protect", "Toggle protection against destructive actions"),
                 ],
             ),
@@ -943,7 +942,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 "{cmd} env import ./backups/mira.ocm-env.tar --name rowan"
             )],
             &[
-                "Imported environments get a fresh identity and marker file.",
+                "Imported environments get a fresh identity in the central env registry.",
                 "Import rewrites env-scoped OpenClaw config paths for the new root.",
                 "Import keeps durable agent auth/settings, but clears copied runtime residue like sessions, logs, and backups.",
             ],
@@ -1016,7 +1015,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "cleanup" => render_leaf(
             "Repair safe environment issues",
-            "Preview or apply narrow, safe repairs such as marker rewrites, missing binding cleanup, and env-scoped OpenClaw config rewrites.",
+            "Preview or apply narrow, safe repairs such as missing binding cleanup and env-scoped OpenClaw config rewrites.",
             vec![format!(
                 "{cmd} env cleanup (<name> | --all) [--yes] [--raw] [--json]"
             )],
@@ -1038,20 +1037,6 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} env cleanup --all --yes"),
             ],
             &["Only a narrow set of safe repairs is applied."],
-        ),
-        "repair-marker" => render_leaf(
-            "Repair an environment marker",
-            "Rewrite `.ocm-env.json` for a known environment root.",
-            vec![format!("{cmd} env repair-marker <name> [--raw] [--json]")],
-            &[
-                (
-                    "--raw",
-                    "Force plain output instead of the TTY receipt view",
-                ),
-                ("--json", "Print the repair summary as JSON"),
-            ],
-            vec![format!("{cmd} env repair-marker mira")],
-            &[],
         ),
         "use" => render_leaf(
             "Activate an environment in your shell",
@@ -1215,7 +1200,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--yes", "Apply destruction instead of showing a preview"),
                 (
                     "--force",
-                    "Override protection and missing-marker safety rails",
+                    "Override protection checks and destroy the env anyway",
                 ),
                 ("--raw", "Force plain output instead of TTY cards"),
                 ("--json", "Print the destroy preview or result as JSON"),

@@ -15,7 +15,6 @@ pub use execution::{
 };
 pub use health::{
     EnvCleanupActionSummary, EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary,
-    EnvMarkerRepairSummary,
 };
 pub use inspect::EnvStatusSummary;
 pub use lifecycle::{

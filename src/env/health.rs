@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::Path;
 
 use serde::Serialize;
@@ -6,9 +5,8 @@ use serde::Serialize;
 use super::{EnvMeta, EnvironmentService, ExecutionBinding, resolve_execution_binding};
 use crate::store::{OpenClawStateAudit, audit_openclaw_state, derive_env_paths, display_path};
 use crate::store::{
-    audit_openclaw_config, get_launcher, get_runtime, repair_environment_marker,
-    repair_openclaw_config, repair_openclaw_runtime_state, runtime_integrity_issue,
-    save_environment,
+    audit_openclaw_config, get_launcher, get_runtime, repair_openclaw_config,
+    repair_openclaw_runtime_state, runtime_integrity_issue, save_environment,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -20,7 +18,6 @@ pub struct EnvDoctorSummary {
     pub default_launcher: Option<String>,
     pub healthy: bool,
     pub root_status: String,
-    pub marker_status: String,
     pub config_status: String,
     pub runtime_status: String,
     pub launcher_status: String,
@@ -31,14 +28,6 @@ pub struct EnvDoctorSummary {
     pub runtime_release_version: Option<String>,
     pub runtime_release_channel: Option<String>,
     pub issues: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvMarkerRepairSummary {
-    pub env_name: String,
-    pub root: String,
-    pub marker_path: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -79,10 +68,6 @@ struct PlannedCleanupAction {
 }
 
 impl<'a> EnvironmentService<'a> {
-    pub fn repair_marker(&self, name: &str) -> Result<EnvMarkerRepairSummary, String> {
-        repair_environment_marker(name, self.env, self.cwd)
-    }
-
     pub fn cleanup_preview(&self, name: &str) -> Result<EnvCleanupSummary, String> {
         let env = self.get(name)?;
         let config_audit = audit_openclaw_config(&env, &self.list()?);
@@ -101,9 +86,6 @@ impl<'a> EnvironmentService<'a> {
 
         for action in &actions {
             match action.kind {
-                "repair-marker" => {
-                    repair_environment_marker(&env.name, self.env, self.cwd)?;
-                }
                 "clear-missing-runtime" => {
                     env.default_runtime = None;
                 }
@@ -164,62 +146,6 @@ impl<'a> EnvironmentService<'a> {
                 format!(
                     "environment root does not exist: {}",
                     display_path(&env_paths.root)
-                ),
-            );
-            "missing".to_string()
-        };
-
-        let marker_status = if env_paths.marker_path.exists() {
-            match fs::read_to_string(&env_paths.marker_path) {
-                Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
-                    Ok(value)
-                        if value.get("name").and_then(|field| field.as_str())
-                            == Some(env.name.as_str()) =>
-                    {
-                        "ok".to_string()
-                    }
-                    Ok(value) => {
-                        let found = value
-                            .get("name")
-                            .and_then(|field| field.as_str())
-                            .unwrap_or("<missing>");
-                        push_issue(
-                            &mut issues,
-                            format!(
-                                "environment marker name mismatch: expected \"{}\", found \"{}\"",
-                                env.name, found
-                            ),
-                        );
-                        "mismatch".to_string()
-                    }
-                    Err(error) => {
-                        push_issue(
-                            &mut issues,
-                            format!(
-                                "environment marker is unreadable: {} ({error})",
-                                display_path(&env_paths.marker_path)
-                            ),
-                        );
-                        "invalid".to_string()
-                    }
-                },
-                Err(error) => {
-                    push_issue(
-                        &mut issues,
-                        format!(
-                            "environment marker is unreadable: {} ({error})",
-                            display_path(&env_paths.marker_path)
-                        ),
-                    );
-                    "invalid".to_string()
-                }
-            }
-        } else {
-            push_issue(
-                &mut issues,
-                format!(
-                    "environment marker is missing: {}",
-                    display_path(&env_paths.marker_path)
                 ),
             );
             "missing".to_string()
@@ -323,7 +249,6 @@ impl<'a> EnvironmentService<'a> {
             default_launcher: env.default_launcher,
             healthy: issues.is_empty(),
             root_status,
-            marker_status,
             config_status,
             runtime_status,
             launcher_status,
@@ -377,13 +302,6 @@ fn cleanup_actions(
     state_audit: &OpenClawStateAudit,
 ) -> Vec<PlannedCleanupAction> {
     let mut actions = Vec::new();
-
-    if doctor.root_status == "ok" && doctor.marker_status != "ok" {
-        actions.push(PlannedCleanupAction {
-            kind: "repair-marker",
-            description: "rewrite the environment marker file".to_string(),
-        });
-    }
 
     if doctor.runtime_status == "missing" {
         if let Some(runtime_name) = env.default_runtime.as_deref() {

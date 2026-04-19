@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::env::{
-    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary,
-    EnvMarkerRepairSummary, EnvMeta, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary, EnvMeta,
+    ExportEnvironmentOptions, ImportEnvironmentOptions,
 };
 use crate::infra::archive::{
     ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive,
@@ -106,38 +106,12 @@ pub fn save_environment(
     meta.root = display_path(&clean_path(Path::new(&meta.root)));
     meta.updated_at = now_utc();
 
-    let paths = derive_env_paths(Path::new(&meta.root));
-    write_json(&paths.marker_path, &meta)?;
-
     let mut registry = load_env_registry(env, cwd)?;
     registry.envs.retain(|entry| entry.name != meta.name);
     registry.envs.push(meta.clone());
     write_env_registry(registry, env, cwd)?;
 
     Ok(meta)
-}
-
-pub fn repair_environment_marker(
-    name: &str,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<EnvMarkerRepairSummary, String> {
-    let meta = get_environment(name, env, cwd)?;
-    let paths = derive_env_paths(Path::new(&meta.root));
-    if !path_exists(&paths.root) {
-        return Err(format!(
-            "environment root does not exist: {}",
-            display_path(&paths.root)
-        ));
-    }
-
-    write_json(&paths.marker_path, &meta)?;
-
-    Ok(EnvMarkerRepairSummary {
-        env_name: meta.name,
-        root: meta.root,
-        marker_path: display_path(&paths.marker_path),
-    })
 }
 
 pub fn create_environment(
@@ -223,18 +197,6 @@ pub fn clone_environment(
             display_path(&source_paths.root)
         ));
     }
-    if !path_exists(&source_paths.marker_path) {
-        return Err(format!(
-            "refusing to clone {} without {}",
-            display_path(&source_paths.root),
-            source_paths
-                .marker_path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or(".ocm-env.json")
-        ));
-    }
-
     let result = (|| {
         copy_dir_recursive(&source_paths.root, &target_paths.root)?;
         let created_at = now_utc();
@@ -353,17 +315,6 @@ pub fn export_environment(
             display_path(&env_paths.root)
         ));
     }
-    if !path_exists(&env_paths.marker_path) {
-        return Err(format!(
-            "refusing to export {} without {}",
-            display_path(&env_paths.root),
-            env_paths
-                .marker_path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or(".ocm-env.json")
-        ));
-    }
 
     let output_path = if let Some(output) = options.output.as_deref() {
         resolve_absolute_path(output, env, cwd)?
@@ -468,10 +419,6 @@ pub fn import_environment(
         if !path_exists(&extracted.root_dir) {
             return Err("archive is missing root/".to_string());
         }
-        if !path_exists(&extracted.root_dir.join(".ocm-env.json")) {
-            return Err("archive environment root is missing .ocm-env.json".to_string());
-        }
-
         let imported = (|| {
             copy_dir_recursive(&extracted.root_dir, &target_paths.root)?;
             rewrite_openclaw_config_for_target(
@@ -536,20 +483,6 @@ pub fn remove_environment(
 
     let paths = derive_env_paths(Path::new(&meta.root));
     let root_exists = path_exists(&paths.root);
-    let marker_exists = path_exists(&paths.marker_path);
-
-    if root_exists && !marker_exists && !force {
-        let marker_name = paths
-            .marker_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or(".ocm-env.json");
-        return Err(format!(
-            "refusing to delete {} without {}; re-run with --force",
-            display_path(&paths.root),
-            marker_name
-        ));
-    }
 
     if root_exists {
         fs::remove_dir_all(&paths.root).map_err(|error| error.to_string())?;

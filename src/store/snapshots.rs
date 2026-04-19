@@ -62,17 +62,6 @@ pub fn create_env_snapshot(
             display_path(&env_paths.root)
         ));
     }
-    if !path_exists(&env_paths.marker_path) {
-        return Err(format!(
-            "refusing to snapshot {} without {}",
-            display_path(&env_paths.root),
-            env_paths
-                .marker_path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or(".ocm-env.json")
-        ));
-    }
 
     let created_at = now_utc();
     let snapshot_id = format!(
@@ -181,19 +170,6 @@ pub fn restore_env_snapshot(
     let current = get_environment(&env_name, env, cwd)?;
     let current_paths = derive_env_paths(Path::new(&current.root));
     let root_exists = path_exists(&current_paths.root);
-    let marker_exists = path_exists(&current_paths.marker_path);
-    if root_exists && !marker_exists {
-        let marker_name = current_paths
-            .marker_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or(".ocm-env.json");
-        return Err(format!(
-            "refusing to restore {} without {}",
-            display_path(&current_paths.root),
-            marker_name
-        ));
-    }
 
     let staging_dir = restore_staging_dir();
     let backup_root = restore_backup_root(&current_paths.root);
@@ -218,10 +194,6 @@ pub fn restore_env_snapshot(
                 extracted.metadata.format_version
             ));
         }
-        if !path_exists(&extracted.root_dir.join(".ocm-env.json")) {
-            return Err("snapshot archive is missing .ocm-env.json".to_string());
-        }
-
         let mut renamed = false;
         if root_exists {
             fs::rename(&current_paths.root, &backup_root).map_err(|error| error.to_string())?;

@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use crate::cli::env::EnvDestroySummary;
 use crate::env::{
     EnvCleanupBatchSummary, EnvCleanupSummary, EnvDoctorSummary, EnvExportSummary,
-    EnvImportSummary, EnvMarkerRepairSummary, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
-    EnvSnapshotSummary, EnvStatusSummary, EnvSummary, ExecutionSummary,
+    EnvImportSummary, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary, EnvSnapshotSummary,
+    EnvStatusSummary, EnvSummary, ExecutionSummary,
 };
 use crate::infra::terminal::{
     Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, render_tags,
@@ -83,19 +83,6 @@ pub fn env_destroy_preview(
                     Tone::Warning
                 } else {
                     Tone::Muted
-                },
-            ),
-            KeyValueRow::new(
-                "Marker",
-                if summary.marker_present {
-                    "present"
-                } else {
-                    "missing"
-                },
-                if summary.marker_present {
-                    Tone::Success
-                } else {
-                    Tone::Danger
                 },
             ),
             KeyValueRow::plain("Snapshots", summary.snapshot_count.to_string()),
@@ -648,7 +635,6 @@ pub fn env_doctor(
         "Checks",
         vec![
             doctor_state_row("Root", &doctor.root_status),
-            doctor_state_row("Marker", &doctor.marker_status),
             doctor_state_row("Config", &doctor.config_status),
             doctor_state_row("Runtime", &doctor.runtime_status),
             doctor_state_row("Launcher", &doctor.launcher_status),
@@ -730,18 +716,11 @@ fn env_doctor_next_steps(doctor: &EnvDoctorSummary, command_example: &str) -> Ve
         ];
     }
 
-    if doctor.marker_status != "ok" || doctor.config_status == "drifted" {
-        let mut rows = vec![KeyValueRow::warning(
+    if doctor.config_status == "drifted" {
+        return vec![KeyValueRow::warning(
             "Cleanup",
             format!("{command_example} env cleanup {}", doctor.env_name),
         )];
-        if doctor.marker_status != "ok" {
-            rows.push(KeyValueRow::accent(
-                "Repair marker",
-                format!("{command_example} env repair-marker {}", doctor.env_name),
-            ));
-        }
-        return rows;
     }
 
     Vec::new()
@@ -753,7 +732,6 @@ fn env_doctor_raw(doctor: &EnvDoctorSummary) -> Vec<String> {
         format!("root: {}", doctor.root),
         format!("healthy: {}", doctor.healthy),
         format!("rootStatus: {}", doctor.root_status),
-        format!("markerStatus: {}", doctor.marker_status),
         format!("configStatus: {}", doctor.config_status),
         format!("runtimeStatus: {}", doctor.runtime_status),
         format!("launcherStatus: {}", doctor.launcher_status),
@@ -949,36 +927,6 @@ fn env_cleanup_raw(cleanup: &EnvCleanupSummary) -> Vec<String> {
             lines.push("  re-run with --yes to apply them".to_string());
         }
     }
-    lines
-}
-
-pub fn env_marker_repaired(
-    repaired: &EnvMarkerRepairSummary,
-    profile: RenderProfile,
-) -> Vec<String> {
-    if !profile.pretty {
-        return vec![
-            format!("Repaired marker for env {}", repaired.env_name),
-            format!("  root: {}", repaired.root),
-            format!("  marker: {}", repaired.marker_path),
-        ];
-    }
-
-    let mut lines = vec![paint(
-        "Environment marker repaired",
-        Tone::Strong,
-        profile.color,
-    )];
-    push_card(
-        &mut lines,
-        "Marker",
-        vec![
-            KeyValueRow::accent("Env", repaired.env_name.clone()),
-            KeyValueRow::plain("Root", repaired.root.clone()),
-            KeyValueRow::plain("Marker", repaired.marker_path.clone()),
-        ],
-        profile.color,
-    );
     lines
 }
 
@@ -1497,7 +1445,6 @@ mod tests {
                 default_launcher: Some("stable".to_string()),
                 healthy: false,
                 root_status: "ok".to_string(),
-                marker_status: "mismatch".to_string(),
                 config_status: "drifted".to_string(),
                 runtime_status: "unbound".to_string(),
                 launcher_status: "ok".to_string(),
@@ -1507,7 +1454,7 @@ mod tests {
                 runtime_source_kind: None,
                 runtime_release_version: None,
                 runtime_release_channel: None,
-                issues: vec!["environment marker name mismatch".to_string()],
+                issues: vec!["OpenClaw config drift".to_string()],
             },
             RenderProfile::pretty(false),
             "ocm",
@@ -1529,7 +1476,6 @@ mod tests {
                 default_launcher: None,
                 healthy: true,
                 root_status: "ok".to_string(),
-                marker_status: "ok".to_string(),
                 config_status: "absent".to_string(),
                 runtime_status: "ok".to_string(),
                 launcher_status: "unbound".to_string(),
@@ -1560,7 +1506,6 @@ mod tests {
                 default_launcher: None,
                 healthy: false,
                 root_status: "ok".to_string(),
-                marker_status: "ok".to_string(),
                 config_status: "absent".to_string(),
                 runtime_status: "broken".to_string(),
                 launcher_status: "unbound".to_string(),
@@ -1590,7 +1535,7 @@ mod tests {
     }
 
     #[test]
-    fn env_doctor_pretty_suggests_marker_repair_steps() {
+    fn env_doctor_pretty_suggests_cleanup_for_config_drift() {
         let lines = env_doctor(
             &EnvDoctorSummary {
                 env_name: "demo".to_string(),
@@ -1599,7 +1544,6 @@ mod tests {
                 default_launcher: Some("stable".to_string()),
                 healthy: false,
                 root_status: "ok".to_string(),
-                marker_status: "mismatch".to_string(),
                 config_status: "drifted".to_string(),
                 runtime_status: "unbound".to_string(),
                 launcher_status: "ok".to_string(),
@@ -1609,7 +1553,7 @@ mod tests {
                 runtime_source_kind: None,
                 runtime_release_version: None,
                 runtime_release_channel: None,
-                issues: vec!["marker mismatch".to_string()],
+                issues: vec!["config drift".to_string()],
             },
             RenderProfile::pretty(false),
             "ocm",
@@ -1619,11 +1563,6 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line.contains("ocm env cleanup demo"))
-        );
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("ocm env repair-marker demo"))
         );
     }
 
@@ -1744,8 +1683,6 @@ mod tests {
         EnvDestroySummary {
             env_name: "demo".to_string(),
             root: "/tmp/demo".to_string(),
-            marker_path: "/tmp/demo/.ocm-env.json".to_string(),
-            marker_present: true,
             protected: false,
             apply: false,
             force: false,

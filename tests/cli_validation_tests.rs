@@ -420,22 +420,6 @@ fn runtime_releases_use_the_official_source_and_reject_conflicting_selectors() {
 }
 
 #[test]
-fn env_repair_marker_requires_a_name() {
-    let root = TestDir::new("cli-env-repair-marker-validation");
-    let cwd = root.child("workspace");
-    fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
-
-    let missing_name = run_ocm(&cwd, &env, &["env", "repair-marker"]);
-    assert_eq!(missing_name.status.code(), Some(1));
-    assert!(stderr(&missing_name).contains("environment name is required"));
-
-    let extra = run_ocm(&cwd, &env, &["env", "repair-marker", "demo", "extra"]);
-    assert_eq!(extra.status.code(), Some(1));
-    assert!(stderr(&extra).contains("unexpected arguments: extra"));
-}
-
-#[test]
 fn env_run_rejects_empty_and_unknown_launcher_overrides() {
     let root = TestDir::new("cli-run-launcher-validation");
     let cwd = root.child("workspace");

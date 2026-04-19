@@ -35,7 +35,6 @@ fn env_doctor_reports_a_healthy_launcher_bound_environment() {
     let output = stdout(&doctor);
     assert!(output.contains("healthy: true"));
     assert!(output.contains("rootStatus: ok"));
-    assert!(output.contains("markerStatus: ok"));
     assert!(output.contains("configStatus: absent"));
     assert!(output.contains("launcherStatus: ok"));
     assert!(output.contains("resolutionStatus: ok"));
@@ -44,7 +43,7 @@ fn env_doctor_reports_a_healthy_launcher_bound_environment() {
 }
 
 #[test]
-fn env_doctor_json_reports_marker_and_runtime_health_issues() {
+fn env_doctor_json_reports_runtime_health_issues() {
     let root = TestDir::new("env-doctor-runtime-issues");
     let cwd = root.child("workspace");
     let bin_dir = cwd.join("bin");
@@ -67,11 +66,6 @@ fn env_doctor_json_reports_marker_and_runtime_health_issues() {
     );
     assert!(create.status.success(), "{}", stderr(&create));
 
-    fs::write(
-        root.child("ocm-home/envs/demo/.ocm-env.json"),
-        "{\n  \"kind\": \"ocm-env-marker\",\n  \"name\": \"other\",\n  \"createdAt\": \"2026-03-25T00:00:00Z\"\n}\n",
-    )
-    .unwrap();
     fs::remove_file(&runtime_path).unwrap();
 
     let doctor = run_ocm(&cwd, &env, &["env", "doctor", "demo", "--json"]);
@@ -79,7 +73,6 @@ fn env_doctor_json_reports_marker_and_runtime_health_issues() {
     let value: Value = serde_json::from_str(&stdout(&doctor)).unwrap();
     assert_eq!(value["healthy"], false);
     assert_eq!(value["rootStatus"], "ok");
-    assert_eq!(value["markerStatus"], "mismatch");
     assert_eq!(value["configStatus"], "absent");
     assert_eq!(value["runtimeStatus"], "broken");
     assert_eq!(value["launcherStatus"], "unbound");
@@ -90,15 +83,9 @@ fn env_doctor_json_reports_marker_and_runtime_health_issues() {
     assert_eq!(value["runtimeReleaseVersion"], Value::Null);
     assert_eq!(value["runtimeReleaseChannel"], Value::Null);
     let issues = value["issues"].as_array().unwrap();
-    assert_eq!(issues.len(), 2);
+    assert_eq!(issues.len(), 1);
     assert!(
         issues[0]
-            .as_str()
-            .unwrap()
-            .contains("environment marker name mismatch")
-    );
-    assert!(
-        issues[1]
             .as_str()
             .unwrap()
             .contains("runtime \"stable\" binary path does not exist")
