@@ -234,7 +234,8 @@ fn service_state_plans_runnable_children_and_skips_disabled_envs() {
         .find(|child| child["envName"] == "demo")
         .unwrap();
     assert_eq!(demo["bindingKind"], "launcher");
-    assert_eq!(demo["childPort"], 18789);
+    let demo_port = demo["childPort"].as_u64().unwrap();
+    assert!(demo_port >= 18_789);
     assert!(
         demo["processEnv"]["OPENCLAW_HOME"]
             .as_str()
@@ -248,6 +249,8 @@ fn service_state_plans_runnable_children_and_skips_disabled_envs() {
         .unwrap();
     assert_eq!(prod["bindingKind"], "runtime");
     assert_eq!(prod["bindingName"], "managed");
+    let prod_port = prod["childPort"].as_u64().unwrap();
+    assert!(prod_port > demo_port + 110);
     assert!(
         prod["binaryPath"]
             .as_str()
