@@ -29,6 +29,7 @@ const SUPERVISOR_RUNTIME_KIND: &str = "ocm-supervisor-runtime";
 const DAEMON_SERVICE_NAME: &str = "ocm";
 const SUPERVISOR_POLL_INTERVAL_MS: u64 = 200;
 const SUPERVISOR_RESTART_DELAY_MS: u64 = 400;
+const SUPERVISOR_STABLE_RUN_MS: u64 = 10_000;
 const DEFAULT_SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 const SERVICE_PROXY_ENV_KEYS: [&str; 8] = [
     "HTTP_PROXY",
@@ -539,6 +540,7 @@ struct RunningSupervisorChild {
     spec: SupervisorChildSpec,
     child: Child,
     restart_count: usize,
+    started_at: Instant,
 }
 
 #[derive(Clone)]
@@ -552,6 +554,7 @@ struct ExitedSupervisorChild {
     env_name: String,
     exit_code: Option<i32>,
     restart_count: usize,
+    ran_for: Duration,
 }
 
 fn spawn_running_child(
@@ -567,6 +570,7 @@ fn spawn_running_child(
         child: spawn_supervisor_child(&spec)?,
         spec,
         restart_count,
+        started_at: Instant::now(),
     })
 }
 
@@ -811,6 +815,7 @@ fn collect_exited_children(
                 env_name: env_name.clone(),
                 exit_code: status.code(),
                 restart_count: running_child.restart_count,
+                ran_for: running_child.started_at.elapsed(),
             });
         }
     }
@@ -834,19 +839,25 @@ fn process_exited_children(
             continue;
         };
         runtime_dirty = true;
-        eprintln!(
-            "ocm service: {} exited with {}; restarting",
-            previous_child.spec.env_name,
-            exited_child
-                .exit_code
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "signal".to_string())
-        );
         child_results.push(child_run_result(
             &previous_child.spec,
             exited_child.exit_code,
             exited_child.restart_count,
         ));
+        let should_restart = should_restart_exited_child(&exited_child);
+        eprintln!(
+            "ocm service: {} exited with {}; {}",
+            previous_child.spec.env_name,
+            exited_child
+                .exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            if should_restart {
+                "restarting"
+            } else {
+                "leaving stopped after quick clean exit"
+            }
+        );
         if stop_requested.load(Ordering::SeqCst) {
             break;
         }
@@ -858,7 +869,10 @@ fn process_exited_children(
             running,
             pending,
         );
-        if let Some(next_spec) = active_child_spec(active_state, &exited_child.env_name).cloned() {
+        if should_restart
+            && let Some(next_spec) =
+                active_child_spec(active_state, &exited_child.env_name).cloned()
+        {
             let next_restart_count = if next_spec == previous_child.spec {
                 exited_child.restart_count + 1
             } else {
@@ -876,6 +890,11 @@ fn process_exited_children(
     }
 
     Ok(runtime_dirty)
+}
+
+fn should_restart_exited_child(exited_child: &ExitedSupervisorChild) -> bool {
+    !(exited_child.exit_code == Some(0)
+        && exited_child.ran_for < Duration::from_millis(SUPERVISOR_STABLE_RUN_MS))
 }
 
 fn queue_missing_children(

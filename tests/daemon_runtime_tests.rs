@@ -592,6 +592,50 @@ fn daemon_stops_a_running_child_after_service_stop() {
 }
 
 #[test]
+fn daemon_does_not_restart_a_quick_clean_exit_forever() {
+    let root = TestDir::new("daemon-run-clean-exit");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+
+    let started = root.child("started.txt");
+    let script = root.child("bin/openclaw");
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf 'started\\n' >> '{}'\nexit 0\n",
+            path_string(&started),
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", &path_string(&script)],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    set_service_enabled(&cwd, &env, "demo", true);
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    assert!(wait_for_file(&started, Duration::from_secs(5)));
+    wait_for_runtime_children(&runtime_path, 0, None, Duration::from_secs(5))
+        .expect("daemon runtime state did not clear after the quick clean exit");
+
+    sleep(Duration::from_secs(2));
+    let starts = fs::read_to_string(&started).unwrap();
+    assert_eq!(starts.lines().count(), 1);
+    assert!(daemon.try_wait().unwrap().is_none());
+
+    stop_process(&mut daemon);
+}
+
+#[test]
 fn live_runtime_changes_recreate_missing_supervisor_state() {
     let root = TestDir::new("daemon-runtime-recovers-missing-state");
     let cwd = root.child("workspace");
