@@ -274,7 +274,7 @@ impl<'a> SupervisorService<'a> {
         if status.running {
             return Ok(status);
         }
-        self.install_daemon()
+        self.activate_daemon("install")
     }
 
     pub fn daemon_status(&self) -> Result<SupervisorDaemonSummary, String> {
@@ -365,6 +365,10 @@ impl<'a> SupervisorService<'a> {
 
     fn refresh_daemon(&self, action: &str) -> Result<SupervisorDaemonSummary, String> {
         let _ = self.sync()?;
+        self.activate_daemon(action)
+    }
+
+    fn activate_daemon(&self, action: &str) -> Result<SupervisorDaemonSummary, String> {
         let definition = self.supervisor_daemon_definition()?;
         write_managed_service_definition(&definition, self.env)?;
         activate_managed_service(&definition.label, &definition.definition_path, self.env)?;
@@ -885,11 +889,6 @@ fn queue_missing_children(
         if running.contains_key(&next_spec.env_name) || pending.contains_key(&next_spec.env_name) {
             continue;
         }
-        eprintln!(
-            "ocm service: starting new env {} ({})",
-            next_spec.env_name,
-            child_binding_label(next_spec)
-        );
         pending.insert(
             next_spec.env_name.clone(),
             PendingSupervisorChild {
