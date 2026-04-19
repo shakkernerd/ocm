@@ -166,6 +166,14 @@ pub struct SupervisorRuntimeView {
     pub children: Vec<SupervisorRuntimeChild>,
 }
 
+#[derive(Clone, Debug)]
+pub struct SupervisorInspection {
+    pub daemon: SupervisorDaemonSummary,
+    pub planned_children: Vec<SupervisorChildSpec>,
+    pub skipped_envs: Vec<SkippedSupervisorEnv>,
+    pub runtime_children: Vec<SupervisorRuntimeChild>,
+}
+
 pub struct SupervisorService<'a> {
     env: &'a BTreeMap<String, String>,
     cwd: &'a Path,
@@ -228,6 +236,23 @@ impl<'a> SupervisorService<'a> {
             ocm_home: runtime.ocm_home,
             updated_at: runtime.updated_at,
             children: runtime.children,
+        })
+    }
+
+    pub fn inspect(&self) -> Result<SupervisorInspection, String> {
+        let state = self.build_state()?;
+        let daemon = self.daemon_status()?;
+        let runtime_children = if daemon.running {
+            self.runtime()?.children
+        } else {
+            Vec::new()
+        };
+
+        Ok(SupervisorInspection {
+            daemon,
+            planned_children: state.children,
+            skipped_envs: state.skipped_envs,
+            runtime_children,
         })
     }
 
@@ -464,69 +489,22 @@ impl<'a> SupervisorService<'a> {
         let mut child_results = Vec::new();
 
         while !stop_requested.load(Ordering::SeqCst) {
-            let mut runtime_dirty = false;
-            if let Some(next_state) = read_updated_supervisor_state(state_path, &active_state) {
-                runtime_dirty |=
-                    reconcile_running_children(&mut running, &mut pending, &next_state);
-                active_state = next_state;
-                managed_child_count = active_state.children.len();
-            }
-
-            let mut exited = Vec::new();
-            for (env_name, running_child) in &mut running {
-                if let Some(status) = running_child.child.try_wait().map_err(|error| {
-                    format!(
-                        "failed to poll env \"{}\": {error}",
-                        running_child.spec.env_name
-                    )
-                })? {
-                    exited.push((env_name.clone(), status.code(), running_child.restart_count));
-                }
-            }
-
-            for (env_name, exit_code, restart_count) in exited {
-                let Some(previous_child) = running.remove(&env_name) else {
-                    continue;
-                };
-                runtime_dirty = true;
-                eprintln!(
-                    "ocm service: {} exited with {}; restarting",
-                    previous_child.spec.env_name,
-                    exit_code
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "signal".to_string())
-                );
-                child_results.push(child_run_result(
-                    &previous_child.spec,
-                    exit_code,
-                    restart_count,
-                ));
-                if stop_requested.load(Ordering::SeqCst) {
-                    break;
-                }
-                if let Some(next_state) = read_updated_supervisor_state(state_path, &active_state) {
-                    runtime_dirty |=
-                        reconcile_running_children(&mut running, &mut pending, &next_state);
-                    active_state = next_state;
-                    managed_child_count = active_state.children.len();
-                }
-                if let Some(next_spec) = active_child_spec(&active_state, &env_name).cloned() {
-                    let next_restart_count = if next_spec == previous_child.spec {
-                        restart_count + 1
-                    } else {
-                        0
-                    };
-                    pending.insert(
-                        env_name,
-                        PendingSupervisorChild {
-                            spec: next_spec,
-                            restart_count: next_restart_count,
-                            retry_at: Instant::now()
-                                + Duration::from_millis(SUPERVISOR_RESTART_DELAY_MS),
-                        },
-                    );
-                }
-            }
+            let mut runtime_dirty = refresh_active_state(
+                state_path,
+                &mut active_state,
+                &mut managed_child_count,
+                &mut running,
+                &mut pending,
+            );
+            runtime_dirty |= process_exited_children(
+                state_path,
+                &stop_requested,
+                &mut active_state,
+                &mut managed_child_count,
+                &mut running,
+                &mut pending,
+                &mut child_results,
+            )?;
 
             runtime_dirty |= start_due_children(&mut running, &mut pending)?;
             if runtime_dirty {
@@ -564,6 +542,12 @@ struct PendingSupervisorChild {
     spec: SupervisorChildSpec,
     restart_count: usize,
     retry_at: Instant,
+}
+
+struct ExitedSupervisorChild {
+    env_name: String,
+    exit_code: Option<i32>,
+    restart_count: usize,
 }
 
 fn spawn_running_child(
@@ -717,6 +701,22 @@ fn read_updated_supervisor_state(
     Some(next_state)
 }
 
+fn refresh_active_state(
+    state_path: &Path,
+    active_state: &mut SupervisorState,
+    managed_child_count: &mut usize,
+    running: &mut BTreeMap<String, RunningSupervisorChild>,
+    pending: &mut BTreeMap<String, PendingSupervisorChild>,
+) -> bool {
+    let Some(next_state) = read_updated_supervisor_state(state_path, active_state) else {
+        return false;
+    };
+    let runtime_dirty = reconcile_running_children(running, pending, &next_state);
+    *managed_child_count = next_state.children.len();
+    *active_state = next_state;
+    runtime_dirty
+}
+
 fn reconcile_running_children(
     running: &mut BTreeMap<String, RunningSupervisorChild>,
     pending: &mut BTreeMap<String, PendingSupervisorChild>,
@@ -790,6 +790,88 @@ fn reconcile_running_children(
     }
     queue_missing_children(pending, running, &desired_state.children, 0, Instant::now());
     runtime_dirty
+}
+
+fn collect_exited_children(
+    running: &mut BTreeMap<String, RunningSupervisorChild>,
+) -> Result<Vec<ExitedSupervisorChild>, String> {
+    let mut exited = Vec::new();
+    for (env_name, running_child) in running {
+        if let Some(status) = running_child.child.try_wait().map_err(|error| {
+            format!(
+                "failed to poll env \"{}\": {error}",
+                running_child.spec.env_name
+            )
+        })? {
+            exited.push(ExitedSupervisorChild {
+                env_name: env_name.clone(),
+                exit_code: status.code(),
+                restart_count: running_child.restart_count,
+            });
+        }
+    }
+    Ok(exited)
+}
+
+fn process_exited_children(
+    state_path: &Path,
+    stop_requested: &AtomicBool,
+    active_state: &mut SupervisorState,
+    managed_child_count: &mut usize,
+    running: &mut BTreeMap<String, RunningSupervisorChild>,
+    pending: &mut BTreeMap<String, PendingSupervisorChild>,
+    child_results: &mut Vec<SupervisorChildRunResult>,
+) -> Result<bool, String> {
+    let exited = collect_exited_children(running)?;
+    let mut runtime_dirty = false;
+
+    for exited_child in exited {
+        let Some(previous_child) = running.remove(&exited_child.env_name) else {
+            continue;
+        };
+        runtime_dirty = true;
+        eprintln!(
+            "ocm service: {} exited with {}; restarting",
+            previous_child.spec.env_name,
+            exited_child
+                .exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_string())
+        );
+        child_results.push(child_run_result(
+            &previous_child.spec,
+            exited_child.exit_code,
+            exited_child.restart_count,
+        ));
+        if stop_requested.load(Ordering::SeqCst) {
+            break;
+        }
+
+        runtime_dirty |= refresh_active_state(
+            state_path,
+            active_state,
+            managed_child_count,
+            running,
+            pending,
+        );
+        if let Some(next_spec) = active_child_spec(active_state, &exited_child.env_name).cloned() {
+            let next_restart_count = if next_spec == previous_child.spec {
+                exited_child.restart_count + 1
+            } else {
+                0
+            };
+            pending.insert(
+                exited_child.env_name,
+                PendingSupervisorChild {
+                    spec: next_spec,
+                    restart_count: next_restart_count,
+                    retry_at: Instant::now() + Duration::from_millis(SUPERVISOR_RESTART_DELAY_MS),
+                },
+            );
+        }
+    }
+
+    Ok(runtime_dirty)
 }
 
 fn queue_missing_children(

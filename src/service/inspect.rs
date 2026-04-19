@@ -9,7 +9,8 @@ use crate::env::GatewayProcessSpec;
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::store::{display_path, list_environments, supervisor_logs_dir};
 use crate::supervisor::{
-    SupervisorChildSpec, SupervisorDaemonSummary, SupervisorRuntimeChild, SupervisorService,
+    SupervisorChildSpec, SupervisorDaemonSummary, SupervisorInspection, SupervisorRuntimeChild,
+    SupervisorService,
 };
 
 fn launchctl_binary(env: &BTreeMap<String, String>) -> String {
@@ -145,32 +146,27 @@ fn load_service_snapshot(
     cwd: &Path,
 ) -> Result<ServiceSnapshot, String> {
     let supervisor = SupervisorService::new(env, cwd);
-    let plan = supervisor.plan()?;
-    let daemon = supervisor.daemon_status()?;
-    let runtime_children = if daemon.running {
-        supervisor
-            .runtime()?
-            .children
-            .into_iter()
-            .map(|child| (child.env_name.clone(), child))
-            .collect::<BTreeMap<_, _>>()
-    } else {
-        BTreeMap::new()
-    };
+    let SupervisorInspection {
+        daemon,
+        planned_children,
+        skipped_envs,
+        runtime_children,
+    } = supervisor.inspect()?;
 
     Ok(ServiceSnapshot {
         daemon,
-        planned_children: plan
-            .children
+        planned_children: planned_children
             .into_iter()
             .map(|child| (child.env_name.clone(), child))
             .collect(),
-        skipped_envs: plan
-            .skipped_envs
+        skipped_envs: skipped_envs
             .into_iter()
             .map(|skipped| (skipped.env_name, skipped.reason))
             .collect(),
-        runtime_children,
+        runtime_children: runtime_children
+            .into_iter()
+            .map(|child| (child.env_name.clone(), child))
+            .collect(),
     })
 }
 
