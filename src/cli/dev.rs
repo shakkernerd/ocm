@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::Cli;
+use super::render::RenderProfile;
 use crate::env::{CreateEnvironmentOptions, EnvDevMeta, EnvMeta};
 use crate::infra::process::run_direct;
 use crate::infra::shell::build_openclaw_env;
+use crate::infra::terminal::{Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table};
 use crate::openclaw_repo::{
     detect_openclaw_checkout, discover_openclaw_checkout, ensure_openclaw_worktree,
 };
@@ -73,12 +75,7 @@ impl Cli {
             return Ok(0);
         }
 
-        for (index, summary) in summaries.iter().enumerate() {
-            if index > 0 {
-                self.stdout_line("");
-            }
-            self.stdout_lines(render_dev_status(summary, profile));
-        }
+        self.stdout_lines(render_dev_status_list(&summaries, profile));
         Ok(0)
     }
 
@@ -343,22 +340,9 @@ impl Cli {
     }
 }
 
-fn render_dev_status(
-    summary: &DevStatusSummary,
-    profile: super::render::RenderProfile,
-) -> Vec<String> {
-    if profile.pretty {
-        vec![
-            format!("Dev env {}", summary.env_name),
-            format!("  port: {}", summary.gateway_port),
-            format!("  repo: {}", summary.repo_root),
-            format!("  worktree: {}", summary.worktree_root),
-            format!("  root: {}", summary.root),
-            format!("  config: {}", summary.config_path),
-            format!("  workspace: {}", summary.workspace_dir),
-        ]
-    } else {
-        vec![
+fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return vec![
             format!("env={}", summary.env_name),
             format!("port={}", summary.gateway_port),
             format!("repo={}", summary.repo_root),
@@ -366,6 +350,79 @@ fn render_dev_status(
             format!("root={}", summary.root),
             format!("config={}", summary.config_path),
             format!("workspace={}", summary.workspace_dir),
-        ]
+        ];
     }
+
+    let mut lines = vec![paint(
+        &format!("Dev env {}", summary.env_name),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.extend(render_key_value_card(
+        "Environment",
+        &[
+            KeyValueRow::accent("Port", summary.gateway_port.to_string()),
+            KeyValueRow::plain("Root", summary.root.clone()),
+            KeyValueRow::plain("Workspace", summary.workspace_dir.clone()),
+            KeyValueRow::plain("Config", summary.config_path.clone()),
+        ],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "Source",
+        &[
+            KeyValueRow::plain("Repo", summary.repo_root.clone()),
+            KeyValueRow::plain("Worktree", summary.worktree_root.clone()),
+            KeyValueRow::plain("Service enabled", summary.service_enabled.to_string()),
+            KeyValueRow::plain("Service running", summary.service_running.to_string()),
+        ],
+        profile.color,
+    ));
+    lines
+}
+
+fn render_dev_status_list(summaries: &[DevStatusSummary], profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        let mut lines = Vec::new();
+        for (index, summary) in summaries.iter().enumerate() {
+            if index > 0 {
+                lines.push(String::new());
+            }
+            lines.extend(render_dev_status(summary, profile));
+        }
+        return lines;
+    }
+
+    render_table(
+        &["Env", "Port", "Repo", "Worktree", "Service"],
+        &summaries
+            .iter()
+            .map(|summary| {
+                vec![
+                    Cell::accent(summary.env_name.clone()),
+                    Cell::right(summary.gateway_port.to_string(), Tone::Accent),
+                    Cell::plain(summary.repo_root.clone()),
+                    Cell::plain(summary.worktree_root.clone()),
+                    Cell::new(
+                        if summary.service_running {
+                            "running"
+                        } else if summary.service_enabled {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        },
+                        crate::infra::terminal::Align::Left,
+                        if summary.service_running {
+                            Tone::Success
+                        } else if summary.service_enabled {
+                            Tone::Warning
+                        } else {
+                            Tone::Muted
+                        },
+                    ),
+                ]
+            })
+            .collect::<Vec<_>>(),
+        profile.color,
+    )
 }

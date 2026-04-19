@@ -18,26 +18,14 @@ fn ocm_service_state(installed: bool, loaded: bool, running: bool) -> &'static s
     }
 }
 
-fn service_state(summary: &ServiceSummary) -> &'static str {
-    if summary.running {
-        "running"
-    } else if summary.desired_running {
-        if summary.installed {
-            "pending"
-        } else {
-            "starting"
-        }
-    } else if summary.installed {
-        "stopped"
-    } else {
-        "disabled"
-    }
+fn service_state(summary: &ServiceSummary) -> &str {
+    summary.gateway_state.as_str()
 }
 
 fn state_tone(state: &str) -> Tone {
     match state {
         "running" => Tone::Success,
-        "pending" | "starting" | "loaded" | "installed" => Tone::Warning,
+        "pending" | "starting" | "loaded" | "installed" | "backoff" => Tone::Warning,
         "stopped" | "disabled" | "absent" => Tone::Muted,
         _ => Tone::Plain,
     }
@@ -60,7 +48,7 @@ fn binding_label(summary: &ServiceSummary) -> String {
     }
 }
 
-fn gateway_state(summary: &ServiceSummary) -> &'static str {
+fn gateway_state(summary: &ServiceSummary) -> &str {
     service_state(summary)
 }
 
@@ -225,6 +213,12 @@ pub fn service_status(
                 "Restart count",
                 summary.child_restart_count.map(|value| value.to_string()),
             ),
+            optional_value_row(
+                "Last exit",
+                summary.last_exit_code.map(|value| value.to_string()),
+            ),
+            optional_value_row("Last event", summary.last_event_at.clone()),
+            optional_value_row("Next retry", summary.next_retry_at.clone()),
         ],
         profile.color,
     ));
@@ -241,7 +235,10 @@ pub fn service_status(
     if let Some(issue) = summary.issue.as_deref() {
         lines.extend(render_key_value_card(
             "Issue",
-            &[KeyValueRow::warning("Status", issue.to_string())],
+            &[
+                KeyValueRow::warning("Status", issue.to_string()),
+                optional_value_row("Detail", summary.last_error.clone()),
+            ],
             profile.color,
         ));
     }
@@ -479,6 +476,7 @@ mod tests {
             installed: true,
             loaded: true,
             running: true,
+            gateway_state: "running".to_string(),
             desired_running: true,
             ocm_service_installed: true,
             ocm_service_loaded: true,
@@ -488,6 +486,10 @@ mod tests {
             child_pid: Some(99),
             child_restart_count: Some(0),
             child_port: Some(18789),
+            last_exit_code: None,
+            last_error: None,
+            last_event_at: None,
+            next_retry_at: None,
             stdout_path: Some("/tmp/stdout.log".to_string()),
             stderr_path: Some("/tmp/stderr.log".to_string()),
             issue: None,

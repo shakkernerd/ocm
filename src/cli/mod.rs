@@ -7,7 +7,7 @@ mod internal;
 mod launcher;
 mod migrate;
 mod release;
-mod render;
+pub(crate) mod render;
 mod runtime;
 mod self_cmd;
 mod service;

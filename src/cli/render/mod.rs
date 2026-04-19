@@ -42,7 +42,7 @@ pub(super) fn format_key_value_lines(lines: BTreeMap<String, String>) -> Vec<Str
         .collect()
 }
 
-pub(super) fn format_rfc3339(value: OffsetDateTime) -> Result<String, String> {
+pub(crate) fn format_rfc3339(value: OffsetDateTime) -> Result<String, String> {
     value
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|error| error.to_string())
