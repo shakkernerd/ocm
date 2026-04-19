@@ -421,7 +421,7 @@ fn parse_launchctl_print(raw: &str, status: &mut LaunchdJobStatus) {
         let trimmed = line.trim();
         if let Some(value) = trimmed.strip_prefix("state = ") {
             let value = value.trim().to_string();
-            status.running = value == "running";
+            status.running = matches!(value.as_str(), "running" | "active");
             status.state = Some(value);
             continue;
         }
@@ -477,4 +477,19 @@ fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
             .is_some_and(|value| !matches!(value, "not-found" | "masked"));
     status.running = active_state.as_deref() == Some("active");
     status.state = sub_state.or(active_state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LaunchdJobStatus, parse_launchctl_print};
+
+    #[test]
+    fn launchctl_active_state_counts_as_running() {
+        let mut status = LaunchdJobStatus::default();
+        parse_launchctl_print("state = active\npid = 78428\n", &mut status);
+
+        assert!(status.running);
+        assert_eq!(status.pid, Some(78428));
+        assert_eq!(status.state.as_deref(), Some("active"));
+    }
 }
