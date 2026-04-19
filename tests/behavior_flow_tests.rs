@@ -6,6 +6,19 @@ use ocm::store::clean_path;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_text};
 
+fn exported_gateway_port(output: &std::process::Output) -> u32 {
+    let script = stdout(output);
+    let marker = "export OPENCLAW_GATEWAY_PORT='";
+    let start = script.find(marker).expect("gateway port export missing") + marker.len();
+    let rest = &script[start..];
+    let end = rest
+        .find('\'')
+        .expect("gateway port export terminator missing");
+    rest[..end]
+        .parse::<u32>()
+        .expect("gateway port export must be numeric")
+}
+
 #[test]
 fn env_use_prints_activation_exports_for_the_selected_environment() {
     let root = TestDir::new("behavior-env-use");
@@ -299,11 +312,34 @@ fn env_use_auto_assigns_distinct_gateway_ports_for_fresh_envs() {
 
     let demo_use = run_ocm(&cwd, &env, &["env", "use", "demo"]);
     assert!(demo_use.status.success(), "{}", stderr(&demo_use));
-    assert!(stdout(&demo_use).contains("export OPENCLAW_GATEWAY_PORT='18789'"));
+    let demo_port = exported_gateway_port(&demo_use);
 
     let test_use = run_ocm(&cwd, &env, &["env", "use", "test"]);
     assert!(test_use.status.success(), "{}", stderr(&test_use));
-    assert!(stdout(&test_use).contains("export OPENCLAW_GATEWAY_PORT='18790'"));
+    let test_port = exported_gateway_port(&test_use);
+    assert!(test_port >= demo_port + 111);
+}
+
+#[test]
+fn env_use_skips_the_machine_global_openclaw_port_family() {
+    let root = TestDir::new("behavior-env-use-skips-global-openclaw");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let global_root = root.child("home/.openclaw");
+    fs::create_dir_all(&global_root).unwrap();
+    write_text(
+        &global_root.join("openclaw.json"),
+        "{\n  \"gateway\": {\n    \"port\": 18789\n  }\n}\n",
+    );
+
+    let create_demo = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(create_demo.status.success(), "{}", stderr(&create_demo));
+
+    let demo_use = run_ocm(&cwd, &env, &["env", "use", "demo"]);
+    assert!(demo_use.status.success(), "{}", stderr(&demo_use));
+    assert!(exported_gateway_port(&demo_use) >= 18_900);
 }
 
 #[test]
@@ -339,5 +375,5 @@ fn env_exec_skips_gateway_port_claimed_by_an_initialized_environment() {
         ],
     );
     assert!(exec_output.status.success(), "{}", stderr(&exec_output));
-    assert_eq!(stdout(&exec_output), "18790");
+    assert_eq!(stdout(&exec_output), "18900");
 }

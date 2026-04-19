@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -14,6 +13,10 @@ use crate::infra::archive::{
 use serde::{Deserialize, Serialize};
 
 use super::common::{copy_dir_recursive, ensure_dir, path_exists, read_json, write_json};
+use super::gateway_ports::{
+    DEFAULT_GATEWAY_PORT, choose_available_gateway_port, resolve_effective_gateway_ports,
+    resolve_env_gateway_port,
+};
 use super::layout::{
     clean_path, default_env_root, derive_env_paths, display_path, env_registry_path,
     resolve_absolute_path, validate_name,
@@ -237,69 +240,15 @@ fn choose_cloned_gateway_port(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<u32, String> {
-    let mut envs = list_environments(env, cwd)?;
-    envs.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then_with(|| left.name.cmp(&right.name))
-    });
-
-    let mut claimed = std::collections::BTreeSet::new();
-    let mut effective_ports = std::collections::BTreeMap::new();
-
-    for meta in &envs {
-        if let Some(port) = meta.gateway_port.or_else(|| read_config_gateway_port(meta)) {
-            claimed.insert(port);
-            effective_ports.insert(meta.name.clone(), port);
-        }
-    }
-
-    for meta in &envs {
-        if effective_ports.contains_key(&meta.name) {
-            continue;
-        }
-
-        let mut port = 18_789;
-        while claimed.contains(&port) {
-            port = port.saturating_add(1);
-        }
-        claimed.insert(port);
-        effective_ports.insert(meta.name.clone(), port);
-    }
-
+    let envs = list_environments(env, cwd)?;
+    let effective_ports = resolve_effective_gateway_ports(&envs, env);
     let preferred = effective_ports
         .get(&source.name)
         .copied()
-        .or_else(|| {
-            source
-                .gateway_port
-                .or_else(|| read_config_gateway_port(source))
-        })
-        .unwrap_or(18_789);
+        .or_else(|| resolve_env_gateway_port(source))
+        .unwrap_or(DEFAULT_GATEWAY_PORT);
 
-    let mut port = preferred.max(18_789);
-    while claimed.contains(&port) || !gateway_port_available(port) {
-        claimed.insert(port);
-        port = port.saturating_add(1);
-    }
-
-    Ok(port)
-}
-
-fn read_config_gateway_port(meta: &EnvMeta) -> Option<u32> {
-    let config_path = derive_env_paths(Path::new(&meta.root)).config_path;
-    let raw = fs::read_to_string(config_path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let port = value.get("gateway")?.get("port")?.as_u64()?;
-    if (1..=u16::MAX as u64).contains(&port) {
-        Some(port as u32)
-    } else {
-        None
-    }
-}
-
-fn gateway_port_available(port: u32) -> bool {
-    TcpListener::bind(("127.0.0.1", port as u16)).is_ok()
+    Ok(choose_available_gateway_port(preferred, &envs, env))
 }
 
 pub fn export_environment(

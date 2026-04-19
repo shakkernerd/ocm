@@ -349,7 +349,53 @@ fn clone_environment_assigns_a_new_port_when_the_source_only_had_a_computed_port
     .unwrap();
 
     assert_ne!(cloned.gateway_port, Some(18789));
-    assert!(cloned.gateway_port.unwrap() >= 18790);
+    assert!(cloned.gateway_port.unwrap() >= 18_900);
+}
+
+#[test]
+fn clone_environment_skips_the_global_openclaw_port_family() {
+    let root = TestDir::new("store-env-clone-global-openclaw-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let global_root = root.child("home/.openclaw");
+    fs::create_dir_all(&global_root).unwrap();
+    fs::write(
+        global_root.join("openclaw.json"),
+        "{\n  \"gateway\": {\n    \"port\": 18789\n  }\n}\n",
+    )
+    .unwrap();
+
+    let source = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: None,
+            service_enabled: false,
+            service_running: false,
+            default_runtime: None,
+            default_launcher: Some("stable".to_string()),
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let cloned = clone_environment(
+        CloneEnvironmentOptions {
+            source_name: source.name,
+            name: "target".to_string(),
+            root: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(source.gateway_port, None);
+    assert!(cloned.gateway_port.unwrap() >= 19_011);
 }
 
 #[test]

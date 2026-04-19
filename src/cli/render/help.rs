@@ -887,6 +887,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             &[
                 "Environments are the main isolation unit in OCM.",
+                "Computed gateway ports reserve the full local OpenClaw port family and skip the machine-wide OpenClaw config when present.",
                 "Use exactly one of `--runtime`, `--version`, or `--channel`.",
             ],
         ),
@@ -911,6 +912,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Clone resets environment identity while preserving the copied workspace and env config.",
                 "Clone assigns a fresh gateway port to the new env to avoid collisions.",
+                "Computed gateway ports reserve the full local OpenClaw port family and skip the machine-wide OpenClaw config when present.",
                 "Clone rewrites env-scoped OpenClaw config paths inside the copied env root.",
                 "Clone keeps durable agent auth/settings for the same user, but clears copied runtime residue like sessions, logs, and backups.",
                 "Background services are not copied; use `start` or `service install` for the clone.",
