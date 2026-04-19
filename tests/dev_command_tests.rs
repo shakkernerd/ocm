@@ -208,3 +208,39 @@ fn dev_status_reports_dev_envs() {
     );
     assert!(summary["gatewayPort"].as_u64().unwrap() > 0);
 }
+
+#[test]
+fn dev_command_accepts_a_custom_env_root() {
+    let root = TestDir::new("dev-command-custom-root");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+    let custom_root = cwd.join("env-roots/demo");
+
+    let run = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "dev",
+            "demo",
+            "--repo",
+            &path_string(&repo),
+            "--root",
+            "./env-roots/demo",
+        ],
+    );
+    assert!(run.status.success(), "{}", stderr(&run));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    let resolved_root = fs::canonicalize(&custom_root).unwrap();
+    assert_eq!(show_json["root"], path_string(&resolved_root));
+    assert_eq!(show_json["openclawHome"], path_string(&resolved_root));
+    assert_eq!(
+        show_json["configPath"],
+        path_string(&resolved_root.join(".openclaw/openclaw.json"))
+    );
+}

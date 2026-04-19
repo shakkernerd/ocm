@@ -87,6 +87,8 @@ impl Cli {
         let (args, onboard) = Self::consume_flag(args, "--onboard");
         let (args, repo_root) = Self::consume_option(args, "--repo")?;
         let repo_root = Self::require_option_value(repo_root, "--repo")?;
+        let (args, root) = Self::consume_option(args, "--root")?;
+        let root = Self::require_option_value(root, "--root")?;
         let (args, port_raw) = Self::consume_option(args, "--port")?;
         let gateway_port = match port_raw.as_deref() {
             Some(raw) => Some(Self::parse_positive_u32(raw, "--port")?),
@@ -98,7 +100,7 @@ impl Cli {
         Self::assert_no_extra_args(&args[1..])?;
         let name = validate_name(name, "Environment name")?;
 
-        let (meta, created) = self.ensure_dev_env(&name, repo_root, gateway_port)?;
+        let (meta, created) = self.ensure_dev_env(&name, repo_root, root, gateway_port)?;
         let dev = meta
             .dev
             .as_ref()
@@ -137,6 +139,7 @@ impl Cli {
         &self,
         name: &str,
         repo_root: Option<String>,
+        root: Option<String>,
         gateway_port: Option<u32>,
     ) -> Result<(EnvMeta, bool), String> {
         if let Some(existing) = self.environment_service().find(name)? {
@@ -160,6 +163,16 @@ impl Cli {
                     return Err(format!(
                         "dev cannot change the repo for existing env {}; current repo is {}",
                         existing.name, dev.repo_root
+                    ));
+                }
+            }
+            if let Some(root) = root {
+                let requested = resolve_absolute_path(&root, &self.env, &self.cwd)?;
+                let current = PathBuf::from(&existing.root);
+                if requested != current {
+                    return Err(format!(
+                        "dev cannot change the root for existing env {}; current root is {}",
+                        existing.name, existing.root
                     ));
                 }
             }
@@ -188,7 +201,7 @@ impl Cli {
 
         let created = self.environment_service().create(CreateEnvironmentOptions {
             name: name.to_string(),
-            root: None,
+            root,
             gateway_port,
             service_enabled: false,
             service_running: false,

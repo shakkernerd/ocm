@@ -84,7 +84,10 @@ fn dev_help_is_available_from_help_and_bare_group() {
     let output = stdout(&via_help);
     assert_eq!(output, stdout(&bare));
     assert!(output.contains("Development envs"));
-    assert!(output.contains("ocm dev <env> [--repo <path>] [--port <port>] [--watch] [--onboard]"));
+    assert!(output.contains(
+        "ocm dev <env> [--repo <path>] [--root <path>] [--port <port>] [--watch] [--onboard]"
+    ));
+    assert!(output.contains("ocm dev shaks --root /tmp/shaks"));
     assert!(output.contains("ocm dev shaks --watch"));
     assert!(output.contains("ocm help dev status"));
 }

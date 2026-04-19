@@ -205,7 +205,7 @@ pub fn dev_help(cmd: &str) -> String {
         "Development envs",
         "Provision OpenClaw dev envs from a checkout worktree, bootstrap the minimum local config, and run the gateway in the foreground.",
         vec![format!(
-            "{cmd} dev <env> [--repo <path>] [--port <port>] [--watch] [--onboard]"
+            "{cmd} dev <env> [--repo <path>] [--root <path>] [--port <port>] [--watch] [--onboard]"
         )],
         &[(
             "Commands",
@@ -213,6 +213,7 @@ pub fn dev_help(cmd: &str) -> String {
         )],
         vec![
             format!("{cmd} dev shaks"),
+            format!("{cmd} dev shaks --root /tmp/shaks"),
             format!("{cmd} dev shaks --watch"),
             format!("{cmd} dev shaks --onboard"),
             format!("{cmd} dev status"),
