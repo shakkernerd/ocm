@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::inspect::ServiceSummary;
+use super::service_backend_support_error;
 use crate::env::EnvironmentService;
 use crate::supervisor::SupervisorService;
 
@@ -28,6 +29,12 @@ pub struct ServiceActionSummary {
 
 pub type ServiceInstallSummary = ServiceActionSummary;
 
+#[derive(Clone, Copy)]
+enum ServiceSupervisorPolicy {
+    LeaveAsIs,
+    EnsureRunning,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceLogSummary {
@@ -44,10 +51,16 @@ pub fn install_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceInstallSummary, String> {
-    ensure_gateway_binding(name, env, cwd)?;
-    EnvironmentService::new(env, cwd).set_service_policy(name, Some(true), Some(false))?;
-    ensure_supervisor_daemon(env, cwd)?;
-    action_summary(name, "install", Vec::new(), env, cwd)
+    update_service(
+        name,
+        "install",
+        Some(true),
+        Some(false),
+        true,
+        ServiceSupervisorPolicy::EnsureRunning,
+        env,
+        cwd,
+    )
 }
 
 pub fn start_service(
@@ -55,10 +68,16 @@ pub fn start_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
-    ensure_gateway_binding(name, env, cwd)?;
-    EnvironmentService::new(env, cwd).set_service_policy(name, Some(true), Some(true))?;
-    ensure_supervisor_daemon(env, cwd)?;
-    action_summary(name, "start", Vec::new(), env, cwd)
+    update_service(
+        name,
+        "start",
+        Some(true),
+        Some(true),
+        true,
+        ServiceSupervisorPolicy::EnsureRunning,
+        env,
+        cwd,
+    )
 }
 
 pub fn stop_service(
@@ -66,8 +85,16 @@ pub fn stop_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
-    EnvironmentService::new(env, cwd).set_service_policy(name, Some(true), Some(false))?;
-    action_summary(name, "stop", Vec::new(), env, cwd)
+    update_service(
+        name,
+        "stop",
+        Some(true),
+        Some(false),
+        false,
+        ServiceSupervisorPolicy::LeaveAsIs,
+        env,
+        cwd,
+    )
 }
 
 pub fn restart_service(
@@ -75,15 +102,21 @@ pub fn restart_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
-    ensure_gateway_binding(name, env, cwd)?;
     let env_service = EnvironmentService::new(env, cwd);
     let meta = env_service.get(name)?;
     if meta.service_enabled && meta.service_running {
         env_service.set_service_policy(name, Some(true), Some(false))?;
     }
-    env_service.set_service_policy(name, Some(true), Some(true))?;
-    ensure_supervisor_daemon(env, cwd)?;
-    action_summary(name, "restart", Vec::new(), env, cwd)
+    update_service(
+        name,
+        "restart",
+        Some(true),
+        Some(true),
+        true,
+        ServiceSupervisorPolicy::EnsureRunning,
+        env,
+        cwd,
+    )
 }
 
 pub fn uninstall_service(
@@ -91,8 +124,16 @@ pub fn uninstall_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
-    EnvironmentService::new(env, cwd).set_service_policy(name, Some(false), Some(false))?;
-    action_summary(name, "uninstall", Vec::new(), env, cwd)
+    update_service(
+        name,
+        "uninstall",
+        Some(false),
+        Some(false),
+        false,
+        ServiceSupervisorPolicy::LeaveAsIs,
+        env,
+        cwd,
+    )
 }
 
 pub fn service_logs(
@@ -142,15 +183,33 @@ fn ensure_gateway_binding(
         .map(|_| ())
 }
 
-fn ensure_supervisor_daemon(env: &BTreeMap<String, String>, cwd: &Path) -> Result<(), String> {
-    let supervisor = SupervisorService::new(env, cwd);
-    supervisor.sync()?;
-    let status = supervisor.daemon_status()?;
-    if status.running {
-        return Ok(());
+fn ensure_supervisor_running(env: &BTreeMap<String, String>, cwd: &Path) -> Result<(), String> {
+    if let Some(error) = service_backend_support_error(env) {
+        return Err(error);
     }
-    supervisor.install_daemon()?;
+    let supervisor = SupervisorService::new(env, cwd);
+    supervisor.ensure_daemon_running()?;
     Ok(())
+}
+
+fn update_service(
+    name: &str,
+    action: &str,
+    service_enabled: Option<bool>,
+    service_running: Option<bool>,
+    require_binding: bool,
+    supervisor_policy: ServiceSupervisorPolicy,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ServiceActionSummary, String> {
+    if require_binding {
+        ensure_gateway_binding(name, env, cwd)?;
+    }
+    EnvironmentService::new(env, cwd).set_service_policy(name, service_enabled, service_running)?;
+    if let ServiceSupervisorPolicy::EnsureRunning = supervisor_policy {
+        ensure_supervisor_running(env, cwd)?;
+    }
+    action_summary(name, action, Vec::new(), env, cwd)
 }
 
 fn action_summary(

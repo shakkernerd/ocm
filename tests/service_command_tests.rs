@@ -30,6 +30,15 @@ fn systemd_env(root: &TestDir) -> BTreeMap<String, String> {
     env
 }
 
+fn unsupported_env(root: &TestDir) -> BTreeMap<String, String> {
+    let mut env = ocm_env(root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "unsupported".to_string(),
+    );
+    env
+}
+
 fn setup_launcher_env(cwd: &Path, env: &BTreeMap<String, String>) {
     let launcher = run_ocm(
         cwd,
@@ -121,6 +130,40 @@ fn service_install_enables_the_env_and_installs_the_ocm_service() {
         "missing {}",
         path_string(&service_path)
     );
+}
+
+#[test]
+fn service_stop_and_uninstall_do_not_require_a_managed_service_backend() {
+    let root = TestDir::new("service-stop-uninstall-unsupported");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = unsupported_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    let stop = run_ocm(&cwd, &env, &["service", "stop", "demo", "--json"]);
+    assert!(stop.status.success(), "{}", stderr(&stop));
+    let stop_body = json_output(&stop);
+    assert_eq!(stop_body["installed"], true);
+    assert_eq!(stop_body["desiredRunning"], false);
+
+    let uninstall = run_ocm(&cwd, &env, &["service", "uninstall", "demo", "--json"]);
+    assert!(uninstall.status.success(), "{}", stderr(&uninstall));
+    let uninstall_body = json_output(&uninstall);
+    assert_eq!(uninstall_body["installed"], false);
+    assert_eq!(uninstall_body["desiredRunning"], false);
+}
+
+#[test]
+fn service_start_still_requires_a_managed_service_backend() {
+    let root = TestDir::new("service-start-unsupported");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = unsupported_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    let output = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("managed services are not supported on this platform yet"));
 }
 
 #[test]

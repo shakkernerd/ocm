@@ -1,14 +1,6 @@
 use super::{Cli, render};
-use crate::service::service_backend_support_error;
 
 impl Cli {
-    fn ensure_service_backend_mutation_supported(&self) -> Result<(), String> {
-        if let Some(error) = service_backend_support_error(&self.env) {
-            return Err(error);
-        }
-        Ok(())
-    }
-
     pub(super) fn handle_service_logs(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, stderr_flag) = Self::consume_flag(args, "--stderr");
@@ -45,7 +37,6 @@ impl Cli {
             return Err("service install requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
-        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.with_progress(
             format!("Enabling {name} in the OCM background service"),
@@ -119,7 +110,6 @@ impl Cli {
             return Err("service start requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
-        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.service_service().start(name)?;
         if json_flag {
@@ -141,7 +131,6 @@ impl Cli {
             return Err("service stop requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
-        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.service_service().stop(name)?;
         if json_flag {
@@ -164,7 +153,6 @@ impl Cli {
             return Err("service restart requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
-        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.service_service().restart(name)?;
         if json_flag {
@@ -187,7 +175,6 @@ impl Cli {
             return Err("service uninstall requires <env>".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
-        self.ensure_service_backend_mutation_supported()?;
 
         let summary = self.service_service().uninstall(name)?;
         if json_flag {

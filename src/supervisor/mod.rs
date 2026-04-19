@@ -243,6 +243,15 @@ impl<'a> SupervisorService<'a> {
         self.refresh_daemon("install")
     }
 
+    pub fn ensure_daemon_running(&self) -> Result<SupervisorDaemonSummary, String> {
+        let _ = self.sync()?;
+        let status = self.daemon_status()?;
+        if status.running {
+            return Ok(status);
+        }
+        self.install_daemon()
+    }
+
     pub fn daemon_status(&self) -> Result<SupervisorDaemonSummary, String> {
         self.daemon_summary("status")
     }
