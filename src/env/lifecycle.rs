@@ -21,6 +21,13 @@ pub fn default_service_running() -> bool {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EnvDevMeta {
+    pub repo_root: String,
+    pub worktree_root: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnvMeta {
     pub kind: String,
     pub name: String,
@@ -32,6 +39,8 @@ pub struct EnvMeta {
     pub service_running: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev: Option<EnvDevMeta>,
     pub protected: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -55,6 +64,8 @@ pub struct EnvSummary {
     pub service_running: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
+    pub dev_repo_root: Option<String>,
+    pub dev_worktree_root: Option<String>,
     pub protected: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -71,6 +82,7 @@ pub struct CreateEnvironmentOptions {
     pub service_running: bool,
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
+    pub dev: Option<EnvDevMeta>,
     pub protected: bool,
 }
 

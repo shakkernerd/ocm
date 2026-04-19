@@ -270,6 +270,7 @@ impl Cli {
                 service_running: false,
                 default_runtime: runtime_name,
                 default_launcher: launcher_name,
+                dev: None,
                 protected: protect,
             })?;
 
@@ -920,6 +921,18 @@ impl Cli {
                 ..
             } => run_shell(&command, &build_openclaw_env(&env, &self.env), &run_dir),
             crate::env::ResolvedExecution::Runtime {
+                env,
+                program,
+                program_args,
+                run_dir,
+                ..
+            } => run_direct(
+                &program,
+                &program_args,
+                &build_openclaw_env(&env, &self.env),
+                &run_dir,
+            ),
+            crate::env::ResolvedExecution::Dev {
                 env,
                 program,
                 program_args,

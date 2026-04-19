@@ -217,6 +217,7 @@ pub fn restore_env_snapshot(
                 service_running: extracted.metadata.env.service_running,
                 default_runtime: extracted.metadata.env.default_runtime.clone(),
                 default_launcher: extracted.metadata.env.default_launcher.clone(),
+                dev: None,
                 protected: extracted.metadata.env.protected,
                 created_at: current.created_at,
                 updated_at: current.updated_at,

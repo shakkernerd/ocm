@@ -10,6 +10,7 @@ use crate::env::{
 use crate::infra::archive::{
     ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive,
 };
+use crate::openclaw_repo::remove_openclaw_worktree;
 use serde::{Deserialize, Serialize};
 
 use super::common::{copy_dir_recursive, ensure_dir, path_exists, read_json, write_json};
@@ -158,6 +159,7 @@ pub fn create_environment(
         service_running: options.service_running,
         default_runtime: options.default_runtime,
         default_launcher: options.default_launcher,
+        dev: options.dev,
         protected: options.protected,
         created_at,
         updated_at: created_at,
@@ -220,6 +222,7 @@ pub fn clone_environment(
             service_running: source.service_running,
             default_runtime: source.default_runtime,
             default_launcher: source.default_launcher,
+            dev: None,
             protected: source.protected,
             created_at,
             updated_at: created_at,
@@ -387,6 +390,7 @@ pub fn import_environment(
                 service_running: extracted.metadata.env.service_running,
                 default_runtime: extracted.metadata.env.default_runtime.clone(),
                 default_launcher: extracted.metadata.env.default_launcher.clone(),
+                dev: None,
                 protected: extracted.metadata.env.protected,
                 created_at,
                 updated_at: created_at,
@@ -435,6 +439,10 @@ pub fn remove_environment(
 
     if root_exists {
         fs::remove_dir_all(&paths.root).map_err(|error| error.to_string())?;
+    }
+
+    if let Some(dev) = meta.dev.as_ref() {
+        remove_openclaw_worktree(Path::new(&dev.repo_root), Path::new(&dev.worktree_root))?;
     }
 
     let mut registry = load_env_registry(env, cwd)?;

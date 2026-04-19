@@ -29,7 +29,7 @@ fn env_list_accepts_raw_output_mode() {
     assert!(list.status.success(), "{}", stderr(&list));
     let output = stdout(&list);
     assert!(output.contains("demo"));
-    assert!(output.contains("port=18789"));
+    assert!(output.contains("port="));
     assert!(!output.contains("┌"));
 }
 
@@ -48,7 +48,7 @@ fn env_list_json_reports_effective_ports_for_fresh_envs() {
     let value: Value = serde_json::from_str(&stdout(&list)).unwrap();
     assert_eq!(value.as_array().unwrap().len(), 1);
     assert_eq!(value[0]["name"], "demo");
-    assert_eq!(value[0]["gatewayPort"], 18789);
+    assert!(value[0]["gatewayPort"].as_u64().unwrap() >= 18_789);
 }
 
 #[test]

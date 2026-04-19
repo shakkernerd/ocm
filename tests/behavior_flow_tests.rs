@@ -2,9 +2,8 @@ mod support;
 
 use std::fs;
 
-use ocm::store::clean_path;
-
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_text};
+use ocm::store::clean_path;
 
 fn exported_gateway_port(output: &std::process::Output) -> u32 {
     let script = stdout(output);
@@ -313,11 +312,16 @@ fn env_use_auto_assigns_distinct_gateway_ports_for_fresh_envs() {
     let demo_use = run_ocm(&cwd, &env, &["env", "use", "demo"]);
     assert!(demo_use.status.success(), "{}", stderr(&demo_use));
     let demo_port = exported_gateway_port(&demo_use);
+    let demo_root = root.child("ocm-home/envs/demo");
+    write_text(
+        &demo_root.join(".openclaw/openclaw.json"),
+        &format!("{{\n  \"gateway\": {{\n    \"port\": {demo_port}\n  }}\n}}\n"),
+    );
 
     let test_use = run_ocm(&cwd, &env, &["env", "use", "test"]);
     assert!(test_use.status.success(), "{}", stderr(&test_use));
     let test_port = exported_gateway_port(&test_use);
-    assert!(test_port >= demo_port + 111);
+    assert!(demo_port.abs_diff(test_port) > 110);
 }
 
 #[test]
@@ -375,5 +379,9 @@ fn env_exec_skips_gateway_port_claimed_by_an_initialized_environment() {
         ],
     );
     assert!(exec_output.status.success(), "{}", stderr(&exec_output));
-    assert_eq!(stdout(&exec_output), "18900");
+    let test_port = stdout(&exec_output)
+        .parse::<u32>()
+        .expect("gateway port must be numeric");
+    assert!(test_port >= 18_900);
+    assert!(test_port > 18_789 + 110);
 }

@@ -131,6 +131,7 @@ fn migrate_plain_openclaw_home_inner(
         service_running: false,
         default_runtime: None,
         default_launcher: None,
+        dev: None,
         protected: false,
     })?;
     let created_name = created.name.clone();

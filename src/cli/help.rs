@@ -20,6 +20,7 @@ impl Cli {
             [] => Ok(render::help::root_help(&cmd)),
             ["help"] | ["--help"] | ["-h"] => Ok(render::help::root_help(&cmd)),
             ["setup"] => Ok(render::help::setup_help(&cmd)),
+            ["dev"] => Ok(render::help::dev_help(&cmd)),
             ["start"] => Ok(render::help::start_help(&cmd)),
             ["upgrade"] => Ok(render::help::upgrade_help(&cmd)),
             ["doctor"] => Ok(render::help::doctor_help(&cmd)),
@@ -51,10 +52,13 @@ impl Cli {
             ["service"] => Ok(render::help::service_help(&cmd)),
             ["service", action] => render::help::service_command_help(&cmd, action)
                 .ok_or_else(|| format!("unknown service command: {action}")),
+            ["dev", action] => render::help::dev_command_help(&cmd, action)
+                .ok_or_else(|| format!("unknown dev command: {action}")),
             [group, ..]
                 if matches!(
                     *group,
                     "setup"
+                        | "dev"
                         | "start"
                         | "upgrade"
                         | "doctor"
@@ -88,7 +92,14 @@ impl Cli {
             [group]
                 if matches!(
                     group.as_str(),
-                    "self" | "env" | "adopt" | "release" | "launcher" | "runtime" | "service"
+                    "self"
+                        | "env"
+                        | "adopt"
+                        | "release"
+                        | "launcher"
+                        | "runtime"
+                        | "service"
+                        | "dev"
                 ) =>
             {
                 Some(vec![group.as_str()])
@@ -108,6 +119,7 @@ impl Cli {
                     group.as_str(),
                     "self"
                         | "env"
+                        | "dev"
                         | "migrate"
                         | "adopt"
                         | "release"
@@ -130,6 +142,7 @@ impl Cli {
                     group.as_str(),
                     "self"
                         | "env"
+                        | "dev"
                         | "migrate"
                         | "adopt"
                         | "release"

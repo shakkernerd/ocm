@@ -122,7 +122,11 @@ fn env_status_reports_when_an_environment_has_no_binding() {
     assert!(output.contains("gatewayPortSource: metadata"));
     assert!(output.contains("managedServiceState: absent"));
     assert!(output.contains("openclawState: stopped"));
-    assert!(output.contains("issue: environment \"demo\" has no default runtime or launcher"));
+    assert!(
+        output.contains(
+            "issue: environment \"demo\" has no default runtime, launcher, or dev binding"
+        )
+    );
 }
 
 #[test]

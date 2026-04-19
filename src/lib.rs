@@ -5,6 +5,7 @@ pub mod infra;
 pub mod launcher;
 pub mod managed_node;
 pub mod migrate;
+mod openclaw_repo;
 pub mod runtime;
 pub mod service;
 pub mod store;

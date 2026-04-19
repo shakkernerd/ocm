@@ -219,6 +219,7 @@ impl Cli {
                         Some(StartBinding::Launcher(launcher_name)) => Some(launcher_name.clone()),
                         _ => None,
                     },
+                    dev: None,
                     protected: request.protect,
                 })?,
             Some(existing) => {

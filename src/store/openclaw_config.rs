@@ -3,10 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use serde_json::json;
 
 use crate::env::EnvMeta;
 
-use super::common::path_exists;
+use super::common::{ensure_dir, path_exists};
 use super::layout::{EnvPaths, clean_path, derive_env_paths, display_path};
 
 #[derive(Clone, Debug)]
@@ -127,6 +128,64 @@ pub(crate) fn rewrite_openclaw_config_for_target(
     write_config_value(&target_paths.config_path, &value)
 }
 
+pub(crate) fn ensure_minimum_local_openclaw_config(
+    target_paths: &EnvPaths,
+    gateway_port: u32,
+) -> Result<(), String> {
+    ensure_dir(&target_paths.state_dir)?;
+    ensure_dir(&target_paths.workspace_dir)?;
+    ensure_dir(&target_paths.state_dir.join("sessions"))?;
+
+    let workspace = display_path(&target_paths.workspace_dir);
+    let mut value = read_config_value(&target_paths.config_path)?.unwrap_or_else(|| json!({}));
+    if !value.is_object() {
+        value = json!({});
+    }
+
+    let root = value
+        .as_object_mut()
+        .ok_or_else(|| "OpenClaw config root must be an object".to_string())?;
+
+    let gateway = ensure_object_field(root, "gateway");
+    gateway
+        .entry("mode".to_string())
+        .or_insert_with(|| Value::String("local".to_string()));
+    gateway
+        .entry("bind".to_string())
+        .or_insert_with(|| Value::String("loopback".to_string()));
+    gateway.insert(
+        "port".to_string(),
+        Value::Number(serde_json::Number::from(gateway_port)),
+    );
+
+    let agents = ensure_object_field(root, "agents");
+    let defaults = ensure_object_field(agents, "defaults");
+    defaults
+        .entry("workspace".to_string())
+        .or_insert_with(|| Value::String(workspace.clone()));
+    defaults
+        .entry("skipBootstrap".to_string())
+        .or_insert_with(|| Value::Bool(true));
+
+    let list_needs_default = agents
+        .get("list")
+        .and_then(Value::as_array)
+        .map(|entries| entries.is_empty())
+        .unwrap_or(true);
+    if list_needs_default {
+        agents.insert(
+            "list".to_string(),
+            Value::Array(vec![json!({
+                "id": "dev",
+                "default": true,
+                "workspace": workspace,
+            })]),
+        );
+    }
+
+    write_config_value(&target_paths.config_path, &value)
+}
+
 fn audit_openclaw_config_value(
     meta: &EnvMeta,
     known_envs: &[EnvMeta],
@@ -222,6 +281,20 @@ fn read_config_value(config_path: &Path) -> Result<Option<Value>, String> {
     let raw = fs::read_to_string(config_path).map_err(|error| error.to_string())?;
     let value = serde_json::from_str(&raw).map_err(|error| error.to_string())?;
     Ok(Some(value))
+}
+
+fn ensure_object_field<'a>(
+    object: &'a mut serde_json::Map<String, Value>,
+    key: &str,
+) -> &'a mut serde_json::Map<String, Value> {
+    let needs_reset = !object.get(key).is_some_and(Value::is_object);
+    if needs_reset {
+        object.insert(key.to_string(), Value::Object(serde_json::Map::new()));
+    }
+    object
+        .get_mut(key)
+        .and_then(Value::as_object_mut)
+        .expect("object field must exist after reset")
 }
 
 fn write_config_value(config_path: &Path, value: &Value) -> Result<(), String> {
@@ -507,6 +580,7 @@ mod tests {
             service_running: true,
             default_runtime: None,
             default_launcher: None,
+            dev: None,
             protected: false,
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,

@@ -338,7 +338,7 @@ fn service_start_requires_a_valid_binding() {
 
     let output = run_ocm(&cwd, &env, &["service", "start", "demo"]);
     assert!(!output.status.success());
-    assert!(stderr(&output).contains("has no default runtime or launcher"));
+    assert!(stderr(&output).contains("has no default runtime, launcher, or dev binding"));
 }
 
 #[test]
@@ -364,7 +364,7 @@ fn service_status_reports_missing_binding_issue() {
         body["issue"]
             .as_str()
             .unwrap()
-            .contains("has no default runtime or launcher")
+            .contains("has no default runtime, launcher, or dev binding")
     );
 }
 

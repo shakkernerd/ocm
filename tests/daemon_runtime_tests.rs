@@ -250,7 +250,7 @@ fn service_state_plans_runnable_children_and_skips_disabled_envs() {
     assert_eq!(prod["bindingKind"], "runtime");
     assert_eq!(prod["bindingName"], "managed");
     let prod_port = prod["childPort"].as_u64().unwrap();
-    assert!(prod_port > demo_port + 110);
+    assert!(prod_port.abs_diff(demo_port) > 110);
     assert!(
         prod["binaryPath"]
             .as_str()

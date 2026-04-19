@@ -45,6 +45,7 @@ pub struct GatewayProcessSpec {
 pub enum ExecutionBinding {
     Launcher(String),
     Runtime(String),
+    Dev,
 }
 
 pub fn resolve_execution_binding(
@@ -75,8 +76,12 @@ pub fn resolve_execution_binding(
         return Ok(ExecutionBinding::Launcher(launcher_name));
     }
 
+    if env_meta.dev.is_some() {
+        return Ok(ExecutionBinding::Dev);
+    }
+
     Err(format!(
-        "environment \"{}\" has no default runtime or launcher; use env set-runtime, env set-launcher, or pass --runtime/--launcher",
+        "environment \"{}\" has no default runtime, launcher, or dev binding; use ocm dev <name>, env set-runtime, env set-launcher, or pass --runtime/--launcher",
         env_meta.name
     ))
 }
@@ -158,6 +163,29 @@ pub fn resolve_gateway_process_spec(
                 process_env: build_openclaw_env(env_meta, process_env),
             })
         }
+        ExecutionBinding::Dev => {
+            let dev = env_meta.dev.as_ref().ok_or_else(|| {
+                format!(
+                    "environment \"{}\" is missing its dev binding",
+                    env_meta.name
+                )
+            })?;
+            let mut args = vec!["openclaw".to_string()];
+            args.extend(gateway_args);
+            Ok(GatewayProcessSpec {
+                env_name: env_meta.name.clone(),
+                binding_kind: "dev".to_string(),
+                binding_name: "dev".to_string(),
+                command: Some(format!("pnpm {}", args.join(" "))),
+                binary_path: Some("pnpm".to_string()),
+                runtime_source_kind: None,
+                runtime_release_version: None,
+                runtime_release_channel: None,
+                args,
+                run_dir: PathBuf::from(&dev.worktree_root),
+                process_env: build_openclaw_env(env_meta, process_env),
+            })
+        }
     }
 }
 
@@ -198,6 +226,15 @@ pub enum ResolvedExecution {
         runtime_source_kind: String,
         runtime_release_version: Option<String>,
         runtime_release_channel: Option<String>,
+        forwarded_args: Vec<String>,
+        program: String,
+        program_args: Vec<String>,
+        run_dir: PathBuf,
+    },
+    Dev {
+        env: EnvMeta,
+        repo_root: String,
+        worktree_root: String,
         forwarded_args: Vec<String>,
         program: String,
         program_args: Vec<String>,
@@ -285,6 +322,22 @@ impl<'a> EnvironmentService<'a> {
                     env,
                 })
             }
+            ExecutionBinding::Dev => {
+                let dev = env.dev.clone().ok_or_else(|| {
+                    format!("environment \"{}\" is missing its dev binding", env.name)
+                })?;
+                let mut program_args = vec!["openclaw".to_string()];
+                program_args.extend(args.clone());
+                Ok(ResolvedExecution::Dev {
+                    env,
+                    repo_root: dev.repo_root,
+                    worktree_root: dev.worktree_root.clone(),
+                    forwarded_args: args,
+                    program: "pnpm".to_string(),
+                    program_args,
+                    run_dir: PathBuf::from(dev.worktree_root),
+                })
+            }
         }
     }
 }
@@ -328,6 +381,25 @@ impl ResolvedExecution {
                 runtime_source_kind: Some(runtime_source_kind),
                 runtime_release_version,
                 runtime_release_channel,
+                forwarded_args,
+                run_dir: run_dir.display().to_string(),
+            },
+            Self::Dev {
+                env,
+                repo_root,
+                worktree_root: _,
+                forwarded_args,
+                run_dir,
+                ..
+            } => ExecutionSummary {
+                env_name: env.name,
+                binding_kind: "dev".to_string(),
+                binding_name: "dev".to_string(),
+                command: Some(format!("pnpm openclaw ({repo_root})")),
+                binary_path: Some("pnpm".to_string()),
+                runtime_source_kind: None,
+                runtime_release_version: None,
+                runtime_release_channel: None,
                 forwarded_args,
                 run_dir: run_dir.display().to_string(),
             },

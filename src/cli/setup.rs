@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -7,13 +6,13 @@ use dialoguer::{
     console::{Style, style},
     theme::ColorfulTheme,
 };
-use serde_json::Value;
 use time::OffsetDateTime;
 
 use super::{Cli, start::StartOnboardingMode};
 use crate::cli::start::StartRequest;
 use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
 use crate::migrate::inspect_migration_source;
+use crate::openclaw_repo::discover_openclaw_checkout;
 use crate::service::service_backend_support_error;
 use crate::store::validate_name;
 
@@ -233,14 +232,10 @@ impl Cli {
     }
 
     fn detect_local_setup_defaults(&self) -> Option<LocalSetupDefaults> {
-        self.cwd
-            .ancestors()
-            .take(6)
-            .find_map(detect_openclaw_checkout)
-            .map(|cwd| LocalSetupDefaults {
-                command: "pnpm openclaw".to_string(),
-                cwd,
-            })
+        discover_openclaw_checkout(&self.cwd).map(|cwd| LocalSetupDefaults {
+            command: "pnpm openclaw".to_string(),
+            cwd,
+        })
     }
 
     fn detect_plain_openclaw_home(&self) -> Option<PathBuf> {
@@ -497,22 +492,6 @@ fn sanitize_name_fragment(value: &str) -> Option<String> {
         return None;
     }
     Some(trimmed)
-}
-
-fn detect_openclaw_checkout(path: &Path) -> Option<PathBuf> {
-    let package_json = path.join("package.json");
-    let scripts_dir = path.join("scripts");
-    if !package_json.exists() || !scripts_dir.join("run-node.mjs").exists() {
-        return None;
-    }
-
-    let contents = fs::read_to_string(package_json).ok()?;
-    let package: Value = serde_json::from_str(&contents).ok()?;
-    if package.get("name").and_then(Value::as_str) == Some("openclaw") {
-        Some(path.to_path_buf())
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

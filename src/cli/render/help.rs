@@ -101,6 +101,10 @@ pub fn root_help(cmd: &str) -> String {
         format_entries(&[
             ("setup", "Guided setup for release and local-dev flows"),
             (
+                "dev",
+                "OpenClaw development envs with worktrees and watch mode",
+            ),
+            (
                 "start",
                 "Fast path: create or reuse an env and keep it running",
             ),
@@ -141,6 +145,8 @@ pub fn root_help(cmd: &str) -> String {
         &mut lines,
         "Get started",
         format_examples(&[
+            format!("{cmd} dev shaks"),
+            format!("{cmd} dev shaks --watch"),
             format!("{cmd} start mira"),
             format!("{cmd} migrate mira"),
             format!("{cmd} adopt inspect"),
@@ -158,6 +164,7 @@ pub fn root_help(cmd: &str) -> String {
         "More",
         format_examples(&[
             format!("{cmd} help setup"),
+            format!("{cmd} help dev"),
             format!("{cmd} help start"),
             format!("{cmd} help migrate"),
             format!("{cmd} help adopt"),
@@ -191,6 +198,53 @@ pub fn setup_help(cmd: &str) -> String {
             "Use `start` when you already know the source you want.",
         ],
     )
+}
+
+pub fn dev_help(cmd: &str) -> String {
+    render_group(
+        "Development envs",
+        "Provision OpenClaw dev envs from a checkout worktree, bootstrap the minimum local config, and run the gateway in the foreground.",
+        vec![format!(
+            "{cmd} dev <env> [--repo <path>] [--port <port>] [--watch] [--onboard]"
+        )],
+        &[(
+            "Commands",
+            &[("status", "Show one dev env or all dev envs")],
+        )],
+        vec![
+            format!("{cmd} dev shaks"),
+            format!("{cmd} dev shaks --watch"),
+            format!("{cmd} dev shaks --onboard"),
+            format!("{cmd} dev status"),
+            format!("{cmd} dev status shaks --json"),
+        ],
+        vec![format!("{cmd} help dev status")],
+    )
+}
+
+pub fn dev_command_help(cmd: &str, action: &str) -> Option<String> {
+    match action {
+        "status" => Some(render_leaf(
+            "Show dev env status",
+            "List dev envs or inspect one dev env, including the repo checkout, worktree path, and effective gateway port.",
+            vec![format!("{cmd} dev status [env] [--raw] [--json]")],
+            &[
+                ("[env]", "Optional env name"),
+                ("--raw", "Print machine-friendly key/value output"),
+                ("--json", "Print JSON output"),
+            ],
+            vec![
+                format!("{cmd} dev status"),
+                format!("{cmd} dev status shaks"),
+                format!("{cmd} dev status shaks --json"),
+            ],
+            &[
+                "Only envs created through `ocm dev` appear here.",
+                "Use `ocm dev <env>` to create or reuse a dev env and start its gateway.",
+            ],
+        )),
+        _ => None,
+    }
 }
 
 pub fn migrate_help(cmd: &str) -> String {

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::{collections::BTreeMap, path::PathBuf};
 
-use ocm::env::EnvMeta;
+use ocm::env::{EnvDevMeta, EnvMeta};
 use ocm::env::{
     ExecutionBinding, GatewayProcessSpec, resolve_execution_binding, resolve_runtime_run_dir,
 };
@@ -20,6 +20,7 @@ fn sample_env(default_runtime: Option<&str>, default_launcher: Option<&str>) -> 
         service_running: true,
         default_runtime: default_runtime.map(str::to_string),
         default_launcher: default_launcher.map(str::to_string),
+        dev: None,
         protected: false,
         created_at: OffsetDateTime::UNIX_EPOCH,
         updated_at: OffsetDateTime::UNIX_EPOCH,
@@ -115,6 +116,18 @@ fn resolve_execution_binding_falls_back_to_launcher_default() {
 }
 
 #[test]
+fn resolve_execution_binding_falls_back_to_dev_binding() {
+    let mut env = sample_env(None, None);
+    env.dev = Some(EnvDevMeta {
+        repo_root: "/tmp/openclaw".to_string(),
+        worktree_root: "/tmp/openclaw/.worktrees/demo".to_string(),
+    });
+
+    let resolved = resolve_execution_binding(&env, None, None).unwrap();
+    assert!(matches!(resolved, ExecutionBinding::Dev));
+}
+
+#[test]
 fn resolve_execution_binding_rejects_conflicting_overrides() {
     let env = sample_env(Some("stable"), Some("launcher"));
 
@@ -132,7 +145,7 @@ fn resolve_execution_binding_uses_runtime_and_launcher_wording_when_unbound() {
     let env = sample_env(None, None);
 
     let error = resolve_execution_binding(&env, None, None).unwrap_err();
-    assert!(error.contains("has no default runtime or launcher"));
+    assert!(error.contains("has no default runtime, launcher, or dev binding"));
     assert!(error.contains("env set-runtime"));
     assert!(error.contains("env set-launcher"));
 }

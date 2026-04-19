@@ -20,6 +20,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     ));
     assert!(output.contains("ocm [--color <mode>] <command> [args]"));
     assert!(output.contains("Fast path: create or reuse an env and keep it running"));
+    assert!(output.contains("OpenClaw development envs with worktrees and watch mode"));
     assert!(output.contains("Guided setup for release and local-dev flows"));
     assert!(output.contains("Update one env or all envs and restart services when needed"));
     assert!(output.contains("Check host software for release and feature readiness"));
@@ -30,13 +31,17 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("Color policy for pretty output: auto, always, or never"));
     assert!(output.contains("Environment lifecycle, binding, execution, snapshots, and repair"));
     assert!(output.contains("start"));
+    assert!(output.contains("dev"));
     assert!(output.contains("upgrade"));
     assert!(output.contains("setup"));
+    assert!(output.contains("ocm dev shaks"));
+    assert!(output.contains("ocm dev shaks --watch"));
     assert!(output.contains("ocm start"));
     assert!(output.contains("ocm migrate mira"));
     assert!(output.contains("ocm adopt inspect"));
     assert!(output.contains("ocm upgrade mira"));
     assert!(output.contains("ocm help setup"));
+    assert!(output.contains("ocm help dev"));
     assert!(output.contains("ocm help adopt"));
     assert!(output.contains("ocm help upgrade"));
     assert!(output.contains("ocm help doctor"));
@@ -62,6 +67,45 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(!output.contains("env snapshot restore <name> <snapshot>"));
     assert!(!output.contains("service restore-global"));
     assert!(!output.contains("service discover"));
+}
+
+#[test]
+fn dev_help_is_available_from_help_and_bare_group() {
+    let root = TestDir::new("help-dev-group");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "dev"]);
+    let bare = run_ocm(&cwd, &env, &["dev", "--help"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(bare.status.success(), "{}", stderr(&bare));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&bare));
+    assert!(output.contains("Development envs"));
+    assert!(output.contains("ocm dev <env> [--repo <path>] [--port <port>] [--watch] [--onboard]"));
+    assert!(output.contains("ocm dev shaks --watch"));
+    assert!(output.contains("ocm help dev status"));
+}
+
+#[test]
+fn dev_status_help_is_available_from_help_and_flag() {
+    let root = TestDir::new("help-dev-status");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let via_help = run_ocm(&cwd, &env, &["help", "dev", "status"]);
+    let via_flag = run_ocm(&cwd, &env, &["dev", "status", "--help"]);
+    assert!(via_help.status.success(), "{}", stderr(&via_help));
+    assert!(via_flag.status.success(), "{}", stderr(&via_flag));
+
+    let output = stdout(&via_help);
+    assert_eq!(output, stdout(&via_flag));
+    assert!(output.contains("Show dev env status"));
+    assert!(output.contains("ocm dev status [env] [--raw] [--json]"));
+    assert!(output.contains("Only envs created through `ocm dev` appear here."));
 }
 
 #[test]

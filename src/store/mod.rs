@@ -30,8 +30,8 @@ pub use layout::{
     supervisor_logs_dir, supervisor_runtime_path, supervisor_state_path, validate_name,
 };
 pub(crate) use openclaw_config::{
-    OpenClawConfigAudit, audit_openclaw_config, repair_openclaw_config,
-    rewrite_openclaw_config_for_target,
+    OpenClawConfigAudit, audit_openclaw_config, ensure_minimum_local_openclaw_config,
+    repair_openclaw_config, rewrite_openclaw_config_for_target,
 };
 pub(crate) use openclaw_state::{
     OpenClawStateAudit, audit_openclaw_state, clear_nonportable_runtime_state,
@@ -78,6 +78,8 @@ pub fn summarize_env(meta: &EnvMeta) -> EnvSummary {
         service_running: meta.service_running,
         default_runtime: meta.default_runtime.clone(),
         default_launcher: meta.default_launcher.clone(),
+        dev_repo_root: meta.dev.as_ref().map(|dev| dev.repo_root.clone()),
+        dev_worktree_root: meta.dev.as_ref().map(|dev| dev.worktree_root.clone()),
         protected: meta.protected,
         created_at: meta.created_at,
         last_used_at: meta.last_used_at,

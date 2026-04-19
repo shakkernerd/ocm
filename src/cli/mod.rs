@@ -1,3 +1,4 @@
+mod dev;
 mod doctor;
 mod env;
 mod help;
@@ -489,6 +490,7 @@ impl Cli {
             "help" => cli.dispatch_help_command(rest),
             "init" => cli.handle_init_command(&action, rest),
             "setup" => cli.handle_setup_command(args[1..].to_vec()),
+            "dev" => cli.handle_dev_command(args[1..].to_vec()),
             "start" => cli.handle_start_command(args[1..].to_vec()),
             "upgrade" => cli.handle_upgrade_command(args[1..].to_vec()),
             "doctor" => cli.dispatch_doctor_command(action.as_str(), rest),

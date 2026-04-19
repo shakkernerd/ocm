@@ -124,6 +124,20 @@ impl<'a> EnvironmentService<'a> {
                     Err(error) => summary.issue = Some(error),
                 }
             }
+            Ok(ExecutionBinding::Dev) => {
+                summary.resolved_kind = Some("dev".to_string());
+                summary.resolved_name = Some("dev".to_string());
+                if let Some(dev) = env.dev.as_ref() {
+                    summary.command = Some("pnpm openclaw".to_string());
+                    summary.binary_path = Some("pnpm".to_string());
+                    summary.run_dir = Some(dev.worktree_root.clone());
+                } else {
+                    summary.issue = Some(format!(
+                        "environment \"{}\" is missing its dev binding",
+                        env.name
+                    ));
+                }
+            }
             Err(error) => summary.issue = Some(error),
         }
 
