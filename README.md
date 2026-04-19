@@ -90,6 +90,16 @@ ocm start
 
 `setup` walks you through the choices. `start` creates or reuses an environment, installs the latest stable OpenClaw release by default, and keeps it running in the background. If you do not pass a name, `ocm` generates one for you.
 
+If you are developing OpenClaw itself, use the dev path:
+
+```bash
+ocm dev shaks
+ocm dev shaks --watch
+ocm dev shaks --onboard
+```
+
+`dev` creates or reuses an isolated env, provisions an OpenClaw worktree under the repo's own `.worktrees/`, bootstraps the minimum local config so the gateway can run immediately, and then starts the gateway in the foreground. `--watch` keeps a source-run gateway rebuilding in place. `--onboard` runs local onboarding first and then starts the dev gateway.
+
 If you already have a plain `~/.openclaw` home you care about, use `ocm migrate <env>` instead of starting fresh. `setup` and `start` now point that out when they detect an existing plain OpenClaw home.
 
 ## Common paths
@@ -114,11 +124,11 @@ ocm upgrade --all
 ### Use a local checkout or dev build
 
 ```bash
-ocm start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service
-ocm @luna -- tui
+ocm dev luna
+ocm dev luna --watch
 ```
 
-Use `--no-service` when you want a quick local-dev setup without a background process. If you are already inside an OpenClaw checkout, `ocm setup` can detect that and suggest the local-command path automatically.
+Use `ocm dev` when you want an isolated source-run checkout with its own env root and gateway port. If you are already inside an OpenClaw checkout, `ocm setup` can detect that and suggest a local path automatically.
 
 ### Try beta or pin a specific release
 
@@ -172,6 +182,7 @@ You can also use:
 
 ```bash
 ocm help
+ocm help dev
 ocm help start
 ocm help setup
 ocm help env
