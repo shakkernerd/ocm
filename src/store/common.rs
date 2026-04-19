@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -48,7 +49,24 @@ pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), Str
 
     let mut raw = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
     raw.push('\n');
-    fs::write(path, raw).map_err(|error| error.to_string())
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("json path has no parent: {}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("json path has no file name: {}", path.display()))?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let temp_path = parent.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()));
+
+    fs::write(&temp_path, raw).map_err(|error| error.to_string())?;
+    fs::rename(&temp_path, path).map_err(|error| {
+        let _ = fs::remove_file(&temp_path);
+        error.to_string()
+    })
 }
 
 pub(crate) fn load_json_files(dir: &Path) -> Result<Vec<PathBuf>, String> {

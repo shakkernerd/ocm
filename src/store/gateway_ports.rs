@@ -94,7 +94,7 @@ fn openclaw_port_family_conflicts(base_port: u32, claimed: &BTreeSet<u32>) -> bo
         .any(|port| claimed.contains(&port))
 }
 
-fn openclaw_port_family_available(base_port: u32) -> bool {
+pub(crate) fn openclaw_port_family_available(base_port: u32) -> bool {
     let mut listeners = Vec::new();
     for port in openclaw_port_family(base_port) {
         match TcpListener::bind(("127.0.0.1", port as u16)) {
@@ -111,11 +111,16 @@ fn reserve_openclaw_port_family(base_port: u32, claimed: &mut BTreeSet<u32>) {
     }
 }
 
-fn openclaw_port_family(base_port: u32) -> Vec<u32> {
+pub(crate) fn openclaw_port_family_range(base_port: u32) -> (u32, u32) {
     let end_port = base_port
         .saturating_add(OPENCLAW_PORT_FAMILY_END_OFFSET)
         .min(u16::MAX as u32);
-    (base_port..=end_port).collect()
+    (base_port, end_port)
+}
+
+fn openclaw_port_family(base_port: u32) -> Vec<u32> {
+    let (start_port, end_port) = openclaw_port_family_range(base_port);
+    (start_port..=end_port).collect()
 }
 
 fn read_gateway_port_from_config(path: &Path) -> Option<u32> {

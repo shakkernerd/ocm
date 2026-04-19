@@ -52,7 +52,7 @@ pub fn build_openclaw_env(
     base_env: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let paths = derive_env_paths(Path::new(&meta.root));
-    let mut next = base_env.clone();
+    let mut next = sanitized_openclaw_base_env(base_env);
     next.insert(
         "OPENCLAW_HOME".to_string(),
         paths.openclaw_home.to_string_lossy().into_owned(),
@@ -79,6 +79,18 @@ pub fn build_openclaw_env(
 
     next.remove("OPENCLAW_PROFILE");
     next
+}
+
+fn sanitized_openclaw_base_env(base_env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    base_env
+        .iter()
+        .filter(|(key, _)| {
+            !key.starts_with("OPENCLAW_")
+                && key.as_str() != "OCM_ACTIVE_ENV"
+                && key.as_str() != "OCM_ACTIVE_ENV_ROOT"
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 pub fn render_use_script(meta: &EnvMeta, shell: &str) -> String {

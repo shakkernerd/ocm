@@ -183,6 +183,23 @@ impl<'a> EnvironmentService<'a> {
         Ok(meta)
     }
 
+    pub(crate) fn apply_effective_gateway_ports(
+        &self,
+        envs: Vec<EnvMeta>,
+    ) -> Result<Vec<EnvMeta>, String> {
+        let effective_ports = resolve_effective_gateway_ports(&envs, self.env);
+
+        envs.into_iter()
+            .map(|mut meta| {
+                if meta.gateway_port.is_none() {
+                    meta.gateway_port = resolve_env_gateway_port(&meta)
+                        .or_else(|| effective_ports.get(&meta.name).copied());
+                }
+                Ok(meta)
+            })
+            .collect()
+    }
+
     pub fn create(&self, options: CreateEnvironmentOptions) -> Result<EnvMeta, String> {
         if let Some(runtime_name) = options.default_runtime.as_deref() {
             get_runtime_verified(runtime_name, self.env, self.cwd)?;
@@ -308,8 +325,8 @@ impl<'a> EnvironmentService<'a> {
             return Ok((port, "config"));
         }
 
-        let envs = list_environments(self.env, self.cwd)?;
-        let effective_ports = resolve_effective_gateway_ports(&envs, self.env);
+        let effective_ports =
+            resolve_effective_gateway_ports(&list_environments(self.env, self.cwd)?, self.env);
 
         effective_ports
             .get(&target.name)

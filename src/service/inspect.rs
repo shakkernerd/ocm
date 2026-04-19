@@ -5,12 +5,13 @@ use std::process::Command;
 use serde::Serialize;
 
 use super::platform::{ServiceManagerKind, service_manager_kind};
+use crate::cli::render::format_rfc3339;
 use crate::env::GatewayProcessSpec;
 use crate::env::{EnvMeta, EnvironmentService};
 use crate::store::{display_path, list_environments, supervisor_logs_dir};
 use crate::supervisor::{
     SupervisorChildSpec, SupervisorDaemonSummary, SupervisorInspection, SupervisorRuntimeChild,
-    SupervisorService,
+    SupervisorRuntimeService, SupervisorService,
 };
 
 fn launchctl_binary(env: &BTreeMap<String, String>) -> String {
@@ -52,6 +53,7 @@ pub struct ServiceSummary {
     pub installed: bool,
     pub loaded: bool,
     pub running: bool,
+    pub gateway_state: String,
     pub desired_running: bool,
     pub ocm_service_installed: bool,
     pub ocm_service_loaded: bool,
@@ -61,6 +63,10 @@ pub struct ServiceSummary {
     pub child_pid: Option<u32>,
     pub child_restart_count: Option<usize>,
     pub child_port: Option<u32>,
+    pub last_exit_code: Option<i32>,
+    pub last_error: Option<String>,
+    pub last_event_at: Option<String>,
+    pub next_retry_at: Option<String>,
     pub stdout_path: Option<String>,
     pub stderr_path: Option<String>,
     pub issue: Option<String>,
@@ -83,6 +89,7 @@ struct ServiceSnapshot {
     planned_children: BTreeMap<String, SupervisorChildSpec>,
     skipped_envs: BTreeMap<String, String>,
     runtime_children: BTreeMap<String, SupervisorRuntimeChild>,
+    runtime_services: BTreeMap<String, SupervisorRuntimeService>,
 }
 
 pub fn list_services(
@@ -105,6 +112,7 @@ pub fn list_services(
             snapshot.planned_children.get(&meta.name),
             snapshot.skipped_envs.get(&meta.name),
             snapshot.runtime_children.get(&meta.name),
+            snapshot.runtime_services.get(&meta.name),
             &snapshot.daemon,
         )?);
     }
@@ -137,6 +145,7 @@ pub fn service_status_fast(
         snapshot.planned_children.get(name),
         snapshot.skipped_envs.get(name),
         snapshot.runtime_children.get(name),
+        snapshot.runtime_services.get(name),
         &snapshot.daemon,
     )
 }
@@ -151,6 +160,7 @@ fn load_service_snapshot(
         planned_children,
         skipped_envs,
         runtime_children,
+        runtime_services,
     } = supervisor.inspect()?;
 
     Ok(ServiceSnapshot {
@@ -167,6 +177,10 @@ fn load_service_snapshot(
             .into_iter()
             .map(|child| (child.env_name.clone(), child))
             .collect(),
+        runtime_services: runtime_services
+            .into_iter()
+            .map(|child| (child.env_name.clone(), child))
+            .collect(),
     })
 }
 
@@ -178,6 +192,7 @@ fn build_service_summary(
     planned_child: Option<&SupervisorChildSpec>,
     skipped_reason: Option<&String>,
     runtime_child: Option<&SupervisorRuntimeChild>,
+    runtime_service: Option<&SupervisorRuntimeService>,
     daemon: &SupervisorDaemonSummary,
 ) -> Result<ServiceSummary, String> {
     let (gateway_port, _) = env_service.resolve_effective_gateway_port(meta)?;
@@ -194,12 +209,16 @@ fn build_service_summary(
     let desired_running = meta.service_running;
     let loaded = installed && (daemon.loaded || daemon.running);
     let running = runtime_child.is_some();
+    let gateway_state = runtime_service
+        .map(|service| service.gateway_state.clone())
+        .unwrap_or_else(|| service_state_label(installed, desired_running, running));
     let issue = service_issue(
         installed,
         desired_running,
         daemon,
-        running,
+        &gateway_state,
         skipped_reason,
+        runtime_service,
         resolved_issue,
     );
 
@@ -277,6 +296,7 @@ fn build_service_summary(
         installed,
         loaded,
         running,
+        gateway_state,
         desired_running,
         ocm_service_installed: daemon.installed,
         ocm_service_loaded: daemon.loaded,
@@ -284,8 +304,18 @@ fn build_service_summary(
         ocm_service_pid: daemon.pid,
         ocm_service_state: daemon.state.clone(),
         child_pid: runtime_child.map(|child| child.pid),
-        child_restart_count: runtime_child.map(|child| child.restart_count),
+        child_restart_count: runtime_service.map(|child| child.restart_count),
         child_port: runtime_child.map(|child| child.child_port),
+        last_exit_code: runtime_service.and_then(|service| service.last_exit_code),
+        last_error: runtime_service.and_then(|service| service.last_error.clone()),
+        last_event_at: runtime_service
+            .and_then(|service| service.last_event_at)
+            .map(format_rfc3339)
+            .transpose()?,
+        next_retry_at: runtime_service
+            .and_then(|service| service.next_retry_at)
+            .map(format_rfc3339)
+            .transpose()?,
         stdout_path: runtime_child
             .map(|child| child.stdout_path.clone())
             .or_else(|| planned_child.map(|child| child.stdout_path.clone()))
@@ -324,8 +354,9 @@ fn service_issue(
     installed: bool,
     desired_running: bool,
     daemon: &SupervisorDaemonSummary,
-    running: bool,
+    gateway_state: &str,
     skipped_reason: Option<&String>,
+    runtime_service: Option<&SupervisorRuntimeService>,
     resolved_issue: Option<String>,
 ) -> Option<String> {
     if let Some(issue) = resolved_issue {
@@ -344,11 +375,39 @@ fn service_issue(
         if !daemon.running {
             return Some("OCM background service is not running".to_string());
         }
-        if !running {
+        if gateway_state == "backoff" {
+            return runtime_service
+                .and_then(|service| service.last_error.clone())
+                .or_else(|| {
+                    Some("env gateway is backing off after repeated failures".to_string())
+                });
+        }
+        if gateway_state == "stopped" {
+            return runtime_service
+                .and_then(|service| service.last_error.clone())
+                .or_else(|| Some("env gateway exited and is not being restarted".to_string()));
+        }
+        if gateway_state != "running" {
             return Some("env gateway is not running under the OCM background service".to_string());
         }
     }
     None
+}
+
+fn service_state_label(installed: bool, desired_running: bool, running: bool) -> String {
+    if running {
+        "running".to_string()
+    } else if desired_running {
+        if installed {
+            "pending".to_string()
+        } else {
+            "starting".to_string()
+        }
+    } else if installed {
+        "stopped".to_string()
+    } else {
+        "disabled".to_string()
+    }
 }
 
 pub(crate) fn inspect_job(

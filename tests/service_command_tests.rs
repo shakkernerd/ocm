@@ -456,6 +456,7 @@ fn service_status_ignores_stale_runtime_children_when_the_daemon_is_down() {
         kind: "ocm-supervisor-runtime".to_string(),
         ocm_home: path_string(&root.child("ocm-home")),
         updated_at: now_utc(),
+        services: Vec::new(),
         children: vec![SupervisorRuntimeChild {
             env_name: "demo".to_string(),
             binding_kind: "launcher".to_string(),

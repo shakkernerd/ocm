@@ -157,7 +157,7 @@ fn setup_daemon_run_fixture(
     write_executable_script(
         &launcher_script,
         &format!(
-            "#!/bin/sh\nprintf 'launcher\\n' > '{}'\nprintf 'launcher stdout\\n'\nprintf 'launcher stderr\\n' >&2\n",
+            "#!/bin/sh\nprintf 'launcher\\n' > '{}'\nprintf 'launcher stdout\\n'\nprintf 'launcher stderr\\n' >&2\nsleep 1\n",
             path_string(&launcher_marker)
         ),
     );
@@ -165,7 +165,7 @@ fn setup_daemon_run_fixture(
     write_executable_script(
         &runtime_script,
         &format!(
-            "#!/bin/sh\nprintf 'runtime\\n' > '{}'\nprintf 'runtime stdout\\n'\nprintf 'runtime stderr\\n' >&2\n",
+            "#!/bin/sh\nprintf 'runtime\\n' > '{}'\nprintf 'runtime stdout\\n'\nprintf 'runtime stderr\\n' >&2\nsleep 1\n",
             path_string(&runtime_marker)
         ),
     );

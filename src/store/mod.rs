@@ -20,7 +20,10 @@ pub use envs::{
     clone_environment, create_environment, export_environment, get_environment, import_environment,
     list_environments, remove_environment, save_environment,
 };
-pub(crate) use gateway_ports::{resolve_effective_gateway_ports, resolve_env_gateway_port};
+pub(crate) use gateway_ports::{
+    openclaw_port_family_available, openclaw_port_family_range, resolve_effective_gateway_ports,
+    resolve_env_gateway_port,
+};
 pub use launchers::{add_launcher, get_launcher, list_launchers, remove_launcher};
 pub use layout::{
     EnvPaths, StorePaths, clean_path, default_env_root, derive_env_paths, display_path,

@@ -12,23 +12,24 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::env::EnvironmentService;
+use crate::env::{EnvironmentService, resolve_gateway_process_spec};
 use crate::service::inspect::inspect_job;
 use crate::service::platform::{
     ManagedServiceDefinition, activate_managed_service, managed_service_identity,
     write_managed_service_definition,
 };
 use crate::store::{
-    display_path, ensure_dir, ensure_store, list_environments, now_utc, read_json,
-    resolve_ocm_home, supervisor_logs_dir, supervisor_runtime_path, supervisor_state_path,
-    write_json,
+    display_path, ensure_dir, ensure_store, list_environments, now_utc,
+    openclaw_port_family_available, openclaw_port_family_range, read_json, resolve_ocm_home,
+    supervisor_logs_dir, supervisor_runtime_path, supervisor_state_path, write_json,
 };
 
 const SUPERVISOR_STATE_KIND: &str = "ocm-supervisor-state";
 const SUPERVISOR_RUNTIME_KIND: &str = "ocm-supervisor-runtime";
 const DAEMON_SERVICE_NAME: &str = "ocm";
 const SUPERVISOR_POLL_INTERVAL_MS: u64 = 200;
-const SUPERVISOR_RESTART_DELAY_MS: u64 = 400;
+const SUPERVISOR_RESTART_DELAY_MS: u64 = 1_000;
+const SUPERVISOR_MAX_RESTART_DELAY_MS: u64 = 30_000;
 const SUPERVISOR_STABLE_RUN_MS: u64 = 10_000;
 const DEFAULT_SERVICE_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 const SERVICE_PROXY_ENV_KEYS: [&str; 8] = [
@@ -152,7 +153,28 @@ pub struct SupervisorRuntimeState {
     pub ocm_home: String,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+    pub services: Vec<SupervisorRuntimeService>,
     pub children: Vec<SupervisorRuntimeChild>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorRuntimeService {
+    pub env_name: String,
+    pub binding_kind: String,
+    pub binding_name: String,
+    pub gateway_state: String,
+    pub restart_count: usize,
+    pub child_port: u32,
+    pub pid: Option<u32>,
+    pub stdout_path: String,
+    pub stderr_path: String,
+    pub last_exit_code: Option<i32>,
+    pub last_error: Option<String>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub last_event_at: Option<OffsetDateTime>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub next_retry_at: Option<OffsetDateTime>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -173,6 +195,7 @@ pub struct SupervisorInspection {
     pub planned_children: Vec<SupervisorChildSpec>,
     pub skipped_envs: Vec<SkippedSupervisorEnv>,
     pub runtime_children: Vec<SupervisorRuntimeChild>,
+    pub runtime_services: Vec<SupervisorRuntimeService>,
 }
 
 pub struct SupervisorService<'a> {
@@ -243,17 +266,21 @@ impl<'a> SupervisorService<'a> {
     pub fn inspect(&self) -> Result<SupervisorInspection, String> {
         let state = self.build_state()?;
         let daemon = self.daemon_status()?;
-        let runtime_children = if daemon.running {
-            self.runtime()?.children
+        let runtime = if daemon.running {
+            self.read_runtime_state()?
         } else {
-            Vec::new()
+            None
         };
 
         Ok(SupervisorInspection {
             daemon,
             planned_children: state.children,
             skipped_envs: state.skipped_envs,
-            runtime_children,
+            runtime_children: runtime
+                .as_ref()
+                .map(|runtime| runtime.children.clone())
+                .unwrap_or_default(),
+            runtime_services: runtime.map(|runtime| runtime.services).unwrap_or_default(),
         })
     }
 
@@ -288,6 +315,7 @@ impl<'a> SupervisorService<'a> {
         let env_service = EnvironmentService::new(self.env, self.cwd);
         let mut envs = list_environments(self.env, self.cwd)?;
         envs.sort_by(|left, right| left.name.cmp(&right.name));
+        let envs = env_service.apply_effective_gateway_ports(envs)?;
 
         let mut children = Vec::new();
         let mut skipped_envs = Vec::new();
@@ -307,7 +335,7 @@ impl<'a> SupervisorService<'a> {
                 });
                 continue;
             }
-            match env_service.resolve_gateway_process(&name, false) {
+            match resolve_gateway_process_spec(&env_meta, self.env, self.cwd, false) {
                 Ok(process) => {
                     let args = process.args.clone();
                     let child_port = process
@@ -343,6 +371,9 @@ impl<'a> SupervisorService<'a> {
                 }),
             }
         }
+        let (children, additional_skipped) = filter_conflicting_supervisor_children(children);
+        skipped_envs.extend(additional_skipped);
+        skipped_envs.sort_by(|left, right| left.env_name.cmp(&right.env_name));
 
         Ok(SupervisorState {
             kind: SUPERVISOR_STATE_KIND.to_string(),
@@ -437,6 +468,15 @@ impl<'a> SupervisorService<'a> {
         })
     }
 
+    fn read_runtime_state(&self) -> Result<Option<SupervisorRuntimeState>, String> {
+        let runtime_path = supervisor_runtime_path(self.env, self.cwd)?;
+        if !runtime_path.exists() {
+            return Ok(None);
+        }
+
+        Ok(Some(read_json::<SupervisorRuntimeState>(&runtime_path)?))
+    }
+
     fn run_once(
         &self,
         state_path: &Path,
@@ -481,6 +521,7 @@ impl<'a> SupervisorService<'a> {
         let mut active_state = state;
         let mut running = BTreeMap::new();
         let mut pending = BTreeMap::new();
+        let mut inactive = BTreeMap::new();
         queue_missing_children(
             &mut pending,
             &running,
@@ -488,8 +529,14 @@ impl<'a> SupervisorService<'a> {
             0,
             Instant::now(),
         );
-        start_due_children(&mut running, &mut pending)?;
-        write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
+        start_due_children(&mut running, &mut pending, &mut inactive)?;
+        write_supervisor_runtime_state(
+            &runtime_path,
+            &active_state.ocm_home,
+            &running,
+            &pending,
+            &inactive,
+        )?;
         let mut managed_child_count = active_state.children.len();
         let mut child_results = Vec::new();
 
@@ -500,6 +547,7 @@ impl<'a> SupervisorService<'a> {
                 &mut managed_child_count,
                 &mut running,
                 &mut pending,
+                &mut inactive,
             );
             runtime_dirty |= process_exited_children(
                 state_path,
@@ -508,12 +556,19 @@ impl<'a> SupervisorService<'a> {
                 &mut managed_child_count,
                 &mut running,
                 &mut pending,
+                &mut inactive,
                 &mut child_results,
             )?;
 
-            runtime_dirty |= start_due_children(&mut running, &mut pending)?;
+            runtime_dirty |= start_due_children(&mut running, &mut pending, &mut inactive)?;
             if runtime_dirty {
-                write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &running)?;
+                write_supervisor_runtime_state(
+                    &runtime_path,
+                    &active_state.ocm_home,
+                    &running,
+                    &pending,
+                    &inactive,
+                )?;
             }
 
             if !stop_requested.load(Ordering::SeqCst) {
@@ -524,7 +579,13 @@ impl<'a> SupervisorService<'a> {
         for (_, mut running_child) in running {
             stop_supervisor_child(&mut running_child);
         }
-        write_supervisor_runtime_state(&runtime_path, &active_state.ocm_home, &BTreeMap::new())?;
+        write_supervisor_runtime_state(
+            &runtime_path,
+            &active_state.ocm_home,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )?;
 
         Ok(SupervisorRunSummary {
             state_path: display_path(state_path),
@@ -548,6 +609,10 @@ struct PendingSupervisorChild {
     spec: SupervisorChildSpec,
     restart_count: usize,
     retry_at: Instant,
+    retry_at_utc: OffsetDateTime,
+    last_exit_code: Option<i32>,
+    last_error: Option<String>,
+    last_event_at: Option<OffsetDateTime>,
 }
 
 struct ExitedSupervisorChild {
@@ -555,6 +620,17 @@ struct ExitedSupervisorChild {
     exit_code: Option<i32>,
     restart_count: usize,
     ran_for: Duration,
+}
+
+#[derive(Clone)]
+struct InactiveSupervisorChild {
+    spec: SupervisorChildSpec,
+    gateway_state: String,
+    restart_count: usize,
+    last_exit_code: Option<i32>,
+    last_error: Option<String>,
+    last_event_at: Option<OffsetDateTime>,
+    next_retry_at: Option<OffsetDateTime>,
 }
 
 fn spawn_running_child(
@@ -715,11 +791,12 @@ fn refresh_active_state(
     managed_child_count: &mut usize,
     running: &mut BTreeMap<String, RunningSupervisorChild>,
     pending: &mut BTreeMap<String, PendingSupervisorChild>,
+    inactive: &mut BTreeMap<String, InactiveSupervisorChild>,
 ) -> bool {
     let Some(next_state) = read_updated_supervisor_state(state_path, active_state) else {
         return false;
     };
-    let runtime_dirty = reconcile_running_children(running, pending, &next_state);
+    let runtime_dirty = reconcile_running_children(running, pending, inactive, &next_state);
     *managed_child_count = next_state.children.len();
     *active_state = next_state;
     runtime_dirty
@@ -728,6 +805,7 @@ fn refresh_active_state(
 fn reconcile_running_children(
     running: &mut BTreeMap<String, RunningSupervisorChild>,
     pending: &mut BTreeMap<String, PendingSupervisorChild>,
+    inactive: &mut BTreeMap<String, InactiveSupervisorChild>,
     desired_state: &SupervisorState,
 ) -> bool {
     let desired = child_map(&desired_state.children);
@@ -744,16 +822,13 @@ fn reconcile_running_children(
                 if should_replace {
                     pending.insert(
                         env_name,
-                        PendingSupervisorChild {
-                            spec: next_spec.clone(),
-                            restart_count: 0,
-                            retry_at: Instant::now(),
-                        },
+                        pending_supervisor_child(next_spec.clone(), 0, 0, None, None),
                     );
                 }
             }
             None => {
                 pending.remove(&env_name);
+                inactive.remove(&env_name);
             }
         }
     }
@@ -767,6 +842,7 @@ fn reconcile_running_children(
                     existing.spec.env_name
                 );
                 stop_supervisor_child(&mut existing);
+                inactive.remove(&env_name);
                 runtime_dirty = true;
             }
             continue;
@@ -787,12 +863,9 @@ fn reconcile_running_children(
             stop_supervisor_child(&mut existing);
             pending.insert(
                 env_name,
-                PendingSupervisorChild {
-                    spec: next_spec.clone(),
-                    restart_count: 0,
-                    retry_at: Instant::now(),
-                },
+                pending_supervisor_child(next_spec.clone(), 0, 0, None, None),
             );
+            inactive.remove(&existing.spec.env_name);
             runtime_dirty = true;
         }
     }
@@ -829,6 +902,7 @@ fn process_exited_children(
     managed_child_count: &mut usize,
     running: &mut BTreeMap<String, RunningSupervisorChild>,
     pending: &mut BTreeMap<String, PendingSupervisorChild>,
+    inactive: &mut BTreeMap<String, InactiveSupervisorChild>,
     child_results: &mut Vec<SupervisorChildRunResult>,
 ) -> Result<bool, String> {
     let exited = collect_exited_children(running)?;
@@ -868,6 +942,7 @@ fn process_exited_children(
             managed_child_count,
             running,
             pending,
+            inactive,
         );
         if should_restart
             && let Some(next_spec) =
@@ -878,13 +953,49 @@ fn process_exited_children(
             } else {
                 0
             };
+            let issue = Some(format!(
+                "process exited with {}; retrying after backoff",
+                exited_child
+                    .exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "signal".to_string())
+            ));
             pending.insert(
+                exited_child.env_name.clone(),
+                pending_supervisor_child(
+                    next_spec.clone(),
+                    next_restart_count,
+                    restart_delay_ms(next_restart_count),
+                    exited_child.exit_code,
+                    issue.clone(),
+                ),
+            );
+            inactive.insert(
                 exited_child.env_name,
-                PendingSupervisorChild {
-                    spec: next_spec,
-                    restart_count: next_restart_count,
-                    retry_at: Instant::now() + Duration::from_millis(SUPERVISOR_RESTART_DELAY_MS),
-                },
+                inactive_supervisor_child(
+                    next_spec,
+                    "backoff",
+                    next_restart_count,
+                    exited_child.exit_code,
+                    issue,
+                    now_utc(),
+                    pending
+                        .get(&previous_child.spec.env_name)
+                        .map(|child| child.retry_at_utc),
+                ),
+            );
+        } else {
+            inactive.insert(
+                previous_child.spec.env_name.clone(),
+                inactive_supervisor_child(
+                    previous_child.spec.clone(),
+                    "stopped",
+                    exited_child.restart_count,
+                    exited_child.exit_code,
+                    Some("process exited cleanly too quickly; leaving stopped".to_string()),
+                    now_utc(),
+                    None,
+                ),
             );
         }
     }
@@ -914,6 +1025,10 @@ fn queue_missing_children(
                 spec: next_spec.clone(),
                 restart_count,
                 retry_at,
+                retry_at_utc: now_utc(),
+                last_exit_code: None,
+                last_error: None,
+                last_event_at: None,
             },
         );
     }
@@ -922,6 +1037,7 @@ fn queue_missing_children(
 fn start_due_children(
     running: &mut BTreeMap<String, RunningSupervisorChild>,
     pending: &mut BTreeMap<String, PendingSupervisorChild>,
+    inactive: &mut BTreeMap<String, InactiveSupervisorChild>,
 ) -> Result<bool, String> {
     let now = Instant::now();
     let due = pending
@@ -934,18 +1050,53 @@ fn start_due_children(
         let Some(next_child) = pending.get(&env_name).cloned() else {
             continue;
         };
+        if let Err(error) = preflight_supervisor_child_start(&next_child, running) {
+            if let Some(entry) = pending.get_mut(&env_name) {
+                entry.restart_count += 1;
+                let delay_ms = restart_delay_ms(entry.restart_count);
+                entry.retry_at = Instant::now() + Duration::from_millis(delay_ms);
+                entry.retry_at_utc = now_utc() + time::Duration::milliseconds(delay_ms as i64);
+                entry.last_error = Some(error.clone());
+                entry.last_event_at = Some(now_utc());
+            }
+            inactive.insert(
+                env_name.clone(),
+                inactive_from_pending(
+                    pending
+                        .get(&env_name)
+                        .expect("pending child should still exist after preflight failure"),
+                    "backoff",
+                ),
+            );
+            eprintln!("{error}");
+            continue;
+        }
         match spawn_running_child(next_child.spec.clone(), next_child.restart_count) {
             Ok(running_child) => {
                 pending.remove(&env_name);
-                running.insert(env_name, running_child);
+                running.insert(env_name.clone(), running_child);
+                inactive.remove(&env_name);
                 runtime_dirty = true;
             }
             Err(error) => {
                 eprintln!("{error}");
                 if let Some(entry) = pending.get_mut(&env_name) {
-                    entry.retry_at =
-                        Instant::now() + Duration::from_millis(SUPERVISOR_RESTART_DELAY_MS);
+                    entry.restart_count += 1;
+                    let delay_ms = restart_delay_ms(entry.restart_count);
+                    entry.retry_at = Instant::now() + Duration::from_millis(delay_ms);
+                    entry.retry_at_utc = now_utc() + time::Duration::milliseconds(delay_ms as i64);
+                    entry.last_error = Some(error.clone());
+                    entry.last_event_at = Some(now_utc());
                 }
+                inactive.insert(
+                    env_name.clone(),
+                    inactive_from_pending(
+                        pending
+                            .get(&env_name)
+                            .expect("pending child should still exist after spawn failure"),
+                        "backoff",
+                    ),
+                );
             }
         }
     }
@@ -986,6 +1137,119 @@ fn active_child_spec<'a>(
         .children
         .iter()
         .find(|child| child.env_name == env_name)
+}
+
+fn filter_conflicting_supervisor_children(
+    children: Vec<SupervisorChildSpec>,
+) -> (Vec<SupervisorChildSpec>, Vec<SkippedSupervisorEnv>) {
+    let mut kept = Vec::new();
+    let mut skipped = Vec::new();
+    let mut claimed_run_dirs = BTreeMap::new();
+
+    for child in children {
+        if child.binding_kind != "runtime" {
+            if let Some(existing_env) = claimed_run_dirs.get(&child.run_dir) {
+                skipped.push(SkippedSupervisorEnv {
+                    env_name: child.env_name,
+                    reason: format!(
+                        "source-backed run dir is already claimed by env \"{}\": {}",
+                        existing_env, child.run_dir
+                    ),
+                });
+                continue;
+            }
+            claimed_run_dirs.insert(child.run_dir.clone(), child.env_name.clone());
+        }
+        kept.push(child);
+    }
+
+    (kept, skipped)
+}
+
+fn pending_supervisor_child(
+    spec: SupervisorChildSpec,
+    restart_count: usize,
+    delay_ms: u64,
+    last_exit_code: Option<i32>,
+    last_error: Option<String>,
+) -> PendingSupervisorChild {
+    PendingSupervisorChild {
+        spec,
+        restart_count,
+        retry_at: Instant::now() + Duration::from_millis(delay_ms),
+        retry_at_utc: now_utc() + time::Duration::milliseconds(delay_ms as i64),
+        last_exit_code,
+        last_error,
+        last_event_at: Some(now_utc()),
+    }
+}
+
+fn inactive_supervisor_child(
+    spec: SupervisorChildSpec,
+    gateway_state: &str,
+    restart_count: usize,
+    last_exit_code: Option<i32>,
+    last_error: Option<String>,
+    last_event_at: OffsetDateTime,
+    next_retry_at: Option<OffsetDateTime>,
+) -> InactiveSupervisorChild {
+    InactiveSupervisorChild {
+        spec,
+        gateway_state: gateway_state.to_string(),
+        restart_count,
+        last_exit_code,
+        last_error,
+        last_event_at: Some(last_event_at),
+        next_retry_at,
+    }
+}
+
+fn inactive_from_pending(
+    pending_child: &PendingSupervisorChild,
+    gateway_state: &str,
+) -> InactiveSupervisorChild {
+    InactiveSupervisorChild {
+        spec: pending_child.spec.clone(),
+        gateway_state: gateway_state.to_string(),
+        restart_count: pending_child.restart_count,
+        last_exit_code: pending_child.last_exit_code,
+        last_error: pending_child.last_error.clone(),
+        last_event_at: pending_child.last_event_at,
+        next_retry_at: Some(pending_child.retry_at_utc),
+    }
+}
+
+fn restart_delay_ms(restart_count: usize) -> u64 {
+    let exponent = restart_count.saturating_sub(1).min(6) as u32;
+    SUPERVISOR_RESTART_DELAY_MS
+        .saturating_mul(2u64.saturating_pow(exponent))
+        .min(SUPERVISOR_MAX_RESTART_DELAY_MS)
+}
+
+fn preflight_supervisor_child_start(
+    pending_child: &PendingSupervisorChild,
+    running: &BTreeMap<String, RunningSupervisorChild>,
+) -> Result<(), String> {
+    if !openclaw_port_family_available(pending_child.spec.child_port) {
+        let (start_port, end_port) = openclaw_port_family_range(pending_child.spec.child_port);
+        return Err(format!(
+            "refusing to start env \"{}\": OpenClaw port family {}-{} is already in use",
+            pending_child.spec.env_name, start_port, end_port
+        ));
+    }
+
+    let has_run_dir_conflict = running.values().any(|running_child| {
+        running_child.spec.run_dir == pending_child.spec.run_dir
+            && running_child.spec.binding_kind != "runtime"
+    });
+    if has_run_dir_conflict {
+        return Err(format!(
+            "refusing to start env \"{}\": source-backed run dir is already active at {}",
+            pending_child.spec.env_name, pending_child.spec.run_dir
+        ));
+    }
+
+    Ok(())
 }
 
 fn supervisor_service_environment(
@@ -1039,6 +1303,8 @@ fn write_supervisor_runtime_state(
     runtime_path: &Path,
     ocm_home: &str,
     running: &BTreeMap<String, RunningSupervisorChild>,
+    pending: &BTreeMap<String, PendingSupervisorChild>,
+    inactive: &BTreeMap<String, InactiveSupervisorChild>,
 ) -> Result<(), String> {
     if let Some(parent) = runtime_path.parent() {
         ensure_dir(parent)?;
@@ -1049,6 +1315,20 @@ fn write_supervisor_runtime_state(
         .map(supervisor_runtime_child)
         .collect::<Vec<_>>();
     children.sort_by(|left, right| left.env_name.cmp(&right.env_name));
+    let mut services = running
+        .values()
+        .map(supervisor_runtime_service_running)
+        .collect::<Vec<_>>();
+    services.extend(pending.values().map(|child| {
+        supervisor_runtime_service_inactive(&inactive_from_pending(child, "backoff"))
+    }));
+    services.extend(
+        inactive
+            .values()
+            .filter(|child| !pending.contains_key(&child.spec.env_name))
+            .map(supervisor_runtime_service_inactive),
+    );
+    services.sort_by(|left, right| left.env_name.cmp(&right.env_name));
 
     write_json(
         runtime_path,
@@ -1056,6 +1336,7 @@ fn write_supervisor_runtime_state(
             kind: SUPERVISOR_RUNTIME_KIND.to_string(),
             ocm_home: ocm_home.to_string(),
             updated_at: now_utc(),
+            services,
             children,
         },
     )
@@ -1071,5 +1352,45 @@ fn supervisor_runtime_child(running_child: &RunningSupervisorChild) -> Superviso
         child_port: running_child.spec.child_port,
         stdout_path: running_child.spec.stdout_path.clone(),
         stderr_path: running_child.spec.stderr_path.clone(),
+    }
+}
+
+fn supervisor_runtime_service_running(
+    running_child: &RunningSupervisorChild,
+) -> SupervisorRuntimeService {
+    SupervisorRuntimeService {
+        env_name: running_child.spec.env_name.clone(),
+        binding_kind: running_child.spec.binding_kind.clone(),
+        binding_name: running_child.spec.binding_name.clone(),
+        gateway_state: "running".to_string(),
+        restart_count: running_child.restart_count,
+        child_port: running_child.spec.child_port,
+        pid: Some(running_child.child.id()),
+        stdout_path: running_child.spec.stdout_path.clone(),
+        stderr_path: running_child.spec.stderr_path.clone(),
+        last_exit_code: None,
+        last_error: None,
+        last_event_at: None,
+        next_retry_at: None,
+    }
+}
+
+fn supervisor_runtime_service_inactive(
+    inactive_child: &InactiveSupervisorChild,
+) -> SupervisorRuntimeService {
+    SupervisorRuntimeService {
+        env_name: inactive_child.spec.env_name.clone(),
+        binding_kind: inactive_child.spec.binding_kind.clone(),
+        binding_name: inactive_child.spec.binding_name.clone(),
+        gateway_state: inactive_child.gateway_state.clone(),
+        restart_count: inactive_child.restart_count,
+        child_port: inactive_child.spec.child_port,
+        pid: None,
+        stdout_path: inactive_child.spec.stdout_path.clone(),
+        stderr_path: inactive_child.spec.stderr_path.clone(),
+        last_exit_code: inactive_child.last_exit_code,
+        last_error: inactive_child.last_error.clone(),
+        last_event_at: inactive_child.last_event_at,
+        next_retry_at: inactive_child.next_retry_at,
     }
 }
