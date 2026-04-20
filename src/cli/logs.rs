@@ -2,6 +2,7 @@ use std::io::{self, Write};
 
 use super::render::RenderProfile;
 use super::{Cli, render};
+use crate::logs::LogComponentSummary;
 
 struct PrettyLogWriter<'a, W: Write> {
     inner: &'a mut W,
@@ -52,6 +53,7 @@ impl Cli {
     pub(super) fn handle_logs_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "logs")?;
         let (args, follow) = Self::consume_flag(args, "--follow");
+        let (args, all_streams_flag) = Self::consume_flag(args, "--all-streams");
         let (args, stderr_flag) = Self::consume_flag(args, "--stderr");
         let (args, stdout_flag) = Self::consume_flag(args, "--stdout");
         let (args, tail_raw) = Self::consume_option(args, "--tail")?;
@@ -60,8 +62,14 @@ impl Cli {
             None => Some(50),
         };
 
-        if stdout_flag && stderr_flag {
-            return Err("logs accepts only one of --stdout or --stderr".to_string());
+        let stream_flag_count = [all_streams_flag, stderr_flag, stdout_flag]
+            .into_iter()
+            .filter(|flag| *flag)
+            .count();
+        if stream_flag_count > 1 {
+            return Err(
+                "logs accepts only one of --stdout, --stderr, or --all-streams".to_string(),
+            );
         }
         if json_flag && follow {
             return Err("logs cannot combine --json with --follow".to_string());
@@ -72,15 +80,18 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let stream = if stderr_flag { "stderr" } else { "stdout" };
+        let stream = if all_streams_flag {
+            "all"
+        } else if stderr_flag {
+            "stderr"
+        } else {
+            "stdout"
+        };
         if follow {
-            let target = self.log_service().target(name, stream)?;
             if profile.pretty {
                 self.stdout_lines(render::logs::log_header(
                     name,
-                    stream,
-                    &target.source_kind,
-                    &target.path.to_string_lossy(),
+                    &follow_components(self.log_service().targets(name, stream)?),
                     tail_lines,
                     true,
                     profile,
@@ -108,9 +119,7 @@ impl Cli {
         if profile.pretty {
             self.stdout_lines(render::logs::log_header(
                 &summary.env_name,
-                &summary.stream,
-                &summary.source_kind,
-                &summary.path,
+                &summary.components,
                 summary.tail_lines,
                 false,
                 profile,
@@ -129,4 +138,15 @@ impl Cli {
             .map_err(|error| error.to_string())?;
         Ok(0)
     }
+}
+
+fn follow_components(targets: Vec<crate::logs::LogTarget>) -> Vec<LogComponentSummary> {
+    targets
+        .into_iter()
+        .map(|target| LogComponentSummary {
+            stream: target.stream,
+            source_kind: target.source_kind,
+            path: target.path.to_string_lossy().into_owned(),
+        })
+        .collect()
 }

@@ -159,7 +159,7 @@ ocm adopt plan --name mira
 ```bash
 ocm service status
 ocm logs mira --tail 50
-ocm logs mira --follow
+ocm logs mira --all-streams --follow
 ```
 
 ## Why not just run OpenClaw directly?

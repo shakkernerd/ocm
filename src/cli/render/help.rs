@@ -210,10 +210,14 @@ pub fn logs_help(cmd: &str) -> String {
         "Read env logs",
         "Tail one env log with follow support. OCM chooses the active log file between the env's OpenClaw gateway logs and the OCM background service child logs.",
         vec![format!(
-            "{cmd} logs <env> [--stderr] [--tail <count>] [--follow] [--raw] [--json]"
+            "{cmd} logs <env> [--stderr | --all-streams] [--tail <count>] [--follow] [--raw] [--json]"
         )],
         &[
             ("--stderr", "Read stderr instead of stdout"),
+            (
+                "--all-streams",
+                "Read stdout and stderr together in time order",
+            ),
             ("--tail <count>", "Print the last N lines before streaming"),
             ("--follow", "Keep following the log file like tail -f"),
             ("--raw", "Print log content without the TTY header"),
@@ -222,6 +226,7 @@ pub fn logs_help(cmd: &str) -> String {
         vec![
             format!("{cmd} logs mira"),
             format!("{cmd} logs mira --follow"),
+            format!("{cmd} logs mira --all-streams --follow"),
             format!("{cmd} logs mira --stderr --tail 100"),
         ],
         &[

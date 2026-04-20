@@ -1,12 +1,11 @@
 use super::RenderProfile;
 use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
+use crate::logs::LogComponentSummary;
 use time::OffsetDateTime;
 
 pub fn log_header(
     env_name: &str,
-    stream: &str,
-    source_kind: &str,
-    path: &str,
+    components: &[LogComponentSummary],
     tail_lines: Option<usize>,
     follow: bool,
     profile: RenderProfile,
@@ -20,29 +19,40 @@ pub fn log_header(
         Tone::Strong,
         profile.color,
     )];
-    lines.extend(render_key_value_card(
-        "Active log",
-        &[
-            KeyValueRow::plain("Stream", stream.to_string()),
-            KeyValueRow::plain("Source", source_kind.to_string()),
-            KeyValueRow::plain("Path", path.to_string()),
-            KeyValueRow::plain(
-                "Mode",
-                if follow {
-                    "follow".to_string()
-                } else {
-                    "snapshot".to_string()
-                },
-            ),
-            KeyValueRow::plain(
-                "Tail",
-                tail_lines
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "all".to_string()),
-            ),
-        ],
-        profile.color,
+    let mut rows = Vec::new();
+    if components.len() == 1 {
+        let component = &components[0];
+        rows.push(KeyValueRow::plain("Stream", component.stream.clone()));
+        rows.push(KeyValueRow::plain("Source", component.source_kind.clone()));
+        rows.push(KeyValueRow::plain("Path", component.path.clone()));
+    } else {
+        rows.push(KeyValueRow::plain("Streams", "stdout + stderr"));
+        for component in components {
+            rows.push(KeyValueRow::plain(
+                format!("{} source", component.stream),
+                component.source_kind.clone(),
+            ));
+            rows.push(KeyValueRow::plain(
+                format!("{} path", component.stream),
+                component.path.clone(),
+            ));
+        }
+    }
+    rows.push(KeyValueRow::plain(
+        "Mode",
+        if follow {
+            "follow".to_string()
+        } else {
+            "snapshot".to_string()
+        },
     ));
+    rows.push(KeyValueRow::plain(
+        "Tail",
+        tail_lines
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "all".to_string()),
+    ));
+    lines.extend(render_key_value_card("Active log", &rows, profile.color));
     lines.push(String::new());
     lines
 }
@@ -67,7 +77,14 @@ fn render_log_line(line: &str, profile: RenderProfile) -> String {
     let rendered = parse_bracketed_line(body)
         .or_else(|| parse_leveled_line(body))
         .map(|parsed| format_parsed_line(parsed, profile))
-        .unwrap_or_else(|| body.to_string());
+        .unwrap_or_else(|| {
+            let tone = heuristic_line_tone(body);
+            if matches!(tone, Tone::Plain) {
+                body.to_string()
+            } else {
+                paint(body, tone, profile.color)
+            }
+        });
 
     if has_newline {
         format!("{rendered}\n")
@@ -127,6 +144,10 @@ fn parse_leveled_line(line: &str) -> Option<ParsedLogLine<'_>> {
 
 fn format_parsed_line(parsed: ParsedLogLine<'_>, profile: RenderProfile) -> String {
     let mut parts = Vec::new();
+    let content_tone = parsed
+        .level
+        .map(level_tone)
+        .unwrap_or_else(|| heuristic_line_tone(parsed.message));
     if let Some(timestamp) = parsed.timestamp {
         parts.push(paint(
             &format_log_timestamp(timestamp),
@@ -143,14 +164,18 @@ fn format_parsed_line(parsed: ParsedLogLine<'_>, profile: RenderProfile) -> Stri
         } else {
             source.to_string()
         };
-        parts.push(paint(&source_label, Tone::Accent, profile.color));
+        let source_tone = parsed.level.map(level_tone).unwrap_or_else(|| {
+            let tone = heuristic_line_tone(parsed.message);
+            if matches!(tone, Tone::Plain) {
+                Tone::Accent
+            } else {
+                tone
+            }
+        });
+        parts.push(paint(&source_label, source_tone, profile.color));
     }
     if !parsed.message.is_empty() {
-        parts.push(paint(
-            parsed.message,
-            parsed.level.map(level_tone).unwrap_or(Tone::Plain),
-            profile.color,
-        ));
+        parts.push(paint(parsed.message, content_tone, profile.color));
     }
     parts.join(" ")
 }
@@ -196,18 +221,37 @@ fn level_tone(level: &str) -> Tone {
     }
 }
 
+fn heuristic_line_tone(line: &str) -> Tone {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("fatal")
+        || lower.contains("error")
+        || lower.contains(" failed")
+        || lower.contains("exception")
+        || lower.contains("panic")
+    {
+        Tone::Danger
+    } else if lower.contains("warn") || lower.contains("warning") {
+        Tone::Warning
+    } else {
+        Tone::Plain
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{log_header, render_log_text};
     use crate::cli::render::RenderProfile;
+    use crate::logs::LogComponentSummary;
 
     #[test]
     fn log_header_pretty_uses_cards() {
         let lines = log_header(
             "demo",
-            "stdout",
-            "gateway",
-            "/tmp/demo/.openclaw/logs/gateway.log",
+            &[LogComponentSummary {
+                stream: "stdout".to_string(),
+                source_kind: "gateway".to_string(),
+                path: "/tmp/demo/.openclaw/logs/gateway.log".to_string(),
+            }],
             Some(50),
             false,
             RenderProfile::pretty(false),
@@ -224,9 +268,12 @@ mod tests {
                 "2026-04-20T00:13:45.497+01:00 [agents/tool-images] Image resized\n",
                 "04:42:38+00:00 error gateway connect failed\n"
             ),
-            RenderProfile::pretty(false),
+            RenderProfile::pretty(true),
         );
-        assert!(rendered.contains("00:13:45+01:00 [agents/tool-images] Image resized"));
-        assert!(rendered.contains("04:42:38+00:00 error gateway connect failed"));
+        assert!(rendered.contains("00:13:45+01:00"));
+        assert!(rendered.contains("[agents/tool-images]"));
+        assert!(rendered.contains("\u{1b}[31merror\u{1b}[0m"));
+        assert!(rendered.contains("\u{1b}[31mgateway\u{1b}[0m"));
+        assert!(rendered.contains("\u{1b}[31mconnect failed\u{1b}[0m"));
     }
 }

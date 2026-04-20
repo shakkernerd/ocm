@@ -6,12 +6,21 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use serde::Serialize;
+use time::OffsetDateTime;
 
 use crate::env::EnvironmentService;
 use crate::store::{derive_env_paths, display_path, supervisor_logs_dir};
 
 const FOLLOW_POLL_INTERVAL_MS: u64 = 250;
 const TAIL_READ_CHUNK_SIZE: usize = 8 * 1024;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogComponentSummary {
+    pub stream: String,
+    pub source_kind: String,
+    pub path: String,
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +31,7 @@ pub struct LogSummary {
     pub path: String,
     pub tail_lines: Option<usize>,
     pub content: String,
+    pub components: Vec<LogComponentSummary>,
 }
 
 #[derive(Clone, Debug)]
@@ -48,23 +58,63 @@ impl<'a> LogService<'a> {
         stream: &str,
         tail_lines: Option<usize>,
     ) -> Result<LogSummary, String> {
-        let target = self.target(name, stream)?;
-        if !target.path.exists() {
+        let targets = self.targets(name, stream)?;
+        if targets.len() == 1 {
+            let target = &targets[0];
+            if !target.path.exists() {
+                return Err(format!(
+                    "{} log does not exist for env \"{}\": {}",
+                    target.stream,
+                    target.env_name,
+                    display_path(&target.path)
+                ));
+            }
+
+            return Ok(LogSummary {
+                env_name: target.env_name.clone(),
+                stream: target.stream.clone(),
+                source_kind: target.source_kind.clone(),
+                path: display_path(&target.path),
+                tail_lines,
+                content: read_log_text(&target.path, tail_lines)?,
+                components: vec![LogComponentSummary {
+                    stream: target.stream.clone(),
+                    source_kind: target.source_kind.clone(),
+                    path: display_path(&target.path),
+                }],
+            });
+        }
+
+        let mut contents = Vec::new();
+        let mut components = Vec::new();
+        for target in &targets {
+            components.push(LogComponentSummary {
+                stream: target.stream.clone(),
+                source_kind: target.source_kind.clone(),
+                path: display_path(&target.path),
+            });
+            if target.path.exists() {
+                contents.push((
+                    target.stream.clone(),
+                    read_log_text(&target.path, tail_lines)?,
+                ));
+            }
+        }
+        if contents.is_empty() {
             return Err(format!(
-                "{} log does not exist for env \"{}\": {}",
-                target.stream,
-                target.env_name,
-                display_path(&target.path)
+                "no logs exist for env \"{}\" across stdout or stderr",
+                name
             ));
         }
 
         Ok(LogSummary {
-            env_name: target.env_name,
-            stream: target.stream,
-            source_kind: target.source_kind,
-            path: display_path(&target.path),
+            env_name: name.to_string(),
+            stream: "stdout + stderr".to_string(),
+            source_kind: summarize_sources(&targets),
+            path: "multiple".to_string(),
             tail_lines,
-            content: read_log_text(&target.path, tail_lines)?,
+            content: merge_log_texts(contents, tail_lines),
+            components,
         })
     }
 
@@ -107,6 +157,17 @@ impl<'a> LogService<'a> {
         })
     }
 
+    pub fn targets(&self, name: &str, stream: &str) -> Result<Vec<LogTarget>, String> {
+        match normalize_stream(stream)? {
+            "stdout" | "stderr" => Ok(vec![self.target(name, stream)?]),
+            "all" => Ok(vec![
+                self.target(name, "stdout")?,
+                self.target(name, "stderr")?,
+            ]),
+            _ => unreachable!("stream validated by normalize_stream"),
+        }
+    }
+
     pub fn follow<W: std::io::Write>(
         &self,
         name: &str,
@@ -114,6 +175,16 @@ impl<'a> LogService<'a> {
         tail_lines: Option<usize>,
         writer: &mut W,
     ) -> Result<LogTarget, String> {
+        if normalize_stream(stream)? == "all" {
+            self.follow_all(name, tail_lines, writer)?;
+            return Ok(LogTarget {
+                env_name: name.to_string(),
+                stream: "all".to_string(),
+                source_kind: "mixed".to_string(),
+                path: PathBuf::new(),
+            });
+        }
+
         let target = self.target(name, stream)?;
         let mut offset = 0_u64;
         let mut printed_snapshot = false;
@@ -154,6 +225,79 @@ impl<'a> LogService<'a> {
             sleep(Duration::from_millis(FOLLOW_POLL_INTERVAL_MS));
         }
     }
+
+    fn follow_all<W: std::io::Write>(
+        &self,
+        name: &str,
+        tail_lines: Option<usize>,
+        writer: &mut W,
+    ) -> Result<(), String> {
+        let targets = self.targets(name, "all")?;
+        let summary = self.read(name, "all", tail_lines)?;
+        writer
+            .write_all(summary.content.as_bytes())
+            .map_err(|error| error.to_string())?;
+        writer.flush().map_err(|error| error.to_string())?;
+
+        let mut cursors = targets
+            .into_iter()
+            .map(|target| FollowCursor {
+                target,
+                offset: 0,
+                pending: String::new(),
+            })
+            .collect::<Vec<_>>();
+        for cursor in &mut cursors {
+            if let Ok(metadata) = fs::metadata(&cursor.target.path) {
+                cursor.offset = metadata.len();
+            }
+        }
+
+        loop {
+            let mut updates = Vec::new();
+            for cursor in &mut cursors {
+                if !cursor.target.path.exists() {
+                    continue;
+                }
+
+                let metadata =
+                    fs::metadata(&cursor.target.path).map_err(|error| error.to_string())?;
+                if metadata.len() < cursor.offset {
+                    cursor.offset = 0;
+                    cursor.pending.clear();
+                }
+                if metadata.len() == cursor.offset {
+                    continue;
+                }
+
+                let mut file =
+                    File::open(&cursor.target.path).map_err(|error| error.to_string())?;
+                file.seek(SeekFrom::Start(cursor.offset))
+                    .map_err(|error| error.to_string())?;
+                let mut chunk = String::new();
+                file.read_to_string(&mut chunk)
+                    .map_err(|error| error.to_string())?;
+                cursor.offset = metadata.len();
+                updates.extend(collect_complete_lines(&mut cursor.pending, &chunk));
+            }
+
+            if !updates.is_empty() {
+                let merged = merge_log_lines(updates);
+                writer
+                    .write_all(merged.as_bytes())
+                    .map_err(|error| error.to_string())?;
+                writer.flush().map_err(|error| error.to_string())?;
+            }
+
+            sleep(Duration::from_millis(FOLLOW_POLL_INTERVAL_MS));
+        }
+    }
+}
+
+struct FollowCursor {
+    target: LogTarget,
+    offset: u64,
+    pending: String,
 }
 
 fn modified_at(path: &Path) -> Option<std::time::SystemTime> {
@@ -162,7 +306,7 @@ fn modified_at(path: &Path) -> Option<std::time::SystemTime> {
 
 fn normalize_stream(stream: &str) -> Result<&str, String> {
     match stream {
-        "stdout" | "stderr" => Ok(stream),
+        "stdout" | "stderr" | "all" => Ok(stream),
         _ => Err(format!("unsupported log stream: {stream}")),
     }
 }
@@ -217,9 +361,97 @@ fn tail_text(text: &str, tail_lines: usize) -> String {
     output
 }
 
+fn summarize_sources(targets: &[LogTarget]) -> String {
+    let mut kinds = targets
+        .iter()
+        .map(|target| target.source_kind.as_str())
+        .collect::<Vec<_>>();
+    kinds.sort_unstable();
+    kinds.dedup();
+    if kinds.len() == 1 {
+        kinds[0].to_string()
+    } else {
+        "mixed".to_string()
+    }
+}
+
+fn merge_log_texts(contents: Vec<(String, String)>, tail_lines: Option<usize>) -> String {
+    let lines = contents
+        .into_iter()
+        .flat_map(|(_stream, content)| {
+            content
+                .split_inclusive('\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| TimedLogLine::new(line.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut output = merge_log_lines(lines);
+    if let Some(limit) = tail_lines {
+        output = tail_text(&output, limit);
+    }
+    output
+}
+
+fn collect_complete_lines(pending: &mut String, chunk: &str) -> Vec<TimedLogLine> {
+    pending.push_str(chunk);
+    let mut lines = Vec::new();
+    while let Some(newline_index) = pending.find('\n') {
+        let line = pending[..=newline_index].to_string();
+        pending.drain(..=newline_index);
+        lines.push(TimedLogLine::new(line));
+    }
+    lines
+}
+
+fn merge_log_lines(mut lines: Vec<TimedLogLine>) -> String {
+    lines.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.sequence.cmp(&right.sequence))
+    });
+    lines.into_iter().map(|line| line.text).collect()
+}
+
+#[derive(Clone, Debug)]
+struct TimedLogLine {
+    timestamp: Option<OffsetDateTime>,
+    sequence: usize,
+    text: String,
+}
+
+impl TimedLogLine {
+    fn new(text: String) -> Self {
+        Self {
+            timestamp: parse_log_timestamp(&text),
+            sequence: next_log_sequence(),
+            text,
+        }
+    }
+}
+
+fn parse_log_timestamp(line: &str) -> Option<OffsetDateTime> {
+    let token = line.split_whitespace().next()?;
+    OffsetDateTime::parse(token, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .or_else(|| {
+            time::format_description::parse(
+                "[hour]:[minute]:[second][offset_hour sign:mandatory]:[offset_minute]",
+            )
+            .ok()
+            .and_then(|format| OffsetDateTime::parse(token, &format).ok())
+        })
+}
+
+fn next_log_sequence() -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+    NEXT_SEQUENCE.fetch_add(1, Ordering::SeqCst)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LogService, tail_text};
+    use super::{LogService, merge_log_texts, tail_text};
     use crate::store::ensure_dir;
     use std::collections::BTreeMap;
     use std::fs;
@@ -231,6 +463,35 @@ mod tests {
     fn tail_text_keeps_the_last_requested_lines() {
         assert_eq!(tail_text("one\ntwo\nthree\n", 2), "two\nthree\n");
         assert_eq!(tail_text("one\ntwo\nthree", 1), "three");
+    }
+
+    #[test]
+    fn merge_log_texts_orders_stdout_and_stderr_by_timestamp() {
+        let merged = merge_log_texts(
+            vec![
+                (
+                    "stdout".to_string(),
+                    concat!(
+                        "2026-04-20T00:13:45.497+01:00 [gateway] one\n",
+                        "2026-04-20T00:13:47.497+01:00 [gateway] three\n"
+                    )
+                    .to_string(),
+                ),
+                (
+                    "stderr".to_string(),
+                    "2026-04-20T00:13:46.497+01:00 error gateway two\n".to_string(),
+                ),
+            ],
+            Some(10),
+        );
+        assert_eq!(
+            merged,
+            concat!(
+                "2026-04-20T00:13:45.497+01:00 [gateway] one\n",
+                "2026-04-20T00:13:46.497+01:00 error gateway two\n",
+                "2026-04-20T00:13:47.497+01:00 [gateway] three\n",
+            )
+        );
     }
 
     #[test]

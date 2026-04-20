@@ -85,10 +85,11 @@ fn logs_help_is_available_from_help_and_flag() {
     let output = stdout(&via_help);
     assert_eq!(output, stdout(&via_flag));
     assert!(output.contains("Read env logs"));
-    assert!(
-        output.contains("ocm logs <env> [--stderr] [--tail <count>] [--follow] [--raw] [--json]")
-    );
+    assert!(output.contains(
+        "ocm logs <env> [--stderr | --all-streams] [--tail <count>] [--follow] [--raw] [--json]"
+    ));
     assert!(output.contains("ocm logs mira --follow"));
+    assert!(output.contains("ocm logs mira --all-streams --follow"));
     assert!(output.contains("Default output shows the last 50 lines."));
 }
 

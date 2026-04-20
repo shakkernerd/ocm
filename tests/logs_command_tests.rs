@@ -55,6 +55,42 @@ fn logs_reads_gateway_logs_from_the_env_root() {
 }
 
 #[test]
+fn logs_can_merge_stdout_and_stderr_in_one_snapshot() {
+    let root = TestDir::new("logs-all-streams");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    let (stdout_path, stderr_path) = gateway_log_paths(&root);
+    fs::create_dir_all(stdout_path.parent().unwrap()).unwrap();
+    fs::write(
+        &stdout_path,
+        concat!(
+            "2026-04-20T00:13:45.497+01:00 [gateway] one\n",
+            "2026-04-20T00:13:47.497+01:00 [gateway] three\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &stderr_path,
+        "2026-04-20T00:13:46.497+01:00 error gateway two\n",
+    )
+    .unwrap();
+
+    let output = run_ocm(&cwd, &env, &["logs", "demo", "--all-streams", "--raw"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        concat!(
+            "2026-04-20T00:13:45.497+01:00 [gateway] one\n",
+            "2026-04-20T00:13:46.497+01:00 error gateway two\n",
+            "2026-04-20T00:13:47.497+01:00 [gateway] three\n"
+        )
+    );
+}
+
+#[test]
 fn logs_fall_back_to_supervisor_logs_when_gateway_logs_are_missing() {
     let root = TestDir::new("logs-service-fallback");
     let cwd = root.child("workspace");
