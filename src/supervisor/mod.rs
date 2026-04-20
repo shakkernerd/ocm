@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
@@ -684,22 +686,26 @@ fn spawn_supervisor_child(spec: &SupervisorChildSpec) -> Result<Child, String> {
             )
         })?;
 
-    Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(program_arguments.iter().skip(1))
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         .env_clear()
         .envs(&spec.process_env)
-        .current_dir(Path::new(&spec.run_dir))
-        .spawn()
-        .map_err(|error| {
-            format!(
-                "failed starting env \"{}\" with {}: {error}",
-                spec.env_name,
-                child_binding_label(spec)
-            )
-        })
+        .current_dir(Path::new(&spec.run_dir));
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+    }
+    command.spawn().map_err(|error| {
+        format!(
+            "failed starting env \"{}\" with {}: {error}",
+            spec.env_name,
+            child_binding_label(spec)
+        )
+    })
 }
 
 fn supervisor_program_arguments(spec: &SupervisorChildSpec) -> Vec<String> {
@@ -1106,8 +1112,9 @@ fn start_due_children(
 fn stop_supervisor_child(running_child: &mut RunningSupervisorChild) {
     #[cfg(unix)]
     {
+        let process_group = format!("-{}", running_child.child.id());
         let _ = Command::new("kill")
-            .args(["-TERM", &running_child.child.id().to_string()])
+            .args(["-TERM", "--", &process_group])
             .status();
         for _ in 0..20 {
             match running_child.child.try_wait() {
@@ -1116,6 +1123,9 @@ fn stop_supervisor_child(running_child: &mut RunningSupervisorChild) {
                 Err(_) => break,
             }
         }
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &process_group])
+            .status();
     }
     let _ = running_child.child.kill();
     let _ = running_child.child.wait();

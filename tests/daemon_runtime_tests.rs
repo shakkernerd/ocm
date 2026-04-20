@@ -82,6 +82,15 @@ fn stop_process(child: &mut Child) {
     let _ = child.wait();
 }
 
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 fn set_service_enabled(cwd: &Path, env: &BTreeMap<String, String>, name: &str, enabled: bool) {
     EnvironmentService::new(env, cwd)
         .set_service_policy(name, Some(enabled), Some(enabled))
@@ -587,6 +596,74 @@ fn daemon_stops_a_running_child_after_service_stop() {
     wait_for_runtime_children(&runtime_path, 0, None, Duration::from_secs(5))
         .expect("daemon runtime state did not clear after service stop");
     assert!(wait_for_file(&stopped, Duration::from_secs(5)));
+
+    stop_process(&mut daemon);
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_stops_the_full_dev_process_tree_after_service_stop() {
+    let root = TestDir::new("daemon-run-service-stop-tree");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+
+    let started = root.child("started.txt");
+    let stopped = root.child("stopped.txt");
+    let child_pid_file = root.child("child.pid");
+    let script = root.child("bin/openclaw");
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nsh -c 'echo $$ > \"{}\"; trap \"exit 0\" TERM INT; while :; do sleep 1; done' &\nprintf 'started\\n' >> '{}'\ntrap 'printf \"stopped\\n\" >> \"{}\"; exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&child_pid_file),
+            path_string(&started),
+            path_string(&stopped),
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", &path_string(&script)],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    set_service_enabled(&cwd, &env, "demo", true);
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    assert!(wait_for_file(&started, Duration::from_secs(5)));
+    assert!(wait_for_file(&child_pid_file, Duration::from_secs(5)));
+    wait_for_runtime_children(&runtime_path, 1, Some("demo"), Duration::from_secs(5))
+        .expect("daemon runtime state did not report the running child");
+
+    let child_pid = fs::read_to_string(&child_pid_file)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    assert!(process_exists(child_pid));
+
+    let stop = run_ocm(&cwd, &env, &["service", "stop", "demo"]);
+    assert!(stop.status.success(), "{}", stderr(&stop));
+
+    wait_for_runtime_children(&runtime_path, 0, None, Duration::from_secs(5))
+        .expect("daemon runtime state did not clear after service stop");
+    assert!(wait_for_file(&stopped, Duration::from_secs(5)));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && process_exists(child_pid) {
+        sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !process_exists(child_pid),
+        "background descendant still alive after service stop"
+    );
 
     stop_process(&mut daemon);
 }
