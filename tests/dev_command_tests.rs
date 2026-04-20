@@ -7,7 +7,8 @@ use std::process::Command;
 use serde_json::Value;
 
 use crate::support::{
-    TestDir, ocm_env, path_string, run_ocm, stderr, stdout, write_executable_script,
+    TestDir, ocm_env, path_string, run_ocm, run_ocm_with_stdin, stderr, stdout,
+    write_executable_script,
 };
 
 fn init_openclaw_repo(root: &TestDir) -> PathBuf {
@@ -243,4 +244,55 @@ fn dev_command_accepts_a_custom_env_root() {
         show_json["configPath"],
         path_string(&resolved_root.join(".openclaw/openclaw.json"))
     );
+}
+
+#[test]
+fn dev_command_reuses_the_saved_repo_for_new_envs() {
+    let root = TestDir::new("dev-command-saved-repo");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let first = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(first.status.success(), "{}", stderr(&first));
+
+    let second = run_ocm(&cwd, &env, &["dev", "preview"]);
+    assert!(second.status.success(), "{}", stderr(&second));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "preview", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["devRepoRoot"], path_string(&repo));
+    assert!(
+        show_json["devWorktreeRoot"]
+            .as_str()
+            .unwrap()
+            .contains("/.worktrees/preview")
+    );
+}
+
+#[test]
+fn dev_command_prompts_for_the_repo_when_it_is_not_known_yet() {
+    let root = TestDir::new("dev-command-prompt-repo");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let run = run_ocm_with_stdin(
+        &cwd,
+        &env,
+        &["dev", "demo"],
+        &format!("{}\n", path_string(&repo)),
+    );
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert!(stdout(&run).contains("OpenClaw repo path"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["devRepoRoot"], path_string(&repo));
 }

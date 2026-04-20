@@ -241,7 +241,7 @@ pub fn logs_help(cmd: &str) -> String {
 pub fn dev_help(cmd: &str) -> String {
     render_group(
         "Development envs",
-        "Provision OpenClaw dev envs from a checkout worktree, bootstrap the minimum local config, and run the gateway in the foreground.",
+        "Provision OpenClaw dev envs from a checkout worktree, bootstrap the minimum local config, and run the gateway in the foreground. If OCM cannot infer the repo on the first run, it asks once and reuses that repo for later dev envs.",
         vec![format!(
             "{cmd} dev <env> [--repo <path>] [--root <path>] [--port <port>] [--watch] [--onboard]"
         )],

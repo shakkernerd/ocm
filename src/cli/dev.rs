@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::Cli;
 use super::render::RenderProfile;
@@ -12,9 +12,18 @@ use crate::openclaw_repo::{
     detect_openclaw_checkout, discover_openclaw_checkout, ensure_openclaw_worktree,
 };
 use crate::store::{
-    derive_env_paths, display_path, ensure_minimum_local_openclaw_config, resolve_absolute_path,
-    validate_name,
+    derive_env_paths, display_path, ensure_minimum_local_openclaw_config, ensure_store,
+    read_json, resolve_absolute_path, validate_name, write_json,
 };
+
+const DEV_PREFERENCES_KIND: &str = "ocm-dev-preferences";
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevPreferences {
+    kind: String,
+    preferred_repo_root: Option<String>,
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -200,22 +209,19 @@ impl Cli {
             let meta = self
                 .environment_service()
                 .apply_effective_gateway_port(existing)?;
+            self.save_preferred_dev_repo(&existing_repo)?;
             self.bootstrap_dev_env(&meta)?;
             return Ok((meta, false));
         }
 
-        let repo_root = match repo_root {
-            Some(repo_root) => resolve_absolute_path(&repo_root, &self.env, &self.cwd)?,
-            None => discover_openclaw_checkout(&self.cwd).ok_or_else(|| {
-                "could not find an OpenClaw checkout; pass --repo /path/to/openclaw".to_string()
-            })?,
-        };
+        let repo_root = self.resolve_dev_repo_root(repo_root)?;
         let repo_root = detect_openclaw_checkout(&repo_root).ok_or_else(|| {
             format!(
                 "OpenClaw checkout not found at {}",
                 display_path(&repo_root)
             )
         })?;
+        self.save_preferred_dev_repo(&repo_root)?;
         let worktree_root = ensure_openclaw_worktree(&repo_root, name)?;
 
         let created = self.environment_service().create(CreateEnvironmentOptions {
@@ -249,6 +255,67 @@ impl Cli {
         }
 
         Ok((created, true))
+    }
+
+    fn resolve_dev_repo_root(&self, repo_root: Option<String>) -> Result<PathBuf, String> {
+        if let Some(repo_root) = repo_root {
+            return resolve_absolute_path(&repo_root, &self.env, &self.cwd);
+        }
+
+        if let Some(repo_root) = discover_openclaw_checkout(&self.cwd) {
+            return Ok(repo_root);
+        }
+
+        if let Some(repo_root) = self.load_preferred_dev_repo()? {
+            if let Some(repo_root) = detect_openclaw_checkout(&repo_root) {
+                return Ok(repo_root);
+            }
+        }
+
+        let repo_root = self.prompt_dev_repo_root()?;
+        resolve_absolute_path(&repo_root, &self.env, &self.cwd)
+    }
+
+    fn prompt_dev_repo_root(&self) -> Result<String, String> {
+        loop {
+            let value = self
+                .prompt_required("OpenClaw repo path")
+                .map_err(|_| {
+                    "OpenClaw repo path is required; pass --repo /path/to/openclaw".to_string()
+                })?;
+            let repo_root = resolve_absolute_path(&value, &self.env, &self.cwd)?;
+            if detect_openclaw_checkout(&repo_root).is_some() {
+                return Ok(display_path(&repo_root));
+            }
+            self.stderr_line(format!(
+                "ocm: OpenClaw checkout not found at {}",
+                display_path(&repo_root)
+            ));
+        }
+    }
+
+    fn load_preferred_dev_repo(&self) -> Result<Option<PathBuf>, String> {
+        let path = self.dev_preferences_path()?;
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let prefs = read_json::<DevPreferences>(&path)?;
+        Ok(prefs.preferred_repo_root.map(PathBuf::from))
+    }
+
+    fn save_preferred_dev_repo(&self, repo_root: &Path) -> Result<(), String> {
+        let path = self.dev_preferences_path()?;
+        let prefs = DevPreferences {
+            kind: DEV_PREFERENCES_KIND.to_string(),
+            preferred_repo_root: Some(display_path(repo_root)),
+        };
+        write_json(&path, &prefs)
+    }
+
+    fn dev_preferences_path(&self) -> Result<PathBuf, String> {
+        let stores = ensure_store(&self.env, &self.cwd)?;
+        Ok(stores.home.join("dev.json"))
     }
 
     fn bootstrap_dev_env(&self, meta: &EnvMeta) -> Result<(), String> {

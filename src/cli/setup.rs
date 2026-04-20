@@ -148,7 +148,7 @@ impl Cli {
         }
     }
 
-    fn prompt_required(&self, label: &str) -> Result<String, String> {
+    pub(crate) fn prompt_required(&self, label: &str) -> Result<String, String> {
         if self.use_pretty_setup_prompts() {
             loop {
                 let value = Input::<String>::with_theme(&Self::setup_theme())
@@ -225,9 +225,12 @@ impl Cli {
         handle.flush().map_err(|error| error.to_string())?;
 
         let mut input = String::new();
-        io::stdin()
+        let bytes = io::stdin()
             .read_line(&mut input)
             .map_err(|error| error.to_string())?;
+        if bytes == 0 {
+            return Err(format!("{label} is required"));
+        }
         Ok(input.trim_end_matches(['\n', '\r']).to_string())
     }
 
