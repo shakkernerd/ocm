@@ -26,25 +26,11 @@ impl Cli {
         Ok(0)
     }
 
-    pub(super) fn handle_service_list(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag, profile) = self.consume_human_output_flags(args, "service list")?;
-        Self::assert_no_extra_args(&args)?;
-
-        let services = self.service_service().list()?;
-        if json_flag {
-            self.print_json(&services)?;
-            return Ok(0);
-        }
-
-        self.stdout_lines(render::service::service_list(&services, profile));
-        Ok(0)
-    }
-
     pub(super) fn handle_service_status(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "service status")?;
         let (args, all_flag) = Self::consume_flag(args, "--all");
 
-        if all_flag {
+        if all_flag || args.is_empty() {
             Self::assert_no_extra_args(&args)?;
             let services = self.service_service().list()?;
             if json_flag {
@@ -52,12 +38,11 @@ impl Cli {
                 return Ok(0);
             }
 
-            self.stdout_lines(render::service::service_list(&services, profile));
+            self.stdout_lines(render::service::service_overview(&services, profile));
             return Ok(0);
         }
-
         let Some(name) = args.first() else {
-            return Err("service status requires <env> or --all".to_string());
+            unreachable!("handled by the empty-args branch")
         };
         Self::assert_no_extra_args(&args[1..])?;
 
@@ -168,7 +153,6 @@ impl Cli {
     ) -> Result<i32, String> {
         match action {
             "install" => self.handle_service_install(rest),
-            "list" => self.handle_service_list(rest),
             "status" => self.handle_service_status(rest),
             "start" => self.handle_service_start(rest),
             "stop" => self.handle_service_stop(rest),

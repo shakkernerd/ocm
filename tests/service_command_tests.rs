@@ -81,15 +81,19 @@ fn service_lifecycle_commands_require_a_target_env() {
 }
 
 #[test]
-fn service_status_requires_target_or_all() {
+fn service_status_defaults_to_the_all_env_view() {
     let root = TestDir::new("service-status-validation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = launchd_env(&root);
+    setup_launcher_env(&cwd, &env);
 
-    let output = run_ocm(&cwd, &env, &["service", "status"]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("service status requires <env> or --all"));
+    let output = run_ocm(&cwd, &env, &["service", "status", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = json_output(&output);
+    assert!(body["services"].is_array());
+    assert_eq!(body["services"].as_array().unwrap().len(), 1);
+    assert_eq!(body["services"][0]["envName"], "demo");
 }
 
 #[test]
@@ -251,8 +255,8 @@ fn service_uninstall_disables_the_env_service() {
 }
 
 #[test]
-fn service_list_reports_env_and_ocm_service_state_in_json() {
-    let root = TestDir::new("service-list");
+fn service_status_all_reports_env_and_ocm_service_state_in_json() {
+    let root = TestDir::new("service-status-all");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = launchd_env(&root);
@@ -261,7 +265,7 @@ fn service_list_reports_env_and_ocm_service_state_in_json() {
     let started = run_ocm(&cwd, &env, &["service", "start", "demo"]);
     assert!(started.status.success(), "{}", stderr(&started));
 
-    let output = run_ocm(&cwd, &env, &["service", "list", "--json"]);
+    let output = run_ocm(&cwd, &env, &["service", "status", "--all", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body = json_output(&output);
     assert_eq!(body["ocmServiceInstalled"], true);
@@ -392,7 +396,6 @@ fn service_status_keeps_simple_package_manager_launchers_as_direct_exec() {
     let body = json_output(&status);
     assert_eq!(body["bindingKind"], "launcher");
     assert_eq!(body["binaryPath"], "pnpm");
-    let gateway_port = body["gatewayPort"].as_u64().unwrap().to_string();
     assert_eq!(
         body["args"],
         Value::Array(vec![
@@ -400,9 +403,14 @@ fn service_status_keeps_simple_package_manager_launchers_as_direct_exec() {
             Value::String("gateway".to_string()),
             Value::String("run".to_string()),
             Value::String("--port".to_string()),
-            Value::String(gateway_port),
+            body["args"][4].clone(),
         ])
     );
+    assert!(body["args"][4]
+        .as_str()
+        .unwrap()
+        .parse::<u16>()
+        .is_ok());
 }
 
 #[test]

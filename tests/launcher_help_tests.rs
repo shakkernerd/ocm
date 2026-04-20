@@ -483,10 +483,10 @@ fn env_and_service_status_style_help_mentions_raw_mode() {
         stderr(&service_status)
     );
     let output = stdout(&service_status);
-    assert!(output.contains("ocm service status <env> [--raw] [--json]"));
-    assert!(
-        output.contains("TTY output uses cards for one env and a table for `--all` by default.")
-    );
+    assert!(output.contains("ocm service status [env] [--raw] [--json]"));
+    assert!(output.contains(
+        "TTY output uses cards for one env and a table when no env is passed or `--all` is used."
+    ));
 
     let service_install = run_ocm(&cwd, &env, &["help", "service", "install"]);
     assert!(

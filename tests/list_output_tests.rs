@@ -91,10 +91,14 @@ fn launcher_runtime_and_service_lists_accept_raw_output_mode() {
     assert!(stdout(&runtime_list).contains("stable"));
     assert!(!stdout(&runtime_list).contains("┌"));
 
-    let service_list = run_ocm(&cwd, &env, &["service", "list", "--raw"]);
-    assert!(service_list.status.success(), "{}", stderr(&service_list));
-    assert!(stdout(&service_list).contains("demo"));
-    assert!(!stdout(&service_list).contains("┌"));
+    let service_status = run_ocm(&cwd, &env, &["service", "status", "--raw"]);
+    assert!(
+        service_status.status.success(),
+        "{}",
+        stderr(&service_status)
+    );
+    assert!(stdout(&service_status).contains("demo"));
+    assert!(!stdout(&service_status).contains("┌"));
 }
 
 #[test]
@@ -413,9 +417,9 @@ fn list_output_flags_reject_mixed_json_and_raw() {
     assert_eq!(runtime.status.code(), Some(1));
     assert!(stderr(&runtime).contains("runtime list accepts only one of --json or --raw"));
 
-    let service = run_ocm(&cwd, &env, &["service", "list", "--json", "--raw"]);
+    let service = run_ocm(&cwd, &env, &["service", "status", "--json", "--raw"]);
     assert_eq!(service.status.code(), Some(1));
-    assert!(stderr(&service).contains("service list accepts only one of --json or --raw"));
+    assert!(stderr(&service).contains("service status accepts only one of --json or --raw"));
 
     let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json", "--raw"]);
     assert_eq!(env_show.status.code(), Some(1));

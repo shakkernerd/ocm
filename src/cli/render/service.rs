@@ -60,17 +60,17 @@ fn ocm_background_service_state(summary: &ServiceSummary) -> &'static str {
     )
 }
 
-pub fn service_list(summary: &ServiceSummaryList, profile: RenderProfile) -> Vec<String> {
-    service_list_with_width(summary, profile, terminal_width())
+pub fn service_overview(summary: &ServiceSummaryList, profile: RenderProfile) -> Vec<String> {
+    service_overview_with_width(summary, profile, terminal_width())
 }
 
-fn service_list_with_width(
+fn service_overview_with_width(
     summary: &ServiceSummaryList,
     profile: RenderProfile,
     _width: Option<usize>,
 ) -> Vec<String> {
     if !profile.pretty {
-        return service_list_raw(summary);
+        return service_overview_raw(summary);
     }
 
     if summary.services.is_empty() {
@@ -124,7 +124,7 @@ fn service_list_with_width(
     lines
 }
 
-fn service_list_raw(summary: &ServiceSummaryList) -> Vec<String> {
+fn service_overview_raw(summary: &ServiceSummaryList) -> Vec<String> {
     let mut lines = vec![format!(
         "ocmService state={}",
         ocm_service_state(
@@ -278,7 +278,7 @@ fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) ->
                 "Restart",
                 format!("{command_example} service restart {}", summary.env_name),
             ),
-            KeyValueRow::plain("Inspect", format!("{command_example} service list")),
+            KeyValueRow::plain("Inspect", format!("{command_example} service status")),
         ];
     }
 
@@ -456,7 +456,7 @@ fn action_title(summary: &ServiceActionSummary) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderProfile, service_list, service_status};
+    use super::{RenderProfile, service_overview, service_status};
     use crate::service::{ServiceSummary, ServiceSummaryList};
 
     fn sample_service() -> ServiceSummary {
@@ -497,8 +497,8 @@ mod tests {
     }
 
     #[test]
-    fn service_list_pretty_renders_table() {
-        let lines = service_list(
+    fn service_overview_pretty_renders_table() {
+        let lines = service_overview(
             &ServiceSummaryList {
                 ocm_service_label: "ocm.ocm".to_string(),
                 ocm_service_installed: true,

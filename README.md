@@ -157,8 +157,7 @@ ocm adopt plan --name mira
 ### Keep supervised envs visible
 
 ```bash
-ocm service list
-ocm service status mira
+ocm service status
 ocm logs mira --tail 50
 ocm logs mira --follow
 ```

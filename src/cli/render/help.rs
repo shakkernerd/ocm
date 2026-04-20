@@ -896,10 +896,7 @@ pub fn service_help(cmd: &str) -> String {
         &[
             (
                 "Inspect",
-                &[
-                    ("list", "List supervised env gateways"),
-                    ("status", "Show one env gateway or all supervised envs"),
-                ],
+                &[("status", "Show one env gateway or all supervised envs")],
             ),
             (
                 "Lifecycle",
@@ -922,7 +919,7 @@ pub fn service_help(cmd: &str) -> String {
             ),
         ],
         vec![
-            format!("{cmd} service list"),
+            format!("{cmd} service status"),
             format!("{cmd} service install mira"),
             format!("{cmd} service start mira"),
         ],
@@ -1898,25 +1895,11 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 "The shared OCM background service is installed automatically when needed.",
             ],
         ),
-        "list" => render_leaf(
-            "List supervised env gateways",
-            "Show daemon-managed gateway state for every known environment.",
-            vec![format!("{cmd} service list [--raw] [--json]")],
-            &[
-                (
-                    "--raw",
-                    "Force plain line output instead of TTY table rendering",
-                ),
-                ("--json", "Print service summaries as JSON"),
-            ],
-            vec![format!("{cmd} service list")],
-            &["TTY output renders a table by default. Piped output stays plain."],
-        ),
         "status" => render_leaf(
             "Show supervised env status",
             "Inspect one env or every env managed by the OCM background service.",
             vec![
-                format!("{cmd} service status <env> [--raw] [--json]"),
+                format!("{cmd} service status [env] [--raw] [--json]"),
                 format!("{cmd} service status --all [--raw] [--json]"),
             ],
             &[
@@ -1926,10 +1909,13 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             vec![
                 format!("{cmd} service status mira"),
+                format!("{cmd} service status"),
                 format!("{cmd} service status mira --raw"),
                 format!("{cmd} service status --all"),
             ],
-            &["TTY output uses cards for one env and a table for `--all` by default."],
+            &[
+                "TTY output uses cards for one env and a table when no env is passed or `--all` is used.",
+            ],
         ),
         "start" => render_leaf(
             "Start an env under the background service",
