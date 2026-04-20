@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -209,6 +211,7 @@ fn build_service_summary(
     let desired_running = meta.service_running;
     let loaded = installed && (daemon.loaded || daemon.running);
     let running = runtime_child.is_some();
+    let foreign_listener = !running && tcp_port_reachable(gateway_port);
     let gateway_state = runtime_service
         .map(|service| service.gateway_state.clone())
         .unwrap_or_else(|| service_state_label(installed, desired_running, running));
@@ -217,6 +220,8 @@ fn build_service_summary(
         desired_running,
         daemon,
         &gateway_state,
+        gateway_port,
+        foreign_listener,
         skipped_reason,
         runtime_service,
         resolved_issue,
@@ -355,6 +360,8 @@ fn service_issue(
     desired_running: bool,
     daemon: &SupervisorDaemonSummary,
     gateway_state: &str,
+    gateway_port: u32,
+    foreign_listener: bool,
     skipped_reason: Option<&String>,
     runtime_service: Option<&SupervisorRuntimeService>,
     resolved_issue: Option<String>,
@@ -367,6 +374,11 @@ fn service_issue(
     }
     if !daemon.installed {
         return Some("OCM background service is not installed".to_string());
+    }
+    if foreign_listener {
+        return Some(format!(
+            "port {gateway_port} is occupied by a process outside the OCM background service"
+        ));
     }
     if desired_running {
         if let Some(reason) = skipped_reason {
@@ -392,6 +404,14 @@ fn service_issue(
         }
     }
     None
+}
+
+fn tcp_port_reachable(port: u32) -> bool {
+    if port == 0 || port > u16::MAX as u32 {
+        return false;
+    }
+    let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port as u16);
+    TcpStream::connect_timeout(&addr.into(), Duration::from_millis(100)).is_ok()
 }
 
 fn service_state_label(installed: bool, desired_running: bool, running: bool) -> String {
@@ -536,6 +556,49 @@ fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
             .is_some_and(|value| !matches!(value, "not-found" | "masked"));
     status.running = active_state.as_deref() == Some("active");
     status.state = sub_state.or(active_state);
+}
+
+#[cfg(test)]
+mod service_issue_tests {
+    use super::{service_issue, tcp_port_reachable};
+    use crate::supervisor::SupervisorDaemonSummary;
+    use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+
+    #[test]
+    fn service_issue_reports_foreign_listener_when_port_is_occupied() {
+        let daemon = SupervisorDaemonSummary {
+            action: "inspect".to_string(),
+            installed: true,
+            loaded: true,
+            running: true,
+            pid: Some(42),
+            state: Some("active".to_string()),
+            managed_label: "ai.openclaw.ocm".to_string(),
+            definition_path: "/tmp/ocm.plist".to_string(),
+            state_path: "/tmp/state.json".to_string(),
+            ocm_home: "/tmp/ocm".to_string(),
+            executable_path: "/tmp/ocm".to_string(),
+            stdout_path: "/tmp/stdout.log".to_string(),
+            stderr_path: "/tmp/stderr.log".to_string(),
+        };
+
+        let issue = service_issue(
+            true, false, &daemon, "stopped", 19_566, true, None, None, None,
+        );
+
+        assert_eq!(
+            issue.as_deref(),
+            Some("port 19566 is occupied by a process outside the OCM background service")
+        );
+    }
+
+    #[test]
+    fn tcp_port_reachable_detects_listener() {
+        let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port() as u32;
+
+        assert!(tcp_port_reachable(port));
+    }
 }
 
 #[cfg(test)]

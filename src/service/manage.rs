@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -160,18 +162,41 @@ fn update_service(
     if let ServiceSupervisorPolicy::EnsureRunning = supervisor_policy {
         ensure_supervisor_running(env, cwd)?;
     }
-    action_summary(name, action, Vec::new(), env, cwd)
+    let (summary, warnings) = wait_for_action_summary(name, action, env, cwd)?;
+    Ok(service_action_summary(action, summary, warnings))
 }
 
-fn action_summary(
+fn wait_for_action_summary(
     name: &str,
     action: &str,
-    warnings: Vec<String>,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) -> Result<ServiceActionSummary, String> {
-    let summary = super::inspect::service_status_fast(name, env, cwd)?;
-    Ok(service_action_summary(action, summary, warnings))
+) -> Result<(ServiceSummary, Vec<String>), String> {
+    let should_wait_for_stop = matches!(action, "stop" | "uninstall");
+    if !should_wait_for_stop {
+        return Ok((
+            super::inspect::service_status_fast(name, env, cwd)?,
+            Vec::new(),
+        ));
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut latest = super::inspect::service_status_fast(name, env, cwd)?;
+    while Instant::now() < deadline {
+        if !latest.running {
+            return Ok((latest, Vec::new()));
+        }
+        sleep(Duration::from_millis(100));
+        latest = super::inspect::service_status_fast(name, env, cwd)?;
+    }
+
+    let mut warnings = Vec::new();
+    if latest.running {
+        warnings.push(
+            "gateway is still shutting down; check service status again in a moment".to_string(),
+        );
+    }
+    Ok((latest, warnings))
 }
 
 fn service_action_summary(
