@@ -504,7 +504,7 @@ mod tests {
             "Managed service",
             &[KeyValueRow::plain(
                 "Plist",
-                "/Users/shakker/Library/LaunchAgents/ai.openclaw.gateway.ocm.hacking.plist",
+                "/Users/shakker/Library/LaunchAgents/ai.openclaw.ocm.plist",
             )],
             false,
             Some(60),

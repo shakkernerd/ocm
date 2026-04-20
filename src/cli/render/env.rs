@@ -1709,7 +1709,7 @@ mod tests {
                 },
                 EnvDestroyStepSummary {
                     kind: "service".to_string(),
-                    description: "remove OCM service ai.openclaw.gateway.ocm.demo".to_string(),
+                    description: "remove OCM service ai.openclaw.ocm".to_string(),
                 },
                 EnvDestroyStepSummary {
                     kind: "env".to_string(),

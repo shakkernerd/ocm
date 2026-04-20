@@ -16,7 +16,7 @@ use std::thread::{self, JoinHandle};
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
 use sha2::Sha512;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use tar::{Builder, Header};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
@@ -188,27 +188,12 @@ pub fn ocm_env(root: &TestDir) -> BTreeMap<String, String> {
     env
 }
 
-pub fn test_service_store_hash(env: &BTreeMap<String, String>, cwd: &Path) -> String {
-    let store = env
-        .get("OCM_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| cwd.join(".ocm"));
-    let store = if store.is_absolute() {
-        store
-    } else {
-        cwd.join(store)
-    };
-    let mut hasher = Sha256::new();
-    hasher.update(path_string(&store).as_bytes());
-    format!("{:x}", hasher.finalize())[..10].to_string()
-}
-
-pub fn managed_service_label(env: &BTreeMap<String, String>, cwd: &Path, name: &str) -> String {
-    format!(
-        "ai.openclaw.gateway.ocm.{}.{}",
-        test_service_store_hash(env, cwd),
-        name
-    )
+pub fn managed_service_label(
+    _env: &BTreeMap<String, String>,
+    _cwd: &Path,
+    _name: &str,
+) -> String {
+    "ai.openclaw.ocm".to_string()
 }
 
 pub fn managed_service_definition_path(

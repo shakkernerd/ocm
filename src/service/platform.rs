@@ -5,15 +5,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use sha2::{Digest, Sha256};
+use crate::store::{display_path, resolve_user_home};
 
-use crate::store::{display_path, resolve_ocm_home, resolve_user_home};
-
-pub(crate) const OCM_GATEWAY_LABEL_PREFIX: &str = "ai.openclaw.gateway.ocm.";
+pub(crate) const OCM_SERVICE_LABEL: &str = "ai.openclaw.ocm";
 const SERVICE_MANAGER_OVERRIDE: &str = "OCM_INTERNAL_SERVICE_MANAGER";
 const LAUNCHCTL_BIN_OVERRIDE: &str = "OCM_INTERNAL_LAUNCHCTL_BIN";
 const SYSTEMCTL_BIN_OVERRIDE: &str = "OCM_INTERNAL_SYSTEMCTL_BIN";
-const STORE_HASH_LEN: usize = 10;
 const SERVICE_DIR_MODE: u32 = 0o755;
 const SERVICE_FILE_MODE: u32 = 0o644;
 const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS: u32 = 1;
@@ -21,7 +18,6 @@ const LAUNCH_AGENT_UMASK_DECIMAL: u32 = 0o077;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ManagedServiceIdentity {
-    pub(crate) store_hash: String,
     pub(crate) label: String,
     pub(crate) definition_path: PathBuf,
 }
@@ -156,38 +152,16 @@ fn systemd_user_available(env: &BTreeMap<String, String>) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn service_store_hash(
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<String, String> {
-    let store = resolve_ocm_home(env, cwd)?;
-    let mut hasher = Sha256::new();
-    hasher.update(display_path(&store).as_bytes());
-    let digest = hasher.finalize();
-    let hex = format!("{digest:x}");
-    Ok(hex[..STORE_HASH_LEN].to_string())
-}
-
-pub(crate) fn managed_service_label(
-    name: &str,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<String, String> {
-    Ok(format!(
-        "{OCM_GATEWAY_LABEL_PREFIX}{}.{}",
-        service_store_hash(env, cwd)?,
-        name
-    ))
+pub(crate) fn managed_service_label() -> &'static str {
+    OCM_SERVICE_LABEL
 }
 
 pub(crate) fn managed_service_identity(
-    name: &str,
     env: &BTreeMap<String, String>,
-    cwd: &Path,
+    _cwd: &Path,
 ) -> Result<ManagedServiceIdentity, String> {
-    let label = managed_service_label(name, env, cwd)?;
+    let label = managed_service_label().to_string();
     Ok(ManagedServiceIdentity {
-        store_hash: service_store_hash(env, cwd)?,
         definition_path: service_definition_dir(env).join(format!(
             "{}.{}",
             label,
@@ -537,7 +511,7 @@ mod tests {
     use crate::store::display_path;
 
     use super::{
-        ManagedServiceDefinition, ManagedServiceIdentity, ServiceManagerKind,
+        ManagedServiceDefinition, ManagedServiceIdentity, OCM_SERVICE_LABEL, ServiceManagerKind,
         managed_service_identity, managed_service_label, service_backend_support_error,
         service_definition_dir, service_manager_kind, write_managed_service_definition,
     };
@@ -663,34 +637,33 @@ mod tests {
             "/tmp/home/.config/systemd/user"
         );
         assert_eq!(
-            managed_service_identity("demo", &env, Path::new("/tmp"))
+            managed_service_identity(&env, Path::new("/tmp"))
                 .unwrap()
                 .definition_path
                 .display()
                 .to_string(),
             format!(
                 "/tmp/home/.config/systemd/user/{}.service",
-                managed_service_label("demo", &env, Path::new("/tmp")).unwrap()
+                managed_service_label()
             )
         );
     }
 
     #[test]
-    fn managed_service_labels_are_store_scoped() {
+    fn managed_service_label_is_stable() {
         let mut env = BTreeMap::new();
         env.insert("HOME".to_string(), "/tmp/home".to_string());
         env.insert("OCM_HOME".to_string(), "/tmp/store".to_string());
 
-        let label = managed_service_label("demo", &env, Path::new("/tmp")).unwrap();
-        assert!(label.starts_with("ai.openclaw.gateway.ocm."));
-        assert!(label.ends_with(".demo"));
+        let label = managed_service_label();
+        assert_eq!(label, OCM_SERVICE_LABEL);
         assert!(matches!(
-            managed_service_identity("demo", &env, Path::new("/tmp")).unwrap(),
+            managed_service_identity(&env, Path::new("/tmp")).unwrap(),
             ManagedServiceIdentity {
-                label,
+                label: managed_label,
                 definition_path,
                 ..
-            } if definition_path.display().to_string().contains(&label)
+            } if managed_label == label && definition_path.display().to_string().contains(label)
         ));
     }
 
@@ -712,7 +685,7 @@ mod tests {
         );
 
         let definition = ManagedServiceDefinition {
-            label: "ai.openclaw.gateway.ocm.test".to_string(),
+            label: OCM_SERVICE_LABEL.to_string(),
             description: "test".to_string(),
             definition_path: root.join("home/Library/LaunchAgents/test.plist"),
             program_arguments: vec![
@@ -729,7 +702,7 @@ mod tests {
         write_managed_service_definition(&definition, &env).unwrap();
         let plist = fs::read_to_string(&definition.definition_path).unwrap();
         assert!(plist.contains("<key>Label</key>"));
-        assert!(plist.contains("ai.openclaw.gateway.ocm.test"));
+        assert!(plist.contains(OCM_SERVICE_LABEL));
         assert!(plist.contains("openclaw gateway run"));
         assert!(plist.contains("<key>EnvironmentVariables</key>"));
         assert!(plist.contains(&display_path(&definition.stdout_path)));
@@ -755,7 +728,7 @@ mod tests {
         );
 
         let definition = ManagedServiceDefinition {
-            label: "ai.openclaw.gateway.ocm.test".to_string(),
+            label: OCM_SERVICE_LABEL.to_string(),
             description: "test".to_string(),
             definition_path: root.join("home/.config/systemd/user/test.service"),
             program_arguments: vec![

@@ -26,7 +26,6 @@ use crate::store::{
 
 const SUPERVISOR_STATE_KIND: &str = "ocm-supervisor-state";
 const SUPERVISOR_RUNTIME_KIND: &str = "ocm-supervisor-runtime";
-const DAEMON_SERVICE_NAME: &str = "ocm";
 const SUPERVISOR_POLL_INTERVAL_MS: u64 = 200;
 const SUPERVISOR_RESTART_DELAY_MS: u64 = 1_000;
 const SUPERVISOR_MAX_RESTART_DELAY_MS: u64 = 30_000;
@@ -411,7 +410,7 @@ impl<'a> SupervisorService<'a> {
         ensure_store(self.env, self.cwd)?;
         let ocm_home = resolve_ocm_home(self.env, self.cwd)?;
         let state_path = supervisor_state_path(self.env, self.cwd)?;
-        let identity = managed_service_identity(DAEMON_SERVICE_NAME, self.env, self.cwd)?;
+        let identity = managed_service_identity(self.env, self.cwd)?;
         let logs_dir = supervisor_logs_dir(self.env, self.cwd)?;
         let stdout_path = logs_dir.join("daemon.stdout.log");
         let stderr_path = logs_dir.join("daemon.stderr.log");
@@ -437,7 +436,7 @@ impl<'a> SupervisorService<'a> {
 
     fn supervisor_daemon_definition(&self) -> Result<ManagedServiceDefinition, String> {
         let ocm_home = resolve_ocm_home(self.env, self.cwd)?;
-        let identity = managed_service_identity(DAEMON_SERVICE_NAME, self.env, self.cwd)?;
+        let identity = managed_service_identity(self.env, self.cwd)?;
         let logs_dir = supervisor_logs_dir(self.env, self.cwd)?;
         let executable_path = self.supervisor_executable_path()?;
 
