@@ -243,7 +243,7 @@ pub fn dev_help(cmd: &str) -> String {
         "Development envs",
         "Provision OpenClaw dev envs from a checkout worktree, bootstrap the minimum local config, and run the gateway in the foreground. If OCM cannot infer the repo on the first run, it asks once and reuses that repo for later dev envs.",
         vec![format!(
-            "{cmd} dev <env> [--repo <path>] [--root <path>] [--port <port>] [--watch] [--onboard]"
+            "{cmd} dev <env> [--repo <path>] [--root <path>] [--port <port>] [--watch] [--service] [--onboard]"
         )],
         &[(
             "Commands",
@@ -253,6 +253,7 @@ pub fn dev_help(cmd: &str) -> String {
             format!("{cmd} dev shaks"),
             format!("{cmd} dev shaks --root /tmp/shaks"),
             format!("{cmd} dev shaks --watch"),
+            format!("{cmd} dev shaks --service"),
             format!("{cmd} dev shaks --onboard"),
             format!("{cmd} dev status"),
             format!("{cmd} dev status shaks --json"),

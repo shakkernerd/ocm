@@ -96,10 +96,11 @@ If you are developing OpenClaw itself, use the dev path:
 ocm dev shaks
 ocm dev shaks --root /tmp/shaks
 ocm dev shaks --watch
+ocm dev shaks --service
 ocm dev shaks --onboard
 ```
 
-`dev` creates or reuses an isolated env, provisions an OpenClaw worktree under the repo's own `.worktrees/`, bootstraps the minimum local config so the gateway can run immediately, and then starts the gateway in the foreground. `--root` lets you place that env anywhere. `--watch` keeps a source-run gateway rebuilding in place. `--onboard` runs local onboarding first and then starts the dev gateway. If OCM cannot infer the repo on the first run, it asks once for the OpenClaw repo path and then reuses that repo for later dev envs.
+`dev` creates or reuses an isolated env, provisions an OpenClaw worktree under the repo's own `.worktrees/`, bootstraps the minimum local config so the gateway can run immediately, and then starts the gateway in the foreground. `--root` lets you place that env anywhere. `--watch` keeps a source-run gateway rebuilding in place. `--service` installs and starts the dev env in the OCM background service instead of keeping the process in the current terminal. `--onboard` runs local onboarding first and then starts the dev gateway. If OCM cannot infer the repo on the first run, it asks once for the OpenClaw repo path and then reuses that repo for later dev envs.
 
 If you already have a plain `~/.openclaw` home you care about, use `ocm migrate <env>` instead of starting fresh. `setup` and `start` now point that out when they detect an existing plain OpenClaw home.
 

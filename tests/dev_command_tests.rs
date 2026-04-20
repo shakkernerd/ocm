@@ -7,8 +7,8 @@ use std::process::Command;
 use serde_json::Value;
 
 use crate::support::{
-    TestDir, ocm_env, path_string, run_ocm, run_ocm_with_stdin, stderr, stdout,
-    write_executable_script,
+    TestDir, install_fake_service_manager, ocm_env, path_string, run_ocm, run_ocm_with_stdin,
+    stderr, stdout, write_executable_script,
 };
 
 fn init_openclaw_repo(root: &TestDir) -> PathBuf {
@@ -110,6 +110,12 @@ fn install_fake_dev_runners(root: &TestDir, env: &mut std::collections::BTreeMap
     write_executable_script(&bin_dir.join("pnpm"), &pnpm);
     write_executable_script(&bin_dir.join("node"), &node);
     prepend_fake_bin(env, &bin_dir);
+}
+
+fn service_env(root: &TestDir) -> std::collections::BTreeMap<String, String> {
+    let mut env = ocm_env(root);
+    install_fake_service_manager(root, &mut env);
+    env
 }
 
 #[test]
@@ -295,4 +301,51 @@ fn dev_command_prompts_for_the_repo_when_it_is_not_known_yet() {
     assert!(show.status.success(), "{}", stderr(&show));
     let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
     assert_eq!(show_json["devRepoRoot"], path_string(&repo));
+}
+
+#[test]
+fn dev_command_can_start_a_background_service() {
+    let root = TestDir::new("dev-command-service");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = service_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let run = run_ocm(
+        &cwd,
+        &env,
+        &["dev", "demo", "--repo", &path_string(&repo), "--service"],
+    );
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert!(stdout(&run).contains("service status demo"));
+    assert!(stdout(&run).contains("logs demo --all-streams --follow"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["serviceEnabled"], true);
+    assert_eq!(show_json["serviceRunning"], true);
+
+    let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let status_json: Value = serde_json::from_str(&stdout(&status)).unwrap();
+    assert_eq!(status_json["bindingKind"], "dev");
+    assert_eq!(status_json["bindingName"], "dev");
+    assert_eq!(status_json["desiredRunning"], true);
+
+    let pnpm_log = fs::read_to_string(root.child("pnpm.log")).unwrap();
+    assert!(pnpm_log.contains("|install"));
+}
+
+#[test]
+fn dev_command_rejects_watch_plus_service() {
+    let root = TestDir::new("dev-command-watch-service");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--watch", "--service"]);
+    assert!(!run.status.success());
+    assert!(stderr(&run).contains("dev cannot combine --watch with --service"));
 }

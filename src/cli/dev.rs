@@ -11,6 +11,7 @@ use crate::infra::terminal::{Cell, KeyValueRow, Tone, paint, render_key_value_ca
 use crate::openclaw_repo::{
     detect_openclaw_checkout, discover_openclaw_checkout, ensure_openclaw_worktree,
 };
+use crate::service::service_backend_support_error;
 use crate::store::{
     derive_env_paths, display_path, ensure_minimum_local_openclaw_config, ensure_store,
     read_json, resolve_absolute_path, validate_name, write_json,
@@ -89,6 +90,7 @@ impl Cli {
     }
 
     fn handle_dev_run(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, service_requested) = Self::consume_flag(args, "--service");
         let (args, watch) = Self::consume_flag(args, "--watch");
         let (args, onboard) = Self::consume_flag(args, "--onboard");
         let (args, repo_root) = Self::consume_option(args, "--repo")?;
@@ -104,6 +106,12 @@ impl Cli {
             return Err("environment name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
+        if watch && service_requested {
+            return Err("dev cannot combine --watch with --service".to_string());
+        }
+        if service_requested && let Some(error) = service_backend_support_error(&self.env) {
+            return Err(error);
+        }
         let name = validate_name(name, "Environment name")?;
 
         let (meta, created) = self.ensure_dev_env(&name, repo_root, root, gateway_port)?;
@@ -112,9 +120,20 @@ impl Cli {
             .as_ref()
             .ok_or_else(|| format!("environment \"{}\" is missing its dev binding", meta.name))?;
         let stderr_profile = self.dev_stderr_profile();
+        if !service_requested && meta.service_running {
+            return Err(format!(
+                "dev env {} is already running in the background; stop it first with {} service stop {} or inspect it with {} logs {} --all-streams --follow",
+                meta.name,
+                self.command_example(),
+                meta.name,
+                self.command_example(),
+                meta.name
+            ));
+        }
         self.stderr_lines(render_dev_run_summary(
             &meta,
             created,
+            service_requested,
             watch,
             onboard,
             stderr_profile,
@@ -135,6 +154,25 @@ impl Cli {
             if code != 0 {
                 return Ok(code);
             }
+        }
+
+        if service_requested {
+            self.stderr_lines(render_dev_run_step(
+                "Service",
+                format!(
+                    "Installing and starting {} in the OCM background service",
+                    meta.name
+                ),
+                stderr_profile,
+            ));
+            self.service_service().install(&meta.name)?;
+            self.service_service().start(&meta.name)?;
+            self.stdout_lines(render_dev_service_started(
+                &meta,
+                &self.command_example(),
+                self.dev_stdout_profile(),
+            ));
+            return Ok(0);
         }
 
         if watch {
@@ -364,6 +402,19 @@ impl Cli {
         }
     }
 
+    fn dev_stdout_profile(&self) -> RenderProfile {
+        let color_mode = self.color_mode();
+        let pretty_enabled =
+            self.stdout_is_terminal() || matches!(color_mode, super::ColorMode::Always);
+        if pretty_enabled {
+            RenderProfile::pretty(
+                self.color_output_enabled_for(self.stdout_is_terminal(), color_mode),
+            )
+        } else {
+            RenderProfile::raw()
+        }
+    }
+
     fn run_dev_onboard(&self, meta: &EnvMeta) -> Result<i32, String> {
         let dev = meta
             .dev
@@ -490,6 +541,7 @@ fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<
 fn render_dev_run_summary(
     meta: &EnvMeta,
     created: bool,
+    service_requested: bool,
     watch: bool,
     onboard: bool,
     profile: RenderProfile,
@@ -507,7 +559,16 @@ fn render_dev_run_summary(
             format!("port={}", meta.gateway_port.unwrap_or_default()),
             format!("repo={}", dev.repo_root),
             format!("worktree={}", dev.worktree_root),
-            format!("mode={}", if watch { "watch" } else { "run" }),
+            format!(
+                "mode={}",
+                if service_requested {
+                    "service"
+                } else if watch {
+                    "watch"
+                } else {
+                    "run"
+                }
+            ),
             format!("onboard={onboard}"),
         ];
     }
@@ -541,8 +602,72 @@ fn render_dev_run_summary(
     lines.extend(render_key_value_card(
         "Launch",
         &[
-            KeyValueRow::plain("Mode", if watch { "watch" } else { "run" }),
+            KeyValueRow::plain(
+                "Mode",
+                if service_requested {
+                    "service"
+                } else if watch {
+                    "watch"
+                } else {
+                    "run"
+                },
+            ),
             KeyValueRow::plain("Onboard first", onboard.to_string()),
+        ],
+        profile.color,
+    ));
+    lines
+}
+
+fn render_dev_service_started(meta: &EnvMeta, command_example: &str, profile: RenderProfile) -> Vec<String> {
+    let Some(dev) = meta.dev.as_ref() else {
+        return Vec::new();
+    };
+
+    if !profile.pretty {
+        return vec![
+            format!("service started for {}", meta.name),
+            format!("port={}", meta.gateway_port.unwrap_or_default()),
+            format!("repo={}", dev.repo_root),
+            format!("worktree={}", dev.worktree_root),
+            format!("status={} service status {}", command_example, meta.name),
+            format!(
+                "logs={} logs {} --all-streams --follow",
+                command_example, meta.name
+            ),
+        ];
+    }
+
+    let mut lines = vec![paint(
+        &format!("Dev service {}", meta.name),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.extend(render_key_value_card(
+        "Service",
+        &[
+            KeyValueRow::accent("Port", meta.gateway_port.unwrap_or_default().to_string()),
+            KeyValueRow::success("State", "running"),
+            KeyValueRow::plain("Repo", dev.repo_root.clone()),
+            KeyValueRow::plain("Worktree", dev.worktree_root.clone()),
+        ],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "Next",
+        &[
+            KeyValueRow::plain(
+                "Status",
+                format!("{command_example} service status {}", meta.name),
+            ),
+            KeyValueRow::plain(
+                "Logs",
+                format!("{command_example} logs {} --all-streams --follow", meta.name),
+            ),
+            KeyValueRow::plain(
+                "Stop",
+                format!("{command_example} service stop {}", meta.name),
+            ),
         ],
         profile.color,
     ));
