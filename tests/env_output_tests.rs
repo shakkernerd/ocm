@@ -44,6 +44,7 @@ fn env_create_prints_the_effective_gateway_port_for_fresh_envs() {
     assert!(output.contains("Created env demo"));
     assert!(output.contains("(computed)"));
     assert!(extract_port(&output, "effective gateway port") >= 18_789);
+    assert!(output.contains("open: ocm @demo -- tui"));
     assert!(output.contains("onboard: ocm @demo -- onboard"));
     assert!(output.contains("run: ocm @demo -- status"));
 }
@@ -83,6 +84,7 @@ fn env_clone_prints_the_effective_gateway_port_for_the_cloned_env() {
     assert_ne!(cloned_port, source_port);
     assert!(output.contains("service: not copied from source"));
     assert!(output.contains("start: ocm start copy"));
+    assert!(output.contains("open: ocm @copy -- tui"));
     assert!(output.contains("onboard: ocm @copy -- onboard"));
     assert!(output.contains("run: ocm @copy -- status"));
 }

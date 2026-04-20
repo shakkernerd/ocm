@@ -393,11 +393,11 @@ fn env_created_raw(
     if let Some(launcher) = summary.default_launcher.as_deref() {
         lines.push(format!("  launcher: {launcher}"));
     }
-    lines.push(format!(
-        "  activate: eval \"$({command_example} env use {})\"",
-        summary.name
-    ));
     if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
+        lines.push(format!(
+            "  open: {command_example} @{} -- tui",
+            summary.name
+        ));
         lines.push(format!(
             "  onboard: {command_example} @{} -- onboard",
             summary.name
@@ -467,6 +467,10 @@ fn env_cloned_raw(
     lines.push("  service: not copied from source".to_string());
     lines.push(format!("  start: {command_example} start {}", summary.name));
     if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
+        lines.push(format!(
+            "  open: {command_example} @{} -- tui",
+            summary.name
+        ));
         lines.push(format!(
             "  onboard: {command_example} @{} -- onboard",
             summary.name
@@ -581,11 +585,11 @@ fn env_imported_raw(summary: &EnvImportSummary, command_example: &str) -> Vec<St
     if summary.protected {
         lines.push("  protected: true".to_string());
     }
-    lines.push(format!(
-        "  activate: eval \"$({command_example} env use {})\"",
-        summary.name
-    ));
     if summary.default_runtime.is_some() || summary.default_launcher.is_some() {
+        lines.push(format!(
+            "  open: {command_example} @{} -- tui",
+            summary.name
+        ));
         lines.push(format!(
             "  run: {command_example} @{} -- status",
             summary.name
@@ -1787,16 +1791,16 @@ fn env_show_next_steps(summary: &EnvSummary, command_example: &str) -> Vec<KeyVa
 
     vec![
         KeyValueRow::accent(
-            "Activate",
-            format!("{command_example} env use {}", summary.name),
+            "Open",
+            format!("{command_example} @{} -- tui", summary.name),
         ),
         KeyValueRow::accent(
             "Status",
-            format!("{command_example} env status {}", summary.name),
+            format!("{command_example} @{} -- status", summary.name),
         ),
         KeyValueRow::warning(
-            "Run",
-            format!("{command_example} @{} -- status", summary.name),
+            "Onboard",
+            format!("{command_example} @{} -- onboard", summary.name),
         ),
     ]
 }

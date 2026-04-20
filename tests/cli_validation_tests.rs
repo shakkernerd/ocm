@@ -229,7 +229,7 @@ fn root_double_dash_requires_an_active_environment() {
     let run = run_ocm(&cwd, &env, &["--", "status"]);
     assert_eq!(run.status.code(), Some(1));
     assert!(stderr(&run).contains(
-        "no active environment; run eval \"$(ocm env use <name>)\" or use \"ocm env run <name> -- ...\""
+        "no active environment; use \"ocm @<env> -- ...\" or \"ocm env run <name> -- ...\""
     ));
 }
 

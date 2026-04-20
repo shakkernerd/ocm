@@ -27,7 +27,7 @@ struct StartSummary {
     service_started: bool,
     detected_plain_home: Option<String>,
     migrate_command: Option<String>,
-    activate_command: String,
+    open_command: String,
     run_command: String,
     onboard_command: String,
     service_command: String,
@@ -268,11 +268,7 @@ impl Cli {
                 .as_ref()
                 .map(|_| format!("{} migrate <env>", self.command_example())),
             detected_plain_home,
-            activate_command: format!(
-                "eval \"$({} env use {})\"",
-                self.command_example(),
-                request.name
-            ),
+            open_command: format!("{} @{} -- tui", self.command_example(), request.name),
             run_command: format!("{} @{} -- status", self.command_example(), request.name),
             onboard_command: format!("{} @{} -- onboard", self.command_example(), request.name),
             service_command: format!(
@@ -522,7 +518,7 @@ impl Cli {
                 lines.push(format!("  migrate instead: {command}"));
             }
         }
-        lines.push(format!("  activate: {}", summary.activate_command));
+        lines.push(format!("  open: {}", summary.open_command));
         lines.push(format!("  run: {}", summary.run_command));
         lines
     }
@@ -595,7 +591,7 @@ impl Cli {
             lines.extend(render_key_value_card("Up next", &up_next, color));
         } else {
             let mut next = vec![
-                KeyValueRow::accent("Activate", &summary.activate_command),
+                KeyValueRow::accent("Open", &summary.open_command),
                 KeyValueRow::accent("Status", &summary.run_command),
             ];
             next.push(KeyValueRow::warning("Onboard", &summary.onboard_command));
@@ -707,7 +703,7 @@ mod tests {
             service_started: true,
             detected_plain_home: None,
             migrate_command: None,
-            activate_command: "eval \"$(ocm env use mira)\"".to_string(),
+            open_command: "ocm @mira -- tui".to_string(),
             run_command: "ocm @mira -- status".to_string(),
             onboard_command: "ocm @mira -- onboard".to_string(),
             service_command: "ocm service install mira".to_string(),
@@ -743,7 +739,8 @@ mod tests {
         let lines = test_cli().start_summary_lines_pretty(&sample_summary(false));
         assert_eq!(lines[0], "OpenClaw ready");
         assert!(lines.iter().any(|line| line.contains("Next")));
-        assert!(lines.iter().any(|line| line.contains("Activate")));
+        assert!(lines.iter().any(|line| line.contains("Open")));
+        assert!(lines.iter().any(|line| line.contains("ocm @mira -- tui")));
         assert!(
             lines
                 .iter()

@@ -388,7 +388,7 @@ impl Cli {
             .ok_or_else(|| {
                 let command = self.command_example();
                 format!(
-                    "no active environment; run eval \"$({command} env use <name>)\" or use \"{command} env run <name> -- ...\""
+                    "no active environment; use \"{command} @<env> -- ...\" or \"{command} env run <name> -- ...\""
                 )
             })
     }
