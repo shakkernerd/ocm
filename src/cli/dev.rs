@@ -580,13 +580,20 @@ fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<
         profile.color,
     )];
     lines.extend(render_key_value_card(
-        "Environment",
+        "Status",
         &[
             KeyValueRow::accent("Port", summary.gateway_port.to_string()),
             KeyValueRow::plain("URL", summary.gateway_url.clone()),
-            KeyValueRow::plain("Root", summary.root.clone()),
-            KeyValueRow::plain("Workspace", summary.workspace_dir.clone()),
-            KeyValueRow::plain("Config", summary.config_path.clone()),
+            KeyValueRow::plain(
+                "Service",
+                if summary.service_running {
+                    "running".to_string()
+                } else if summary.service_enabled {
+                    "enabled".to_string()
+                } else {
+                    "disabled".to_string()
+                },
+            ),
         ],
         profile.color,
     ));
@@ -595,8 +602,12 @@ fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<
         &[
             KeyValueRow::plain("Repo", summary.repo_root.clone()),
             KeyValueRow::plain("Worktree", summary.worktree_root.clone()),
-            KeyValueRow::plain("Service enabled", summary.service_enabled.to_string()),
-            KeyValueRow::plain("Service running", summary.service_running.to_string()),
+        ],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "Next",
+        &[
             KeyValueRow::plain("Status", summary.status_command.clone()),
             KeyValueRow::plain("Logs", summary.logs_command.clone()),
         ],
@@ -721,12 +732,19 @@ fn render_dev_service_started(
     lines.extend(render_key_value_card(
         "Service",
         &[
+            KeyValueRow::success("State", "running"),
             KeyValueRow::accent("Port", meta.gateway_port.unwrap_or_default().to_string()),
             KeyValueRow::plain(
                 "URL",
                 dev_gateway_url(meta.gateway_port.unwrap_or_default()),
             ),
-            KeyValueRow::success("State", "running"),
+            KeyValueRow::plain("Env", meta.name.clone()),
+        ],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "Source",
+        &[
             KeyValueRow::plain("Repo", dev.repo_root.clone()),
             KeyValueRow::plain("Worktree", dev.worktree_root.clone()),
         ],
@@ -876,4 +894,52 @@ fn render_dev_status_list(summaries: &[DevStatusSummary], profile: RenderProfile
             .collect::<Vec<_>>(),
         profile.color,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DevStatusSummary, RenderProfile, render_dev_status};
+
+    fn sample_summary() -> DevStatusSummary {
+        DevStatusSummary {
+            env_name: "demo".to_string(),
+            root: "/tmp/demo".to_string(),
+            repo_root: "/repo/openclaw".to_string(),
+            worktree_root: "/repo/openclaw/.worktrees/demo".to_string(),
+            gateway_port: 18789,
+            gateway_url: "http://127.0.0.1:18789".to_string(),
+            config_path: "/tmp/demo/.openclaw/openclaw.json".to_string(),
+            workspace_dir: "/tmp/demo/.openclaw/workspace".to_string(),
+            service_enabled: true,
+            service_running: true,
+            logs_command: "ocm logs demo --all-streams --follow".to_string(),
+            status_command: "ocm service status demo".to_string(),
+        }
+    }
+
+    #[test]
+    fn dev_status_pretty_stays_compact_when_healthy() {
+        let lines = render_dev_status(&sample_summary(), RenderProfile::pretty(false));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("http://127.0.0.1:18789"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm logs demo --all-streams --follow"))
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("/tmp/demo/.openclaw/openclaw.json"))
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("/tmp/demo/.openclaw/workspace"))
+        );
+        assert!(!lines.iter().any(|line| line.contains("Service enabled")));
+    }
 }

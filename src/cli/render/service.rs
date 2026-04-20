@@ -52,6 +52,10 @@ fn gateway_state(summary: &ServiceSummary) -> &str {
     service_state(summary)
 }
 
+fn gateway_url(port: u32) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
 fn ocm_background_service_state(summary: &ServiceSummary) -> &'static str {
     ocm_service_state(
         summary.ocm_service_installed,
@@ -172,63 +176,19 @@ pub fn service_status(
         profile.color,
     )];
 
+    let mut summary_rows = vec![
+        KeyValueRow::new("Gateway", gateway, state_tone(gateway)),
+        KeyValueRow::new("OCM service", daemon, state_tone(daemon)),
+        KeyValueRow::plain("Binding", binding_label(summary)),
+        KeyValueRow::accent("Port", summary.gateway_port.to_string()),
+        KeyValueRow::plain("URL", gateway_url(summary.gateway_port)),
+    ];
+    if let Some(runtime) = compact_runtime_label(summary) {
+        summary_rows.push(KeyValueRow::plain("Runtime", runtime));
+    }
     lines.extend(render_key_value_card(
-        "Gateway",
-        &[
-            KeyValueRow::plain("Type", summary.service_kind.clone()),
-            KeyValueRow::accent("Port", summary.gateway_port.to_string()),
-            KeyValueRow::new("State", gateway, state_tone(gateway)),
-            KeyValueRow::plain("Desired running", summary.desired_running.to_string()),
-        ],
-        profile.color,
-    ));
-    lines.extend(render_key_value_card(
-        "OCM background service",
-        &[KeyValueRow::new("State", daemon, state_tone(daemon))],
-        profile.color,
-    ));
-
-    lines.extend(render_key_value_card(
-        "Binding",
-        &[
-            optional_value_row("Binding", Some(binding_label(summary))),
-            optional_value_row("Command", summary.command.clone()),
-            optional_value_row("Binary", summary.binary_path.clone()),
-            optional_value_row("Run dir", Some(summary.run_dir.clone())),
-        ],
-        profile.color,
-    ));
-
-    lines.extend(render_key_value_card(
-        "Runtime",
-        &[
-            optional_value_row("Release version", summary.runtime_release_version.clone()),
-            optional_value_row("Release channel", summary.runtime_release_channel.clone()),
-            optional_value_row("Source", summary.runtime_source_kind.clone()),
-            optional_value_row(
-                "Child pid",
-                summary.child_pid.map(|value| value.to_string()),
-            ),
-            optional_value_row(
-                "Restart count",
-                summary.child_restart_count.map(|value| value.to_string()),
-            ),
-            optional_value_row(
-                "Last exit",
-                summary.last_exit_code.map(|value| value.to_string()),
-            ),
-            optional_value_row("Last event", summary.last_event_at.clone()),
-            optional_value_row("Next retry", summary.next_retry_at.clone()),
-        ],
-        profile.color,
-    ));
-
-    lines.extend(render_key_value_card(
-        "Logs",
-        &[
-            optional_value_row("Stdout", summary.stdout_path.clone()),
-            optional_value_row("Stderr", summary.stderr_path.clone()),
-        ],
+        "Status",
+        &summary_rows,
         profile.color,
     ));
 
@@ -241,6 +201,20 @@ pub fn service_status(
             ],
             profile.color,
         ));
+
+        let details = service_detail_rows(summary);
+        if !details.is_empty() {
+            lines.extend(render_key_value_card("Details", &details, profile.color));
+        }
+        let logs = service_log_rows(summary);
+        if !logs.is_empty() {
+            lines.extend(render_key_value_card("Logs", &logs, profile.color));
+        }
+    } else if has_runtime_attention(summary) {
+        let details = service_detail_rows(summary);
+        if !details.is_empty() {
+            lines.extend(render_key_value_card("Details", &details, profile.color));
+        }
     }
 
     let next = service_status_next_steps(summary, command_example);
@@ -282,10 +256,16 @@ fn service_status_next_steps(summary: &ServiceSummary, command_example: &str) ->
         ];
     }
 
-    vec![KeyValueRow::accent(
-        "Logs",
-        format!("{command_example} logs {}", summary.env_name),
-    )]
+    vec![
+        KeyValueRow::accent(
+            "Logs",
+            format!("{command_example} logs {}", summary.env_name),
+        ),
+        KeyValueRow::plain(
+            "Restart",
+            format!("{command_example} service restart {}", summary.env_name),
+        ),
+    ]
 }
 
 fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
@@ -377,14 +357,6 @@ pub fn service_action(
         ],
         profile.color,
     ));
-    lines.extend(render_key_value_card(
-        "Logs",
-        &[
-            optional_value_row("Stdout", summary.stdout_path.clone()),
-            optional_value_row("Stderr", summary.stderr_path.clone()),
-        ],
-        profile.color,
-    ));
     if !summary.warnings.is_empty() {
         let rows = summary
             .warnings
@@ -393,17 +365,98 @@ pub fn service_action(
             .collect::<Vec<_>>();
         lines.extend(render_key_value_card("Warnings", &rows, profile.color));
     }
-    if summary.running {
-        lines.extend(render_key_value_card(
-            "Next",
-            &[KeyValueRow::accent(
-                "Logs",
-                format!("{command_example} logs {}", summary.env_name),
-            )],
-            profile.color,
-        ));
+    let next = service_action_next_steps(summary, command_example);
+    if !next.is_empty() {
+        lines.extend(render_key_value_card("Next", &next, profile.color));
     }
     lines
+}
+
+fn compact_runtime_label(summary: &ServiceSummary) -> Option<String> {
+    match (
+        summary.binding_kind.as_deref(),
+        summary.binding_name.as_deref(),
+        summary.runtime_release_version.as_deref(),
+    ) {
+        (Some("runtime"), Some(name), Some(version)) => Some(format!("{name} ({version})")),
+        (Some("runtime"), Some(name), None) => Some(name.to_string()),
+        _ => None,
+    }
+}
+
+fn has_runtime_attention(summary: &ServiceSummary) -> bool {
+    summary.child_restart_count.unwrap_or_default() > 0
+        || summary.last_exit_code.is_some()
+        || summary.last_event_at.is_some()
+        || summary.next_retry_at.is_some()
+}
+
+fn service_detail_rows(summary: &ServiceSummary) -> Vec<KeyValueRow> {
+    let mut rows = Vec::new();
+    if let Some(command) = summary.command.clone() {
+        rows.push(KeyValueRow::plain("Command", command));
+    }
+    if let Some(binary) = summary.binary_path.clone() {
+        rows.push(KeyValueRow::plain("Binary", binary));
+    }
+    rows.push(KeyValueRow::plain("Run dir", summary.run_dir.clone()));
+    if let Some(pid) = summary.child_pid {
+        rows.push(KeyValueRow::plain("Child pid", pid.to_string()));
+    }
+    if let Some(restart_count) = summary.child_restart_count
+        && restart_count > 0
+    {
+        rows.push(KeyValueRow::warning(
+            "Restart count",
+            restart_count.to_string(),
+        ));
+    }
+    if let Some(last_exit) = summary.last_exit_code {
+        rows.push(KeyValueRow::plain("Last exit", last_exit.to_string()));
+    }
+    if let Some(last_event) = summary.last_event_at.clone() {
+        rows.push(KeyValueRow::plain("Last event", last_event));
+    }
+    if let Some(next_retry) = summary.next_retry_at.clone() {
+        rows.push(KeyValueRow::plain("Next retry", next_retry));
+    }
+    rows
+}
+
+fn service_log_rows(summary: &ServiceSummary) -> Vec<KeyValueRow> {
+    let mut rows = Vec::new();
+    if let Some(stdout) = summary.stdout_path.clone() {
+        rows.push(KeyValueRow::plain("Stdout", stdout));
+    }
+    if let Some(stderr) = summary.stderr_path.clone() {
+        rows.push(KeyValueRow::plain("Stderr", stderr));
+    }
+    rows
+}
+
+fn service_action_next_steps(
+    summary: &ServiceActionSummary,
+    command_example: &str,
+) -> Vec<KeyValueRow> {
+    if summary.running {
+        return vec![
+            KeyValueRow::accent(
+                "Logs",
+                format!("{command_example} logs {}", summary.env_name),
+            ),
+            KeyValueRow::plain(
+                "Status",
+                format!("{command_example} service status {}", summary.env_name),
+            ),
+        ];
+    }
+    if summary.installed {
+        return vec![KeyValueRow::accent(
+            "Start",
+            format!("{command_example} service start {}", summary.env_name),
+        )];
+    }
+    Vec::new()
 }
 
 fn service_action_raw(summary: &ServiceActionSummary, _command_example: &str) -> Vec<String> {
@@ -456,8 +509,8 @@ fn action_title(summary: &ServiceActionSummary) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderProfile, service_overview, service_status};
-    use crate::service::{ServiceSummary, ServiceSummaryList};
+    use super::{RenderProfile, service_action, service_overview, service_status};
+    use crate::service::{ServiceActionSummary, ServiceSummary, ServiceSummaryList};
 
     fn sample_service() -> ServiceSummary {
         ServiceSummary {
@@ -522,5 +575,50 @@ mod tests {
     fn service_status_pretty_shows_logs_next_step() {
         let lines = service_status(&sample_service(), RenderProfile::pretty(false), "ocm");
         assert!(lines.iter().any(|line| line.contains("logs demo")));
+    }
+
+    #[test]
+    fn service_status_pretty_hides_debug_details_when_healthy() {
+        let lines = service_status(&sample_service(), RenderProfile::pretty(false), "ocm");
+        assert!(lines.iter().any(|line| line.contains("Runtime")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("http://127.0.0.1:18789"))
+        );
+        assert!(!lines.iter().any(|line| line.contains("/tmp/openclaw")));
+        assert!(!lines.iter().any(|line| line.contains("/tmp/stdout.log")));
+        assert!(!lines.iter().any(|line| line.contains("Child pid")));
+        assert!(!lines.iter().any(|line| line.contains("Restart count")));
+    }
+
+    #[test]
+    fn service_action_pretty_hides_log_paths() {
+        let lines = service_action(
+            &ServiceActionSummary {
+                env_name: "demo".to_string(),
+                service_kind: "gateway".to_string(),
+                action: "restart".to_string(),
+                installed: true,
+                loaded: true,
+                desired_running: true,
+                running: true,
+                gateway_port: 18789,
+                binding_kind: Some("runtime".to_string()),
+                binding_name: Some("stable".to_string()),
+                stdout_path: Some("/tmp/stdout.log".to_string()),
+                stderr_path: Some("/tmp/stderr.log".to_string()),
+                warnings: Vec::new(),
+            },
+            RenderProfile::pretty(false),
+            "ocm",
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("service status demo"))
+        );
+        assert!(!lines.iter().any(|line| line.contains("/tmp/stdout.log")));
+        assert!(!lines.iter().any(|line| line.contains("/tmp/stderr.log")));
     }
 }
