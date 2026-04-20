@@ -226,16 +226,13 @@ fn start_help_is_available_from_help_and_flag() {
     assert!(output.contains("Start an environment"));
     assert!(output.contains("ocm start [name]"));
     assert!(output.contains("Optional environment name. If omitted, ocm generates a new one."));
-    assert!(output.contains("--service"));
     assert!(output.contains("--no-service"));
-    assert!(output.contains("--onboard | --no-onboard"));
+    assert!(output.contains("--onboard"));
     assert!(output.contains("ocm start mira --channel stable"));
-    assert!(
-        output.contains(
-            "ocm start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
-        )
-    );
+    assert!(output.contains("ocm start luna --command 'pnpm openclaw' --cwd /path/to/openclaw"));
+    assert!(output.contains("ocm start mira --onboard"));
     assert!(output.contains("Start installs and starts the env service by default."));
+    assert!(output.contains("Start writes the minimum local config by default"));
     assert!(output.contains(
         "Managed services currently support launchd on macOS and systemd --user on Linux."
     ));

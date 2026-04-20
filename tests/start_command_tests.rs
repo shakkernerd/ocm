@@ -88,7 +88,7 @@ fn start_generates_an_env_name_and_uses_latest_stable_runtime() {
         packument_server.url(),
     );
 
-    let start = run_ocm(&cwd, &env, &["start", "--no-onboard"]);
+    let start = run_ocm(&cwd, &env, &["start"]);
     assert!(start.status.success(), "{}", stderr(&start));
     let output = stdout(&start);
     let env_name = output
@@ -97,6 +97,7 @@ fn start_generates_an_env_name_and_uses_latest_stable_runtime() {
         .expect("start output should name the created environment");
     assert_ne!(env_name, "default");
     assert!(output.contains("runtime: stable"));
+    assert!(output.contains("config: minimum local"));
     assert!(output.contains(&format!("onboard: ocm @{env_name} -- onboard")));
     assert!(output.contains("service: running"));
 
@@ -112,6 +113,13 @@ fn start_generates_an_env_name_and_uses_latest_stable_runtime() {
     assert_eq!(runtime_json["name"], "stable");
     assert_eq!(runtime_json["releaseSelectorKind"], "channel");
     assert_eq!(runtime_json["releaseSelectorValue"], "stable");
+
+    let config_path = root.child(format!("ocm-home/envs/{env_name}/.openclaw/openclaw.json"));
+    let config_json: Value =
+        serde_json::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
+    assert_eq!(config_json["gateway"]["mode"], "local");
+    assert_eq!(config_json["gateway"]["bind"], "loopback");
+    assert_eq!(config_json["agents"]["defaults"]["skipBootstrap"], true);
 }
 
 #[test]
@@ -141,7 +149,7 @@ fn start_without_a_name_generates_a_new_env_each_time() {
         packument_server.url(),
     );
 
-    let first = run_ocm(&cwd, &env, &["start", "--no-service", "--no-onboard"]);
+    let first = run_ocm(&cwd, &env, &["start", "--no-service"]);
     assert!(first.status.success(), "{}", stderr(&first));
     let first_name = stdout(&first)
         .lines()
@@ -149,7 +157,7 @@ fn start_without_a_name_generates_a_new_env_each_time() {
         .expect("first start output should name the created environment")
         .to_string();
 
-    let second = run_ocm(&cwd, &env, &["start", "--no-service", "--no-onboard"]);
+    let second = run_ocm(&cwd, &env, &["start", "--no-service"]);
     assert!(second.status.success(), "{}", stderr(&second));
     let second_name = stdout(&second)
         .lines()
@@ -171,11 +179,7 @@ fn start_rejects_services_on_unsupported_backends() {
         "unsupported".to_string(),
     );
 
-    let start = run_ocm(
-        &cwd,
-        &env,
-        &["start", "demo", "--command", "openclaw", "--no-onboard"],
-    );
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--command", "openclaw"]);
     assert_eq!(start.status.code(), Some(1));
     assert!(stderr(&start).contains("managed services are not supported on this platform yet"));
 
@@ -199,11 +203,7 @@ fn start_rejects_services_when_launchctl_is_unavailable() {
         root.child("missing-bin/launchctl").display().to_string(),
     );
 
-    let start = run_ocm(
-        &cwd,
-        &env,
-        &["start", "demo", "--command", "openclaw", "--no-onboard"],
-    );
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--command", "openclaw"]);
     assert_eq!(start.status.code(), Some(1));
     assert!(stderr(&start).contains("managed services require launchctl on this machine"));
 
@@ -227,11 +227,7 @@ fn start_rejects_services_when_launchctl_is_unusable() {
         "/bin/sh".to_string(),
     );
 
-    let start = run_ocm(
-        &cwd,
-        &env,
-        &["start", "demo", "--command", "openclaw", "--no-onboard"],
-    );
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--command", "openclaw"]);
     assert_eq!(start.status.code(), Some(1));
     assert!(stderr(&start).contains("managed services require a usable launchctl session"));
 
@@ -259,7 +255,6 @@ fn start_can_create_a_local_command_launcher() {
             "--cwd",
             &project_dir.to_string_lossy(),
             "--no-service",
-            "--no-onboard",
         ],
     );
     assert!(start.status.success(), "{}", stderr(&start));
@@ -303,7 +298,6 @@ fn start_points_existing_plain_openclaw_users_at_migrate_when_creating_fresh_env
             "--cwd",
             &cwd.to_string_lossy(),
             "--no-service",
-            "--no-onboard",
         ],
     );
     assert!(start.status.success(), "{}", stderr(&start));
@@ -335,15 +329,12 @@ fn start_reuses_existing_env_without_forcing_onboarding() {
     );
     assert!(create.status.success(), "{}", stderr(&create));
 
-    let start = run_ocm(
-        &cwd,
-        &env,
-        &["start", "demo", "--no-service", "--no-onboard"],
-    );
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-service"]);
     assert!(start.status.success(), "{}", stderr(&start));
     let output = stdout(&start);
     assert!(output.contains("Using env demo"));
     assert!(output.contains("launcher: stable"));
+    assert!(output.contains("config: minimum local"));
     assert!(output.contains("onboard: ocm @demo -- onboard"));
     assert!(!output.contains("onboarding: running now"));
 }
@@ -355,9 +346,13 @@ fn start_rejects_json_when_onboarding_would_run() {
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
 
-    let output = run_ocm(&cwd, &env, &["start", "--json", "--no-service"]);
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["start", "--json", "--no-service", "--onboard"],
+    );
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("start cannot combine --json with interactive onboarding"));
+    assert!(stderr(&output).contains("start cannot combine --json with --onboard"));
 }
 
 #[test]
@@ -390,7 +385,7 @@ fn start_uses_managed_node_fallback_without_host_doctor_noise() {
     );
     let _managed_node = install_fake_managed_node_archive(&root, &mut env, "22.14.0");
 
-    let start = run_ocm(&cwd, &env, &["start", "--no-service", "--no-onboard"]);
+    let start = run_ocm(&cwd, &env, &["start", "--no-service"]);
     assert!(start.status.success(), "{}", stderr(&start));
     let output = stdout(&start);
     assert!(output.contains("Started env "));
@@ -424,6 +419,7 @@ fn start_reports_recovery_steps_when_onboarding_fails() {
             "--command",
             &path_string(&failing_openclaw),
             "--no-service",
+            "--onboard",
         ],
     );
     assert_eq!(start.status.code(), Some(1));

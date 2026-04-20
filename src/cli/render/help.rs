@@ -432,9 +432,9 @@ pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
 pub fn start_help(cmd: &str) -> String {
     render_leaf(
         "Start an environment",
-        "Fast path: create or reuse an environment, prepare the selected OpenClaw source, start its background service, and optionally run onboarding.",
+        "Fast path: create or reuse an environment, prepare the selected OpenClaw source, write the minimum local config needed to boot, and start its background service. Use --onboard when you want the interactive OpenClaw setup flow instead.",
         vec![format!(
-            "{cmd} start [name] [--runtime <name> | --launcher <name> | --version <version> | --channel <channel> | --command <command>] [--cwd <path>] [--root <path>] [--port <port>] [--protect] [--service | --no-service] [--onboard | --no-onboard] [--json]"
+            "{cmd} start [name] [--runtime <name> | --launcher <name> | --version <version> | --channel <channel> | --command <command>] [--cwd <path>] [--root <path>] [--port <port>] [--protect] [--no-service] [--onboard] [--json]"
         )],
         &[
             (
@@ -466,20 +466,12 @@ pub fn start_help(cmd: &str) -> String {
             ),
             ("--protect", "Mark the environment as protected"),
             (
-                "--service",
-                "Keep the default background-service behavior explicit",
-            ),
-            (
                 "--no-service",
                 "Skip installing and starting a background service",
             ),
             (
                 "--onboard",
-                "Run onboarding even when the env already exists",
-            ),
-            (
-                "--no-onboard",
-                "Skip onboarding output and print next steps instead",
+                "Run interactive onboarding instead of writing the minimum local config",
             ),
             ("--json", "Print a machine-readable start summary"),
         ],
@@ -487,21 +479,21 @@ pub fn start_help(cmd: &str) -> String {
             format!("{cmd} start"),
             format!("{cmd} start mira --channel stable"),
             format!("{cmd} start rowan --version 2026.3.24"),
+            format!("{cmd} start luna --command 'pnpm openclaw' --cwd /path/to/openclaw"),
             format!(
-                "{cmd} start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-onboard"
+                "{cmd} start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service"
             ),
-            format!(
-                "{cmd} start luna --command 'pnpm openclaw' --cwd /path/to/openclaw --no-service --no-onboard"
-            ),
+            format!("{cmd} start mira --onboard"),
         ],
         &[
             "If an environment already exists, start reuses it and only adjusts binding/protection when you asked for it.",
+            "Start writes the minimum local config by default so the env can boot immediately. Use `--onboard` for the interactive setup flow.",
             "Start installs and starts the env service by default. Use `--no-service` when you do not want a background process.",
             "Managed services currently support launchd on macOS and systemd --user on Linux.",
             "Official release selectors prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing.",
             "When start creates a new official-release env interactively, it can offer to install git for repo-aware coding workflows.",
             "If OCM detects an existing plain OpenClaw home, start keeps the new env fresh and points you at `migrate` if you want to bring that older state under OCM.",
-            "`--json` requires `--no-onboard` because onboarding is interactive.",
+            "`--json` cannot be combined with `--onboard` because onboarding is interactive.",
         ],
     )
 }

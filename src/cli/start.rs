@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use serde::Serialize;
 
 use super::Cli;
@@ -6,7 +8,7 @@ use crate::infra::terminal::{KeyValueRow, Tone, paint, render_key_value_card};
 use crate::launcher::AddLauncherOptions;
 use crate::migrate::inspect_migration_source;
 use crate::service::service_backend_support_error;
-use crate::store::validate_name;
+use crate::store::{derive_env_paths, ensure_minimum_local_openclaw_config, validate_name};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +18,7 @@ struct StartSummary {
     root: String,
     gateway_port: u32,
     gateway_port_source: String,
+    config_mode: String,
     default_runtime: Option<String>,
     default_launcher: Option<String>,
     protected: bool,
@@ -32,7 +35,6 @@ struct StartSummary {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum StartOnboardingMode {
-    Auto,
     Always,
     Never,
 }
@@ -63,9 +65,7 @@ impl Cli {
     pub(super) fn handle_start_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, protect) = Self::consume_flag(args, "--protect");
-        let (args, no_onboard) = Self::consume_flag(args, "--no-onboard");
         let (args, onboard) = Self::consume_flag(args, "--onboard");
-        let (args, service_flag) = Self::consume_flag(args, "--service");
         let (args, no_service) = Self::consume_flag(args, "--no-service");
         let (args, root) = Self::consume_option(args, "--root")?;
         let root = Self::require_option_value(root, "--root")?;
@@ -87,12 +87,6 @@ impl Cli {
         let (args, cwd) = Self::consume_option(args, "--cwd")?;
         let cwd = Self::require_option_value(cwd, "--cwd")?;
 
-        if onboard && no_onboard {
-            return Err("start accepts only one of --onboard or --no-onboard".to_string());
-        }
-        if service_flag && no_service {
-            return Err("start accepts only one of --service or --no-service".to_string());
-        }
         if cwd.is_some() && command.is_none() {
             return Err("start accepts --cwd only with --command".to_string());
         }
@@ -128,10 +122,8 @@ impl Cli {
             service_requested: !no_service,
             onboarding_mode: if onboard {
                 StartOnboardingMode::Always
-            } else if no_onboard {
-                StartOnboardingMode::Never
             } else {
-                StartOnboardingMode::Auto
+                StartOnboardingMode::Never
             },
             runtime_name,
             launcher_name,
@@ -163,15 +155,11 @@ impl Cli {
             ));
         }
         let created = existing.is_none();
-        let onboarding_planned = match request.onboarding_mode {
-            StartOnboardingMode::Always => true,
-            StartOnboardingMode::Never => false,
-            StartOnboardingMode::Auto => created,
-        };
+        let onboarding_planned = matches!(request.onboarding_mode, StartOnboardingMode::Always);
 
         if json_flag && onboarding_planned {
             return Err(
-                "start cannot combine --json with interactive onboarding; rerun with --no-onboard"
+                "start cannot combine --json with --onboard because onboarding is interactive"
                     .to_string(),
             );
         }
@@ -231,6 +219,17 @@ impl Cli {
             .environment_service()
             .apply_effective_gateway_port(meta)?;
 
+        let (effective_port, gateway_port_source) = self
+            .environment_service()
+            .resolve_effective_gateway_port(&meta)?;
+
+        if !onboarding_planned {
+            ensure_minimum_local_openclaw_config(
+                &derive_env_paths(Path::new(&meta.root)),
+                effective_port,
+            )?;
+        }
+
         let mut service_started = false;
         if request.service_requested {
             self.with_progress(format!("Installing service for {}", request.name), || {
@@ -242,9 +241,6 @@ impl Cli {
             service_started = true;
         }
 
-        let (effective_port, gateway_port_source) = self
-            .environment_service()
-            .resolve_effective_gateway_port(&meta)?;
         let detected_plain_home = if created {
             let source = inspect_migration_source(None, &self.env);
             source.exists.then_some(source.source_home)
@@ -257,6 +253,11 @@ impl Cli {
             root: meta.root.clone(),
             gateway_port: effective_port,
             gateway_port_source: gateway_port_source.to_string(),
+            config_mode: if onboarding_planned {
+                "onboarding".to_string()
+            } else {
+                "minimum".to_string()
+            },
             default_runtime: meta.default_runtime.clone(),
             default_launcher: meta.default_launcher.clone(),
             protected: meta.protected,
@@ -505,6 +506,14 @@ impl Cli {
         if summary.onboarding_planned {
             lines.push("  onboarding: running now".to_string());
         } else {
+            lines.push(format!(
+                "  config: {}",
+                if summary.config_mode == "minimum" {
+                    "minimum local"
+                } else {
+                    &summary.config_mode
+                }
+            ));
             lines.push(format!("  onboard: {}", summary.onboard_command));
         }
         if let Some(plain_home) = summary.detected_plain_home.as_deref() {
@@ -561,6 +570,14 @@ impl Cli {
                 }
             } else {
                 "not installed".to_string()
+            },
+        ));
+        overview.push(KeyValueRow::plain(
+            "Config",
+            if summary.config_mode == "minimum" {
+                "minimum local".to_string()
+            } else {
+                summary.config_mode.clone()
             },
         ));
         lines.extend(render_key_value_card("Environment", &overview, color));
@@ -677,6 +694,11 @@ mod tests {
             root: "/tmp/mira".to_string(),
             gateway_port: 18_789,
             gateway_port_source: "metadata".to_string(),
+            config_mode: if onboarding_planned {
+                "onboarding".to_string()
+            } else {
+                "minimum".to_string()
+            },
             default_runtime: Some("stable".to_string()),
             default_launcher: None,
             protected: false,

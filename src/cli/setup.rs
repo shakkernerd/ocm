@@ -96,7 +96,10 @@ impl Cli {
             gateway_port: None,
             protect: false,
             service_requested,
-            onboarding_mode: if self.prompt_yes_no("Run onboarding now?", true)? {
+            onboarding_mode: if self.prompt_yes_no(
+                "Run onboarding now instead of starting with the minimum local config?",
+                false,
+            )? {
                 StartOnboardingMode::Always
             } else {
                 StartOnboardingMode::Never

@@ -116,7 +116,7 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     );
     install_fake_launchctl(&root, &mut env);
 
-    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-onboard"]);
+    let start = run_ocm(&cwd, &env, &["start", "demo"]);
     assert!(start.status.success(), "{}", stderr(&start));
 
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
@@ -162,14 +162,7 @@ fn upgrade_reports_pinned_envs_without_moving_them() {
     let start = run_ocm(
         &cwd,
         &env,
-        &[
-            "start",
-            "pinned",
-            "--version",
-            "2026.3.24",
-            "--no-service",
-            "--no-onboard",
-        ],
+        &["start", "pinned", "--version", "2026.3.24", "--no-service"],
     );
     assert!(start.status.success(), "{}", stderr(&start));
 
@@ -219,7 +212,6 @@ fn upgrade_can_switch_a_local_launcher_env_to_a_published_runtime() {
             "--cwd",
             &project_dir.display().to_string(),
             "--no-service",
-            "--no-onboard",
         ],
     );
     assert!(start.status.success(), "{}", stderr(&start));
@@ -281,7 +273,6 @@ fn upgrade_keeps_a_stopped_installed_service_stopped() {
             "pnpm openclaw",
             "--cwd",
             &project_dir.display().to_string(),
-            "--no-onboard",
         ],
     );
     assert!(start.status.success(), "{}", stderr(&start));
@@ -351,11 +342,7 @@ fn upgrade_all_updates_safe_envs_and_skips_local_or_pinned_ones() {
         packument_server.url(),
     );
 
-    let stable = run_ocm(
-        &cwd,
-        &env,
-        &["start", "stable-env", "--no-service", "--no-onboard"],
-    );
+    let stable = run_ocm(&cwd, &env, &["start", "stable-env", "--no-service"]);
     assert!(stable.status.success(), "{}", stderr(&stable));
     let pinned = run_ocm(
         &cwd,
@@ -366,7 +353,6 @@ fn upgrade_all_updates_safe_envs_and_skips_local_or_pinned_ones() {
             "--version",
             "2026.3.24",
             "--no-service",
-            "--no-onboard",
         ],
     );
     assert!(pinned.status.success(), "{}", stderr(&pinned));
@@ -381,7 +367,6 @@ fn upgrade_all_updates_safe_envs_and_skips_local_or_pinned_ones() {
             "--cwd",
             &project_dir.display().to_string(),
             "--no-service",
-            "--no-onboard",
         ],
     );
     assert!(local.status.success(), "{}", stderr(&local));

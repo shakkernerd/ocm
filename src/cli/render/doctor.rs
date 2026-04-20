@@ -82,7 +82,7 @@ pub fn host_doctor(
     if !summary.healthy {
         next.push(KeyValueRow::warning(
             "Official releases",
-            format!("{command_example} start --no-onboard"),
+            format!("{command_example} start"),
         ));
     }
     next.push(KeyValueRow::muted(

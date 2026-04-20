@@ -88,7 +88,7 @@ If you already know what you want:
 ocm start
 ```
 
-`setup` walks you through the choices. `start` creates or reuses an environment, installs the latest stable OpenClaw release by default, and keeps it running in the background. If you do not pass a name, `ocm` generates one for you.
+`setup` walks you through the choices. `start` creates or reuses an environment, installs the latest stable OpenClaw release by default, writes the minimum local config needed to boot, and keeps it running in the background. Use `--onboard` when you want the interactive OpenClaw setup flow instead. If you do not pass a name, `ocm` generates one for you.
 
 If you are developing OpenClaw itself, use the dev path:
 
@@ -111,7 +111,6 @@ If you already have a plain `~/.openclaw` home you care about, use `ocm migrate 
 
 ```bash
 ocm start mira
-ocm @mira -- onboard
 ocm @mira -- tui
 ```
 
