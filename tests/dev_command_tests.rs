@@ -214,6 +214,25 @@ fn dev_status_reports_dev_envs() {
             .contains("/.worktrees/demo")
     );
     assert!(summary["gatewayPort"].as_u64().unwrap() > 0);
+    assert_eq!(
+        summary["gatewayUrl"],
+        format!(
+            "http://127.0.0.1:{}",
+            summary["gatewayPort"].as_u64().unwrap()
+        )
+    );
+    assert!(
+        summary["statusCommand"]
+            .as_str()
+            .unwrap()
+            .contains("service status demo")
+    );
+    assert!(
+        summary["logsCommand"]
+            .as_str()
+            .unwrap()
+            .contains("logs demo --all-streams --follow")
+    );
 }
 
 #[test]
@@ -336,6 +355,7 @@ fn dev_command_can_start_a_background_service() {
 
     let pnpm_log = fs::read_to_string(root.child("pnpm.log")).unwrap();
     assert!(pnpm_log.contains("|install"));
+    assert!(stdout(&run).contains("http://127.0.0.1:"));
 }
 
 #[test]
@@ -348,4 +368,34 @@ fn dev_command_rejects_watch_plus_service() {
     let run = run_ocm(&cwd, &env, &["dev", "demo", "--watch", "--service"]);
     assert!(!run.status.success());
     assert!(stderr(&run).contains("dev cannot combine --watch with --service"));
+}
+
+#[test]
+fn dev_watch_force_temporarily_takes_over_and_restores_the_background_service() {
+    let root = TestDir::new("dev-command-watch-force");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = service_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let service = run_ocm(
+        &cwd,
+        &env,
+        &["dev", "demo", "--repo", &path_string(&repo), "--service"],
+    );
+    assert!(service.status.success(), "{}", stderr(&service));
+
+    let watch = run_ocm(&cwd, &env, &["dev", "demo", "--watch", "--force"]);
+    assert!(watch.status.success(), "{}", stderr(&watch));
+    assert!(stdout(&watch).contains("service restored for demo"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["serviceEnabled"], true);
+    assert_eq!(show_json["serviceRunning"], true);
+
+    let node_log = fs::read_to_string(root.child("node.log")).unwrap();
+    assert!(node_log.contains("scripts/watch-node.mjs gateway run --port"));
 }

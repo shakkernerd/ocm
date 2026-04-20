@@ -1,4 +1,9 @@
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -13,8 +18,8 @@ use crate::openclaw_repo::{
 };
 use crate::service::service_backend_support_error;
 use crate::store::{
-    derive_env_paths, display_path, ensure_minimum_local_openclaw_config, ensure_store,
-    read_json, resolve_absolute_path, validate_name, write_json,
+    derive_env_paths, display_path, ensure_minimum_local_openclaw_config, ensure_store, read_json,
+    resolve_absolute_path, validate_name, write_json,
 };
 
 const DEV_PREFERENCES_KIND: &str = "ocm-dev-preferences";
@@ -34,10 +39,13 @@ struct DevStatusSummary {
     repo_root: String,
     worktree_root: String,
     gateway_port: u32,
+    gateway_url: String,
     config_path: String,
     workspace_dir: String,
     service_enabled: bool,
     service_running: bool,
+    logs_command: String,
+    status_command: String,
 }
 
 impl Cli {
@@ -90,6 +98,7 @@ impl Cli {
     }
 
     fn handle_dev_run(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, force) = Self::consume_flag(args, "--force");
         let (args, service_requested) = Self::consume_flag(args, "--service");
         let (args, watch) = Self::consume_flag(args, "--watch");
         let (args, onboard) = Self::consume_flag(args, "--onboard");
@@ -106,6 +115,9 @@ impl Cli {
             return Err("environment name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
+        if force && !watch {
+            return Err("dev accepts --force only with --watch".to_string());
+        }
         if watch && service_requested {
             return Err("dev cannot combine --watch with --service".to_string());
         }
@@ -120,9 +132,10 @@ impl Cli {
             .as_ref()
             .ok_or_else(|| format!("environment \"{}\" is missing its dev binding", meta.name))?;
         let stderr_profile = self.dev_stderr_profile();
-        if !service_requested && meta.service_running {
+        let watch_takes_over_service = watch && force && meta.service_running;
+        if !service_requested && meta.service_running && !watch_takes_over_service {
             return Err(format!(
-                "dev env {} is already running in the background; stop it first with {} service stop {} or inspect it with {} logs {} --all-streams --follow",
+                "dev env {} is already running in the background; stop it first with {} service stop {}, inspect it with {} logs {} --all-streams --follow, or rerun with --watch --force to take it over temporarily",
                 meta.name,
                 self.command_example(),
                 meta.name,
@@ -176,6 +189,17 @@ impl Cli {
         }
 
         if watch {
+            if watch_takes_over_service {
+                self.stderr_lines(render_dev_run_step(
+                    "Takeover",
+                    format!(
+                        "Stopping background service for {} while watch takes over; OCM will restore it when watch exits",
+                        meta.name
+                    ),
+                    stderr_profile,
+                ));
+                self.service_service().stop(&meta.name)?;
+            }
             self.stderr_lines(render_dev_run_step(
                 "Watch",
                 format!(
@@ -185,7 +209,21 @@ impl Cli {
                 ),
                 stderr_profile,
             ));
-            return self.run_dev_gateway_watch(&meta);
+            let code = self.run_dev_gateway_watch(&meta)?;
+            if watch_takes_over_service {
+                self.stderr_lines(render_dev_run_step(
+                    "Restore",
+                    format!("Starting background service for {}", meta.name),
+                    stderr_profile,
+                ));
+                self.service_service().start(&meta.name)?;
+                self.stdout_lines(render_dev_service_restored(
+                    &meta,
+                    &self.command_example(),
+                    self.dev_stdout_profile(),
+                ));
+            }
+            return Ok(code);
         }
 
         self.stderr_lines(render_dev_run_step(
@@ -316,11 +354,9 @@ impl Cli {
 
     fn prompt_dev_repo_root(&self) -> Result<String, String> {
         loop {
-            let value = self
-                .prompt_required("OpenClaw repo path")
-                .map_err(|_| {
-                    "OpenClaw repo path is required; pass --repo /path/to/openclaw".to_string()
-                })?;
+            let value = self.prompt_required("OpenClaw repo path").map_err(|_| {
+                "OpenClaw repo path is required; pass --repo /path/to/openclaw".to_string()
+            })?;
             let repo_root = resolve_absolute_path(&value, &self.env, &self.cwd)?;
             if detect_openclaw_checkout(&repo_root).is_some() {
                 return Ok(display_path(&repo_root));
@@ -467,12 +503,29 @@ impl Cli {
             "--port".to_string(),
             meta.gateway_port.unwrap_or_default().to_string(),
         ];
-        run_direct(
-            "node",
-            &args,
-            &build_openclaw_env(meta, &self.env),
-            Path::new(&dev.worktree_root),
-        )
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        let signal_flag = Arc::clone(&stop_requested);
+        ctrlc::set_handler(move || {
+            signal_flag.store(true, Ordering::SeqCst);
+        })
+        .map_err(|error| format!("failed to install dev watch signal handler: {error}"))?;
+
+        let status = Command::new("node")
+            .args(&args)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .env_clear()
+            .envs(build_openclaw_env(meta, &self.env))
+            .current_dir(Path::new(&dev.worktree_root))
+            .status()
+            .map_err(|error| format!("failed to run \"node\": {error}"))?;
+
+        Ok(match status.code() {
+            Some(code) => code,
+            None if stop_requested.load(Ordering::SeqCst) => 130,
+            None => 1,
+        })
     }
 
     fn build_dev_status_summary(&self, meta: EnvMeta) -> Result<Option<DevStatusSummary>, String> {
@@ -483,16 +536,24 @@ impl Cli {
             .environment_service()
             .resolve_effective_gateway_port(&meta)?;
         let paths = derive_env_paths(Path::new(&meta.root));
+        let env_name = meta.name.clone();
         Ok(Some(DevStatusSummary {
-            env_name: meta.name,
+            env_name: env_name.clone(),
             root: meta.root,
             repo_root: dev.repo_root.clone(),
             worktree_root: dev.worktree_root.clone(),
             gateway_port,
+            gateway_url: dev_gateway_url(gateway_port),
             config_path: display_path(&paths.config_path),
             workspace_dir: display_path(&paths.workspace_dir),
             service_enabled: meta.service_enabled,
             service_running: meta.service_running,
+            logs_command: format!(
+                "{} logs {} --all-streams --follow",
+                self.command_example(),
+                env_name
+            ),
+            status_command: format!("{} service status {}", self.command_example(), env_name),
         }))
     }
 }
@@ -505,8 +566,11 @@ fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<
             format!("repo={}", summary.repo_root),
             format!("worktree={}", summary.worktree_root),
             format!("root={}", summary.root),
+            format!("url={}", summary.gateway_url),
             format!("config={}", summary.config_path),
             format!("workspace={}", summary.workspace_dir),
+            format!("status={}", summary.status_command),
+            format!("logs={}", summary.logs_command),
         ];
     }
 
@@ -519,6 +583,7 @@ fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<
         "Environment",
         &[
             KeyValueRow::accent("Port", summary.gateway_port.to_string()),
+            KeyValueRow::plain("URL", summary.gateway_url.clone()),
             KeyValueRow::plain("Root", summary.root.clone()),
             KeyValueRow::plain("Workspace", summary.workspace_dir.clone()),
             KeyValueRow::plain("Config", summary.config_path.clone()),
@@ -532,6 +597,8 @@ fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<
             KeyValueRow::plain("Worktree", summary.worktree_root.clone()),
             KeyValueRow::plain("Service enabled", summary.service_enabled.to_string()),
             KeyValueRow::plain("Service running", summary.service_running.to_string()),
+            KeyValueRow::plain("Status", summary.status_command.clone()),
+            KeyValueRow::plain("Logs", summary.logs_command.clone()),
         ],
         profile.color,
     ));
@@ -619,7 +686,11 @@ fn render_dev_run_summary(
     lines
 }
 
-fn render_dev_service_started(meta: &EnvMeta, command_example: &str, profile: RenderProfile) -> Vec<String> {
+fn render_dev_service_started(
+    meta: &EnvMeta,
+    command_example: &str,
+    profile: RenderProfile,
+) -> Vec<String> {
     let Some(dev) = meta.dev.as_ref() else {
         return Vec::new();
     };
@@ -628,6 +699,10 @@ fn render_dev_service_started(meta: &EnvMeta, command_example: &str, profile: Re
         return vec![
             format!("service started for {}", meta.name),
             format!("port={}", meta.gateway_port.unwrap_or_default()),
+            format!(
+                "url={}",
+                dev_gateway_url(meta.gateway_port.unwrap_or_default())
+            ),
             format!("repo={}", dev.repo_root),
             format!("worktree={}", dev.worktree_root),
             format!("status={} service status {}", command_example, meta.name),
@@ -647,6 +722,10 @@ fn render_dev_service_started(meta: &EnvMeta, command_example: &str, profile: Re
         "Service",
         &[
             KeyValueRow::accent("Port", meta.gateway_port.unwrap_or_default().to_string()),
+            KeyValueRow::plain(
+                "URL",
+                dev_gateway_url(meta.gateway_port.unwrap_or_default()),
+            ),
             KeyValueRow::success("State", "running"),
             KeyValueRow::plain("Repo", dev.repo_root.clone()),
             KeyValueRow::plain("Worktree", dev.worktree_root.clone()),
@@ -662,7 +741,10 @@ fn render_dev_service_started(meta: &EnvMeta, command_example: &str, profile: Re
             ),
             KeyValueRow::plain(
                 "Logs",
-                format!("{command_example} logs {} --all-streams --follow", meta.name),
+                format!(
+                    "{command_example} logs {} --all-streams --follow",
+                    meta.name
+                ),
             ),
             KeyValueRow::plain(
                 "Stop",
@@ -672,6 +754,74 @@ fn render_dev_service_started(meta: &EnvMeta, command_example: &str, profile: Re
         profile.color,
     ));
     lines
+}
+
+fn render_dev_service_restored(
+    meta: &EnvMeta,
+    command_example: &str,
+    profile: RenderProfile,
+) -> Vec<String> {
+    let Some(dev) = meta.dev.as_ref() else {
+        return Vec::new();
+    };
+
+    if !profile.pretty {
+        return vec![
+            format!("service restored for {}", meta.name),
+            format!("port={}", meta.gateway_port.unwrap_or_default()),
+            format!(
+                "url={}",
+                dev_gateway_url(meta.gateway_port.unwrap_or_default())
+            ),
+            format!("repo={}", dev.repo_root),
+            format!("worktree={}", dev.worktree_root),
+            format!("status={} service status {}", command_example, meta.name),
+            format!(
+                "logs={} logs {} --all-streams --follow",
+                command_example, meta.name
+            ),
+        ];
+    }
+
+    let mut lines = vec![paint(
+        &format!("Dev service {}", meta.name),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.extend(render_key_value_card(
+        "Service",
+        &[
+            KeyValueRow::success("State", "restored"),
+            KeyValueRow::accent("Port", meta.gateway_port.unwrap_or_default().to_string()),
+            KeyValueRow::plain(
+                "URL",
+                dev_gateway_url(meta.gateway_port.unwrap_or_default()),
+            ),
+        ],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "Next",
+        &[
+            KeyValueRow::plain(
+                "Status",
+                format!("{command_example} service status {}", meta.name),
+            ),
+            KeyValueRow::plain(
+                "Logs",
+                format!(
+                    "{command_example} logs {} --all-streams --follow",
+                    meta.name
+                ),
+            ),
+        ],
+        profile.color,
+    ));
+    lines
+}
+
+fn dev_gateway_url(port: u32) -> String {
+    format!("http://127.0.0.1:{port}")
 }
 
 fn render_dev_run_step(title: &str, detail: String, profile: RenderProfile) -> Vec<String> {
