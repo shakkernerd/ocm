@@ -406,11 +406,7 @@ fn service_status_keeps_simple_package_manager_launchers_as_direct_exec() {
             body["args"][4].clone(),
         ])
     );
-    assert!(body["args"][4]
-        .as_str()
-        .unwrap()
-        .parse::<u16>()
-        .is_ok());
+    assert!(body["args"][4].as_str().unwrap().parse::<u16>().is_ok());
 }
 
 #[test]

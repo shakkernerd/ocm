@@ -15,8 +15,8 @@ use std::thread::{self, JoinHandle};
 
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
-use sha2::Sha512;
 use sha2::Digest;
+use sha2::Sha512;
 use tar::{Builder, Header};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
@@ -188,11 +188,7 @@ pub fn ocm_env(root: &TestDir) -> BTreeMap<String, String> {
     env
 }
 
-pub fn managed_service_label(
-    _env: &BTreeMap<String, String>,
-    _cwd: &Path,
-    _name: &str,
-) -> String {
+pub fn managed_service_label(_env: &BTreeMap<String, String>, _cwd: &Path, _name: &str) -> String {
     "ai.openclaw.ocm".to_string()
 }
 

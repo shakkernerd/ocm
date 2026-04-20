@@ -248,8 +248,9 @@ Use `service install` when you want a background service for an environment that
 ### Read logs
 
 ```bash
-ocm service logs mira --tail 50
-ocm service logs mira --stderr
+ocm logs mira --tail 50
+ocm logs mira --stderr
+ocm logs mira --follow
 ```
 
 ### Start, stop, restart
