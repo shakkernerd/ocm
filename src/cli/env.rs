@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 #[cfg(unix)]
-use std::process::Command;
+use std::process::{Command, Stdio};
 #[cfg(unix)]
 use std::thread::sleep;
 #[cfg(unix)]
@@ -1312,7 +1312,7 @@ fn process_command(pid: u32) -> Result<String, String> {
 #[cfg(unix)]
 fn terminate_pid(pid: u32) -> Result<(), String> {
     let pid_text = pid.to_string();
-    let _ = Command::new("kill").args(["-TERM", &pid_text]).status();
+    let _ = quiet_kill("-TERM", &pid_text);
     let deadline = Instant::now() + Duration::from_millis(750);
     while Instant::now() < deadline {
         if !process_alive(pid) {
@@ -1320,7 +1320,7 @@ fn terminate_pid(pid: u32) -> Result<(), String> {
         }
         sleep(Duration::from_millis(50));
     }
-    let _ = Command::new("kill").args(["-KILL", &pid_text]).status();
+    let _ = quiet_kill("-KILL", &pid_text);
     let deadline = Instant::now() + Duration::from_secs(1);
     while Instant::now() < deadline {
         if !process_alive(pid) {
@@ -1329,6 +1329,18 @@ fn terminate_pid(pid: u32) -> Result<(), String> {
         sleep(Duration::from_millis(50));
     }
     Err(format!("failed to terminate pid {pid}"))
+}
+
+#[cfg(unix)]
+fn quiet_kill(signal: &str, pid: &str) -> Result<(), String> {
+    Command::new("kill")
+        .args([signal, pid])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|_| ())
+        .map_err(|error| format!("failed to run kill {signal} {pid}: {error}"))
 }
 
 #[cfg(unix)]
@@ -1349,6 +1361,9 @@ fn process_alive(pid: u32) -> bool {
 
     Command::new("kill")
         .args(["-0", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
