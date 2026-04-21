@@ -548,11 +548,7 @@ impl Cli {
             workspace_dir: display_path(&paths.workspace_dir),
             service_enabled: meta.service_enabled,
             service_running: meta.service_running,
-            logs_command: format!(
-                "{} logs {} --follow",
-                self.command_example(),
-                env_name
-            ),
+            logs_command: format!("{} logs {} --follow", self.command_example(), env_name),
             status_command: format!("{} service status {}", self.command_example(), env_name),
         }))
     }
@@ -717,10 +713,7 @@ fn render_dev_service_started(
             format!("repo={}", dev.repo_root),
             format!("worktree={}", dev.worktree_root),
             format!("status={} service status {}", command_example, meta.name),
-            format!(
-                "logs={} logs {} --follow",
-                command_example, meta.name
-            ),
+            format!("logs={} logs {} --follow", command_example, meta.name),
         ];
     }
 
@@ -759,10 +752,7 @@ fn render_dev_service_started(
             ),
             KeyValueRow::plain(
                 "Logs",
-                format!(
-                    "{command_example} logs {} --follow",
-                    meta.name
-                ),
+                format!("{command_example} logs {} --follow", meta.name),
             ),
             KeyValueRow::plain(
                 "Stop",
@@ -794,10 +784,7 @@ fn render_dev_service_restored(
             format!("repo={}", dev.repo_root),
             format!("worktree={}", dev.worktree_root),
             format!("status={} service status {}", command_example, meta.name),
-            format!(
-                "logs={} logs {} --follow",
-                command_example, meta.name
-            ),
+            format!("logs={} logs {} --follow", command_example, meta.name),
         ];
     }
 
@@ -827,10 +814,7 @@ fn render_dev_service_restored(
             ),
             KeyValueRow::plain(
                 "Logs",
-                format!(
-                    "{command_example} logs {} --follow",
-                    meta.name
-                ),
+                format!("{command_example} logs {} --follow", meta.name),
             ),
         ],
         profile.color,

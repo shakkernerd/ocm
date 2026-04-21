@@ -213,7 +213,10 @@ pub fn logs_help(cmd: &str) -> String {
             "{cmd} logs <env> [--stream <info|error>] [--tail <count>] [--follow] [--raw] [--json]"
         )],
         &[
-            ("--stream <info|error>", "Read only info (stdout) or error (stderr) logs"),
+            (
+                "--stream <info|error>",
+                "Read only info (stdout) or error (stderr) logs",
+            ),
             ("--tail <count>", "Print the last N lines before streaming"),
             ("--follow", "Keep following the log file like tail -f"),
             ("--raw", "Print log content without the TTY header"),
