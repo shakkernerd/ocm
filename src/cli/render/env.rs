@@ -76,6 +76,7 @@ pub fn env_destroy_preview(
         "Summary",
         vec![
             KeyValueRow::plain("Root", summary.root.clone()),
+            optional_value_row("Worktree", summary.dev_worktree.clone()),
             KeyValueRow::new(
                 "Protected",
                 if summary.protected { "yes" } else { "no" },
@@ -136,6 +137,9 @@ pub fn env_destroy_preview(
 fn env_destroy_preview_raw(summary: &EnvDestroySummary, command_example: &str) -> Vec<String> {
     let mut lines = vec![format!("Destroy preview for env {}", summary.env_name)];
     lines.push(format!("  root: {}", summary.root));
+    if let Some(worktree) = &summary.dev_worktree {
+        lines.push(format!("  worktree: {worktree}"));
+    }
     if summary.snapshot_count > 0 {
         lines.push(format!("  snapshots: {}", summary.snapshot_count));
     }
@@ -183,6 +187,24 @@ pub fn env_destroyed(
         vec![
             KeyValueRow::plain("Root", summary.root.clone()),
             KeyValueRow::plain("Snapshots", summary.snapshots_removed.to_string()),
+            KeyValueRow::plain("Processes", summary.processes_terminated.to_string()),
+            KeyValueRow::new(
+                "Worktree",
+                if summary.dev_worktree.is_some() {
+                    if summary.worktree_removed {
+                        "removed"
+                    } else {
+                        "kept"
+                    }
+                } else {
+                    "none"
+                },
+                if summary.worktree_removed {
+                    Tone::Warning
+                } else {
+                    Tone::Muted
+                },
+            ),
             KeyValueRow::new(
                 "OCM service",
                 if summary.service_uninstalled {
@@ -224,6 +246,15 @@ fn env_destroyed_raw(summary: &EnvDestroySummary, command_example: &str) -> Vec<
             "  snapshots removed: {}",
             summary.snapshots_removed
         ));
+    }
+    if summary.processes_terminated > 0 {
+        lines.push(format!(
+            "  processes terminated: {}",
+            summary.processes_terminated
+        ));
+    }
+    if summary.worktree_removed {
+        lines.push("  worktree removed".to_string());
     }
     if summary.service_uninstalled {
         lines.push(format!("  service removed: {}", summary.service_label));
@@ -1693,6 +1724,7 @@ mod tests {
         EnvDestroySummary {
             env_name: "demo".to_string(),
             root: "/tmp/demo".to_string(),
+            dev_worktree: Some("/tmp/openclaw/.worktrees/demo".to_string()),
             protected: false,
             apply: false,
             force: false,
@@ -1722,6 +1754,8 @@ mod tests {
             ],
             snapshots_removed: 0,
             service_uninstalled: false,
+            processes_terminated: 0,
+            worktree_removed: false,
             removed: false,
         }
     }

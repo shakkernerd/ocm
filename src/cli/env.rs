@@ -1,15 +1,23 @@
+use std::collections::BTreeSet;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::Command;
+#[cfg(unix)]
+use std::thread::sleep;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
 use super::{Cli, render};
 use crate::env::{
-    CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvSummary,
-    ExportEnvironmentOptions, ImportEnvironmentOptions, RemoveEnvSnapshotOptions,
+    CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvMeta,
+    EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions, RemoveEnvSnapshotOptions,
     RestoreEnvSnapshotOptions,
 };
 use crate::infra::process::{run_direct, run_shell};
 use crate::infra::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
+use crate::openclaw_repo::remove_openclaw_worktree;
 use crate::store::{derive_env_paths, summarize_env, validate_name};
 
 #[derive(Clone, Debug, Serialize)]
@@ -24,6 +32,7 @@ pub(crate) struct EnvDestroyStepSummary {
 pub(crate) struct EnvDestroySummary {
     pub env_name: String,
     pub root: String,
+    pub dev_worktree: Option<String>,
     pub protected: bool,
     pub apply: bool,
     pub force: bool,
@@ -36,6 +45,8 @@ pub(crate) struct EnvDestroySummary {
     pub steps: Vec<EnvDestroyStepSummary>,
     pub snapshots_removed: usize,
     pub service_uninstalled: bool,
+    pub processes_terminated: usize,
+    pub worktree_removed: bool,
     pub removed: bool,
 }
 
@@ -128,12 +139,22 @@ impl Cli {
             return Ok(1);
         }
 
+        let env_meta = self.environment_service().get(name)?;
+
         let snapshot_ids = self
             .environment_service()
             .list_snapshots(Some(name))?
             .into_iter()
             .map(|snapshot| snapshot.id)
             .collect::<Vec<_>>();
+
+        if summary.service_installed || summary.service_loaded || summary.service_running {
+            self.service_service().uninstall(name)?;
+            summary.service_uninstalled = true;
+        }
+
+        summary.processes_terminated = self.terminate_env_processes(&env_meta)?;
+
         for snapshot_id in &snapshot_ids {
             self.environment_service()
                 .remove_snapshot(RemoveEnvSnapshotOptions {
@@ -143,9 +164,9 @@ impl Cli {
         }
         summary.snapshots_removed = snapshot_ids.len();
 
-        if summary.service_installed || summary.service_loaded || summary.service_running {
-            self.service_service().uninstall(name)?;
-            summary.service_uninstalled = true;
+        if let Some(dev) = env_meta.dev.as_ref() {
+            remove_openclaw_worktree(Path::new(&dev.repo_root), Path::new(&dev.worktree_root))?;
+            summary.worktree_removed = !Path::new(&dev.worktree_root).exists();
         }
 
         self.environment_service().remove(name, force)?;
@@ -792,6 +813,9 @@ impl Cli {
         let service = self.service_service().status(name)?;
         let snapshots = self.environment_service().list_snapshots(Some(name))?;
         let mut blockers = Vec::new();
+        let process_candidates = self
+            .destroy_process_candidates(&env_meta)
+            .unwrap_or_default();
 
         if env_meta.protected && !force {
             blockers.push("env is protected; re-run with --force to destroy it".to_string());
@@ -809,6 +833,18 @@ impl Cli {
                 description: "disable env gateway in the OCM background service".to_string(),
             });
         }
+        if !process_candidates.is_empty() {
+            steps.push(EnvDestroyStepSummary {
+                kind: "processes".to_string(),
+                description: "terminate live OpenClaw processes for the env".to_string(),
+            });
+        }
+        if let Some(dev) = env_meta.dev.as_ref() {
+            steps.push(EnvDestroyStepSummary {
+                kind: "worktree".to_string(),
+                description: format!("remove dev worktree {}", dev.worktree_root),
+            });
+        }
         steps.push(EnvDestroyStepSummary {
             kind: "env".to_string(),
             description: "remove env root and metadata".to_string(),
@@ -817,6 +853,7 @@ impl Cli {
         Ok(EnvDestroySummary {
             env_name: env_meta.name,
             root: env_meta.root,
+            dev_worktree: env_meta.dev.as_ref().map(|dev| dev.worktree_root.clone()),
             protected: env_meta.protected,
             apply,
             force,
@@ -829,8 +866,18 @@ impl Cli {
             steps,
             snapshots_removed: 0,
             service_uninstalled: false,
+            processes_terminated: 0,
+            worktree_removed: false,
             removed: false,
         })
+    }
+
+    fn terminate_env_processes(&self, meta: &EnvMeta) -> Result<usize, String> {
+        terminate_associated_processes(meta)
+    }
+
+    fn destroy_process_candidates(&self, meta: &EnvMeta) -> Result<Vec<u32>, String> {
+        associated_process_pids(meta)
     }
 
     pub(super) fn handle_env_use(&self, args: Vec<String>) -> Result<i32, String> {
@@ -1055,4 +1102,254 @@ impl Cli {
         ));
         Ok(0)
     }
+}
+
+#[cfg(unix)]
+fn terminate_associated_processes(meta: &EnvMeta) -> Result<usize, String> {
+    let pids = associated_process_pids(meta)?;
+    if pids.is_empty() {
+        return Ok(0);
+    }
+
+    for pid in &pids {
+        terminate_pid(*pid)?;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if associated_process_pids(meta)?.is_empty() {
+            return Ok(pids.len());
+        }
+        sleep(Duration::from_millis(100));
+    }
+
+    Err("failed to terminate all live env processes".to_string())
+}
+
+#[cfg(not(unix))]
+fn terminate_associated_processes(_meta: &EnvMeta) -> Result<usize, String> {
+    Ok(0)
+}
+
+#[cfg(unix)]
+fn associated_process_pids(meta: &EnvMeta) -> Result<Vec<u32>, String> {
+    let processes = process_table()?;
+    let parent_map = processes
+        .iter()
+        .map(|process| (process.pid, process.ppid))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut children_map = std::collections::HashMap::<u32, Vec<u32>>::new();
+    for process in &processes {
+        children_map
+            .entry(process.ppid)
+            .or_default()
+            .push(process.pid);
+    }
+
+    let mut seeds = BTreeSet::new();
+    for process in &processes {
+        let command = process_command(process.pid)?;
+        if interactive_shell_command(&command) {
+            continue;
+        }
+        if process_belongs_to_env(process.pid, meta)? {
+            seeds.insert(process.pid);
+        }
+    }
+
+    if seeds.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut related = seeds;
+    let mut queue = related.iter().copied().collect::<Vec<_>>();
+    while let Some(pid) = queue.pop() {
+        if let Some(children) = children_map.get(&pid) {
+            for child in children {
+                let command = process_command(*child)?;
+                if interactive_shell_command(&command) {
+                    continue;
+                }
+                if related.insert(*child) {
+                    queue.push(*child);
+                }
+            }
+        }
+    }
+
+    let depths = process_depths(&parent_map);
+    let mut ordered = related.into_iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|pid| std::cmp::Reverse(depths.get(pid).copied().unwrap_or(0)));
+    Ok(ordered)
+}
+
+#[cfg(unix)]
+fn process_belongs_to_env(pid: u32, meta: &EnvMeta) -> Result<bool, String> {
+    let paths = derive_env_paths(Path::new(&meta.root));
+    let mut markers = vec![
+        meta.root.clone(),
+        paths.state_dir.to_string_lossy().into_owned(),
+        paths.config_path.to_string_lossy().into_owned(),
+        paths.workspace_dir.to_string_lossy().into_owned(),
+    ]
+    .into_iter()
+    .map(|value| normalize_process_path(&value))
+    .collect::<Vec<_>>();
+    if let Some(dev) = meta.dev.as_ref() {
+        markers.push(normalize_process_path(&dev.worktree_root));
+    }
+
+    if let Some(cwd) = process_cwd(pid)?
+        && markers
+            .iter()
+            .any(|marker| normalize_process_path(&cwd).starts_with(marker))
+    {
+        return Ok(true);
+    }
+
+    let command = normalize_process_path(&process_command(pid)?);
+    Ok(markers.iter().any(|marker| command.contains(marker)))
+}
+
+#[cfg(unix)]
+#[derive(Clone, Debug)]
+struct ProcessEntry {
+    pid: u32,
+    ppid: u32,
+}
+
+#[cfg(unix)]
+fn process_table() -> Result<Vec<ProcessEntry>, String> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,ppid="])
+        .output()
+        .map_err(|error| format!("failed to inspect running processes: {error}"))?;
+    if !output.status.success() {
+        return Err("failed to inspect running processes".to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let pid = parts.next()?.parse::<u32>().ok()?;
+            let ppid = parts.next()?.parse::<u32>().ok()?;
+            Some(ProcessEntry { pid, ppid })
+        })
+        .collect())
+}
+
+#[cfg(unix)]
+fn process_depths(
+    parent_map: &std::collections::HashMap<u32, u32>,
+) -> std::collections::HashMap<u32, usize> {
+    fn depth_of(
+        pid: u32,
+        parent_map: &std::collections::HashMap<u32, u32>,
+        cache: &mut std::collections::HashMap<u32, usize>,
+    ) -> usize {
+        if let Some(depth) = cache.get(&pid) {
+            return *depth;
+        }
+        let depth = match parent_map.get(&pid).copied() {
+            Some(parent) if parent > 1 && parent != pid => depth_of(parent, parent_map, cache) + 1,
+            _ => 0,
+        };
+        cache.insert(pid, depth);
+        depth
+    }
+
+    let mut cache = std::collections::HashMap::new();
+    for pid in parent_map.keys().copied().collect::<Vec<_>>() {
+        let _ = depth_of(pid, parent_map, &mut cache);
+    }
+    cache
+}
+
+#[cfg(unix)]
+fn interactive_shell_command(command: &str) -> bool {
+    let command = command.trim_start_matches('-');
+    command.ends_with("/zsh")
+        || command.ends_with("/bash")
+        || command.ends_with("/fish")
+        || command == "zsh"
+        || command == "bash"
+        || command == "fish"
+}
+
+#[cfg(unix)]
+fn normalize_process_path(value: &str) -> String {
+    value.strip_prefix("/private").unwrap_or(value).to_string()
+}
+
+#[cfg(unix)]
+fn process_cwd(pid: u32) -> Result<Option<String>, String> {
+    let output = Command::new("lsof")
+        .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+        .output()
+        .map_err(|error| format!("failed to inspect process cwd for pid {pid}: {error}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix('n').map(|value| value.trim().to_string())))
+}
+
+#[cfg(unix)]
+fn process_command(pid: u32) -> Result<String, String> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .map_err(|error| format!("failed to inspect process command for pid {pid}: {error}"))?;
+    if !output.status.success() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(unix)]
+fn terminate_pid(pid: u32) -> Result<(), String> {
+    let pid_text = pid.to_string();
+    let _ = Command::new("kill").args(["-TERM", &pid_text]).status();
+    let deadline = Instant::now() + Duration::from_millis(750);
+    while Instant::now() < deadline {
+        if !process_alive(pid) {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(50));
+    }
+    let _ = Command::new("kill").args(["-KILL", &pid_text]).status();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        if !process_alive(pid) {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(50));
+    }
+    Err(format!("failed to terminate pid {pid}"))
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    let Ok(status_output) = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "stat="])
+        .output()
+    else {
+        return false;
+    };
+    if !status_output.status.success() {
+        return false;
+    }
+    let status = String::from_utf8_lossy(&status_output.stdout);
+    if status.trim().is_empty() || status.contains('Z') {
+        return false;
+    }
+
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
