@@ -176,7 +176,7 @@ pub(crate) fn ensure_minimum_local_openclaw_config(
         agents.insert(
             "list".to_string(),
             Value::Array(vec![json!({
-                "id": "dev",
+                "id": "main",
                 "default": true,
                 "workspace": workspace,
             })]),

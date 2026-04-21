@@ -120,6 +120,7 @@ fn start_generates_an_env_name_and_uses_latest_stable_runtime() {
     assert_eq!(config_json["gateway"]["mode"], "local");
     assert_eq!(config_json["gateway"]["bind"], "loopback");
     assert_eq!(config_json["agents"]["defaults"]["skipBootstrap"], true);
+    assert_eq!(config_json["agents"]["list"][0]["id"], "main");
 }
 
 #[test]

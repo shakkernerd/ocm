@@ -149,7 +149,7 @@ fn dev_command_provisions_worktree_bootstraps_config_and_runs_gateway() {
         path_string(&workspace_dir)
     );
     assert_eq!(config["agents"]["defaults"]["skipBootstrap"], true);
-    assert_eq!(config["agents"]["list"][0]["id"], "dev");
+    assert_eq!(config["agents"]["list"][0]["id"], "main");
     assert!(workspace_dir.exists());
 
     let pnpm_log = fs::read_to_string(root.child("pnpm.log")).unwrap();
