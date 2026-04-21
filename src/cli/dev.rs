@@ -135,7 +135,7 @@ impl Cli {
         let watch_takes_over_service = watch && force && meta.service_running;
         if !service_requested && meta.service_running && !watch_takes_over_service {
             return Err(format!(
-                "dev env {} is already running in the background; stop it first with {} service stop {}, inspect it with {} logs {} --all-streams --follow, or rerun with --watch --force to take it over temporarily",
+                "dev env {} is already running in the background; stop it first with {} service stop {}, inspect it with {} logs {} --follow, or rerun with --watch --force to take it over temporarily",
                 meta.name,
                 self.command_example(),
                 meta.name,
@@ -549,7 +549,7 @@ impl Cli {
             service_enabled: meta.service_enabled,
             service_running: meta.service_running,
             logs_command: format!(
-                "{} logs {} --all-streams --follow",
+                "{} logs {} --follow",
                 self.command_example(),
                 env_name
             ),
@@ -718,7 +718,7 @@ fn render_dev_service_started(
             format!("worktree={}", dev.worktree_root),
             format!("status={} service status {}", command_example, meta.name),
             format!(
-                "logs={} logs {} --all-streams --follow",
+                "logs={} logs {} --follow",
                 command_example, meta.name
             ),
         ];
@@ -760,7 +760,7 @@ fn render_dev_service_started(
             KeyValueRow::plain(
                 "Logs",
                 format!(
-                    "{command_example} logs {} --all-streams --follow",
+                    "{command_example} logs {} --follow",
                     meta.name
                 ),
             ),
@@ -795,7 +795,7 @@ fn render_dev_service_restored(
             format!("worktree={}", dev.worktree_root),
             format!("status={} service status {}", command_example, meta.name),
             format!(
-                "logs={} logs {} --all-streams --follow",
+                "logs={} logs {} --follow",
                 command_example, meta.name
             ),
         ];
@@ -828,7 +828,7 @@ fn render_dev_service_restored(
             KeyValueRow::plain(
                 "Logs",
                 format!(
-                    "{command_example} logs {} --all-streams --follow",
+                    "{command_example} logs {} --follow",
                     meta.name
                 ),
             ),
@@ -912,7 +912,7 @@ mod tests {
             workspace_dir: "/tmp/demo/.openclaw/workspace".to_string(),
             service_enabled: true,
             service_running: true,
-            logs_command: "ocm logs demo --all-streams --follow".to_string(),
+            logs_command: "ocm logs demo --follow".to_string(),
             status_command: "ocm service status demo".to_string(),
         }
     }
@@ -928,7 +928,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("ocm logs demo --all-streams --follow"))
+                .any(|line| line.contains("ocm logs demo --follow"))
         );
         assert!(
             !lines

@@ -46,7 +46,7 @@ fn logs_reads_gateway_logs_from_the_env_root() {
     assert!(stdout_log.status.success(), "{}", stderr(&stdout_log));
     assert!(stdout(&stdout_log).contains("hello from gateway stdout"));
 
-    let stderr_log = run_ocm(&cwd, &env, &["logs", "demo", "--stderr", "--json"]);
+    let stderr_log = run_ocm(&cwd, &env, &["logs", "demo", "--stream", "error", "--json"]);
     assert!(stderr_log.status.success(), "{}", stderr(&stderr_log));
     let body: Value = serde_json::from_str(&stdout(&stderr_log)).unwrap();
     assert_eq!(body["sourceKind"], "gateway");
@@ -78,7 +78,7 @@ fn logs_can_merge_stdout_and_stderr_in_one_snapshot() {
     )
     .unwrap();
 
-    let output = run_ocm(&cwd, &env, &["logs", "demo", "--all-streams", "--raw"]);
+    let output = run_ocm(&cwd, &env, &["logs", "demo", "--raw"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
@@ -88,6 +88,20 @@ fn logs_can_merge_stdout_and_stderr_in_one_snapshot() {
             "2026-04-20T00:13:47.497+01:00 [gateway] three\n"
         )
     );
+}
+
+#[test]
+fn logs_rejects_unknown_stream_level() {
+    let root = TestDir::new("logs-invalid-stream");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    let output = run_ocm(&cwd, &env, &["logs", "demo", "--stream", "warn"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("unsupported log stream level: warn"));
+    assert!(stderr(&output).contains("--stream info or --stream error"));
 }
 
 #[test]
@@ -102,7 +116,7 @@ fn logs_fall_back_to_supervisor_logs_when_gateway_logs_are_missing() {
     fs::create_dir_all(fallback.parent().unwrap()).unwrap();
     fs::write(&fallback, "hello from supervisor stdout\n").unwrap();
 
-    let output = run_ocm(&cwd, &env, &["logs", "demo", "--json"]);
+    let output = run_ocm(&cwd, &env, &["logs", "demo", "--stream", "info", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body: Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(body["sourceKind"], "service");
@@ -127,7 +141,7 @@ fn logs_prefer_the_newer_service_log_when_gateway_log_is_stale() {
     fs::create_dir_all(service_path.parent().unwrap()).unwrap();
     fs::write(&service_path, "new service output\n").unwrap();
 
-    let output = run_ocm(&cwd, &env, &["logs", "demo", "--json"]);
+    let output = run_ocm(&cwd, &env, &["logs", "demo", "--stream", "info", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let body: Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(body["sourceKind"], "service");

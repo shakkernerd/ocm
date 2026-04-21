@@ -53,24 +53,13 @@ impl Cli {
     pub(super) fn handle_logs_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "logs")?;
         let (args, follow) = Self::consume_flag(args, "--follow");
-        let (args, all_streams_flag) = Self::consume_flag(args, "--all-streams");
-        let (args, stderr_flag) = Self::consume_flag(args, "--stderr");
-        let (args, stdout_flag) = Self::consume_flag(args, "--stdout");
+        let (args, stream_raw) = Self::consume_option(args, "--stream")?;
         let (args, tail_raw) = Self::consume_option(args, "--tail")?;
         let tail_lines = match tail_raw.as_deref() {
             Some(raw) => Some(Self::parse_positive_u32(raw, "--tail")? as usize),
             None => Some(50),
         };
 
-        let stream_flag_count = [all_streams_flag, stderr_flag, stdout_flag]
-            .into_iter()
-            .filter(|flag| *flag)
-            .count();
-        if stream_flag_count > 1 {
-            return Err(
-                "logs accepts only one of --stdout, --stderr, or --all-streams".to_string(),
-            );
-        }
         if json_flag && follow {
             return Err("logs cannot combine --json with --follow".to_string());
         }
@@ -80,12 +69,15 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let stream = if all_streams_flag {
-            "all"
-        } else if stderr_flag {
-            "stderr"
-        } else {
-            "stdout"
+        let stream = match stream_raw.as_deref() {
+            None => "all",
+            Some("info") => "stdout",
+            Some("error") => "stderr",
+            Some(other) => {
+                return Err(format!(
+                    "unsupported log stream level: {other}; use --stream info or --stream error"
+                ));
+            }
         };
         if follow {
             if profile.pretty {

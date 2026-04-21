@@ -231,7 +231,7 @@ fn dev_status_reports_dev_envs() {
         summary["logsCommand"]
             .as_str()
             .unwrap()
-            .contains("logs demo --all-streams --follow")
+            .contains("logs demo --follow")
     );
 }
 
@@ -338,7 +338,7 @@ fn dev_command_can_start_a_background_service() {
     );
     assert!(run.status.success(), "{}", stderr(&run));
     assert!(stdout(&run).contains("service status demo"));
-    assert!(stdout(&run).contains("logs demo --all-streams --follow"));
+    assert!(stdout(&run).contains("logs demo --follow"));
 
     let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
     assert!(show.status.success(), "{}", stderr(&show));
