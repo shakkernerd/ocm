@@ -155,6 +155,18 @@ fn setup_daemon_run_fixture(
     std::path::PathBuf,
     std::path::PathBuf,
 ) {
+    setup_daemon_run_fixture_with_child_sleep(root, 1)
+}
+
+fn setup_daemon_run_fixture_with_child_sleep(
+    root: &TestDir,
+    child_sleep_seconds: u64,
+) -> (
+    std::path::PathBuf,
+    std::collections::BTreeMap<String, String>,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(root);
@@ -166,16 +178,18 @@ fn setup_daemon_run_fixture(
     write_executable_script(
         &launcher_script,
         &format!(
-            "#!/bin/sh\nprintf 'launcher\\n' > '{}'\nprintf 'launcher stdout\\n'\nprintf 'launcher stderr\\n' >&2\nsleep 1\n",
-            path_string(&launcher_marker)
+            "#!/bin/sh\nprintf 'launcher\\n' > '{}'\nprintf 'launcher stdout\\n'\nprintf 'launcher stderr\\n' >&2\nsleep {}\n",
+            path_string(&launcher_marker),
+            child_sleep_seconds
         ),
     );
     let runtime_script = root.child("bin/runtime-openclaw");
     write_executable_script(
         &runtime_script,
         &format!(
-            "#!/bin/sh\nprintf 'runtime\\n' > '{}'\nprintf 'runtime stdout\\n'\nprintf 'runtime stderr\\n' >&2\nsleep 1\n",
-            path_string(&runtime_marker)
+            "#!/bin/sh\nprintf 'runtime\\n' > '{}'\nprintf 'runtime stdout\\n'\nprintf 'runtime stderr\\n' >&2\nsleep {}\n",
+            path_string(&runtime_marker),
+            child_sleep_seconds
         ),
     );
 
@@ -295,7 +309,7 @@ fn service_state_plans_runnable_children_and_skips_disabled_envs() {
 #[test]
 fn daemon_run_persists_live_runtime_children() {
     let root = TestDir::new("daemon-runtime-state");
-    let (cwd, env, _, _) = setup_daemon_run_fixture(&root);
+    let (cwd, env, _, _) = setup_daemon_run_fixture_with_child_sleep(&root, 10);
     let runtime_path = root.child("ocm-home/supervisor/runtime.json");
     let service = SupervisorService::new(&env, &cwd);
 
