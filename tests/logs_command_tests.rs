@@ -1,7 +1,7 @@
 mod support;
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -187,7 +187,12 @@ fn logs_follow_streams_new_lines() {
         receiver.recv_timeout(Duration::from_secs(3)).unwrap(),
         "first line"
     );
-    fs::write(&stdout_path, "first line\nsecond line\n").unwrap();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&stdout_path)
+        .unwrap()
+        .write_all(b"second line\n")
+        .unwrap();
     assert_eq!(
         receiver.recv_timeout(Duration::from_secs(3)).unwrap(),
         "second line"
