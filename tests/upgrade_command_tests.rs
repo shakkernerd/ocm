@@ -1,6 +1,8 @@
 mod support;
 
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
@@ -9,8 +11,8 @@ use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
 use crate::support::{
-    TestDir, TestHttpServer, install_fake_launchctl, install_fake_node_and_npm, ocm_env, run_ocm,
-    stderr, stdout, write_executable_script,
+    TestDir, TestHttpServer, install_fake_launchctl, install_fake_node_and_npm, ocm_env,
+    path_string, run_ocm, stderr, stdout, write_executable_script,
 };
 
 fn append_tar_file(
@@ -58,13 +60,137 @@ fn sha512_integrity(body: &[u8]) -> String {
     )
 }
 
+fn init_openclaw_repo(root: &TestDir) -> PathBuf {
+    let repo = root.child("repo/openclaw");
+    fs::create_dir_all(repo.join("scripts")).unwrap();
+    fs::write(
+        repo.join("package.json"),
+        r#"{"name":"openclaw","version":"2026.4.20-local"}"#,
+    )
+    .unwrap();
+    fs::write(repo.join("scripts/run-node.mjs"), "console.log('run');\n").unwrap();
+    fs::write(
+        repo.join("scripts/watch-node.mjs"),
+        "console.log('watch');\n",
+    )
+    .unwrap();
+
+    let init = Command::new("git").arg("init").arg(&repo).output().unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let email = Command::new("git")
+        .args([
+            "-C",
+            &path_string(&repo),
+            "config",
+            "user.email",
+            "tests@example.com",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        email.status.success(),
+        "{}",
+        String::from_utf8_lossy(&email.stderr)
+    );
+    let name = Command::new("git")
+        .args([
+            "-C",
+            &path_string(&repo),
+            "config",
+            "user.name",
+            "OCM Tests",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        name.status.success(),
+        "{}",
+        String::from_utf8_lossy(&name.stderr)
+    );
+    let add = Command::new("git")
+        .args(["-C", &path_string(&repo), "add", "."])
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let commit = Command::new("git")
+        .args(["-C", &path_string(&repo), "commit", "-m", "init"])
+        .output()
+        .unwrap();
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+
+    repo
+}
+
+fn prepend_fake_bin(env: &mut std::collections::BTreeMap<String, String>, bin_dir: &Path) {
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let combined_path = if existing_path.is_empty() {
+        path_string(bin_dir)
+    } else {
+        format!("{}:{existing_path}", path_string(bin_dir))
+    };
+    env.insert("PATH".to_string(), combined_path);
+}
+
+fn install_fake_simulation_pnpm(
+    root: &TestDir,
+    env: &mut std::collections::BTreeMap<String, String>,
+) {
+    let bin_dir = root.child("fake-sim-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let pnpm = r#"#!/bin/sh
+case "$1" in
+  install)
+    mkdir -p node_modules/.pnpm node_modules/.bin
+    touch node_modules/.bin/tsx
+    exit 0
+    ;;
+  openclaw)
+    shift
+    case "$1" in
+      --version)
+        echo "2026.4.20-local"
+        exit 0
+        ;;
+      doctor)
+        echo "Error: Cannot find module 'grammy'" >&2
+        exit 1
+        ;;
+      *)
+        echo "fake local openclaw $*"
+        exit 0
+        ;;
+    esac
+    ;;
+esac
+echo "unexpected pnpm $*" >&2
+exit 1
+"#;
+    write_executable_script(&bin_dir.join("pnpm"), pnpm);
+    prepend_fake_bin(env, &bin_dir);
+}
+
 #[test]
 fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     let root = TestDir::new("upgrade-tracked-runtime");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
 
-    let old_tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let old_tarball = openclaw_package_tarball(
+        "#!/usr/bin/env node\nconsole.log('2026.3.24');\n",
+        "2026.3.24",
+    );
     let old_integrity = sha512_integrity(&old_tarball);
     let old_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.24.tgz",
@@ -73,7 +199,10 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
         10,
     );
 
-    let new_tarball = openclaw_package_tarball("console.log('2026.3.25');\n", "2026.3.25");
+    let new_tarball = openclaw_package_tarball(
+        "#!/usr/bin/env node\nconsole.log('2026.3.25');\n",
+        "2026.3.25",
+    );
     let new_integrity = sha512_integrity(&new_tarball);
     let new_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.25.tgz",
@@ -145,7 +274,10 @@ fn upgrade_dry_run_reports_without_changing_runtime_or_creating_snapshot() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
 
-    let old_tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let old_tarball = openclaw_package_tarball(
+        "#!/usr/bin/env node\nconsole.log('2026.3.24');\n",
+        "2026.3.24",
+    );
     let old_integrity = sha512_integrity(&old_tarball);
     let old_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.24.tgz",
@@ -187,6 +319,155 @@ fn upgrade_dry_run_reports_without_changing_runtime_or_creating_snapshot() {
     assert!(snapshots.status.success(), "{}", stderr(&snapshots));
     let snapshot_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
     assert_eq!(snapshot_json.as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() {
+    let root = TestDir::new("upgrade-simulate-version");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let old_integrity = sha512_integrity(&old_tarball);
+    let old_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &old_tarball,
+        10,
+    );
+    let new_tarball = openclaw_package_tarball(
+        "#!/usr/bin/env node\nconsole.log('2026.3.25');\n",
+        "2026.3.25",
+    );
+    let new_integrity = sha512_integrity(&new_tarball);
+    let new_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.25.tgz",
+        "application/octet-stream",
+        &new_tarball,
+        10,
+    );
+
+    let initial_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity
+    );
+    let updated_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.25\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25\":{{\"version\":\"2026.3.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\",\"2026.3.25\":\"2026-03-26T09:00:00.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity,
+        new_tarball_server.url(),
+        new_integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![
+            initial_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+        ],
+    );
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-service"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let simulate = run_ocm(
+        &cwd,
+        &env,
+        &["upgrade", "simulate", "demo", "--to", "2026.3.25", "--json"],
+    );
+    assert!(
+        simulate.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        stdout(&simulate),
+        stderr(&simulate)
+    );
+    let json: Value = serde_json::from_str(&stdout(&simulate)).unwrap();
+    assert_eq!(json["sourceEnv"], "demo");
+    assert_eq!(json["outcome"], "passed");
+    assert_eq!(json["toBindingKind"], "runtime");
+    assert_eq!(json["toBindingName"], "2026.3.25");
+    let sim_name = json["simulationEnv"].as_str().unwrap();
+    assert_ne!(sim_name, "demo");
+
+    let source = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(source.status.success(), "{}", stderr(&source));
+    let source_json: Value = serde_json::from_str(&stdout(&source)).unwrap();
+    assert_eq!(source_json["defaultRuntime"], "stable");
+
+    let simulation = run_ocm(&cwd, &env, &["env", "show", sim_name, "--json"]);
+    assert!(simulation.status.success(), "{}", stderr(&simulation));
+    let simulation_json: Value = serde_json::from_str(&stdout(&simulation)).unwrap();
+    assert_eq!(simulation_json["defaultRuntime"], "2026.3.25");
+    assert_eq!(simulation_json["serviceEnabled"], false);
+    assert_eq!(simulation_json["serviceRunning"], false);
+}
+
+#[test]
+fn upgrade_simulate_reports_local_repo_doctor_failures() {
+    let root = TestDir::new("upgrade-simulate-local-repo");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let repo = init_openclaw_repo(&root);
+
+    let tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+        10,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 1);
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_simulation_pnpm(&root, &mut env);
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-service"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let simulate = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "upgrade",
+            "simulate",
+            "demo",
+            "--to",
+            &path_string(&repo),
+            "--raw",
+        ],
+    );
+    assert!(!simulate.status.success(), "{}", stdout(&simulate));
+    let output = stdout(&simulate);
+    assert!(output.contains("outcome=failed"), "{output}");
+    assert!(output.contains("check=openclaw doctor"), "{output}");
+    assert!(output.contains("Cannot find module 'grammy'"), "{output}");
+
+    let source = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(source.status.success(), "{}", stderr(&source));
+    let source_json: Value = serde_json::from_str(&stdout(&source)).unwrap();
+    assert_eq!(source_json["defaultRuntime"], "stable");
+    assert!(source_json["devRepoRoot"].is_null());
 }
 
 #[test]
