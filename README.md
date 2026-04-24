@@ -122,11 +122,17 @@ This is the shortest path for most people.
 ocm upgrade mira
 ocm upgrade --all
 ocm upgrade mira --dry-run
+ocm upgrade simulate mira --to 2026.4.20
+ocm upgrade simulate mira --to ./openclaw
 ```
 
 `upgrade` creates a pre-upgrade snapshot before changing an environment. If a
 running service cannot be restarted or started after the change, OCM restores
 the snapshot and previous runtime by default.
+
+`upgrade simulate` clones the source env, switches only the clone to a published
+release or local OpenClaw repo, runs OpenClaw checks, and leaves the source env
+untouched.
 
 ### Use a local checkout or dev build
 

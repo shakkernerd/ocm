@@ -504,6 +504,9 @@ pub fn upgrade_help(cmd: &str) -> String {
         "Update OpenClaw for one environment or every environment with pre-upgrade snapshots and service rollback when needed.",
         vec![
             format!(
+                "{cmd} upgrade simulate <env> --to <version|channel|repo-path> [--raw] [--json]"
+            ),
+            format!(
                 "{cmd} upgrade <env> [--version <version> | --channel <channel>] [--dry-run] [--no-rollback] [--raw] [--json]"
             ),
             format!("{cmd} upgrade --all [--dry-run] [--raw] [--json]"),
@@ -526,16 +529,23 @@ pub fn upgrade_help(cmd: &str) -> String {
                 "--no-rollback",
                 "Keep failed changes instead of restoring the pre-upgrade snapshot",
             ),
+            (
+                "--to <target>",
+                "Simulate an upgrade to a published version, channel, or local OpenClaw repo",
+            ),
             ("--raw", "Force plain output instead of TTY cards or tables"),
             ("--json", "Print upgrade summaries as JSON"),
         ],
         vec![
+            format!("{cmd} upgrade simulate mira --to 2026.4.20"),
+            format!("{cmd} upgrade simulate mira --to ./openclaw"),
             format!("{cmd} upgrade mira"),
             format!("{cmd} upgrade mira --channel beta"),
             format!("{cmd} upgrade mira --version 2026.3.24"),
             format!("{cmd} upgrade --all"),
         ],
         &[
+            "Simulations clone the source env, switch only the clone, run OpenClaw checks, and leave the source env untouched.",
             "Channel-tracked runtimes move forward automatically.",
             "Upgrades create a pre-upgrade snapshot before changing env state.",
             "If service restart/start fails, ocm restores the snapshot and previous runtime unless --no-rollback is set.",

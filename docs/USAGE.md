@@ -113,13 +113,17 @@ ocm service status mira
 ocm upgrade mira
 ocm upgrade --all
 ocm upgrade mira --dry-run
+ocm upgrade simulate mira --to 2026.4.20
+ocm upgrade simulate mira --to ./openclaw
 ```
 
 Use this when a newer OpenClaw release is available and you want your environments to move forward without manually updating runtimes and restarting services.
+Use `upgrade simulate` when you want to test what would happen against a published release or local OpenClaw repo before touching the real env.
 
 `upgrade` is env-first:
 
 - channel-tracked runtimes move forward
+- simulations clone the source env, switch only the clone, and run OpenClaw checks
 - a pre-upgrade snapshot is created before env state changes
 - if service reconciliation fails, OCM restores the snapshot and previous runtime unless `--no-rollback` is set
 - pinned runtimes stay pinned unless you pass `--version` or `--channel`
