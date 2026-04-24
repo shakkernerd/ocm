@@ -188,7 +188,7 @@ pub fn upgrade_batch(
 pub fn upgrade_simulation(
     summary: &UpgradeSimulationSummary,
     profile: RenderProfile,
-    command_example: &str,
+    _command_example: &str,
 ) -> Vec<String> {
     if !profile.pretty {
         return upgrade_simulation_raw(summary);
@@ -205,7 +205,7 @@ pub fn upgrade_simulation(
         &[
             KeyValueRow::accent("Source env", &summary.source_env),
             KeyValueRow::plain("Scenario", &summary.scenario),
-            KeyValueRow::plain("Simulation env", &summary.simulation_env),
+            KeyValueRow::plain("Temp env", simulation_temp_label(summary)),
             KeyValueRow::plain(
                 "From",
                 format!(
@@ -222,6 +222,11 @@ pub fn upgrade_simulation(
                 &summary.outcome,
                 simulation_tone(&summary.outcome),
             ),
+            KeyValueRow::new(
+                "Cleanup",
+                &summary.cleanup,
+                simulation_cleanup_tone(&summary.cleanup),
+            ),
         ],
         profile.color,
     ));
@@ -229,6 +234,7 @@ pub fn upgrade_simulation(
     let rows = summary
         .checks
         .iter()
+        .filter(|check| check.name != "clone env")
         .map(|check| {
             vec![
                 Cell::plain(check.name.clone()),
@@ -240,7 +246,17 @@ pub fn upgrade_simulation(
                 check
                     .note
                     .as_deref()
-                    .map(Cell::muted)
+                    .map(|note| {
+                        Cell::new(
+                            note,
+                            crate::infra::terminal::Align::Left,
+                            if check.status == "failed" {
+                                Tone::Danger
+                            } else {
+                                Tone::Muted
+                            },
+                        )
+                    })
                     .unwrap_or_else(|| Cell::muted("—")),
             ]
         })
@@ -252,18 +268,6 @@ pub fn upgrade_simulation(
         profile.color,
     ));
 
-    lines.push(String::new());
-    lines.extend(render_key_value_card(
-        "Next",
-        &[
-            KeyValueRow::plain(
-                "Inspect",
-                format!("{command_example} env show {}", summary.simulation_env),
-            ),
-            KeyValueRow::plain("Cleanup", &summary.cleanup_command),
-        ],
-        profile.color,
-    ));
     if let Some(note) = summary.note.as_deref() {
         lines.push(paint(note, Tone::Muted, profile.color));
     }
@@ -274,7 +278,7 @@ pub fn upgrade_simulation(
 pub fn upgrade_simulation_batch(
     summary: &UpgradeSimulationBatchSummary,
     profile: RenderProfile,
-    command_example: &str,
+    _command_example: &str,
 ) -> Vec<String> {
     if !profile.pretty {
         return upgrade_simulation_batch_raw(summary);
@@ -317,19 +321,23 @@ pub fn upgrade_simulation_batch(
                 .unwrap_or("—");
             vec![
                 Cell::plain(result.scenario.clone()),
-                Cell::plain(result.simulation_env.clone()),
                 Cell::new(
                     result.outcome.clone(),
                     crate::infra::terminal::Align::Left,
                     simulation_tone(&result.outcome),
                 ),
-                Cell::muted(failed_check),
+                Cell::new(
+                    result.cleanup.clone(),
+                    crate::infra::terminal::Align::Left,
+                    simulation_cleanup_tone(&result.cleanup),
+                ),
+                Cell::plain(failed_check),
             ]
         })
         .collect::<Vec<_>>();
     lines.push(String::new());
     lines.extend(render_table(
-        &["Scenario", "Simulation env", "Result", "Failed check"],
+        &["Scenario", "Result", "Cleanup", "Failed check"],
         &rows,
         profile.color,
     ));
@@ -365,22 +373,6 @@ pub fn upgrade_simulation_batch(
             profile.color,
         ));
     }
-
-    lines.push(String::new());
-    lines.extend(render_key_value_card(
-        "Next",
-        &[
-            KeyValueRow::plain(
-                "Inspect",
-                format!("{command_example} env show <simulation-env>"),
-            ),
-            KeyValueRow::plain(
-                "Cleanup",
-                format!("{command_example} env destroy <simulation-env> --yes"),
-            ),
-        ],
-        profile.color,
-    ));
 
     lines
 }
@@ -434,7 +426,7 @@ fn upgrade_batch_raw(summary: &UpgradeBatchSummary) -> Vec<String> {
 
 fn upgrade_simulation_raw(summary: &UpgradeSimulationSummary) -> Vec<String> {
     let mut lines = vec![format!(
-        "scenario={}  source={}  simulation={}  from={}:{}  to={}:{}  outcome={}  target={}",
+        "scenario={}  source={}  simulation={}  from={}:{}  to={}:{}  outcome={}  cleanup={}  target={}",
         summary.scenario,
         summary.source_env,
         summary.simulation_env,
@@ -443,6 +435,7 @@ fn upgrade_simulation_raw(summary: &UpgradeSimulationSummary) -> Vec<String> {
         summary.to_binding_kind,
         summary.to_binding_name,
         summary.outcome,
+        summary.cleanup,
         summary.to
     )];
     for check in &summary.checks {
@@ -452,7 +445,9 @@ fn upgrade_simulation_raw(summary: &UpgradeSimulationSummary) -> Vec<String> {
         }
         lines.push(line);
     }
-    lines.push(format!("cleanup={}", summary.cleanup_command));
+    if summary.cleanup != "cleaned" {
+        lines.push(format!("cleanup={}", summary.cleanup_command));
+    }
     if let Some(note) = summary.note.as_deref() {
         lines.push(format!("note={note}"));
     }
@@ -509,6 +504,24 @@ fn simulation_tone(value: &str) -> Tone {
     }
 }
 
+fn simulation_cleanup_tone(value: &str) -> Tone {
+    match value {
+        "cleaned" => Tone::Success,
+        "kept" => Tone::Warning,
+        "failed" => Tone::Danger,
+        _ => Tone::Muted,
+    }
+}
+
+fn simulation_temp_label(summary: &UpgradeSimulationSummary) -> String {
+    match summary.cleanup.as_str() {
+        "cleaned" => "cleaned".to_string(),
+        "kept" => summary.simulation_env.clone(),
+        "failed" => format!("cleanup failed for {}", summary.simulation_env),
+        _ => summary.simulation_env.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,6 +551,7 @@ mod tests {
                     note: Some("release 2026.4.23 was not found".to_string()),
                 }],
                 cleanup_command: "./bin/ocm env destroy demo-current-sim-1 --yes".to_string(),
+                cleanup: "cleaned".to_string(),
                 note: None,
             }],
         };
@@ -547,6 +561,8 @@ mod tests {
 
         assert!(output.contains("Failures"), "{output}");
         assert!(output.contains("prepare target"), "{output}");
+        assert!(output.contains("cleaned"), "{output}");
+        assert!(!output.contains("Next"), "{output}");
         assert!(
             output.contains("release 2026.4.23 was not found"),
             "{output}"

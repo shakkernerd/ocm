@@ -115,6 +115,7 @@ ocm upgrade --all
 ocm upgrade mira --dry-run
 ocm upgrade simulate mira --to 2026.4.20
 ocm upgrade simulate mira --to 2026.4.20 --scenario all
+ocm upgrade simulate mira --to beta --scenario all
 ocm upgrade simulate mira --to ./openclaw
 ```
 
@@ -125,6 +126,8 @@ Use `upgrade simulate` when you want to test what would happen against a publish
 
 - channel-tracked runtimes move forward
 - simulations clone the source env, run OpenClaw's update dry-run plan for published targets, validate local repo builds for repo targets, then run update-mode doctor, plugin update dry-run, and gateway status checks
+- simulation envs are cleaned up automatically; use `--keep-simulations` only when you need to inspect retained debug envs
+- missing published targets fail before any simulation env is created
 - `--scenario all` runs built-in current, clean minimum, and Telegram-configured env shapes as separate simulation clones
 - a pre-upgrade snapshot is created before env state changes
 - if service reconciliation fails, OCM restores the snapshot and previous runtime unless `--no-rollback` is set

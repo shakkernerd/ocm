@@ -124,6 +124,7 @@ ocm upgrade --all
 ocm upgrade mira --dry-run
 ocm upgrade simulate mira --to 2026.4.20
 ocm upgrade simulate mira --to 2026.4.20 --scenario all
+ocm upgrade simulate mira --to beta --scenario all
 ocm upgrade simulate mira --to ./openclaw
 ```
 
@@ -131,13 +132,15 @@ ocm upgrade simulate mira --to ./openclaw
 running service cannot be restarted or started after the change, OCM restores
 the snapshot and previous runtime by default.
 
-`upgrade simulate` clones the source env and leaves the real env untouched. For
-published targets it first runs OpenClaw's own `update --dry-run --json` plan
-against the clone, then switches the clone and runs update-mode doctor, plugin
-update dry-run, and gateway status checks. For local repos it validates the
-checkout with dependency/build checks before running the same post-update
-checks. Use `--scenario all` to test the current env config plus built-in clean
-minimum and Telegram-configured env shapes.
+`upgrade simulate` clones the source env, leaves the real env untouched, and
+cleans temporary simulation envs when the run finishes. For published targets it
+first validates that the target exists, then runs OpenClaw's own
+`update --dry-run --json` plan against the clone, switches the clone, and runs
+update-mode doctor, plugin update dry-run, and gateway status checks. For local
+repos it validates the checkout with dependency/build checks before running the
+same post-update checks. Use `--scenario all` to test the current env config
+plus built-in clean minimum and Telegram-configured env shapes. Use
+`--keep-simulations` only when you need retained simulation envs for debugging.
 
 ### Use a local checkout or dev build
 

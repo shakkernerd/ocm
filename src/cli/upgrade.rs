@@ -77,6 +77,7 @@ pub(crate) struct UpgradeSimulationSummary {
     pub outcome: String,
     pub checks: Vec<UpgradeSimulationCheck>,
     pub cleanup_command: String,
+    pub cleanup: String,
     pub note: Option<String>,
 }
 
@@ -120,6 +121,11 @@ enum UpgradeSimulationScenario {
 struct UpgradeOptions {
     dry_run: bool,
     rollback_enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UpgradeSimulationOptions {
+    keep_envs: bool,
 }
 
 impl UpgradeTarget {
@@ -280,6 +286,11 @@ impl Cli {
     }
 
     fn upgrade_simulate(&self, args: Vec<String>) -> Result<Vec<UpgradeSimulationSummary>, String> {
+        let (args, keep_simulations) = Self::consume_flag(args, "--keep-simulations");
+        let (args, keep_simulation) = Self::consume_flag(args, "--keep-simulation");
+        let options = UpgradeSimulationOptions {
+            keep_envs: keep_simulations || keep_simulation,
+        };
         let (args, to) = Self::consume_option(args, "--to")?;
         let to = Self::require_option_value(to, "--to")?.ok_or_else(|| {
             "upgrade simulate requires --to <version|channel|repo-path>".to_string()
@@ -297,7 +308,7 @@ impl Cli {
         self.validate_simulation_target(&target)?;
         scenarios
             .into_iter()
-            .map(|scenario| self.upgrade_simulate_one(source_name, &target, scenario))
+            .map(|scenario| self.upgrade_simulate_one(source_name, &target, scenario, options))
             .collect()
     }
 
@@ -306,6 +317,7 @@ impl Cli {
         source_name: &str,
         target: &UpgradeSimulationTarget,
         scenario: UpgradeSimulationScenario,
+        options: UpgradeSimulationOptions,
     ) -> Result<UpgradeSimulationSummary, String> {
         let source = self.environment_service().get(source_name)?;
         let (from_binding_kind, from_binding_name) = source_binding(&source);
@@ -333,7 +345,7 @@ impl Cli {
         let scenario_failed = scenario_check.status == "failed";
         checks.push(scenario_check);
         if scenario_failed {
-            return Ok(self.build_simulation_summary(
+            let summary = self.build_simulation_summary(
                 source_name,
                 &cloned.name,
                 from_binding_kind,
@@ -343,7 +355,8 @@ impl Cli {
                 scenario,
                 target.display(),
                 checks,
-            ));
+            );
+            return self.finish_simulation_summary(summary, options);
         }
         checks.push(self.run_update_plan_check(&cloned.name, &target));
 
@@ -355,7 +368,7 @@ impl Cli {
             }
             Err(error) => {
                 checks.push(UpgradeSimulationCheck::failed("prepare target", error));
-                return Ok(self.build_simulation_summary(
+                let summary = self.build_simulation_summary(
                     source_name,
                     &cloned.name,
                     from_binding_kind,
@@ -365,7 +378,8 @@ impl Cli {
                     scenario,
                     target.display(),
                     checks,
-                ));
+                );
+                return self.finish_simulation_summary(summary, options);
             }
         }
 
@@ -396,7 +410,7 @@ impl Cli {
             &["gateway", "status", "--deep", "--json"],
         ));
 
-        Ok(self.build_simulation_summary(
+        let summary = self.build_simulation_summary(
             source_name,
             &cloned.name,
             from_binding_kind,
@@ -406,7 +420,8 @@ impl Cli {
             scenario,
             target.display(),
             checks,
-        ))
+        );
+        self.finish_simulation_summary(summary, options)
     }
 
     fn apply_simulation_scenario(
@@ -755,19 +770,41 @@ impl Cli {
                 self.command_example(),
                 simulation_name
             ),
-            note: if failed {
-                Some(
-                    "source env was not changed; inspect the simulation env before destroying it"
-                        .to_string(),
-                )
-            } else {
-                Some(
-                    "source env was not changed; destroy the simulation env when you are done"
-                        .to_string(),
-                )
-            },
+            cleanup: "pending".to_string(),
+            note: None,
             checks,
         }
+    }
+
+    fn finish_simulation_summary(
+        &self,
+        mut summary: UpgradeSimulationSummary,
+        options: UpgradeSimulationOptions,
+    ) -> Result<UpgradeSimulationSummary, String> {
+        if options.keep_envs {
+            summary.cleanup = "kept".to_string();
+            summary.note =
+                Some("simulation env retained because --keep-simulations was set".to_string());
+            return Ok(summary);
+        }
+
+        match self
+            .environment_service()
+            .remove(&summary.simulation_env, true)
+        {
+            Ok(_) => {
+                summary.cleanup = "cleaned".to_string();
+            }
+            Err(error) => {
+                summary.cleanup = "failed".to_string();
+                summary.checks.push(UpgradeSimulationCheck::failed(
+                    "cleanup simulation env",
+                    error,
+                ));
+                summary.outcome = "failed".to_string();
+            }
+        }
+        Ok(summary)
     }
 
     fn upgrade_env(

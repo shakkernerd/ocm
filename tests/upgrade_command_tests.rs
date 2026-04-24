@@ -507,6 +507,7 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
     assert_eq!(json["outcome"], "passed");
     assert_eq!(json["toBindingKind"], "runtime");
     assert_eq!(json["toBindingName"], "2026.3.25");
+    assert_eq!(json["cleanup"], "cleaned");
     let sim_name = json["simulationEnv"].as_str().unwrap();
     assert_ne!(sim_name, "demo");
 
@@ -516,11 +517,12 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
     assert_eq!(source_json["defaultRuntime"], "stable");
 
     let simulation = run_ocm(&cwd, &env, &["env", "show", sim_name, "--json"]);
-    assert!(simulation.status.success(), "{}", stderr(&simulation));
-    let simulation_json: Value = serde_json::from_str(&stdout(&simulation)).unwrap();
-    assert_eq!(simulation_json["defaultRuntime"], "2026.3.25");
-    assert_eq!(simulation_json["serviceEnabled"], false);
-    assert_eq!(simulation_json["serviceRunning"], false);
+    assert!(!simulation.status.success(), "{}", stdout(&simulation));
+    assert!(
+        stderr(&simulation).contains("does not exist"),
+        "{}",
+        stderr(&simulation)
+    );
 }
 
 #[test]
@@ -661,7 +663,15 @@ fn upgrade_simulate_runs_openclaw_update_contract_checks_for_published_targets()
     let simulate = run_ocm(
         &cwd,
         &env,
-        &["upgrade", "simulate", "demo", "--to", "2026.3.25", "--json"],
+        &[
+            "upgrade",
+            "simulate",
+            "demo",
+            "--to",
+            "2026.3.25",
+            "--keep-simulations",
+            "--json",
+        ],
     );
     assert!(
         simulate.status.success(),
@@ -671,6 +681,7 @@ fn upgrade_simulate_runs_openclaw_update_contract_checks_for_published_targets()
     );
     let json: Value = serde_json::from_str(&stdout(&simulate)).unwrap();
     assert_eq!(json["outcome"], "passed");
+    assert_eq!(json["cleanup"], "kept");
     let sim_name = json["simulationEnv"].as_str().unwrap();
     let simulation = run_ocm(&cwd, &env, &["env", "show", sim_name, "--json"]);
     assert!(simulation.status.success(), "{}", stderr(&simulation));
@@ -810,6 +821,9 @@ fn upgrade_simulate_all_scenarios_reports_plugin_specific_failures() {
     assert_eq!(current["outcome"], "passed");
     assert_eq!(minimum["outcome"], "passed");
     assert_eq!(telegram["outcome"], "failed");
+    assert_eq!(current["cleanup"], "cleaned");
+    assert_eq!(minimum["cleanup"], "cleaned");
+    assert_eq!(telegram["cleanup"], "cleaned");
     assert!(
         telegram["checks"]
             .as_array()
@@ -829,6 +843,13 @@ fn upgrade_simulate_all_scenarios_reports_plugin_specific_failures() {
     let source_json: Value = serde_json::from_str(&stdout(&source)).unwrap();
     assert_eq!(source_json["defaultRuntime"], "2026.4.15");
     assert_eq!(source_json["serviceEnabled"], false);
+
+    let env_list = run_ocm(&cwd, &env, &["env", "list", "--json"]);
+    assert!(env_list.status.success(), "{}", stderr(&env_list));
+    let envs: Value = serde_json::from_str(&stdout(&env_list)).unwrap();
+    let envs = envs.as_array().unwrap();
+    assert_eq!(envs.len(), 1, "{envs:#?}");
+    assert_eq!(envs[0]["name"], "scenario-source");
 }
 
 #[test]
