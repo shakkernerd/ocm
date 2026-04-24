@@ -346,7 +346,11 @@ pub fn upgrade_simulation_batch(
                     vec![
                         Cell::plain(result.scenario.clone()),
                         Cell::plain(check.name.clone()),
-                        Cell::muted(check.note.as_deref().unwrap_or("no details reported")),
+                        Cell::new(
+                            check.note.as_deref().unwrap_or("no details reported"),
+                            crate::infra::terminal::Align::Left,
+                            Tone::Danger,
+                        ),
                     ]
                 })
         })
