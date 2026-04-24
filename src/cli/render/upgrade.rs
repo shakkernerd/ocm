@@ -41,6 +41,15 @@ pub fn upgrade_env(
                 summary.service_action.as_deref().unwrap_or("unchanged"),
                 service_tone(summary.service_action.as_deref()),
             ),
+            KeyValueRow::plain(
+                "Snapshot",
+                summary.snapshot_id.as_deref().unwrap_or("not created"),
+            ),
+            KeyValueRow::new(
+                "Rollback",
+                summary.rollback.as_deref().unwrap_or("not needed"),
+                rollback_tone(summary.rollback.as_deref()),
+            ),
         ],
         profile.color,
     ));
@@ -187,6 +196,12 @@ fn upgrade_env_raw(summary: &UpgradeEnvSummary) -> Vec<String> {
     if let Some(action) = summary.service_action.as_deref() {
         bits.push(format!("service={action}"));
     }
+    if let Some(snapshot_id) = summary.snapshot_id.as_deref() {
+        bits.push(format!("snapshot={snapshot_id}"));
+    }
+    if let Some(rollback) = summary.rollback.as_deref() {
+        bits.push(format!("rollback={rollback}"));
+    }
     if let Some(version) = summary.runtime_release_version.as_deref() {
         bits.push(format!("version={version}"));
     }
@@ -218,9 +233,10 @@ fn upgrade_batch_raw(summary: &UpgradeBatchSummary) -> Vec<String> {
 fn outcome_tone(outcome: &str) -> Tone {
     match outcome {
         "updated" | "switched" => Tone::Success,
+        "would-update" | "would-switch" => Tone::Accent,
         "up-to-date" => Tone::Accent,
         "pinned" | "local-command" | "manual-runtime" => Tone::Warning,
-        "failed" => Tone::Danger,
+        "rolled-back" | "rollback-failed" | "failed" => Tone::Danger,
         _ => Tone::Plain,
     }
 }
@@ -228,7 +244,18 @@ fn outcome_tone(outcome: &str) -> Tone {
 fn service_tone(action: Option<&str>) -> Tone {
     match action {
         Some("restarted") | Some("reloaded") => Tone::Success,
+        Some("would-restart") | Some("would-start") => Tone::Accent,
         Some(_) => Tone::Warning,
+        None => Tone::Muted,
+    }
+}
+
+fn rollback_tone(action: Option<&str>) -> Tone {
+    match action {
+        Some("restored") => Tone::Warning,
+        Some("failed") => Tone::Danger,
+        Some("disabled") => Tone::Warning,
+        Some(_) => Tone::Plain,
         None => Tone::Muted,
     }
 }

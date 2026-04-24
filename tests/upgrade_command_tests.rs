@@ -10,7 +10,7 @@ use tar::{Builder, Header};
 
 use crate::support::{
     TestDir, TestHttpServer, install_fake_launchctl, install_fake_node_and_npm, ocm_env, run_ocm,
-    stderr, stdout,
+    stderr, stdout, write_executable_script,
 };
 
 fn append_tar_file(
@@ -124,12 +124,231 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     let output = stdout(&upgrade);
     assert!(output.contains("outcome=updated"), "{output}");
     assert!(output.contains("service=started"), "{output}");
+    assert!(output.contains("snapshot="), "{output}");
     assert!(output.contains("version=2026.3.25"), "{output}");
 
     let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
     assert!(runtime.status.success(), "{}", stderr(&runtime));
     let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
     assert_eq!(runtime_json["releaseVersion"], "2026.3.25");
+
+    let snapshots = run_ocm(&cwd, &env, &["env", "snapshot", "list", "demo", "--json"]);
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    let snapshot_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
+    assert_eq!(snapshot_json.as_array().unwrap().len(), 1);
+    assert_eq!(snapshot_json[0]["label"], "pre-upgrade");
+}
+
+#[test]
+fn upgrade_dry_run_reports_without_changing_runtime_or_creating_snapshot() {
+    let root = TestDir::new("upgrade-dry-run");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let old_integrity = sha512_integrity(&old_tarball);
+    let old_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &old_tarball,
+        10,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 1);
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-service"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let dry_run = run_ocm(&cwd, &env, &["upgrade", "demo", "--dry-run"]);
+    assert!(dry_run.status.success(), "{}", stderr(&dry_run));
+    let output = stdout(&dry_run);
+    assert!(output.contains("outcome=would-update"), "{output}");
+    assert!(output.contains("dry run"), "{output}");
+    assert!(!output.contains("snapshot="), "{output}");
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
+    assert_eq!(runtime_json["releaseVersion"], "2026.3.24");
+
+    let snapshots = run_ocm(&cwd, &env, &["env", "snapshot", "list", "demo", "--json"]);
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    let snapshot_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
+    assert_eq!(snapshot_json.as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn upgrade_rolls_back_runtime_when_service_restart_fails() {
+    let root = TestDir::new("upgrade-service-rollback");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let old_integrity = sha512_integrity(&old_tarball);
+    let old_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &old_tarball,
+        10,
+    );
+
+    let new_tarball = openclaw_package_tarball("console.log('2026.3.25');\n", "2026.3.25");
+    let new_integrity = sha512_integrity(&new_tarball);
+    let new_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.25.tgz",
+        "application/octet-stream",
+        &new_tarball,
+        10,
+    );
+
+    let initial_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity
+    );
+    let updated_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.25\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25\":{{\"version\":\"2026.3.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\",\"2026.3.25\":\"2026-03-26T09:00:00.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity,
+        new_tarball_server.url(),
+        new_integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![
+            initial_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+        ],
+    );
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    install_fake_launchctl(&root, &mut env);
+
+    let start = run_ocm(&cwd, &env, &["start", "demo"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let launchctl_bin = env.get("OCM_INTERNAL_LAUNCHCTL_BIN").unwrap();
+    write_executable_script(
+        std::path::Path::new(launchctl_bin),
+        "#!/bin/sh\ncase \"$1\" in\n  managername)\n    exit 0\n    ;;\n  print)\n    printf 'state = waiting\\n'\n    exit 0\n    ;;\n  bootout|unload)\n    exit 0\n    ;;\n  bootstrap)\n    echo 'forced bootstrap failure' >&2\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
+    );
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--version", "2026.3.25"]);
+    assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("outcome=rolled-back"), "{output}");
+    assert!(output.contains("rollback=restored"), "{output}");
+    assert!(output.contains("snapshot="), "{output}");
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
+    assert_eq!(runtime_json["releaseVersion"], "2026.3.24");
+
+    let target_runtime = run_ocm(&cwd, &env, &["runtime", "show", "2026.3.25", "--json"]);
+    assert!(
+        !target_runtime.status.success(),
+        "{}",
+        stdout(&target_runtime)
+    );
+    assert!(
+        stderr(&target_runtime).contains("runtime \"2026.3.25\" does not exist"),
+        "{}",
+        stderr(&target_runtime)
+    );
+}
+
+#[test]
+fn upgrade_restores_runtime_when_runtime_preparation_fails() {
+    let root = TestDir::new("upgrade-runtime-prepare-rollback");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let old_integrity = sha512_integrity(&old_tarball);
+    let old_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &old_tarball,
+        10,
+    );
+
+    let new_tarball = openclaw_package_tarball("console.log('2026.3.25');\n", "2026.3.25");
+    let new_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.25.tgz",
+        "application/octet-stream",
+        &new_tarball,
+        10,
+    );
+
+    let initial_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity
+    );
+    let updated_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.25\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25\":{{\"version\":\"2026.3.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"sha512-not-valid\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\",\"2026.3.25\":\"2026-03-26T09:00:00.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity,
+        new_tarball_server.url(),
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![
+            initial_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+        ],
+    );
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-service"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
+    assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("outcome=rolled-back"), "{output}");
+    assert!(output.contains("rollback=restored"), "{output}");
+    assert!(
+        output.contains("runtime artifact integrity is invalid"),
+        "{output}"
+    );
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
+    assert_eq!(runtime_json["releaseVersion"], "2026.3.24");
 }
 
 #[test]
@@ -379,4 +598,55 @@ fn upgrade_all_updates_safe_envs_and_skips_local_or_pinned_ones() {
     assert_eq!(json["current"], 0);
     assert_eq!(json["skipped"], 2);
     assert_eq!(json["failed"], 0);
+}
+
+#[test]
+fn upgrade_all_json_exits_failed_when_any_env_fails() {
+    let root = TestDir::new("upgrade-all-json-failed");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let runtime_path = root.child("openclaw");
+    write_executable_script(&runtime_path, "#!/bin/sh\necho fake-openclaw\n");
+
+    let env = ocm_env(&root);
+    let add_runtime = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "add",
+            "missing-soon",
+            "--path",
+            &runtime_path.display().to_string(),
+        ],
+    );
+    assert!(add_runtime.status.success(), "{}", stderr(&add_runtime));
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "broken", "--runtime", "missing-soon"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let remove_runtime = run_ocm(&cwd, &env, &["runtime", "remove", "missing-soon"]);
+    assert!(
+        remove_runtime.status.success(),
+        "{}",
+        stderr(&remove_runtime)
+    );
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "--all", "--json"]);
+    assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
+    let json: Value = serde_json::from_str(&stdout(&upgrade)).unwrap();
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["failed"], 1);
+    assert_eq!(json["results"][0]["outcome"], "failed");
+    assert!(
+        json["results"][0]["note"]
+            .as_str()
+            .unwrap()
+            .contains("runtime \"missing-soon\" does not exist")
+    );
 }
