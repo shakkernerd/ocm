@@ -504,7 +504,7 @@ pub fn upgrade_help(cmd: &str) -> String {
         "Update OpenClaw for one environment or every environment with pre-upgrade snapshots and service rollback when needed.",
         vec![
             format!(
-                "{cmd} upgrade simulate <env> --to <version|channel|repo-path> [--raw] [--json]"
+                "{cmd} upgrade simulate <env> --to <version|channel|repo-path> [--scenario current|minimum|telegram|all] [--raw] [--json]"
             ),
             format!(
                 "{cmd} upgrade <env> [--version <version> | --channel <channel>] [--dry-run] [--no-rollback] [--raw] [--json]"
@@ -533,11 +533,16 @@ pub fn upgrade_help(cmd: &str) -> String {
                 "--to <target>",
                 "Simulate an upgrade to a published version, channel, or local OpenClaw repo",
             ),
+            (
+                "--scenario <name>",
+                "Seed the simulation clone with current, minimum, telegram, or all built-in scenarios",
+            ),
             ("--raw", "Force plain output instead of TTY cards or tables"),
             ("--json", "Print upgrade summaries as JSON"),
         ],
         vec![
             format!("{cmd} upgrade simulate mira --to 2026.4.20"),
+            format!("{cmd} upgrade simulate mira --to 2026.4.20 --scenario all"),
             format!("{cmd} upgrade simulate mira --to ./openclaw"),
             format!("{cmd} upgrade mira"),
             format!("{cmd} upgrade mira --channel beta"),
@@ -546,6 +551,7 @@ pub fn upgrade_help(cmd: &str) -> String {
         ],
         &[
             "Simulations clone the source env and leave the real env untouched.",
+            "Use --scenario all to test current, clean minimum, and Telegram-configured env shapes.",
             "Published-target simulations run OpenClaw's update dry-run plan before switching the clone.",
             "Local-repo simulations validate deps/build/UI build before post-update checks.",
             "Post-update checks run update-mode doctor, plugin update dry-run, and gateway status.",

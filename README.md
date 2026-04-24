@@ -123,6 +123,7 @@ ocm upgrade mira
 ocm upgrade --all
 ocm upgrade mira --dry-run
 ocm upgrade simulate mira --to 2026.4.20
+ocm upgrade simulate mira --to 2026.4.20 --scenario all
 ocm upgrade simulate mira --to ./openclaw
 ```
 
@@ -135,7 +136,8 @@ published targets it first runs OpenClaw's own `update --dry-run --json` plan
 against the clone, then switches the clone and runs update-mode doctor, plugin
 update dry-run, and gateway status checks. For local repos it validates the
 checkout with dependency/build checks before running the same post-update
-checks.
+checks. Use `--scenario all` to test the current env config plus built-in clean
+minimum and Telegram-configured env shapes.
 
 ### Use a local checkout or dev build
 
