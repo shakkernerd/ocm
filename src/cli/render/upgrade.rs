@@ -375,6 +375,7 @@ fn simulation_tone(value: &str) -> Tone {
     match value {
         "passed" => Tone::Success,
         "failed" => Tone::Danger,
+        "skipped" => Tone::Muted,
         _ => Tone::Plain,
     }
 }

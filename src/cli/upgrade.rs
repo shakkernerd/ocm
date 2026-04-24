@@ -280,6 +280,8 @@ impl Cli {
         let mut to_binding_kind = "unknown".to_string();
         let mut to_binding_name = "unknown".to_string();
 
+        checks.push(self.run_update_plan_check(&cloned.name, &target));
+
         match self.apply_simulation_target(&cloned.name, &target) {
             Ok((kind, name, note)) => {
                 to_binding_kind = kind;
@@ -301,8 +303,32 @@ impl Cli {
             }
         }
 
+        if matches!(target, UpgradeSimulationTarget::LocalRepo { .. }) {
+            checks.push(self.run_local_repo_script_check(&cloned.name, "pnpm build", "build"));
+            checks.push(self.run_local_repo_script_check(
+                &cloned.name,
+                "pnpm ui:build",
+                "ui:build",
+            ));
+        }
+
         checks.push(self.run_simulation_check(&cloned.name, "openclaw --version", &["--version"]));
-        checks.push(self.run_simulation_check(&cloned.name, "openclaw doctor", &["doctor"]));
+        checks.push(self.run_simulation_check_with_env(
+            &cloned.name,
+            "openclaw doctor",
+            &["doctor", "--non-interactive", "--fix"],
+            &[("OPENCLAW_UPDATE_IN_PROGRESS", "1")],
+        ));
+        checks.push(self.run_simulation_check(
+            &cloned.name,
+            "openclaw plugins update",
+            &["plugins", "update", "--all", "--dry-run"],
+        ));
+        checks.push(self.run_simulation_check(
+            &cloned.name,
+            "openclaw gateway status",
+            &["gateway", "status", "--deep", "--json"],
+        ));
 
         Ok(self.build_simulation_summary(
             source_name,
@@ -314,6 +340,21 @@ impl Cli {
             target.display(),
             checks,
         ))
+    }
+
+    fn run_update_plan_check(
+        &self,
+        simulation_name: &str,
+        target: &UpgradeSimulationTarget,
+    ) -> UpgradeSimulationCheck {
+        let Some(update_args) = target.update_plan_args() else {
+            return UpgradeSimulationCheck::skipped(
+                "openclaw update plan",
+                "local repo targets are validated through checkout build and post-update checks",
+            );
+        };
+        let refs = update_args.iter().map(String::as_str).collect::<Vec<_>>();
+        self.run_simulation_check(simulation_name, "openclaw update plan", &refs)
     }
 
     fn resolve_simulation_target(&self, to: &str) -> Result<UpgradeSimulationTarget, String> {
@@ -427,12 +468,22 @@ impl Cli {
         name: &str,
         args: &[&str],
     ) -> UpgradeSimulationCheck {
+        self.run_simulation_check_with_env(simulation_name, name, args, &[])
+    }
+
+    fn run_simulation_check_with_env(
+        &self,
+        simulation_name: &str,
+        name: &str,
+        args: &[&str],
+        extra_env: &[(&str, &str)],
+    ) -> UpgradeSimulationCheck {
         let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
         match self
             .environment_service()
             .resolve(simulation_name, None, None, &args)
         {
-            Ok(resolved) => match self.run_resolved_for_simulation(resolved) {
+            Ok(resolved) => match self.run_resolved_for_simulation(resolved, extra_env) {
                 Ok(output) if output.status.success() => {
                     UpgradeSimulationCheck::passed(name, output.first_line())
                 }
@@ -443,9 +494,55 @@ impl Cli {
         }
     }
 
+    fn run_local_repo_script_check(
+        &self,
+        simulation_name: &str,
+        name: &str,
+        script: &str,
+    ) -> UpgradeSimulationCheck {
+        match self.environment_service().get(simulation_name) {
+            Ok(env_meta) => {
+                let Some(dev) = env_meta.dev.as_ref() else {
+                    return UpgradeSimulationCheck::failed(
+                        name,
+                        format!(
+                            "environment \"{}\" is missing its dev binding",
+                            env_meta.name
+                        ),
+                    );
+                };
+                let mut command = Command::new("pnpm");
+                command
+                    .arg(script)
+                    .current_dir(&dev.worktree_root)
+                    .env_clear()
+                    .envs(build_openclaw_env(&env_meta, &self.env))
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                match command.output() {
+                    Ok(output) if output.status.success() => UpgradeSimulationCheck::passed(
+                        name,
+                        SimulationCommandOutput::from_output(output).first_line(),
+                    ),
+                    Ok(output) => UpgradeSimulationCheck::failed(
+                        name,
+                        SimulationCommandOutput::from_output(output).failure_summary(),
+                    ),
+                    Err(error) => UpgradeSimulationCheck::failed(
+                        name,
+                        format!("failed to run simulation check: {error}"),
+                    ),
+                }
+            }
+            Err(error) => UpgradeSimulationCheck::failed(name, error),
+        }
+    }
+
     fn run_resolved_for_simulation(
         &self,
         resolved: crate::env::ResolvedExecution,
+        extra_env: &[(&str, &str)],
     ) -> Result<SimulationCommandOutput, String> {
         let (mut command, env_meta) = match resolved {
             crate::env::ResolvedExecution::Launcher {
@@ -477,19 +574,19 @@ impl Cli {
                 (process, env)
             }
         };
+        let mut process_env = build_openclaw_env(&env_meta, &self.env);
+        for (key, value) in extra_env {
+            process_env.insert((*key).to_string(), (*value).to_string());
+        }
         let output = command
             .env_clear()
-            .envs(build_openclaw_env(&env_meta, &self.env))
+            .envs(process_env)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
             .map_err(|error| format!("failed to run simulation check: {error}"))?;
-        Ok(SimulationCommandOutput {
-            status: output.status,
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
+        Ok(SimulationCommandOutput::from_output(output))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1233,6 +1330,14 @@ struct SimulationCommandOutput {
 }
 
 impl SimulationCommandOutput {
+    fn from_output(output: std::process::Output) -> Self {
+        Self {
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+
     fn first_line(&self) -> String {
         summarize_command_text(&self.stdout, &self.stderr).unwrap_or_else(|| "ok".to_string())
     }
@@ -1256,6 +1361,14 @@ impl UpgradeSimulationCheck {
         }
     }
 
+    fn skipped(name: impl Into<String>, note: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            status: "skipped".to_string(),
+            note: Some(note.into()),
+        }
+    }
+
     fn failed(name: impl Into<String>, note: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -1269,6 +1382,29 @@ impl UpgradeSimulationTarget {
     fn display(&self) -> String {
         match self {
             Self::Official { display, .. } | Self::LocalRepo { display, .. } => display.clone(),
+        }
+    }
+
+    fn update_plan_args(&self) -> Option<Vec<String>> {
+        match self {
+            Self::Official { target, .. } => {
+                let mut args = vec![
+                    "update".to_string(),
+                    "--dry-run".to_string(),
+                    "--json".to_string(),
+                    "--no-restart".to_string(),
+                    "--yes".to_string(),
+                ];
+                if let Some(channel) = target.channel.as_deref() {
+                    args.push("--channel".to_string());
+                    args.push(channel.to_string());
+                } else if let Some(version) = target.version.as_deref() {
+                    args.push("--tag".to_string());
+                    args.push(version.to_string());
+                }
+                Some(args)
+            }
+            Self::LocalRepo { .. } => None,
         }
     }
 }
