@@ -557,7 +557,7 @@ pub fn upgrade_help(cmd: &str) -> String {
         &[
             "Simulations clone the source env, leave the real env untouched, and clean temporary envs and runtimes by default.",
             "Use --scenario all to test current, clean minimum, and Telegram-configured env shapes.",
-            "Use --keep-simulations only when you need to inspect retained simulation envs after the run.",
+            "Use --keep-simulations only when you need retained simulation artifacts after the run.",
             "Published-target simulations run OpenClaw's update dry-run plan before switching the clone.",
             "Local-repo simulations validate deps/build/UI build before post-update checks.",
             "Post-update checks run update-mode doctor, plugin update dry-run, and gateway status.",
