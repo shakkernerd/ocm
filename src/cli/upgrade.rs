@@ -327,7 +327,22 @@ impl Cli {
         let mut to_binding_kind = "unknown".to_string();
         let mut to_binding_name = "unknown".to_string();
 
-        checks.push(self.apply_simulation_scenario(&cloned.name, scenario));
+        let scenario_check = self.apply_simulation_scenario(&cloned.name, scenario);
+        let scenario_failed = scenario_check.status == "failed";
+        checks.push(scenario_check);
+        if scenario_failed {
+            return Ok(self.build_simulation_summary(
+                source_name,
+                &cloned.name,
+                from_binding_kind,
+                from_binding_name,
+                to_binding_kind,
+                to_binding_name,
+                scenario,
+                target.display(),
+                checks,
+            ));
+        }
         checks.push(self.run_update_plan_check(&cloned.name, &target));
 
         match self.apply_simulation_target(&cloned.name, target) {
