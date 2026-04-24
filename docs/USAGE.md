@@ -126,7 +126,7 @@ Use `upgrade simulate` when you want to test what would happen against a publish
 
 - channel-tracked runtimes move forward
 - simulations clone the source env, run OpenClaw's update dry-run plan for published targets, validate local repo builds for repo targets, then run update-mode doctor, plugin update dry-run, and gateway status checks
-- simulation envs are cleaned up automatically; use `--keep-simulations` only when you need to inspect retained debug envs
+- simulation envs and temporary runtimes are cleaned up automatically; use `--keep-simulations` only when you need retained debug artifacts
 - missing published targets fail before any simulation env is created
 - `--scenario all` runs built-in current, clean minimum, and Telegram-configured env shapes as separate simulation clones
 - a pre-upgrade snapshot is created before env state changes

@@ -539,7 +539,7 @@ pub fn upgrade_help(cmd: &str) -> String {
             ),
             (
                 "--keep-simulations",
-                "Keep simulation envs after the run for debugging; by default they are cleaned up",
+                "Keep simulation envs and temporary runtimes after the run for debugging",
             ),
             ("--raw", "Force plain output instead of TTY cards or tables"),
             ("--json", "Print upgrade summaries as JSON"),
@@ -555,7 +555,7 @@ pub fn upgrade_help(cmd: &str) -> String {
             format!("{cmd} upgrade --all"),
         ],
         &[
-            "Simulations clone the source env, leave the real env untouched, and clean temporary envs by default.",
+            "Simulations clone the source env, leave the real env untouched, and clean temporary envs and runtimes by default.",
             "Use --scenario all to test current, clean minimum, and Telegram-configured env shapes.",
             "Use --keep-simulations only when you need to inspect retained simulation envs after the run.",
             "Published-target simulations run OpenClaw's update dry-run plan before switching the clone.",

@@ -506,7 +506,11 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
     assert_eq!(json["sourceEnv"], "demo");
     assert_eq!(json["outcome"], "passed");
     assert_eq!(json["toBindingKind"], "runtime");
-    assert_eq!(json["toBindingName"], "2026.3.25");
+    let runtime_name = json["toBindingName"].as_str().unwrap();
+    assert!(
+        runtime_name.starts_with("ocm-sim-runtime-"),
+        "{runtime_name}"
+    );
     assert_eq!(json["cleanup"], "cleaned");
     let sim_name = json["simulationEnv"].as_str().unwrap();
     assert_ne!(sim_name, "demo");
@@ -522,6 +526,14 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
         stderr(&simulation).contains("does not exist"),
         "{}",
         stderr(&simulation)
+    );
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", runtime_name, "--json"]);
+    assert!(!runtime.status.success(), "{}", stdout(&runtime));
+    assert!(
+        stderr(&runtime).contains("does not exist"),
+        "{}",
+        stderr(&runtime)
     );
 }
 
@@ -682,12 +694,20 @@ fn upgrade_simulate_runs_openclaw_update_contract_checks_for_published_targets()
     let json: Value = serde_json::from_str(&stdout(&simulate)).unwrap();
     assert_eq!(json["outcome"], "passed");
     assert_eq!(json["cleanup"], "kept");
+    let runtime_name = json["toBindingName"].as_str().unwrap();
+    assert!(
+        runtime_name.starts_with("ocm-sim-runtime-"),
+        "{runtime_name}"
+    );
     let sim_name = json["simulationEnv"].as_str().unwrap();
     let simulation = run_ocm(&cwd, &env, &["env", "show", sim_name, "--json"]);
     assert!(simulation.status.success(), "{}", stderr(&simulation));
     let simulation_json: Value = serde_json::from_str(&stdout(&simulation)).unwrap();
     let sim_root = Path::new(simulation_json["root"].as_str().unwrap());
     let command_log = fs::read_to_string(sim_root.join("sim-commands.log")).unwrap();
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", runtime_name, "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
 
     assert!(
         command_log.contains("update --dry-run --json --no-restart --yes --tag 2026.3.25"),

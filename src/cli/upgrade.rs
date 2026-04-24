@@ -14,6 +14,7 @@ use crate::infra::shell::build_openclaw_env;
 use crate::openclaw_repo::{detect_openclaw_checkout, ensure_openclaw_worktree};
 use crate::runtime::releases::{
     OpenClawRelease, is_official_openclaw_releases_url, normalize_openclaw_channel_selector,
+    official_openclaw_releases_url,
 };
 use crate::runtime::{
     InstallRuntimeFromOfficialReleaseOptions, OfficialRuntimePrepareAction, RuntimeMeta,
@@ -21,9 +22,10 @@ use crate::runtime::{
 };
 use crate::service::ServiceSummary;
 use crate::store::{
-    clean_path, copy_dir_recursive, derive_env_paths, display_path,
-    ensure_minimum_local_openclaw_config, ensure_store, get_runtime, remove_runtime,
-    resolve_absolute_path, runtime_install_root, runtime_meta_path, save_environment, write_json,
+    InstallContext, RuntimeReleaseDetails, clean_path, copy_dir_recursive, derive_env_paths,
+    display_path, ensure_minimum_local_openclaw_config, ensure_store, get_runtime,
+    install_runtime_from_selected_official_openclaw_release, remove_runtime, resolve_absolute_path,
+    runtime_install_root, runtime_integrity_issue, runtime_meta_path, save_environment, write_json,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -545,15 +547,11 @@ impl Cli {
     ) -> Result<(String, String, String), String> {
         match target {
             UpgradeSimulationTarget::Official { target, .. } => {
-                let prepared = self.prepare_upgrade_target(simulation_name, target)?;
+                let (runtime_name, note) =
+                    self.prepare_simulation_official_target(simulation_name, target)?;
                 self.environment_service()
-                    .set_runtime(simulation_name, &prepared.name)?;
-                Ok((
-                    "runtime".to_string(),
-                    prepared.name.clone(),
-                    note_for_official_prepare_action(&prepared.action)
-                        .unwrap_or_else(|| format!("using runtime {}", prepared.name)),
-                ))
+                    .set_runtime(simulation_name, &runtime_name)?;
+                Ok(("runtime".to_string(), runtime_name, note))
             }
             UpgradeSimulationTarget::LocalRepo { repo_root, .. } => {
                 let worktree_root = ensure_openclaw_worktree(repo_root, simulation_name)?;
@@ -581,6 +579,59 @@ impl Cli {
                 ))
             }
         }
+    }
+
+    fn prepare_simulation_official_target(
+        &self,
+        simulation_name: &str,
+        target: &UpgradeTarget,
+    ) -> Result<(String, String), String> {
+        let canonical_name = target.canonical_runtime_name()?;
+        let releases = self
+            .runtime_service()
+            .official_openclaw_releases(target.version.as_deref(), target.channel.as_deref())?;
+        let selected = releases
+            .into_iter()
+            .next()
+            .ok_or_else(|| "OpenClaw release was not found".to_string())?;
+
+        if let Ok(existing) = get_runtime(&canonical_name, &self.env, &self.cwd) {
+            let healthy = runtime_integrity_issue(&existing, &self.env).is_none();
+            let same_release = existing.release_version.as_deref()
+                == Some(selected.version.as_str())
+                && existing.source_url.as_deref() == Some(selected.tarball_url.as_str());
+            if healthy && same_release {
+                return Ok((
+                    canonical_name.clone(),
+                    format!("using installed runtime {canonical_name}"),
+                ));
+            }
+        }
+
+        let runtime_name = simulation_runtime_name(simulation_name);
+        install_runtime_from_selected_official_openclaw_release(
+            runtime_name.clone(),
+            false,
+            official_openclaw_releases_url(&self.env),
+            selected,
+            RuntimeReleaseDetails::with_selector(
+                if target.version.is_some() {
+                    Some(RuntimeReleaseSelectorKind::Version)
+                } else {
+                    Some(RuntimeReleaseSelectorKind::Channel)
+                },
+                target.version.clone().or_else(|| target.channel.clone()),
+            ),
+            Some("Temporary runtime for ocm upgrade simulation".to_string()),
+            InstallContext {
+                env: &self.env,
+                cwd: &self.cwd,
+            },
+        )?;
+        Ok((
+            runtime_name,
+            "installed temporary runtime for simulation".to_string(),
+        ))
     }
 
     fn ensure_simulation_dev_dependencies(&self, meta: &crate::env::EnvMeta) -> Result<(), String> {
@@ -802,6 +853,22 @@ impl Cli {
                     error,
                 ));
                 summary.outcome = "failed".to_string();
+            }
+        }
+        if summary.to_binding_name.starts_with("ocm-sim-runtime-") {
+            match self.remove_runtime_created_during_upgrade(&summary.to_binding_name) {
+                Ok(()) => summary.checks.push(UpgradeSimulationCheck::passed(
+                    "cleanup simulation runtime",
+                    "removed temporary runtime",
+                )),
+                Err(error) => {
+                    summary.cleanup = "failed".to_string();
+                    summary.checks.push(UpgradeSimulationCheck::failed(
+                        "cleanup simulation runtime",
+                        error,
+                    ));
+                    summary.outcome = "failed".to_string();
+                }
             }
         }
         Ok(summary)
@@ -1748,6 +1815,10 @@ fn simulation_env_name(source_name: &str, scenario: &str) -> String {
         scenario,
         time::OffsetDateTime::now_utc().unix_timestamp_nanos()
     )
+}
+
+fn simulation_runtime_name(simulation_name: &str) -> String {
+    format!("ocm-sim-runtime-{simulation_name}")
 }
 
 fn reset_to_minimum_simulation_config(
