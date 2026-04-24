@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::Serialize;
+use serde_json::{Value, json};
 
 use super::{Cli, render};
 use crate::env::{
@@ -65,6 +66,7 @@ pub(crate) struct UpgradeSimulationCheck {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UpgradeSimulationSummary {
+    pub scenario: String,
     pub source_env: String,
     pub simulation_env: String,
     pub from_binding_kind: String,
@@ -76,6 +78,17 @@ pub(crate) struct UpgradeSimulationSummary {
     pub checks: Vec<UpgradeSimulationCheck>,
     pub cleanup_command: String,
     pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpgradeSimulationBatchSummary {
+    pub source_env: String,
+    pub to: String,
+    pub count: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub results: Vec<UpgradeSimulationSummary>,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +107,13 @@ enum UpgradeSimulationTarget {
         repo_root: PathBuf,
         display: String,
     },
+}
+
+#[derive(Clone, Copy, Debug)]
+enum UpgradeSimulationScenario {
+    Current,
+    Minimum,
+    Telegram,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -130,17 +150,29 @@ impl Cli {
     pub(super) fn handle_upgrade_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "upgrade")?;
         if matches!(args.first().map(String::as_str), Some("simulate")) {
-            let summary = self.upgrade_simulate(args[1..].to_vec())?;
-            let failed = summary.outcome == "failed";
+            let summaries = self.upgrade_simulate(args[1..].to_vec())?;
+            let failed = summaries.iter().any(|summary| summary.outcome == "failed");
             if json_flag {
-                self.print_json(&summary)?;
+                if summaries.len() == 1 {
+                    self.print_json(&summaries[0])?;
+                } else {
+                    self.print_json(&build_simulation_batch_summary(summaries))?;
+                }
                 return Ok(if failed { 1 } else { 0 });
             }
-            self.stdout_lines(render::upgrade::upgrade_simulation(
-                &summary,
-                profile,
-                &self.command_example(),
-            ));
+            if summaries.len() == 1 {
+                self.stdout_lines(render::upgrade::upgrade_simulation(
+                    &summaries[0],
+                    profile,
+                    &self.command_example(),
+                ));
+            } else {
+                self.stdout_lines(render::upgrade::upgrade_simulation_batch(
+                    &build_simulation_batch_summary(summaries),
+                    profile,
+                    &self.command_example(),
+                ));
+            }
             return Ok(if failed { 1 } else { 0 });
         }
 
@@ -247,20 +279,35 @@ impl Cli {
         Ok(if failed { 1 } else { 0 })
     }
 
-    fn upgrade_simulate(&self, args: Vec<String>) -> Result<UpgradeSimulationSummary, String> {
+    fn upgrade_simulate(&self, args: Vec<String>) -> Result<Vec<UpgradeSimulationSummary>, String> {
         let (args, to) = Self::consume_option(args, "--to")?;
         let to = Self::require_option_value(to, "--to")?.ok_or_else(|| {
             "upgrade simulate requires --to <version|channel|repo-path>".to_string()
         })?;
+        let (args, scenario) = Self::consume_option(args, "--scenario")?;
+        let scenario = Self::require_option_value(scenario, "--scenario")?;
+        let scenarios = UpgradeSimulationScenario::parse_many(scenario.as_deref())?;
         let Some(source_name) = args.first() else {
             return Err("upgrade simulate requires an environment name".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
+        let target = self.resolve_simulation_target(&to)?;
+        scenarios
+            .into_iter()
+            .map(|scenario| self.upgrade_simulate_one(source_name, &target, scenario))
+            .collect()
+    }
+
+    fn upgrade_simulate_one(
+        &self,
+        source_name: &str,
+        target: &UpgradeSimulationTarget,
+        scenario: UpgradeSimulationScenario,
+    ) -> Result<UpgradeSimulationSummary, String> {
         let source = self.environment_service().get(source_name)?;
         let (from_binding_kind, from_binding_name) = source_binding(&source);
-        let target = self.resolve_simulation_target(&to)?;
-        let simulation_name = simulation_env_name(source_name);
+        let simulation_name = simulation_env_name(source_name, scenario.id());
         let cloned = self.environment_service().clone(CloneEnvironmentOptions {
             source_name: source_name.to_string(),
             name: simulation_name.clone(),
@@ -280,9 +327,10 @@ impl Cli {
         let mut to_binding_kind = "unknown".to_string();
         let mut to_binding_name = "unknown".to_string();
 
+        checks.push(self.apply_simulation_scenario(&cloned.name, scenario));
         checks.push(self.run_update_plan_check(&cloned.name, &target));
 
-        match self.apply_simulation_target(&cloned.name, &target) {
+        match self.apply_simulation_target(&cloned.name, target) {
             Ok((kind, name, note)) => {
                 to_binding_kind = kind;
                 to_binding_name = name;
@@ -297,6 +345,7 @@ impl Cli {
                     from_binding_name,
                     to_binding_kind,
                     to_binding_name,
+                    scenario,
                     target.display(),
                     checks,
                 ));
@@ -337,9 +386,45 @@ impl Cli {
             from_binding_name,
             to_binding_kind,
             to_binding_name,
+            scenario,
             target.display(),
             checks,
         ))
+    }
+
+    fn apply_simulation_scenario(
+        &self,
+        simulation_name: &str,
+        scenario: UpgradeSimulationScenario,
+    ) -> UpgradeSimulationCheck {
+        match self.seed_simulation_scenario(simulation_name, scenario) {
+            Ok(note) => UpgradeSimulationCheck::passed("seed scenario", note),
+            Err(error) => UpgradeSimulationCheck::failed("seed scenario", error),
+        }
+    }
+
+    fn seed_simulation_scenario(
+        &self,
+        simulation_name: &str,
+        scenario: UpgradeSimulationScenario,
+    ) -> Result<String, String> {
+        let meta = self
+            .environment_service()
+            .apply_effective_gateway_port(self.environment_service().get(simulation_name)?)?;
+        let gateway_port = meta.gateway_port.unwrap_or_default();
+        let paths = derive_env_paths(Path::new(&meta.root));
+        match scenario {
+            UpgradeSimulationScenario::Current => Ok("using source env config".to_string()),
+            UpgradeSimulationScenario::Minimum => {
+                reset_to_minimum_simulation_config(&paths, gateway_port)?;
+                Ok("seeded minimum OpenClaw config".to_string())
+            }
+            UpgradeSimulationScenario::Telegram => {
+                reset_to_minimum_simulation_config(&paths, gateway_port)?;
+                seed_telegram_simulation_config(&paths)?;
+                Ok("seeded Telegram channel/plugin config".to_string())
+            }
+        }
     }
 
     fn run_update_plan_check(
@@ -598,11 +683,13 @@ impl Cli {
         from_binding_name: String,
         to_binding_kind: String,
         to_binding_name: String,
+        scenario: UpgradeSimulationScenario,
         to: String,
         checks: Vec<UpgradeSimulationCheck>,
     ) -> UpgradeSimulationSummary {
         let failed = checks.iter().any(|check| check.status == "failed");
         UpgradeSimulationSummary {
+            scenario: scenario.id().to_string(),
             source_env: source_name.to_string(),
             simulation_env: simulation_name.to_string(),
             from_binding_kind,
@@ -1409,6 +1496,52 @@ impl UpgradeSimulationTarget {
     }
 }
 
+impl UpgradeSimulationScenario {
+    fn parse_many(raw: Option<&str>) -> Result<Vec<Self>, String> {
+        let Some(raw) = raw else {
+            return Ok(vec![Self::Current]);
+        };
+        let mut scenarios: Vec<Self> = Vec::new();
+        for token in raw.split(',') {
+            let token = token.trim().to_ascii_lowercase();
+            if token.is_empty() {
+                return Err("--scenario cannot contain an empty scenario".to_string());
+            }
+            if token == "all" {
+                return Ok(vec![Self::Current, Self::Minimum, Self::Telegram]);
+            }
+            let scenario = match token.as_str() {
+                "current" | "source" => Self::Current,
+                "minimum" | "clean" => Self::Minimum,
+                "telegram" => Self::Telegram,
+                _ => {
+                    return Err(format!(
+                        "unknown upgrade simulation scenario \"{token}\"; use current, minimum, telegram, or all"
+                    ));
+                }
+            };
+            if !scenarios
+                .iter()
+                .any(|existing| existing.id() == scenario.id())
+            {
+                scenarios.push(scenario);
+            }
+        }
+        if scenarios.is_empty() {
+            return Err("--scenario requires current, minimum, telegram, or all".to_string());
+        }
+        Ok(scenarios)
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Minimum => "minimum",
+            Self::Telegram => "telegram",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct UpgradeTransaction {
     snapshot_id: String,
@@ -1470,12 +1603,99 @@ fn source_binding(env: &crate::env::EnvMeta) -> (String, String) {
     ("none".to_string(), "none".to_string())
 }
 
-fn simulation_env_name(source_name: &str) -> String {
+fn build_simulation_batch_summary(
+    summaries: Vec<UpgradeSimulationSummary>,
+) -> UpgradeSimulationBatchSummary {
+    let source_env = summaries
+        .first()
+        .map(|summary| summary.source_env.clone())
+        .unwrap_or_default();
+    let to = summaries
+        .first()
+        .map(|summary| summary.to.clone())
+        .unwrap_or_default();
+    let failed = summaries
+        .iter()
+        .filter(|summary| summary.outcome == "failed")
+        .count();
+    UpgradeSimulationBatchSummary {
+        source_env,
+        to,
+        count: summaries.len(),
+        passed: summaries.len().saturating_sub(failed),
+        failed,
+        results: summaries,
+    }
+}
+
+fn simulation_env_name(source_name: &str, scenario: &str) -> String {
     format!(
-        "{}-sim-{}",
+        "{}-{}-sim-{}",
         source_name,
+        scenario,
         time::OffsetDateTime::now_utc().unix_timestamp_nanos()
     )
+}
+
+fn reset_to_minimum_simulation_config(
+    paths: &crate::store::EnvPaths,
+    gateway_port: u32,
+) -> Result<(), String> {
+    if let Some(parent) = paths.config_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    if paths.config_path.exists() {
+        fs::remove_file(&paths.config_path).map_err(|error| error.to_string())?;
+    }
+    ensure_minimum_local_openclaw_config(paths, gateway_port)
+}
+
+fn seed_telegram_simulation_config(paths: &crate::store::EnvPaths) -> Result<(), String> {
+    let raw = fs::read_to_string(&paths.config_path).map_err(|error| error.to_string())?;
+    let mut value: Value = serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+    let root = value
+        .as_object_mut()
+        .ok_or_else(|| "OpenClaw config root must be an object".to_string())?;
+
+    let channels = ensure_json_object_field(root, "channels");
+    channels.insert(
+        "telegram".to_string(),
+        json!({
+            "enabled": true,
+            "botToken": "123456:simulation-token",
+            "allowFrom": ["*"],
+            "groupPolicy": "open"
+        }),
+    );
+
+    let plugins = ensure_json_object_field(root, "plugins");
+    let mut allow = plugins
+        .get("allow")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !allow.iter().any(|entry| entry.as_str() == Some("telegram")) {
+        allow.push(Value::String("telegram".to_string()));
+    }
+    plugins.insert("allow".to_string(), Value::Array(allow));
+
+    let mut rewritten = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    rewritten.push('\n');
+    fs::write(&paths.config_path, rewritten).map_err(|error| error.to_string())
+}
+
+fn ensure_json_object_field<'a>(
+    object: &'a mut serde_json::Map<String, Value>,
+    key: &str,
+) -> &'a mut serde_json::Map<String, Value> {
+    let needs_reset = !object.get(key).is_some_and(Value::is_object);
+    if needs_reset {
+        object.insert(key.to_string(), Value::Object(serde_json::Map::new()));
+    }
+    object
+        .get_mut(key)
+        .and_then(Value::as_object_mut)
+        .expect("object field must exist after reset")
 }
 
 fn summarize_command_text(primary: &str, secondary: &str) -> Option<String> {

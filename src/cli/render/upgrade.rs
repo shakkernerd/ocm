@@ -1,4 +1,6 @@
-use crate::cli::upgrade::{UpgradeBatchSummary, UpgradeEnvSummary, UpgradeSimulationSummary};
+use crate::cli::upgrade::{
+    UpgradeBatchSummary, UpgradeEnvSummary, UpgradeSimulationBatchSummary, UpgradeSimulationSummary,
+};
 use crate::infra::terminal::{
     Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, terminal_width,
 };
@@ -202,6 +204,7 @@ pub fn upgrade_simulation(
         "Target",
         &[
             KeyValueRow::accent("Source env", &summary.source_env),
+            KeyValueRow::plain("Scenario", &summary.scenario),
             KeyValueRow::plain("Simulation env", &summary.simulation_env),
             KeyValueRow::plain(
                 "From",
@@ -268,6 +271,88 @@ pub fn upgrade_simulation(
     lines
 }
 
+pub fn upgrade_simulation_batch(
+    summary: &UpgradeSimulationBatchSummary,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        return upgrade_simulation_batch_raw(summary);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Upgrade Simulations {}", summary.source_env),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.push(String::new());
+    lines.extend(render_key_value_card(
+        "Summary",
+        &[
+            KeyValueRow::accent("Source env", &summary.source_env),
+            KeyValueRow::plain("Target", &summary.to),
+            KeyValueRow::plain("Scenarios", summary.count.to_string()),
+            KeyValueRow::new(
+                "Result",
+                format!("{} passed, {} failed", summary.passed, summary.failed),
+                if summary.failed == 0 {
+                    Tone::Success
+                } else {
+                    Tone::Danger
+                },
+            ),
+        ],
+        profile.color,
+    ));
+
+    let rows = summary
+        .results
+        .iter()
+        .map(|result| {
+            let failed_check = result
+                .checks
+                .iter()
+                .find(|check| check.status == "failed")
+                .map(|check| check.name.as_str())
+                .unwrap_or("—");
+            vec![
+                Cell::plain(result.scenario.clone()),
+                Cell::plain(result.simulation_env.clone()),
+                Cell::new(
+                    result.outcome.clone(),
+                    crate::infra::terminal::Align::Left,
+                    simulation_tone(&result.outcome),
+                ),
+                Cell::muted(failed_check),
+            ]
+        })
+        .collect::<Vec<_>>();
+    lines.push(String::new());
+    lines.extend(render_table(
+        &["Scenario", "Simulation env", "Result", "Failed check"],
+        &rows,
+        profile.color,
+    ));
+
+    lines.push(String::new());
+    lines.extend(render_key_value_card(
+        "Next",
+        &[
+            KeyValueRow::plain(
+                "Inspect",
+                format!("{command_example} env show <simulation-env>"),
+            ),
+            KeyValueRow::plain(
+                "Cleanup",
+                format!("{command_example} env destroy <simulation-env> --yes"),
+            ),
+        ],
+        profile.color,
+    ));
+
+    lines
+}
+
 fn upgrade_env_raw(summary: &UpgradeEnvSummary) -> Vec<String> {
     let mut bits = vec![
         summary.env_name.clone(),
@@ -317,7 +402,8 @@ fn upgrade_batch_raw(summary: &UpgradeBatchSummary) -> Vec<String> {
 
 fn upgrade_simulation_raw(summary: &UpgradeSimulationSummary) -> Vec<String> {
     let mut lines = vec![format!(
-        "source={}  simulation={}  from={}:{}  to={}:{}  outcome={}  target={}",
+        "scenario={}  source={}  simulation={}  from={}:{}  to={}:{}  outcome={}  target={}",
+        summary.scenario,
         summary.source_env,
         summary.simulation_env,
         summary.from_binding_kind,
@@ -337,6 +423,17 @@ fn upgrade_simulation_raw(summary: &UpgradeSimulationSummary) -> Vec<String> {
     lines.push(format!("cleanup={}", summary.cleanup_command));
     if let Some(note) = summary.note.as_deref() {
         lines.push(format!("note={note}"));
+    }
+    lines
+}
+
+fn upgrade_simulation_batch_raw(summary: &UpgradeSimulationBatchSummary) -> Vec<String> {
+    let mut lines = vec![format!(
+        "source={}  target={}  scenarios={}  passed={}  failed={}",
+        summary.source_env, summary.to, summary.count, summary.passed, summary.failed
+    )];
+    for result in &summary.results {
+        lines.extend(upgrade_simulation_raw(result));
     }
     lines
 }
