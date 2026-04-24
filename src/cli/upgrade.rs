@@ -316,18 +316,26 @@ impl Cli {
         let target = self.resolve_simulation_target(&to)?;
         self.validate_simulation_target(&target)?;
         let prepared_runtime = self.prepare_shared_simulation_runtime(source_name, &target)?;
-        let mut summaries = scenarios
-            .into_iter()
-            .map(|scenario| {
-                self.upgrade_simulate_one(
-                    source_name,
-                    &target,
-                    prepared_runtime.as_ref(),
-                    scenario,
-                    options,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut summaries = Vec::with_capacity(scenarios.len());
+        for scenario in scenarios {
+            match self.upgrade_simulate_one(
+                source_name,
+                &target,
+                prepared_runtime.as_ref(),
+                scenario,
+                options,
+            ) {
+                Ok(summary) => summaries.push(summary),
+                Err(error) => {
+                    self.finish_shared_simulation_runtime(
+                        &mut summaries,
+                        prepared_runtime.as_ref(),
+                        options,
+                    )?;
+                    return Err(error);
+                }
+            }
+        }
         self.finish_shared_simulation_runtime(&mut summaries, prepared_runtime.as_ref(), options)?;
         Ok(summaries)
     }
@@ -348,11 +356,21 @@ impl Cli {
             name: simulation_name.clone(),
             root: None,
         })?;
-        self.environment_service()
-            .set_service_policy(&cloned.name, Some(false), Some(false))?;
-        if cloned.protected {
+        if let Err(error) =
             self.environment_service()
-                .set_protected(&cloned.name, false)?;
+                .set_service_policy(&cloned.name, Some(false), Some(false))
+        {
+            let _ = self.environment_service().remove(&cloned.name, true);
+            return Err(error);
+        }
+        if cloned.protected {
+            if let Err(error) = self
+                .environment_service()
+                .set_protected(&cloned.name, false)
+            {
+                let _ = self.environment_service().remove(&cloned.name, true);
+                return Err(error);
+            }
         }
 
         let mut checks = vec![UpgradeSimulationCheck::passed(
