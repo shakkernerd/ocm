@@ -1,20 +1,28 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
 use super::{Cli, render};
-use crate::env::{CreateEnvSnapshotOptions, RestoreEnvSnapshotOptions};
-use crate::runtime::releases::is_official_openclaw_releases_url;
+use crate::env::{
+    CloneEnvironmentOptions, CreateEnvSnapshotOptions, EnvDevMeta, RestoreEnvSnapshotOptions,
+};
+use crate::infra::shell::build_openclaw_env;
+use crate::openclaw_repo::{detect_openclaw_checkout, ensure_openclaw_worktree};
+use crate::runtime::releases::{
+    is_official_openclaw_releases_url, normalize_openclaw_channel_selector,
+};
 use crate::runtime::{
     InstallRuntimeFromOfficialReleaseOptions, OfficialRuntimePrepareAction, RuntimeMeta,
     RuntimeReleaseSelectorKind, RuntimeService,
 };
 use crate::service::ServiceSummary;
 use crate::store::{
-    clean_path, copy_dir_recursive, display_path, ensure_store, get_runtime, remove_runtime,
-    runtime_install_root, runtime_meta_path, write_json,
+    clean_path, copy_dir_recursive, derive_env_paths, display_path,
+    ensure_minimum_local_openclaw_config, ensure_store, get_runtime, remove_runtime,
+    resolve_absolute_path, runtime_install_root, runtime_meta_path, save_environment, write_json,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -46,10 +54,46 @@ pub(crate) struct UpgradeBatchSummary {
     pub results: Vec<UpgradeEnvSummary>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpgradeSimulationCheck {
+    pub name: String,
+    pub status: String,
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpgradeSimulationSummary {
+    pub source_env: String,
+    pub simulation_env: String,
+    pub from_binding_kind: String,
+    pub from_binding_name: String,
+    pub to_binding_kind: String,
+    pub to_binding_name: String,
+    pub to: String,
+    pub outcome: String,
+    pub checks: Vec<UpgradeSimulationCheck>,
+    pub cleanup_command: String,
+    pub note: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 struct UpgradeTarget {
     version: Option<String>,
     channel: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+enum UpgradeSimulationTarget {
+    Official {
+        target: UpgradeTarget,
+        display: String,
+    },
+    LocalRepo {
+        repo_root: PathBuf,
+        display: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -85,6 +129,21 @@ impl UpgradeTarget {
 impl Cli {
     pub(super) fn handle_upgrade_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "upgrade")?;
+        if matches!(args.first().map(String::as_str), Some("simulate")) {
+            let summary = self.upgrade_simulate(args[1..].to_vec())?;
+            let failed = summary.outcome == "failed";
+            if json_flag {
+                self.print_json(&summary)?;
+                return Ok(if failed { 1 } else { 0 });
+            }
+            self.stdout_lines(render::upgrade::upgrade_simulation(
+                &summary,
+                profile,
+                &self.command_example(),
+            ));
+            return Ok(if failed { 1 } else { 0 });
+        }
+
         let (args, dry_run) = Self::consume_flag(args, "--dry-run");
         let (args, no_rollback) = Self::consume_flag(args, "--no-rollback");
         let (args, all_flag) = Self::consume_flag(args, "--all");
@@ -186,6 +245,293 @@ impl Cli {
             &self.command_example(),
         ));
         Ok(if failed { 1 } else { 0 })
+    }
+
+    fn upgrade_simulate(&self, args: Vec<String>) -> Result<UpgradeSimulationSummary, String> {
+        let (args, to) = Self::consume_option(args, "--to")?;
+        let to = Self::require_option_value(to, "--to")?.ok_or_else(|| {
+            "upgrade simulate requires --to <version|channel|repo-path>".to_string()
+        })?;
+        let Some(source_name) = args.first() else {
+            return Err("upgrade simulate requires an environment name".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let source = self.environment_service().get(source_name)?;
+        let (from_binding_kind, from_binding_name) = source_binding(&source);
+        let target = self.resolve_simulation_target(&to)?;
+        let simulation_name = simulation_env_name(source_name);
+        let cloned = self.environment_service().clone(CloneEnvironmentOptions {
+            source_name: source_name.to_string(),
+            name: simulation_name.clone(),
+            root: None,
+        })?;
+        self.environment_service()
+            .set_service_policy(&cloned.name, Some(false), Some(false))?;
+        if cloned.protected {
+            self.environment_service()
+                .set_protected(&cloned.name, false)?;
+        }
+
+        let mut checks = vec![UpgradeSimulationCheck::passed(
+            "clone env",
+            format!("created isolated env {}", cloned.name),
+        )];
+        let mut to_binding_kind = "unknown".to_string();
+        let mut to_binding_name = "unknown".to_string();
+
+        match self.apply_simulation_target(&cloned.name, &target) {
+            Ok((kind, name, note)) => {
+                to_binding_kind = kind;
+                to_binding_name = name;
+                checks.push(UpgradeSimulationCheck::passed("prepare target", note));
+            }
+            Err(error) => {
+                checks.push(UpgradeSimulationCheck::failed("prepare target", error));
+                return Ok(self.build_simulation_summary(
+                    source_name,
+                    &cloned.name,
+                    from_binding_kind,
+                    from_binding_name,
+                    to_binding_kind,
+                    to_binding_name,
+                    target.display(),
+                    checks,
+                ));
+            }
+        }
+
+        checks.push(self.run_simulation_check(&cloned.name, "openclaw --version", &["--version"]));
+        checks.push(self.run_simulation_check(&cloned.name, "openclaw doctor", &["doctor"]));
+
+        Ok(self.build_simulation_summary(
+            source_name,
+            &cloned.name,
+            from_binding_kind,
+            from_binding_name,
+            to_binding_kind,
+            to_binding_name,
+            target.display(),
+            checks,
+        ))
+    }
+
+    fn resolve_simulation_target(&self, to: &str) -> Result<UpgradeSimulationTarget, String> {
+        let path = resolve_absolute_path(to, &self.env, &self.cwd)?;
+        if let Some(repo_root) = detect_openclaw_checkout(&path) {
+            return Ok(UpgradeSimulationTarget::LocalRepo {
+                display: display_path(&repo_root),
+                repo_root,
+            });
+        }
+
+        let trimmed = to.trim();
+        if matches!(trimmed, "stable" | "latest" | "beta" | "dev") {
+            return Ok(UpgradeSimulationTarget::Official {
+                target: UpgradeTarget {
+                    version: None,
+                    channel: Some(normalize_openclaw_channel_selector(trimmed)?),
+                },
+                display: trimmed.to_string(),
+            });
+        }
+
+        Ok(UpgradeSimulationTarget::Official {
+            target: UpgradeTarget {
+                version: Some(trimmed.to_string()),
+                channel: None,
+            },
+            display: trimmed.to_string(),
+        })
+    }
+
+    fn apply_simulation_target(
+        &self,
+        simulation_name: &str,
+        target: &UpgradeSimulationTarget,
+    ) -> Result<(String, String, String), String> {
+        match target {
+            UpgradeSimulationTarget::Official { target, .. } => {
+                let prepared = self.prepare_upgrade_target(simulation_name, target)?;
+                self.environment_service()
+                    .set_runtime(simulation_name, &prepared.name)?;
+                Ok((
+                    "runtime".to_string(),
+                    prepared.name.clone(),
+                    note_for_official_prepare_action(&prepared.action)
+                        .unwrap_or_else(|| format!("using runtime {}", prepared.name)),
+                ))
+            }
+            UpgradeSimulationTarget::LocalRepo { repo_root, .. } => {
+                let worktree_root = ensure_openclaw_worktree(repo_root, simulation_name)?;
+                let mut meta = self.environment_service().get(simulation_name)?;
+                meta.default_runtime = None;
+                meta.default_launcher = None;
+                meta.dev = Some(EnvDevMeta {
+                    repo_root: display_path(repo_root),
+                    worktree_root: display_path(&worktree_root),
+                });
+                let mut meta = save_environment(meta, &self.env, &self.cwd)?;
+                meta = self
+                    .environment_service()
+                    .apply_effective_gateway_port(meta)?;
+                let paths = derive_env_paths(Path::new(&meta.root));
+                ensure_minimum_local_openclaw_config(
+                    &paths,
+                    meta.gateway_port.unwrap_or_default(),
+                )?;
+                self.ensure_simulation_dev_dependencies(&meta)?;
+                Ok((
+                    "dev".to_string(),
+                    "local-repo".to_string(),
+                    format!("prepared local repo {}", display_path(repo_root)),
+                ))
+            }
+        }
+    }
+
+    fn ensure_simulation_dev_dependencies(&self, meta: &crate::env::EnvMeta) -> Result<(), String> {
+        let dev = meta
+            .dev
+            .as_ref()
+            .ok_or_else(|| format!("environment \"{}\" is missing its dev binding", meta.name))?;
+        let worktree_root = Path::new(&dev.worktree_root);
+        let pnpm_store = worktree_root.join("node_modules").join(".pnpm");
+        let tsx_bin = worktree_root.join("node_modules").join(".bin").join("tsx");
+        if pnpm_store.exists() && tsx_bin.exists() {
+            return Ok(());
+        }
+
+        let output = Command::new("pnpm")
+            .arg("install")
+            .env_clear()
+            .envs(build_openclaw_env(meta, &self.env))
+            .current_dir(worktree_root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| format!("failed to run pnpm install: {error}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(format!(
+            "pnpm install failed: {}",
+            summarize_command_output(&output.stdout, &output.stderr)
+        ))
+    }
+
+    fn run_simulation_check(
+        &self,
+        simulation_name: &str,
+        name: &str,
+        args: &[&str],
+    ) -> UpgradeSimulationCheck {
+        let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        match self
+            .environment_service()
+            .resolve(simulation_name, None, None, &args)
+        {
+            Ok(resolved) => match self.run_resolved_for_simulation(resolved) {
+                Ok(output) if output.status.success() => {
+                    UpgradeSimulationCheck::passed(name, output.first_line())
+                }
+                Ok(output) => UpgradeSimulationCheck::failed(name, output.failure_summary()),
+                Err(error) => UpgradeSimulationCheck::failed(name, error),
+            },
+            Err(error) => UpgradeSimulationCheck::failed(name, error),
+        }
+    }
+
+    fn run_resolved_for_simulation(
+        &self,
+        resolved: crate::env::ResolvedExecution,
+    ) -> Result<SimulationCommandOutput, String> {
+        let (mut command, env_meta) = match resolved {
+            crate::env::ResolvedExecution::Launcher {
+                env,
+                command,
+                run_dir,
+                ..
+            } => {
+                let mut process = shell_command(&command);
+                process.current_dir(run_dir);
+                (process, env)
+            }
+            crate::env::ResolvedExecution::Runtime {
+                env,
+                program,
+                program_args,
+                run_dir,
+                ..
+            }
+            | crate::env::ResolvedExecution::Dev {
+                env,
+                program,
+                program_args,
+                run_dir,
+                ..
+            } => {
+                let mut process = Command::new(program);
+                process.args(program_args).current_dir(run_dir);
+                (process, env)
+            }
+        };
+        let output = command
+            .env_clear()
+            .envs(build_openclaw_env(&env_meta, &self.env))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| format!("failed to run simulation check: {error}"))?;
+        Ok(SimulationCommandOutput {
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_simulation_summary(
+        &self,
+        source_name: &str,
+        simulation_name: &str,
+        from_binding_kind: String,
+        from_binding_name: String,
+        to_binding_kind: String,
+        to_binding_name: String,
+        to: String,
+        checks: Vec<UpgradeSimulationCheck>,
+    ) -> UpgradeSimulationSummary {
+        let failed = checks.iter().any(|check| check.status == "failed");
+        UpgradeSimulationSummary {
+            source_env: source_name.to_string(),
+            simulation_env: simulation_name.to_string(),
+            from_binding_kind,
+            from_binding_name,
+            to_binding_kind,
+            to_binding_name,
+            to,
+            outcome: if failed { "failed" } else { "passed" }.to_string(),
+            cleanup_command: format!(
+                "{} env destroy {} --yes",
+                self.command_example(),
+                simulation_name
+            ),
+            note: if failed {
+                Some(
+                    "source env was not changed; inspect the simulation env before destroying it"
+                        .to_string(),
+                )
+            } else {
+                Some(
+                    "source env was not changed; destroy the simulation env when you are done"
+                        .to_string(),
+                )
+            },
+            checks,
+        }
     }
 
     fn upgrade_env(
@@ -880,6 +1226,54 @@ struct PreparedUpgradeTarget {
 }
 
 #[derive(Debug)]
+struct SimulationCommandOutput {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+impl SimulationCommandOutput {
+    fn first_line(&self) -> String {
+        summarize_command_text(&self.stdout, &self.stderr).unwrap_or_else(|| "ok".to_string())
+    }
+
+    fn failure_summary(&self) -> String {
+        let detail = summarize_command_text(&self.stderr, &self.stdout)
+            .unwrap_or_else(|| "no output".to_string());
+        format!(
+            "exited with code {}: {detail}",
+            self.status.code().unwrap_or(1)
+        )
+    }
+}
+
+impl UpgradeSimulationCheck {
+    fn passed(name: impl Into<String>, note: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            status: "passed".to_string(),
+            note: Some(note.into()),
+        }
+    }
+
+    fn failed(name: impl Into<String>, note: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            status: "failed".to_string(),
+            note: Some(note.into()),
+        }
+    }
+}
+
+impl UpgradeSimulationTarget {
+    fn display(&self) -> String {
+        match self {
+            Self::Official { display, .. } | Self::LocalRepo { display, .. } => display.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct UpgradeTransaction {
     snapshot_id: String,
     runtime_backups: Vec<RuntimeRollbackBackup>,
@@ -925,6 +1319,57 @@ fn upgrade_backup_parent(
         .home
         .join("tmp")
         .join("upgrade-runtime-backups"))
+}
+
+fn source_binding(env: &crate::env::EnvMeta) -> (String, String) {
+    if let Some(runtime) = env.default_runtime.clone() {
+        return ("runtime".to_string(), runtime);
+    }
+    if let Some(launcher) = env.default_launcher.clone() {
+        return ("launcher".to_string(), launcher);
+    }
+    if env.dev.is_some() {
+        return ("dev".to_string(), "dev".to_string());
+    }
+    ("none".to_string(), "none".to_string())
+}
+
+fn simulation_env_name(source_name: &str) -> String {
+    format!(
+        "{}-sim-{}",
+        source_name,
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+    )
+}
+
+fn summarize_command_text(primary: &str, secondary: &str) -> Option<String> {
+    for text in [primary, secondary] {
+        if let Some(line) = text.lines().find_map(|line| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty()).then_some(trimmed.to_string())
+        }) {
+            return Some(line);
+        }
+    }
+    None
+}
+
+fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> String {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    summarize_command_text(&stderr, &stdout).unwrap_or_else(|| "no output".to_string())
+}
+
+fn shell_command(command: &str) -> Command {
+    if cfg!(windows) {
+        let mut process = Command::new("cmd");
+        process.args(["/C", command]);
+        process
+    } else {
+        let mut process = Command::new("/bin/sh");
+        process.args(["-lc", command]);
+        process
+    }
 }
 
 fn service_action_for_dry_run(
