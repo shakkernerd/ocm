@@ -13,7 +13,7 @@ use crate::env::{
 use crate::infra::shell::build_openclaw_env;
 use crate::openclaw_repo::{detect_openclaw_checkout, ensure_openclaw_worktree};
 use crate::runtime::releases::{
-    is_official_openclaw_releases_url, normalize_openclaw_channel_selector,
+    OpenClawRelease, is_official_openclaw_releases_url, normalize_openclaw_channel_selector,
 };
 use crate::runtime::{
     InstallRuntimeFromOfficialReleaseOptions, OfficialRuntimePrepareAction, RuntimeMeta,
@@ -291,8 +291,10 @@ impl Cli {
             return Err("upgrade simulate requires an environment name".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
+        self.environment_service().get(source_name)?;
 
         let target = self.resolve_simulation_target(&to)?;
+        self.validate_simulation_target(&target)?;
         scenarios
             .into_iter()
             .map(|scenario| self.upgrade_simulate_one(source_name, &target, scenario))
@@ -484,6 +486,41 @@ impl Cli {
             },
             display: trimmed.to_string(),
         })
+    }
+
+    fn validate_simulation_target(&self, target: &UpgradeSimulationTarget) -> Result<(), String> {
+        let UpgradeSimulationTarget::Official { target, .. } = target else {
+            return Ok(());
+        };
+
+        let releases = self
+            .runtime_service()
+            .official_openclaw_releases(None, None)?;
+        match (target.version.as_deref(), target.channel.as_deref()) {
+            (Some(version), None) => {
+                if releases.iter().any(|release| release.version == version) {
+                    Ok(())
+                } else {
+                    Err(missing_simulation_version_error(version, &releases))
+                }
+            }
+            (None, Some(channel)) => {
+                if releases
+                    .iter()
+                    .any(|release| release.channel.as_deref() == Some(channel))
+                {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "OpenClaw release channel \"{channel}\" was not found; simulation did not create any scenario envs"
+                    ))
+                }
+            }
+            _ => Err(
+                "upgrade simulate requires a published version, channel, or local repo path"
+                    .to_string(),
+            ),
+        }
     }
 
     fn apply_simulation_target(
@@ -1641,6 +1678,30 @@ fn build_simulation_batch_summary(
         failed,
         results: summaries,
     }
+}
+
+fn missing_simulation_version_error(version: &str, releases: &[OpenClawRelease]) -> String {
+    let prefix = format!("{version}-");
+    let nearby = releases
+        .iter()
+        .filter(|release| release.version.starts_with(&prefix))
+        .map(|release| release.version.as_str())
+        .take(5)
+        .collect::<Vec<_>>();
+
+    let mut message = format!(
+        "OpenClaw release version \"{version}\" was not found; simulation did not create any scenario envs"
+    );
+    if !nearby.is_empty() {
+        message.push_str(&format!(
+            ". Nearby published releases: {}",
+            nearby.join(", ")
+        ));
+    }
+    message.push_str(
+        ". Use an exact published version, a channel such as beta, or a local OpenClaw repo path.",
+    );
+    message
 }
 
 fn simulation_env_name(source_name: &str, scenario: &str) -> String {

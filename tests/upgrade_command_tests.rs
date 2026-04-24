@@ -524,6 +524,78 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
 }
 
 #[test]
+fn upgrade_simulate_errors_before_cloning_when_published_target_is_missing() {
+    let root = TestDir::new("upgrade-simulate-missing-target");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/bin/sh\nprintf '2026.3.24\\n'\n", "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+        10,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25-beta.1\":{{\"version\":\"2026.3.25-beta.1\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\",\"2026.3.25-beta.1\":\"2026-03-26T09:00:00.000Z\"}}}}",
+        tarball_server.url(),
+        integrity,
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 4);
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let start = run_ocm(
+        &cwd,
+        &env,
+        &["start", "demo", "--version", "2026.3.24", "--no-service"],
+    );
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let simulate = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "upgrade",
+            "simulate",
+            "demo",
+            "--to",
+            "2026.3.25",
+            "--scenario",
+            "all",
+        ],
+    );
+    assert!(!simulate.status.success(), "{}", stdout(&simulate));
+    assert!(stdout(&simulate).is_empty(), "{}", stdout(&simulate));
+    let error = stderr(&simulate);
+    assert!(
+        error.contains("OpenClaw release version \"2026.3.25\" was not found"),
+        "{error}"
+    );
+    assert!(
+        error.contains("simulation did not create any scenario envs"),
+        "{error}"
+    );
+    assert!(error.contains("2026.3.25-beta.1"), "{error}");
+
+    let list = run_ocm(&cwd, &env, &["env", "list", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let envs: Value = serde_json::from_str(&stdout(&list)).unwrap();
+    let envs = envs.as_array().unwrap();
+    assert_eq!(envs.len(), 1, "{envs:#?}");
+    assert_eq!(envs[0]["name"], "demo");
+}
+
+#[test]
 fn upgrade_simulate_runs_openclaw_update_contract_checks_for_published_targets() {
     let root = TestDir::new("upgrade-simulate-contract");
     let cwd = root.child("workspace");
