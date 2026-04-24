@@ -545,7 +545,10 @@ pub fn upgrade_help(cmd: &str) -> String {
             format!("{cmd} upgrade --all"),
         ],
         &[
-            "Simulations clone the source env, switch only the clone, run OpenClaw checks, and leave the source env untouched.",
+            "Simulations clone the source env and leave the real env untouched.",
+            "Published-target simulations run OpenClaw's update dry-run plan before switching the clone.",
+            "Local-repo simulations validate deps/build/UI build before post-update checks.",
+            "Post-update checks run update-mode doctor, plugin update dry-run, and gateway status.",
             "Channel-tracked runtimes move forward automatically.",
             "Upgrades create a pre-upgrade snapshot before changing env state.",
             "If service restart/start fails, ocm restores the snapshot and previous runtime unless --no-rollback is set.",

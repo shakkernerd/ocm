@@ -123,7 +123,7 @@ Use `upgrade simulate` when you want to test what would happen against a publish
 `upgrade` is env-first:
 
 - channel-tracked runtimes move forward
-- simulations clone the source env, switch only the clone, and run OpenClaw checks
+- simulations clone the source env, run OpenClaw's update dry-run plan for published targets, validate local repo builds for repo targets, then run update-mode doctor, plugin update dry-run, and gateway status checks
 - a pre-upgrade snapshot is created before env state changes
 - if service reconciliation fails, OCM restores the snapshot and previous runtime unless `--no-rollback` is set
 - pinned runtimes stay pinned unless you pass `--version` or `--channel`

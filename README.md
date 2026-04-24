@@ -130,9 +130,12 @@ ocm upgrade simulate mira --to ./openclaw
 running service cannot be restarted or started after the change, OCM restores
 the snapshot and previous runtime by default.
 
-`upgrade simulate` clones the source env, switches only the clone to a published
-release or local OpenClaw repo, runs OpenClaw checks, and leaves the source env
-untouched.
+`upgrade simulate` clones the source env and leaves the real env untouched. For
+published targets it first runs OpenClaw's own `update --dry-run --json` plan
+against the clone, then switches the clone and runs update-mode doctor, plugin
+update dry-run, and gateway status checks. For local repos it validates the
+checkout with dependency/build checks before running the same post-update
+checks.
 
 ### Use a local checkout or dev build
 
