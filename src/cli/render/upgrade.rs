@@ -334,6 +334,34 @@ pub fn upgrade_simulation_batch(
         profile.color,
     ));
 
+    let failure_rows = summary
+        .results
+        .iter()
+        .flat_map(|result| {
+            result
+                .checks
+                .iter()
+                .filter(|check| check.status == "failed")
+                .map(|check| {
+                    vec![
+                        Cell::plain(result.scenario.clone()),
+                        Cell::plain(check.name.clone()),
+                        Cell::muted(check.note.as_deref().unwrap_or("no details reported")),
+                    ]
+                })
+        })
+        .collect::<Vec<_>>();
+    if !failure_rows.is_empty() {
+        lines.push(String::new());
+        lines.push(paint("Failures", Tone::Danger, profile.color));
+        lines.push(String::new());
+        lines.extend(render_table(
+            &["Scenario", "Check", "Error"],
+            &failure_rows,
+            profile.color,
+        ));
+    }
+
     lines.push(String::new());
     lines.extend(render_key_value_card(
         "Next",
@@ -474,5 +502,50 @@ fn simulation_tone(value: &str) -> Tone {
         "failed" => Tone::Danger,
         "skipped" => Tone::Muted,
         _ => Tone::Plain,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::upgrade::{UpgradeSimulationBatchSummary, UpgradeSimulationCheck};
+
+    #[test]
+    fn upgrade_simulation_batch_pretty_surfaces_failure_details() {
+        let summary = UpgradeSimulationBatchSummary {
+            source_env: "demo".to_string(),
+            to: "2026.4.23".to_string(),
+            count: 1,
+            passed: 0,
+            failed: 1,
+            results: vec![UpgradeSimulationSummary {
+                scenario: "current".to_string(),
+                source_env: "demo".to_string(),
+                simulation_env: "demo-current-sim-1".to_string(),
+                from_binding_kind: "runtime".to_string(),
+                from_binding_name: "2026.4.20".to_string(),
+                to_binding_kind: "unknown".to_string(),
+                to_binding_name: "unknown".to_string(),
+                to: "2026.4.23".to_string(),
+                outcome: "failed".to_string(),
+                checks: vec![UpgradeSimulationCheck {
+                    name: "prepare target".to_string(),
+                    status: "failed".to_string(),
+                    note: Some("release 2026.4.23 was not found".to_string()),
+                }],
+                cleanup_command: "./bin/ocm env destroy demo-current-sim-1 --yes".to_string(),
+                note: None,
+            }],
+        };
+
+        let output = upgrade_simulation_batch(&summary, RenderProfile::pretty(false), "./bin/ocm")
+            .join("\n");
+
+        assert!(output.contains("Failures"), "{output}");
+        assert!(output.contains("prepare target"), "{output}");
+        assert!(
+            output.contains("release 2026.4.23 was not found"),
+            "{output}"
+        );
     }
 }
