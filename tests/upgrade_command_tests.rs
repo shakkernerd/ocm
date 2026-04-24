@@ -112,6 +112,41 @@ exit 1
     )
 }
 
+fn scenario_sensitive_openclaw_script(version: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+case "$1" in
+  --version)
+    printf '{version}\n'
+    exit 0
+    ;;
+  update)
+    printf '{{"dryRun":true}}\n'
+    exit 0
+    ;;
+  doctor)
+    if grep -q '"telegram"' "${{OPENCLAW_CONFIG_PATH:-/dev/null}}"; then
+      echo "Error: Cannot find module 'grammy'" >&2
+      exit 1
+    fi
+    echo "doctor ok"
+    exit 0
+    ;;
+  plugins)
+    echo "No tracked plugins or hook packs to update."
+    exit 0
+    ;;
+  gateway)
+    printf '{{"gatewayState":"simulation-ok"}}\n'
+    exit 0
+    ;;
+esac
+echo "unexpected args: $*" >&2
+exit 1
+"#
+    )
+}
+
 fn sha512_integrity(body: &[u8]) -> String {
     let digest = Sha512::digest(body);
     format!(
@@ -302,6 +337,10 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
             initial_packument.as_bytes().to_vec(),
             updated_packument.as_bytes().to_vec(),
             updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
         ],
     );
 
@@ -435,6 +474,10 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
             initial_packument.as_bytes().to_vec(),
             updated_packument.as_bytes().to_vec(),
             updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
         ],
     );
 
@@ -524,6 +567,12 @@ fn upgrade_simulate_runs_openclaw_update_contract_checks_for_published_targets()
             initial_packument.as_bytes().to_vec(),
             updated_packument.as_bytes().to_vec(),
             updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
         ],
     );
 
@@ -574,6 +623,140 @@ fn upgrade_simulate_runs_openclaw_update_contract_checks_for_published_targets()
         command_log.contains("gateway status --deep --json"),
         "{command_log}"
     );
+}
+
+#[test]
+fn upgrade_simulate_all_scenarios_reports_plugin_specific_failures() {
+    let root = TestDir::new("upgrade-simulate-scenarios");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_tarball = openclaw_package_tarball(
+        &scenario_sensitive_openclaw_script("2026.4.15"),
+        "2026.4.15",
+    );
+    let old_integrity = sha512_integrity(&old_tarball);
+    let old_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.4.15.tgz",
+        "application/octet-stream",
+        &old_tarball,
+        10,
+    );
+    let new_tarball = openclaw_package_tarball(
+        &scenario_sensitive_openclaw_script("2026.4.20"),
+        "2026.4.20",
+    );
+    let new_integrity = sha512_integrity(&new_tarball);
+    let new_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.4.20.tgz",
+        "application/octet-stream",
+        &new_tarball,
+        10,
+    );
+
+    let initial_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.4.15\"}},\"versions\":{{\"2026.4.15\":{{\"version\":\"2026.4.15\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.4.15\":\"2026-04-15T16:35:52.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity
+    );
+    let updated_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.4.20\"}},\"versions\":{{\"2026.4.15\":{{\"version\":\"2026.4.15\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.4.20\":{{\"version\":\"2026.4.20\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.4.15\":\"2026-04-15T16:35:52.000Z\",\"2026.4.20\":\"2026-04-20T09:00:00.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity,
+        new_tarball_server.url(),
+        new_integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![
+            initial_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+        ],
+    );
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let start = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "start",
+            "scenario-source",
+            "--version",
+            "2026.4.15",
+            "--no-service",
+        ],
+    );
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let simulate = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "upgrade",
+            "simulate",
+            "scenario-source",
+            "--to",
+            "2026.4.20",
+            "--scenario",
+            "all",
+            "--json",
+        ],
+    );
+    assert!(!simulate.status.success(), "{}", stdout(&simulate));
+    let json: Value = serde_json::from_str(&stdout(&simulate)).unwrap();
+    assert_eq!(json["count"], 3);
+    assert_eq!(json["passed"], 2);
+    assert_eq!(json["failed"], 1);
+
+    let results = json["results"].as_array().unwrap();
+    let current = results
+        .iter()
+        .find(|entry| entry["scenario"] == "current")
+        .unwrap();
+    let minimum = results
+        .iter()
+        .find(|entry| entry["scenario"] == "minimum")
+        .unwrap();
+    let telegram = results
+        .iter()
+        .find(|entry| entry["scenario"] == "telegram")
+        .unwrap();
+    assert_eq!(current["outcome"], "passed");
+    assert_eq!(minimum["outcome"], "passed");
+    assert_eq!(telegram["outcome"], "failed");
+    assert!(
+        telegram["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["name"] == "openclaw doctor"
+                && check["status"] == "failed"
+                && check["note"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Cannot find module 'grammy'")),
+        "{telegram:#}"
+    );
+
+    let source = run_ocm(&cwd, &env, &["env", "show", "scenario-source", "--json"]);
+    assert!(source.status.success(), "{}", stderr(&source));
+    let source_json: Value = serde_json::from_str(&stdout(&source)).unwrap();
+    assert_eq!(source_json["defaultRuntime"], "2026.4.15");
+    assert_eq!(source_json["serviceEnabled"], false);
 }
 
 #[test]
