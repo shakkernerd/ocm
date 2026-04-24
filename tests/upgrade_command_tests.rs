@@ -52,6 +52,66 @@ fn openclaw_package_tarball(script_body: &str, version: &str) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
+fn recording_openclaw_script(version: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+home="${{OPENCLAW_HOME:-$PWD}}"
+mkdir -p "$home"
+printf '%s\n' "$*" >> "$home/sim-commands.log"
+has_arg() {{
+  needle="$1"
+  shift
+  for arg in "$@"; do
+    if [ "$arg" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}}
+case "$1" in
+  --version)
+    printf '{version}\n'
+    exit 0
+    ;;
+  update)
+    printf '{{"dryRun":true}}\n'
+    exit 0
+    ;;
+  doctor)
+    has_arg "--non-interactive" "$@" && has_arg "--fix" "$@" || {{
+      echo "missing doctor update flags" >&2
+      exit 1
+    }}
+    if [ "${{OPENCLAW_UPDATE_IN_PROGRESS:-}}" != "1" ]; then
+      echo "missing OPENCLAW_UPDATE_IN_PROGRESS" >&2
+      exit 1
+    fi
+    echo "doctor ok"
+    exit 0
+    ;;
+  plugins)
+    [ "$2" = "update" ] && has_arg "--all" "$@" && has_arg "--dry-run" "$@" || {{
+      echo "missing plugin dry-run flags" >&2
+      exit 1
+    }}
+    echo "No tracked plugins or hook packs to update."
+    exit 0
+    ;;
+  gateway)
+    [ "$2" = "status" ] && has_arg "--deep" "$@" && has_arg "--json" "$@" || {{
+      echo "missing gateway status flags" >&2
+      exit 1
+    }}
+    printf '{{"gatewayState":"simulation-ok"}}\n'
+    exit 0
+    ;;
+esac
+echo "unexpected args: $*" >&2
+exit 1
+"#
+    )
+}
+
 fn sha512_integrity(body: &[u8]) -> String {
     let digest = Sha512::digest(body);
     format!(
@@ -156,6 +216,10 @@ case "$1" in
     touch node_modules/.bin/tsx
     exit 0
     ;;
+  build|ui:build)
+    echo "$1 ok"
+    exit 0
+    ;;
   openclaw)
     shift
     case "$1" in
@@ -166,6 +230,14 @@ case "$1" in
       doctor)
         echo "Error: Cannot find module 'grammy'" >&2
         exit 1
+        ;;
+      plugins)
+        echo "No tracked plugins or hook packs to update."
+        exit 0
+        ;;
+      gateway)
+        echo "{\"status\":\"ok\"}"
+        exit 0
         ;;
       *)
         echo "fake local openclaw $*"
@@ -327,7 +399,7 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
 
-    let old_tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let old_tarball = openclaw_package_tarball("#!/bin/sh\nprintf '2026.3.24\\n'\n", "2026.3.24");
     let old_integrity = sha512_integrity(&old_tarball);
     let old_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.24.tgz",
@@ -335,10 +407,7 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
         &old_tarball,
         10,
     );
-    let new_tarball = openclaw_package_tarball(
-        "#!/usr/bin/env node\nconsole.log('2026.3.25');\n",
-        "2026.3.25",
-    );
+    let new_tarball = openclaw_package_tarball("#!/bin/sh\nprintf '2026.3.25\\n'\n", "2026.3.25");
     let new_integrity = sha512_integrity(&new_tarball);
     let new_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.25.tgz",
@@ -409,6 +478,102 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
     assert_eq!(simulation_json["defaultRuntime"], "2026.3.25");
     assert_eq!(simulation_json["serviceEnabled"], false);
     assert_eq!(simulation_json["serviceRunning"], false);
+}
+
+#[test]
+fn upgrade_simulate_runs_openclaw_update_contract_checks_for_published_targets() {
+    let root = TestDir::new("upgrade-simulate-contract");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.24");
+    let old_integrity = sha512_integrity(&old_tarball);
+    let old_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &old_tarball,
+        10,
+    );
+    let new_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.25"), "2026.3.25");
+    let new_integrity = sha512_integrity(&new_tarball);
+    let new_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.25.tgz",
+        "application/octet-stream",
+        &new_tarball,
+        10,
+    );
+
+    let initial_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity
+    );
+    let updated_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.25\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25\":{{\"version\":\"2026.3.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\",\"2026.3.25\":\"2026-03-26T09:00:00.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity,
+        new_tarball_server.url(),
+        new_integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![
+            initial_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+        ],
+    );
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-service"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let simulate = run_ocm(
+        &cwd,
+        &env,
+        &["upgrade", "simulate", "demo", "--to", "2026.3.25", "--json"],
+    );
+    assert!(
+        simulate.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        stdout(&simulate),
+        stderr(&simulate)
+    );
+    let json: Value = serde_json::from_str(&stdout(&simulate)).unwrap();
+    assert_eq!(json["outcome"], "passed");
+    let sim_name = json["simulationEnv"].as_str().unwrap();
+    let simulation = run_ocm(&cwd, &env, &["env", "show", sim_name, "--json"]);
+    assert!(simulation.status.success(), "{}", stderr(&simulation));
+    let simulation_json: Value = serde_json::from_str(&stdout(&simulation)).unwrap();
+    let sim_root = Path::new(simulation_json["root"].as_str().unwrap());
+    let command_log = fs::read_to_string(sim_root.join("sim-commands.log")).unwrap();
+
+    assert!(
+        command_log.contains("update --dry-run --json --no-restart --yes --tag 2026.3.25"),
+        "{command_log}"
+    );
+    assert!(command_log.contains("--version"), "{command_log}");
+    assert!(
+        command_log.contains("doctor --non-interactive --fix"),
+        "{command_log}"
+    );
+    assert!(
+        command_log.contains("plugins update --all --dry-run"),
+        "{command_log}"
+    );
+    assert!(
+        command_log.contains("gateway status --deep --json"),
+        "{command_log}"
+    );
 }
 
 #[test]
