@@ -130,6 +130,13 @@ struct UpgradeSimulationOptions {
     keep_envs: bool,
 }
 
+#[derive(Clone, Debug)]
+struct PreparedSimulationRuntime {
+    name: String,
+    note: String,
+    temporary: bool,
+}
+
 impl UpgradeTarget {
     fn parse(args: Vec<String>) -> Result<(Vec<String>, Self), String> {
         let (args, version) = Cli::consume_option(args, "--version")?;
@@ -308,16 +315,28 @@ impl Cli {
 
         let target = self.resolve_simulation_target(&to)?;
         self.validate_simulation_target(&target)?;
-        scenarios
+        let prepared_runtime = self.prepare_shared_simulation_runtime(source_name, &target)?;
+        let mut summaries = scenarios
             .into_iter()
-            .map(|scenario| self.upgrade_simulate_one(source_name, &target, scenario, options))
-            .collect()
+            .map(|scenario| {
+                self.upgrade_simulate_one(
+                    source_name,
+                    &target,
+                    prepared_runtime.as_ref(),
+                    scenario,
+                    options,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.finish_shared_simulation_runtime(&mut summaries, prepared_runtime.as_ref(), options)?;
+        Ok(summaries)
     }
 
     fn upgrade_simulate_one(
         &self,
         source_name: &str,
         target: &UpgradeSimulationTarget,
+        prepared_runtime: Option<&PreparedSimulationRuntime>,
         scenario: UpgradeSimulationScenario,
         options: UpgradeSimulationOptions,
     ) -> Result<UpgradeSimulationSummary, String> {
@@ -362,7 +381,7 @@ impl Cli {
         }
         checks.push(self.run_update_plan_check(&cloned.name, &target));
 
-        match self.apply_simulation_target(&cloned.name, target) {
+        match self.apply_simulation_target(&cloned.name, target, prepared_runtime) {
             Ok((kind, name, note)) => {
                 to_binding_kind = kind;
                 to_binding_name = name;
@@ -544,14 +563,21 @@ impl Cli {
         &self,
         simulation_name: &str,
         target: &UpgradeSimulationTarget,
+        prepared_runtime: Option<&PreparedSimulationRuntime>,
     ) -> Result<(String, String, String), String> {
         match target {
-            UpgradeSimulationTarget::Official { target, .. } => {
-                let (runtime_name, note) =
-                    self.prepare_simulation_official_target(simulation_name, target)?;
+            UpgradeSimulationTarget::Official { .. } => {
+                let prepared_runtime = prepared_runtime.ok_or_else(|| {
+                    "simulation target runtime was not prepared before scenario execution"
+                        .to_string()
+                })?;
                 self.environment_service()
-                    .set_runtime(simulation_name, &runtime_name)?;
-                Ok(("runtime".to_string(), runtime_name, note))
+                    .set_runtime(simulation_name, &prepared_runtime.name)?;
+                Ok((
+                    "runtime".to_string(),
+                    prepared_runtime.name.clone(),
+                    prepared_runtime.note.clone(),
+                ))
             }
             UpgradeSimulationTarget::LocalRepo { repo_root, .. } => {
                 let worktree_root = ensure_openclaw_worktree(repo_root, simulation_name)?;
@@ -581,11 +607,15 @@ impl Cli {
         }
     }
 
-    fn prepare_simulation_official_target(
+    fn prepare_shared_simulation_runtime(
         &self,
-        simulation_name: &str,
-        target: &UpgradeTarget,
-    ) -> Result<(String, String), String> {
+        source_name: &str,
+        target: &UpgradeSimulationTarget,
+    ) -> Result<Option<PreparedSimulationRuntime>, String> {
+        let UpgradeSimulationTarget::Official { target, .. } = target else {
+            return Ok(None);
+        };
+
         let canonical_name = target.canonical_runtime_name()?;
         let releases = self
             .runtime_service()
@@ -601,14 +631,15 @@ impl Cli {
                 == Some(selected.version.as_str())
                 && existing.source_url.as_deref() == Some(selected.tarball_url.as_str());
             if healthy && same_release {
-                return Ok((
-                    canonical_name.clone(),
-                    format!("using installed runtime {canonical_name}"),
-                ));
+                return Ok(Some(PreparedSimulationRuntime {
+                    name: canonical_name.clone(),
+                    note: format!("using installed runtime {canonical_name}"),
+                    temporary: false,
+                }));
             }
         }
 
-        let runtime_name = simulation_runtime_name(simulation_name);
+        let runtime_name = simulation_runtime_name(source_name);
         install_runtime_from_selected_official_openclaw_release(
             runtime_name.clone(),
             false,
@@ -628,10 +659,11 @@ impl Cli {
                 cwd: &self.cwd,
             },
         )?;
-        Ok((
-            runtime_name,
-            "installed temporary runtime for simulation".to_string(),
-        ))
+        Ok(Some(PreparedSimulationRuntime {
+            name: runtime_name,
+            note: "installed temporary runtime for simulation".to_string(),
+            temporary: true,
+        }))
     }
 
     fn ensure_simulation_dev_dependencies(&self, meta: &crate::env::EnvMeta) -> Result<(), String> {
@@ -834,8 +866,9 @@ impl Cli {
     ) -> Result<UpgradeSimulationSummary, String> {
         if options.keep_envs {
             summary.cleanup = "kept".to_string();
-            summary.note =
-                Some("simulation env retained because --keep-simulations was set".to_string());
+            summary.note = Some(
+                "simulation artifacts retained because --keep-simulations was set".to_string(),
+            );
             return Ok(summary);
         }
 
@@ -855,23 +888,39 @@ impl Cli {
                 summary.outcome = "failed".to_string();
             }
         }
-        if summary.to_binding_name.starts_with("ocm-sim-runtime-") {
-            match self.remove_runtime_created_during_upgrade(&summary.to_binding_name) {
-                Ok(()) => summary.checks.push(UpgradeSimulationCheck::passed(
-                    "cleanup simulation runtime",
-                    "removed temporary runtime",
-                )),
-                Err(error) => {
+        Ok(summary)
+    }
+
+    fn finish_shared_simulation_runtime(
+        &self,
+        summaries: &mut [UpgradeSimulationSummary],
+        prepared_runtime: Option<&PreparedSimulationRuntime>,
+        options: UpgradeSimulationOptions,
+    ) -> Result<(), String> {
+        let Some(prepared_runtime) = prepared_runtime else {
+            return Ok(());
+        };
+        if options.keep_envs || !prepared_runtime.temporary {
+            return Ok(());
+        }
+
+        match self.remove_runtime_created_during_upgrade(&prepared_runtime.name) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                for summary in summaries
+                    .iter_mut()
+                    .filter(|summary| summary.to_binding_name == prepared_runtime.name)
+                {
                     summary.cleanup = "failed".to_string();
                     summary.checks.push(UpgradeSimulationCheck::failed(
                         "cleanup simulation runtime",
-                        error,
+                        error.clone(),
                     ));
                     summary.outcome = "failed".to_string();
                 }
+                Ok(())
             }
         }
-        Ok(summary)
     }
 
     fn upgrade_env(
@@ -1817,8 +1866,12 @@ fn simulation_env_name(source_name: &str, scenario: &str) -> String {
     )
 }
 
-fn simulation_runtime_name(simulation_name: &str) -> String {
-    format!("ocm-sim-runtime-{simulation_name}")
+fn simulation_runtime_name(source_name: &str) -> String {
+    format!(
+        "ocm-sim-runtime-{}-{}",
+        source_name,
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+    )
 }
 
 fn reset_to_minimum_simulation_config(

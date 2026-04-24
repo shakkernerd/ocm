@@ -844,6 +844,8 @@ fn upgrade_simulate_all_scenarios_reports_plugin_specific_failures() {
     assert_eq!(current["cleanup"], "cleaned");
     assert_eq!(minimum["cleanup"], "cleaned");
     assert_eq!(telegram["cleanup"], "cleaned");
+    assert_eq!(current["toBindingName"], minimum["toBindingName"]);
+    assert_eq!(minimum["toBindingName"], telegram["toBindingName"]);
     assert!(
         telegram["checks"]
             .as_array()
