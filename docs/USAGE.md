@@ -112,6 +112,7 @@ ocm service status mira
 ```bash
 ocm upgrade mira
 ocm upgrade --all
+ocm upgrade mira --dry-run
 ```
 
 Use this when a newer OpenClaw release is available and you want your environments to move forward without manually updating runtimes and restarting services.
@@ -119,6 +120,8 @@ Use this when a newer OpenClaw release is available and you want your environmen
 `upgrade` is env-first:
 
 - channel-tracked runtimes move forward
+- a pre-upgrade snapshot is created before env state changes
+- if service reconciliation fails, OCM restores the snapshot and previous runtime unless `--no-rollback` is set
 - pinned runtimes stay pinned unless you pass `--version` or `--channel`
 - local-command environments are reported clearly instead of being changed behind your back
 
@@ -278,6 +281,7 @@ ocm upgrade mira
 ```
 
 This is the normal command when `mira` tracks a channel like `stable` or `beta`.
+Use `--dry-run` to preview the transaction without writing snapshots, runtimes, envs, or services.
 
 ### Upgrade every environment that can be updated safely
 

@@ -121,7 +121,12 @@ This is the shortest path for most people.
 ```bash
 ocm upgrade mira
 ocm upgrade --all
+ocm upgrade mira --dry-run
 ```
+
+`upgrade` creates a pre-upgrade snapshot before changing an environment. If a
+running service cannot be restarted or started after the change, OCM restores
+the snapshot and previous runtime by default.
 
 ### Use a local checkout or dev build
 

@@ -110,7 +110,7 @@ pub fn root_help(cmd: &str) -> String {
             ),
             (
                 "upgrade",
-                "Update one env or all envs and restart services when needed",
+                "Safely update one env or all envs and restart services when needed",
             ),
             (
                 "doctor",
@@ -501,12 +501,12 @@ pub fn start_help(cmd: &str) -> String {
 pub fn upgrade_help(cmd: &str) -> String {
     render_leaf(
         "Upgrade environments",
-        "Update OpenClaw for one environment or every environment, and refresh running services when needed.",
+        "Update OpenClaw for one environment or every environment with pre-upgrade snapshots and service rollback when needed.",
         vec![
             format!(
-                "{cmd} upgrade <env> [--version <version> | --channel <channel>] [--raw] [--json]"
+                "{cmd} upgrade <env> [--version <version> | --channel <channel>] [--dry-run] [--no-rollback] [--raw] [--json]"
             ),
-            format!("{cmd} upgrade --all [--raw] [--json]"),
+            format!("{cmd} upgrade --all [--dry-run] [--raw] [--json]"),
         ],
         &[
             (
@@ -518,6 +518,14 @@ pub fn upgrade_help(cmd: &str) -> String {
                 "Move one env to the release for one channel",
             ),
             ("--all", "Upgrade every env that can be updated safely"),
+            (
+                "--dry-run",
+                "Preview what would change without writing snapshots, runtimes, envs, or services",
+            ),
+            (
+                "--no-rollback",
+                "Keep failed changes instead of restoring the pre-upgrade snapshot",
+            ),
             ("--raw", "Force plain output instead of TTY cards or tables"),
             ("--json", "Print upgrade summaries as JSON"),
         ],
@@ -529,6 +537,8 @@ pub fn upgrade_help(cmd: &str) -> String {
         ],
         &[
             "Channel-tracked runtimes move forward automatically.",
+            "Upgrades create a pre-upgrade snapshot before changing env state.",
+            "If service restart/start fails, ocm restores the snapshot and previous runtime unless --no-rollback is set.",
             "Pinned runtimes stay pinned unless you pass --version or --channel explicitly.",
             "Local-command environments are reported clearly instead of being changed behind your back.",
         ],

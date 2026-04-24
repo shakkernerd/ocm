@@ -22,7 +22,7 @@ fn top_level_help_is_clean_and_points_to_topics() {
     assert!(output.contains("Fast path: create or reuse an env and keep it running"));
     assert!(output.contains("OpenClaw development envs with worktrees and watch mode"));
     assert!(output.contains("Guided setup for release and local-dev flows"));
-    assert!(output.contains("Update one env or all envs and restart services when needed"));
+    assert!(output.contains("Safely update one env or all envs and restart services when needed"));
     assert!(output.contains("Check host software for release and feature readiness"));
     assert!(output.contains("Update the installed ocm binary"));
     assert!(output.contains("Bring an existing plain OpenClaw home into OCM"));
@@ -264,8 +264,11 @@ fn upgrade_help_is_available_from_help_and_flag() {
     assert_eq!(output, stdout(&via_flag));
     assert!(output.contains("Upgrade environments"));
     assert!(output.contains("ocm upgrade <env> [--version <version> | --channel <channel>]"));
+    assert!(output.contains("--dry-run"));
+    assert!(output.contains("--no-rollback"));
     assert!(output.contains("ocm upgrade --all"));
     assert!(output.contains("Channel-tracked runtimes move forward automatically."));
+    assert!(output.contains("pre-upgrade snapshot"));
 }
 
 #[test]
