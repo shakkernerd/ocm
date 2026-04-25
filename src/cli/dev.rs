@@ -247,13 +247,6 @@ impl Cli {
         gateway_port: Option<u32>,
     ) -> Result<(EnvMeta, bool), String> {
         if let Some(existing) = self.environment_service().find(name)? {
-            if gateway_port.is_some() {
-                return Err(format!(
-                    "dev cannot change the port for existing env {}; use a new env name or keep the current port",
-                    existing.name
-                ));
-            }
-
             let dev = existing.dev.as_ref().ok_or_else(|| {
                 format!(
                     "environment \"{}\" is not a dev env; use a new env name for `ocm dev`",
@@ -285,6 +278,15 @@ impl Cli {
             let meta = self
                 .environment_service()
                 .apply_effective_gateway_port(existing)?;
+            if let Some(requested_port) = gateway_port {
+                let current_port = meta.gateway_port.unwrap_or_default();
+                if requested_port != current_port {
+                    return Err(format!(
+                        "dev cannot change the port for existing env {}; current port is {}",
+                        meta.name, current_port
+                    ));
+                }
+            }
             self.save_preferred_dev_repo(&existing_repo)?;
             self.bootstrap_dev_env(&meta)?;
             return Ok((meta, false));

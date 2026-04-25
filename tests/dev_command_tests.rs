@@ -272,6 +272,47 @@ fn dev_command_accepts_a_custom_env_root() {
 }
 
 #[test]
+fn dev_command_allows_reusing_the_same_explicit_port() {
+    let root = TestDir::new("dev-command-reuse-same-port");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let first = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "dev",
+            "demo",
+            "--repo",
+            &path_string(&repo),
+            "--port",
+            "21901",
+        ],
+    );
+    assert!(first.status.success(), "{}", stderr(&first));
+
+    let second = run_ocm(&cwd, &env, &["dev", "demo", "--port", "21901"]);
+    assert!(second.status.success(), "{}", stderr(&second));
+
+    let changed = run_ocm(&cwd, &env, &["dev", "demo", "--port", "21902"]);
+    assert!(!changed.status.success(), "{}", stdout(&changed));
+    assert!(
+        stderr(&changed)
+            .contains("dev cannot change the port for existing env demo; current port is 21901"),
+        "{}",
+        stderr(&changed)
+    );
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["gatewayPort"], 21901);
+}
+
+#[test]
 fn dev_command_reuses_the_saved_repo_for_new_envs() {
     let root = TestDir::new("dev-command-saved-repo");
     let repo = init_openclaw_repo(&root);
