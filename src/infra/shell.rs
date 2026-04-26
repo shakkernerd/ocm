@@ -65,6 +65,10 @@ pub fn build_openclaw_env(
         "OPENCLAW_CONFIG_PATH".to_string(),
         paths.config_path.to_string_lossy().into_owned(),
     );
+    next.insert(
+        "OPENCLAW_SERVICE_REPAIR_POLICY".to_string(),
+        "external".to_string(),
+    );
     next.insert("OCM_ACTIVE_ENV".to_string(), meta.name.clone());
     next.insert(
         "OCM_ACTIVE_ENV_ROOT".to_string(),
@@ -112,6 +116,7 @@ pub fn render_use_script(meta: &EnvMeta, shell: &str) -> String {
             "OPENCLAW_CONFIG_PATH",
             &paths.config_path.to_string_lossy(),
         ),
+        render_assignment(shell, "OPENCLAW_SERVICE_REPAIR_POLICY", "external"),
         render_assignment(shell, "OCM_ACTIVE_ENV", &meta.name),
         render_assignment(shell, "OCM_ACTIVE_ENV_ROOT", &paths.root.to_string_lossy()),
     ];

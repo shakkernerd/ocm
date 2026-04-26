@@ -35,6 +35,7 @@ fn env_use_prints_activation_exports_for_the_selected_environment() {
     let script = stdout(&use_output);
     assert!(script.contains("unset OPENCLAW_PROFILE"));
     assert!(script.contains(&format!("export OPENCLAW_HOME='{}'", env_root.display())));
+    assert!(script.contains("export OPENCLAW_SERVICE_REPAIR_POLICY='external'"));
     assert!(script.contains(&format!("export OPENCLAW_GATEWAY_PORT='{}'", 19789)));
 }
 
@@ -58,7 +59,7 @@ fn env_exec_injects_openclaw_environment_variables() {
             "--",
             "sh",
             "-lc",
-            "printf '%s|%s' \"$OPENCLAW_HOME\" \"${OPENCLAW_PROFILE:-unset}\"",
+            "printf '%s|%s|%s' \"$OPENCLAW_HOME\" \"${OPENCLAW_PROFILE:-unset}\" \"$OPENCLAW_SERVICE_REPAIR_POLICY\"",
         ],
     );
     assert!(exec_output.status.success(), "{}", stderr(&exec_output));
@@ -66,7 +67,7 @@ fn env_exec_injects_openclaw_environment_variables() {
     let env_root = clean_path(&root.child("ocm-home/envs/demo"));
     assert_eq!(
         stdout(&exec_output),
-        format!("{}|unset", env_root.display())
+        format!("{}|unset|external", env_root.display())
     );
 }
 
@@ -169,6 +170,10 @@ fn env_run_overrides_parent_openclaw_environment_state() {
         demo_root.display().to_string(),
     );
     env.insert("OPENCLAW_PROFILE".to_string(), "legacy".to_string());
+    env.insert(
+        "OPENCLAW_SERVICE_REPAIR_POLICY".to_string(),
+        "auto".to_string(),
+    );
 
     let run_output = run_ocm(
         &cwd,
@@ -179,7 +184,7 @@ fn env_run_overrides_parent_openclaw_environment_state() {
             "test",
             "--",
             "-lc",
-            "printf '%s|%s|%s|%s|%s' \"$OPENCLAW_HOME\" \"$OPENCLAW_STATE_DIR\" \"$OPENCLAW_CONFIG_PATH\" \"$OCM_ACTIVE_ENV\" \"${OPENCLAW_PROFILE:-unset}\"",
+            "printf '%s|%s|%s|%s|%s|%s' \"$OPENCLAW_HOME\" \"$OPENCLAW_STATE_DIR\" \"$OPENCLAW_CONFIG_PATH\" \"$OCM_ACTIVE_ENV\" \"${OPENCLAW_PROFILE:-unset}\" \"$OPENCLAW_SERVICE_REPAIR_POLICY\"",
         ],
     );
     assert!(run_output.status.success(), "{}", stderr(&run_output));
@@ -188,12 +193,13 @@ fn env_run_overrides_parent_openclaw_environment_state() {
     assert_eq!(
         stdout(&run_output),
         format!(
-            "{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}",
             test_root.display(),
             test_root.join(".openclaw").display(),
             test_root.join(".openclaw/openclaw.json").display(),
             "test",
-            "unset"
+            "unset",
+            "external"
         )
     );
 }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenClaw Release Validation"
+  short_description: "Run broad release scenario checks"
+  default_prompt: "Use $openclaw-release-validation to validate OpenClaw origin/main through the broad release scenario matrix and produce a concise pass/fail report."
