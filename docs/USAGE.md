@@ -243,6 +243,13 @@ This is the shortest non-interactive path.
 ocm env exec mira -- sh -lc 'echo "$OPENCLAW_HOME"'
 ```
 
+OCM env execution sets OpenClaw's env-scoped paths for you:
+`OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_PATH`.
+It also sets `OPENCLAW_SERVICE_REPAIR_POLICY=external`, which tells OpenClaw
+that service registration and repair are managed outside OpenClaw in this
+context. Commands like `openclaw doctor --fix` can still repair normal env
+state, but background service lifecycle should be handled with `ocm service`.
+
 ## Service management
 
 Use `service` when an environment should run in the background.
@@ -315,18 +322,6 @@ Use this when you want to deliberately move one environment to a different publi
 ocm self update
 ocm self update --check
 ```
-
-### Discover other OpenClaw services on the machine
-
-```bash
-ocm service discover
-```
-
-Use this when you want to see:
-
-- OCM-managed services
-- a separate OpenClaw service outside OCM
-- other discovered OpenClaw services on the machine
 
 ## Environment lifecycle
 

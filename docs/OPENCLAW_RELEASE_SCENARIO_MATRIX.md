@@ -43,7 +43,7 @@ Use OCM this way during validation:
   OpenClaw can report service health but does not mutate global/user-level
   service registrations from `doctor --fix`.
 - Inspect env services with `ocm service status <env>`, `ocm service list`,
-  `ocm service discover`, and `ocm logs <env>`.
+  and `ocm logs <env>`.
 - Simulate upgrades with `ocm upgrade simulate <env> --to <target>`.
 - Use `ocm help start`, `ocm help service`, `ocm help logs`, `ocm help
   upgrade`, and `ocm help env` when the command shape is unclear.
@@ -61,10 +61,10 @@ When validating service boundaries, test user intent:
 
 - If an env was created without OCM service management, OCM should not mark it
   service-managed unless explicitly asked.
-- If OpenClaw's own command or `doctor --fix` creates service state, report
-  whether that state is expected OpenClaw behavior or an OCM isolation problem.
-- OCM should not mistake a separate OpenClaw service outside OCM for the
-  env-bound service under test.
+- Do not run a broad standalone OpenClaw LaunchAgent/service mutation scenario
+  unless the release itself changed service behavior.
+- For normal release validation, treat service repair policy as an env execution
+  assertion: OCM env runs should expose `OPENCLAW_SERVICE_REPAIR_POLICY=external`.
 
 ## Report Format
 
@@ -252,8 +252,8 @@ Pass evidence:
 
 What to test:
 
-- `openclaw doctor` reports current state without mutating files, services, or
-  install records.
+- `openclaw doctor` reports current state without mutating files or install
+  records.
 - Missing dependency checks are accurate.
 - Healthy release state does not show stale errors from prior releases.
 
@@ -264,7 +264,7 @@ Run for:
 
 Pass evidence:
 
-- No file/service mutation in read-only mode and diagnostics match reality.
+- No file mutation in read-only mode and diagnostics match reality.
 
 ### S10 - Doctor Repair Mode
 
@@ -272,8 +272,7 @@ What to test:
 
 - `openclaw doctor --fix` repairs supported issues.
 - Repair is idempotent.
-- Repair does not create unrelated default services or global state from an
-  isolated test env.
+- Repair does not create unrelated global state from an isolated test env.
 - Follow-up read-only doctor is clean or reports only expected remaining issues.
 
 Run for:
@@ -283,8 +282,8 @@ Run for:
 
 Pass evidence:
 
-- Repair fixes targeted issues, second repair is a no-op, and no surprise
-  LaunchAgent/service is left behind.
+- Repair fixes targeted issues, second repair is a no-op, and no unrelated
+  global state is left behind.
 
 ### S11 - Plugin Discovery And Registry Health
 
@@ -386,39 +385,7 @@ Pass evidence:
 - Status points at the right env/binary and no stale/global gateway is mistaken
   for the env gateway.
 
-### S16 - OpenClaw Service And OCM Service Boundaries
-
-What to test:
-
-- OCM-created envs respect the user's service intent: no OCM-managed background
-  service unless the OCM command path requested one.
-- OCM env execution and shell activation set
-  `OPENCLAW_SERVICE_REPAIR_POLICY=external`.
-- OpenClaw's own service/gateway behavior, including anything triggered by
-  `openclaw doctor --fix`, is run through `ocm @<env> -- ...` so the active
-  `OPENCLAW_HOME` is the test env.
-- If OpenClaw creates or repairs a LaunchAgent, identify whether it is expected
-  OpenClaw service behavior, unexpected behavior in an OCM-managed env, or OCM
-  incorrectly leaking/defaulting service state.
-- `ocm service status <env>`, `ocm service list`, `ocm service discover`, and
-  `ocm logs <env>` reflect the OCM env being tested and do not confuse it with
-  a separate OpenClaw service outside OCM.
-- Service-enabled envs create only expected OCM service policy/state.
-- Temp `ai.openclaw.gateway` or other test-created services are stopped/booted
-  out.
-
-Run for:
-
-- new user
-- existing user
-
-Pass evidence:
-
-- OCM service state matches user intent, env commands expose
-  `OPENCLAW_SERVICE_REPAIR_POLICY=external`, OpenClaw service side effects are
-  classified correctly, and cleanup leaves no temp LaunchAgent or stale service.
-
-### S17 - Logs And Support Evidence
+### S16 - Logs And Support Evidence
 
 What to test:
 
@@ -436,7 +403,7 @@ Pass evidence:
 
 - Logs identify the current env and contain enough evidence to debug failures.
 
-### S18 - Channel And Connector Smoke
+### S17 - Channel And Connector Smoke
 
 What to test:
 
@@ -455,7 +422,7 @@ Pass evidence:
 - Changed channel surfaces load without diagnostics and preserve existing
   config.
 
-### S19 - Model And Provider Configuration
+### S18 - Model And Provider Configuration
 
 What to test:
 
@@ -472,7 +439,7 @@ Pass evidence:
 
 - Defaults are sane for new users and existing provider choices survive upgrade.
 
-### S20 - Browser/UI Build And Static Assets
+### S19 - Browser/UI Build And Static Assets
 
 What to test:
 
@@ -489,7 +456,7 @@ Pass evidence:
 
 - UI build passes and no missing asset/runtime errors appear in gateway logs.
 
-### S21 - Sessions And Persistent State
+### S20 - Sessions And Persistent State
 
 What to test:
 
@@ -506,7 +473,7 @@ Pass evidence:
 
 - Existing state remains readable and new state is written to the env root.
 
-### S22 - Secrets And Environment Isolation
+### S21 - Secrets And Environment Isolation
 
 What to test:
 
@@ -524,7 +491,7 @@ Pass evidence:
 - Commands use the intended env root and no cross-env secret/config leakage is
   observed.
 
-### S23 - Filesystem And Path Safety
+### S22 - Filesystem And Path Safety
 
 What to test:
 
@@ -543,7 +510,7 @@ Pass evidence:
 - State remains inside the intended roots and destructive commands require the
   expected confirmation/flags.
 
-### S24 - Snapshot, Clone, Export, And Import
+### S23 - Snapshot, Clone, Export, And Import
 
 What to test:
 
@@ -560,7 +527,7 @@ Pass evidence:
 
 - Round-tripped env runs the built artifact and original env is unchanged.
 
-### S25 - Update Commands And Network Failure Behavior
+### S24 - Update Commands And Network Failure Behavior
 
 What to test:
 
@@ -577,7 +544,7 @@ Pass evidence:
 
 - No-op and failure paths leave state unchanged; actionable errors are shown.
 
-### S26 - Release Notes Claims
+### S25 - Release Notes Claims
 
 What to test:
 
@@ -595,7 +562,7 @@ Pass evidence:
 
 - Report maps release-note claims to tested scenarios or explicit gaps.
 
-### S27 - Cleanup Verification
+### S26 - Cleanup Verification
 
 What to test:
 
@@ -616,8 +583,6 @@ Pass evidence:
 
 - `plugins uninstall --force` must remove extension files, not only config and
   install ledger state.
-- `doctor --fix` from isolated OCM-managed state must not install/start an
-  unexpected default user-level `ai.openclaw.gateway` LaunchAgent.
 - missing bundled plugin runtime dependencies must remain fixed after each pull.
 - invalid package-json-only archives must fail cleanly without install residue.
 - Discord-style packages with both canonical manifests and rich package metadata

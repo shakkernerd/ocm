@@ -41,10 +41,11 @@ If repo-level AGENTS instructions are present, read and follow them first.
 7. Copy existing user state before mutation; never mutate `Violet` directly.
 8. For each scenario, test both clean new-user state and copied existing-user
    state when applicable.
-9. For service scenarios, distinguish OCM-managed env services from OpenClaw's
-   own service/gateway behavior; run OpenClaw commands through
-   `ocm @<env> -- ...` unless the scenario explicitly requires direct execution.
-   Verify OCM env runs expose `OPENCLAW_SERVICE_REPAIR_POLICY=external`.
+9. Run OpenClaw commands through `ocm @<env> -- ...` unless the scenario
+   explicitly requires direct execution. Verify OCM env runs expose
+   `OPENCLAW_SERVICE_REPAIR_POLICY=external` as part of normal env execution;
+   do not run broad LaunchAgent/service mutation tests unless the release
+   changed service behavior.
 10. Add extra checks for changed release surfaces, but keep them attached to the
    closest scenario.
 11. Record a concise scenario table while testing; add detailed notes only for
