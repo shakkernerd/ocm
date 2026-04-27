@@ -98,6 +98,7 @@ pub(crate) struct UpgradeSimulationBatchSummary {
 struct UpgradeTarget {
     version: Option<String>,
     channel: Option<String>,
+    runtime: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -143,21 +144,46 @@ impl UpgradeTarget {
         let version = Cli::require_option_value(version, "--version")?;
         let (args, channel) = Cli::consume_option(args, "--channel")?;
         let channel = Cli::require_option_value(channel, "--channel")?;
-        if version.is_some() && channel.is_some() {
-            return Err("upgrade accepts only one of --version or --channel".to_string());
+        let (args, runtime) = Cli::consume_option(args, "--runtime")?;
+        let runtime = Cli::require_option_value(runtime, "--runtime")?;
+        let explicit_count = usize::from(version.is_some())
+            + usize::from(channel.is_some())
+            + usize::from(runtime.is_some());
+        if explicit_count > 1 {
+            return Err(
+                "upgrade accepts only one of --version, --channel, or --runtime".to_string(),
+            );
         }
-        Ok((args, Self { version, channel }))
+        Ok((
+            args,
+            Self {
+                version,
+                channel,
+                runtime,
+            },
+        ))
     }
 
     fn is_explicit(&self) -> bool {
-        self.version.is_some() || self.channel.is_some()
+        self.version.is_some() || self.channel.is_some() || self.runtime.is_some()
     }
 
     fn canonical_runtime_name(&self) -> Result<String, String> {
+        if let Some(runtime) = self.runtime.as_deref() {
+            return Ok(runtime.to_string());
+        }
         RuntimeService::canonical_official_openclaw_runtime_name(
             self.version.as_deref(),
             self.channel.as_deref(),
         )
+    }
+
+    fn release_channel_hint(&self) -> Option<String> {
+        self.channel.clone()
+    }
+
+    fn is_named_runtime(&self) -> bool {
+        self.runtime.is_some()
     }
 }
 
@@ -204,7 +230,7 @@ impl Cli {
             Self::assert_no_extra_args(&args)?;
             if target.is_explicit() {
                 return Err(
-                    "upgrade --all does not accept --version or --channel; upgrade one env at a time when changing selectors"
+                    "upgrade --all does not accept --version, --channel, or --runtime; upgrade one env at a time when changing selectors"
                         .to_string(),
                 );
             }
@@ -528,6 +554,7 @@ impl Cli {
                 target: UpgradeTarget {
                     version: None,
                     channel: Some(normalize_openclaw_channel_selector(trimmed)?),
+                    runtime: None,
                 },
                 display: trimmed.to_string(),
             });
@@ -537,6 +564,7 @@ impl Cli {
             target: UpgradeTarget {
                 version: Some(trimmed.to_string()),
                 channel: None,
+                runtime: None,
             },
             display: trimmed.to_string(),
         })
@@ -1002,7 +1030,7 @@ impl Cli {
                         "would-update".to_string()
                     },
                     runtime_release_version: None,
-                    runtime_release_channel: target.channel.clone(),
+                    runtime_release_channel: target.release_channel_hint(),
                     service_action: service_action_for_dry_run(service, binding_changed, true),
                     snapshot_id: None,
                     rollback: None,
@@ -1027,7 +1055,7 @@ impl Cli {
                         "runtime",
                         target_runtime_name,
                         None,
-                        target.channel.clone(),
+                        target.release_channel_hint(),
                         transaction,
                         error,
                     );
@@ -1147,6 +1175,7 @@ impl Cli {
             let target = UpgradeTarget {
                 version: None,
                 channel: current.release_selector_value.clone(),
+                runtime: None,
             };
             let target_runtime_name = target.canonical_runtime_name()?;
             let transaction = self.begin_upgrade_transaction(
@@ -1310,7 +1339,7 @@ impl Cli {
                 binding_name: target.canonical_runtime_name()?,
                 outcome: "would-switch".to_string(),
                 runtime_release_version: None,
-                runtime_release_channel: target.channel.clone(),
+                runtime_release_channel: target.release_channel_hint(),
                 service_action: service_action_for_dry_run(service, true, true),
                 snapshot_id: None,
                 rollback: None,
@@ -1334,7 +1363,7 @@ impl Cli {
                     "runtime",
                     target_runtime_name,
                     None,
-                    target.channel.clone(),
+                    target.release_channel_hint(),
                     transaction,
                     error,
                 );
@@ -1383,6 +1412,19 @@ impl Cli {
         target: &UpgradeTarget,
     ) -> Result<PreparedUpgradeTarget, String> {
         let runtime_name = target.canonical_runtime_name()?;
+        if target.is_named_runtime() {
+            let meta = self.runtime_service().show(&runtime_name)?;
+            if let Some(issue) = runtime_integrity_issue(&meta, &self.env) {
+                return Err(format!(
+                    "runtime \"{runtime_name}\" is not healthy: {issue}",
+                ));
+            }
+            return Ok(PreparedUpgradeTarget {
+                name: runtime_name,
+                meta,
+                action: OfficialRuntimePrepareAction::Reused,
+            });
+        }
         let (meta, action) =
             self.with_progress(format!("Preparing OpenClaw runtime for {env_name}"), || {
                 self.runtime_service().prepare_official_openclaw_runtime(

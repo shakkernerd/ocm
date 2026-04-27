@@ -1194,6 +1194,64 @@ fn upgrade_can_switch_a_local_launcher_env_to_a_published_runtime() {
 }
 
 #[test]
+fn upgrade_can_switch_env_to_an_installed_runtime() {
+    let root = TestDir::new("upgrade-installed-runtime");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_runtime = root.child("old-openclaw");
+    let new_runtime = root.child("new-openclaw");
+    write_executable_script(&old_runtime, "#!/bin/sh\necho old-openclaw\n");
+    write_executable_script(&new_runtime, "#!/bin/sh\necho new-openclaw\n");
+
+    let env = ocm_env(&root);
+    let add_old = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "add",
+            "old-local",
+            "--path",
+            &old_runtime.display().to_string(),
+        ],
+    );
+    assert!(add_old.status.success(), "{}", stderr(&add_old));
+
+    let add_new = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "add",
+            "new-local",
+            "--path",
+            &new_runtime.display().to_string(),
+        ],
+    );
+    assert!(add_new.status.success(), "{}", stderr(&add_new));
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "old-local"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--runtime", "new-local"]);
+    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("from=runtime:old-local"), "{output}");
+    assert!(output.contains("to=runtime:new-local"), "{output}");
+    assert!(output.contains("outcome=switched"), "{output}");
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(env_json["defaultRuntime"], "new-local");
+}
+
+#[test]
 fn upgrade_keeps_a_stopped_installed_service_stopped() {
     let root = TestDir::new("upgrade-stopped-service-start");
     let cwd = root.child("workspace");
