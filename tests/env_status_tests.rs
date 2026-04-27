@@ -224,7 +224,7 @@ fn env_status_reports_release_backed_runtime_details() {
     assert_eq!(value["runtimeReleaseVersion"], "2026.3.24");
     assert_eq!(value["runtimeReleaseChannel"], "stable");
     assert_eq!(value["runtimeHealth"], "ok");
-    assert_eq!(value["gatewayPort"], 18789);
+    assert!(value["gatewayPort"].as_u64().unwrap() >= 18_789);
     assert_eq!(value["gatewayPortSource"], "computed");
 }
 

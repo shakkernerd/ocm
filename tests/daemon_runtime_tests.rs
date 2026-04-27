@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,14 @@ use ocm::supervisor::SupervisorService;
 use serde_json::{Value, to_value};
 
 use crate::support::{TestDir, ocm_env, path_string, run_ocm, stderr, write_executable_script};
+
+static DAEMON_RUNTIME_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn daemon_runtime_test_lock() -> MutexGuard<'static, ()> {
+    DAEMON_RUNTIME_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn spawn_daemon_process(cwd: &Path, env: &BTreeMap<String, String>) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_ocm"));
@@ -236,6 +245,7 @@ fn setup_daemon_run_fixture_with_child_sleep(
 
 #[test]
 fn service_state_plans_runnable_children_and_skips_disabled_envs() {
+    let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("service-state-plan");
     let (cwd, env) = setup_service_fixture(&root);
     let service = SupervisorService::new(&env, &cwd);
@@ -308,6 +318,7 @@ fn service_state_plans_runnable_children_and_skips_disabled_envs() {
 
 #[test]
 fn daemon_run_persists_live_runtime_children() {
+    let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-runtime-state");
     let (cwd, env, _, _) = setup_daemon_run_fixture_with_child_sleep(&root, 10);
     let runtime_path = root.child("ocm-home/supervisor/runtime.json");
@@ -333,6 +344,7 @@ fn daemon_run_persists_live_runtime_children() {
 
 #[test]
 fn daemon_run_once_executes_planned_children() {
+    let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-once");
     let (cwd, env, launcher_marker, runtime_marker) = setup_daemon_run_fixture(&root);
     let service = SupervisorService::new(&env, &cwd);
@@ -359,6 +371,7 @@ fn daemon_run_once_executes_planned_children() {
 
 #[test]
 fn env_changes_refresh_persisted_service_state_without_extra_commands() {
+    let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("service-state-refresh");
     let (cwd, env) = setup_service_fixture(&root);
     let service = SupervisorService::new(&env, &cwd);
@@ -411,6 +424,7 @@ fn env_changes_refresh_persisted_service_state_without_extra_commands() {
 
 #[test]
 fn daemon_run_reloads_children_after_binding_changes() {
+    let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-reconcile");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -483,6 +497,7 @@ fn daemon_run_reloads_children_after_binding_changes() {
 
 #[test]
 fn daemon_keeps_running_when_one_env_fails_to_spawn() {
+    let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-spawn-failure");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -568,6 +583,7 @@ fn daemon_keeps_running_when_one_env_fails_to_spawn() {
 
 #[test]
 fn daemon_stops_a_running_child_after_service_stop() {
+    let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-service-stop");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -617,6 +633,7 @@ fn daemon_stops_a_running_child_after_service_stop() {
 #[cfg(unix)]
 #[test]
 fn daemon_stops_the_full_dev_process_tree_after_service_stop() {
+    let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-service-stop-tree");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -684,6 +701,7 @@ fn daemon_stops_the_full_dev_process_tree_after_service_stop() {
 
 #[test]
 fn daemon_does_not_restart_a_quick_clean_exit_forever() {
+    let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-clean-exit");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -728,6 +746,7 @@ fn daemon_does_not_restart_a_quick_clean_exit_forever() {
 
 #[test]
 fn live_runtime_changes_recreate_missing_supervisor_state() {
+    let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-runtime-recovers-missing-state");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
