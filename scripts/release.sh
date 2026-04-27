@@ -55,6 +55,10 @@ remote_tag_commit() {
   '
 }
 
+tag_has_signature() {
+  git cat-file -p "$1" | grep -Eq -- '-----BEGIN (PGP|SSH) SIGNATURE-----'
+}
+
 refresh_dirty_files() {
   dirty_files=()
   while IFS= read -r file; do
@@ -290,9 +294,15 @@ if [[ -z "$local_tag_commit_sha" && -n "$remote_tag_commit_sha" ]]; then
 fi
 
 if [[ -z "$local_tag_commit_sha" ]]; then
-  log_step "Creating signed tag ${tag}; git or GPG may prompt here"
-  if ! git tag -s "$tag" -m "$tag"; then
-    echo "error: failed to create signed tag ${tag}; make sure git signing is configured" >&2
+  log_step "Creating signed tag ${tag}; git signing may prompt here"
+  if ! git -c tag.gpgSign=true tag -a "$tag" -m "$tag"; then
+    echo "error: failed to create signed tag ${tag}; make sure git tag signing is configured" >&2
+    echo "hint: for SSH signing, set gpg.format=ssh and user.signingkey; for GPG signing, install and configure gpg" >&2
+    exit 1
+  fi
+  if ! tag_has_signature "$tag"; then
+    git tag -d "$tag" >/dev/null 2>&1 || true
+    echo "error: created tag ${tag} was not signed; configure git tag signing before retrying" >&2
     exit 1
   fi
   log_step "done: Creating signed tag ${tag}"

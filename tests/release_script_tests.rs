@@ -167,7 +167,7 @@ fn init_release_repo(label: &str) -> ReleaseRepo {
     write_executable_script(
         &git_wrapper,
         &format!(
-            "#!/usr/bin/env bash\nset -euo pipefail\nreal_git=\"{}\"\nif [[ \"${{1:-}}\" == \"tag\" && \"${{2:-}}\" == \"-s\" ]]; then\n  shift 2\n  exec \"$real_git\" tag \"$@\"\nfi\nexec \"$real_git\" \"$@\"\n",
+            "#!/usr/bin/env bash\nset -euo pipefail\nreal_git=\"{}\"\nif [[ \"${{1:-}}\" == \"-c\" && \"${{2:-}}\" == \"tag.gpgSign=true\" && \"${{3:-}}\" == \"tag\" ]]; then\n  shift 2\n  exec \"$real_git\" \"$@\"\nfi\nif [[ \"${{1:-}}\" == \"cat-file\" && \"${{2:-}}\" == \"-p\" ]]; then\n  \"$real_git\" \"$@\"\n  if [[ -n \"${{3:-}}\" ]] && [[ \"$(\"$real_git\" cat-file -t \"$3\" 2>/dev/null || true)\" == \"tag\" ]]; then\n    printf '%s\\n' '-----BEGIN SSH SIGNATURE-----' 'test-signature' '-----END SSH SIGNATURE-----'\n  fi\n  exit 0\nfi\nexec \"$real_git\" \"$@\"\n",
             real_git
         ),
     );
