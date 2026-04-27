@@ -264,7 +264,9 @@ fn upgrade_help_is_available_from_help_and_flag() {
     assert_eq!(output, stdout(&via_flag));
     assert!(output.contains("Upgrade environments"));
     assert!(output.contains("ocm upgrade simulate <env> --to <version|channel|repo-path>"));
-    assert!(output.contains("ocm upgrade <env> [--version <version> | --channel <channel>]"));
+    assert!(output.contains(
+        "ocm upgrade <env> [--version <version> | --channel <channel> | --runtime <runtime>]"
+    ));
     assert!(output.contains("--to <target>"));
     assert!(output.contains("--dry-run"));
     assert!(output.contains("--no-rollback"));

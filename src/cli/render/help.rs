@@ -507,7 +507,7 @@ pub fn upgrade_help(cmd: &str) -> String {
                 "{cmd} upgrade simulate <env> --to <version|channel|repo-path> [--scenario current|minimum|telegram|all] [--keep-simulations] [--raw] [--json]"
             ),
             format!(
-                "{cmd} upgrade <env> [--version <version> | --channel <channel>] [--dry-run] [--no-rollback] [--raw] [--json]"
+                "{cmd} upgrade <env> [--version <version> | --channel <channel> | --runtime <runtime>] [--dry-run] [--no-rollback] [--raw] [--json]"
             ),
             format!("{cmd} upgrade --all [--dry-run] [--raw] [--json]"),
         ],
@@ -519,6 +519,10 @@ pub fn upgrade_help(cmd: &str) -> String {
             (
                 "--channel <channel>",
                 "Move one env to the release for one channel",
+            ),
+            (
+                "--runtime <runtime>",
+                "Move one env to an already installed runtime, including a local build",
             ),
             ("--all", "Upgrade every env that can be updated safely"),
             (
@@ -552,6 +556,7 @@ pub fn upgrade_help(cmd: &str) -> String {
             format!("{cmd} upgrade mira"),
             format!("{cmd} upgrade mira --channel beta"),
             format!("{cmd} upgrade mira --version 2026.3.24"),
+            format!("{cmd} upgrade mira --runtime origin-main-local"),
             format!("{cmd} upgrade --all"),
         ],
         &[
@@ -564,7 +569,7 @@ pub fn upgrade_help(cmd: &str) -> String {
             "Channel-tracked runtimes move forward automatically.",
             "Upgrades create a pre-upgrade snapshot before changing env state.",
             "If service restart/start fails, ocm restores the snapshot and previous runtime unless --no-rollback is set.",
-            "Pinned runtimes stay pinned unless you pass --version or --channel explicitly.",
+            "Pinned runtimes stay pinned unless you pass --version, --channel, or --runtime explicitly.",
             "Local-command environments are reported clearly instead of being changed behind your back.",
         ],
     )
@@ -861,6 +866,10 @@ pub fn runtime_help(cmd: &str) -> String {
                         "install",
                         "Install a managed runtime from OpenClaw releases or a custom source",
                     ),
+                    (
+                        "build-local",
+                        "Build a local OpenClaw checkout with npm pack and install it as a package runtime",
+                    ),
                     ("update", "Update one runtime or all runtimes"),
                     (
                         "releases",
@@ -876,11 +885,13 @@ pub fn runtime_help(cmd: &str) -> String {
         vec![
             format!("{cmd} runtime add stable --path /path/to/openclaw"),
             format!("{cmd} runtime install --channel stable"),
+            format!("{cmd} runtime build-local main-local --repo /path/to/openclaw --force"),
             format!("{cmd} runtime update --all"),
         ],
         vec![
             format!("{cmd} help release"),
             format!("{cmd} help runtime install"),
+            format!("{cmd} help runtime build-local"),
             format!("{cmd} help runtime verify"),
         ],
     )
@@ -1767,6 +1778,37 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 "Official release installs prefer host Node.js >= 22.14.0 and npm.",
                 "On supported platforms, OCM can manage a private copy when they are missing.",
                 "Use `ocm doctor host` only if you want a full machine check or an explicit host-tool fix like git.",
+            ],
+        ),
+        "build-local" => render_leaf(
+            "Build a local OpenClaw package runtime",
+            "Run the local OpenClaw package build/pack path and install the produced tarball as an OCM-managed runtime.",
+            vec![format!(
+                "{cmd} runtime build-local <name> --repo <openclaw-repo> [--description <text>] [--force] [--raw] [--json]"
+            )],
+            &[
+                (
+                    "--repo <openclaw-repo>",
+                    "Path to a local OpenClaw checkout with package.json",
+                ),
+                ("--description <text>", "Optional human description"),
+                (
+                    "--force",
+                    "Replace an existing managed runtime of the same name after the package is built",
+                ),
+                (
+                    "--raw",
+                    "Force plain line output instead of the TTY receipt view",
+                ),
+                ("--json", "Print the runtime record as JSON"),
+            ],
+            vec![format!(
+                "{cmd} runtime build-local main-local --repo /path/to/openclaw --force"
+            )],
+            &[
+                "`build-local` uses `npm pack` so OpenClaw's prepack script performs the release-style build, UI build, package inventory, and built entry smoke checks.",
+                "The resulting runtime is installed under OCM's package runtime layout: files/node_modules/openclaw/openclaw.mjs.",
+                "Use this when testing release and upgrade behavior from a local checkout without source/Jiti execution paths.",
             ],
         ),
         "update" => render_leaf(

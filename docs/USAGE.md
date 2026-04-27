@@ -98,7 +98,25 @@ Use this when you are developing OpenClaw locally or want a custom run command.
 
 If you run `ocm setup` from inside an OpenClaw checkout, local mode can detect that and fill in sensible defaults.
 
-### 5. Keep an environment running in the background
+### 5. Test a local checkout as a release-shaped runtime
+
+```bash
+ocm runtime build-local main-local --repo /path/to/openclaw --force
+ocm start luna --runtime main-local
+ocm upgrade luna --runtime main-local
+```
+
+Use this when you need to test what users will run after an OpenClaw release, but from a local checkout before publishing. OCM runs `npm pack` in the OpenClaw repo, which triggers OpenClaw's package prepack path instead of registering a source checkout command.
+
+The installed runtime uses the same package layout as published OpenClaw runtimes:
+
+```text
+files/node_modules/openclaw/openclaw.mjs
+```
+
+That matters for release and upgrade testing because it avoids source/Jiti execution paths and exercises the built package files that users install.
+
+### 6. Keep an environment running in the background
 
 ```bash
 ocm start mira
@@ -107,12 +125,13 @@ ocm service status mira
 
 `start` and `setup` already do this by default. Use `service install` directly when you skipped the background service earlier with `--no-service`.
 
-### 6. Update OpenClaw later
+### 7. Update OpenClaw later
 
 ```bash
 ocm upgrade mira
 ocm upgrade --all
 ocm upgrade mira --dry-run
+ocm upgrade mira --runtime main-local
 ocm upgrade simulate mira --to 2026.4.20
 ocm upgrade simulate mira --to 2026.4.20 --scenario all
 ocm upgrade simulate mira --to beta --scenario all
@@ -131,10 +150,10 @@ Use `upgrade simulate` when you want to test what would happen against a publish
 - `--scenario all` runs built-in current, clean minimum, and Telegram-configured env shapes as separate simulation clones
 - a pre-upgrade snapshot is created before env state changes
 - if service reconciliation fails, OCM restores the snapshot and previous runtime unless `--no-rollback` is set
-- pinned runtimes stay pinned unless you pass `--version` or `--channel`
+- pinned runtimes stay pinned unless you pass `--version`, `--channel`, or `--runtime`
 - local-command environments are reported clearly instead of being changed behind your back
 
-### 7. Run OpenClaw without activating the shell first
+### 8. Run OpenClaw without activating the shell first
 
 ```bash
 ocm @mira -- status
@@ -144,7 +163,7 @@ ocm @mira -- onboard
 
 Use this for quick one-off runs.
 
-### 8. Activate an environment in your current shell
+### 9. Activate an environment in your current shell
 
 ```bash
 eval "$(ocm env use mira)"
@@ -176,6 +195,7 @@ Examples:
 
 ```bash
 ocm release install --channel stable
+ocm runtime build-local main-local --repo /path/to/openclaw --force
 ocm runtime list
 ocm runtime show stable
 ocm runtime verify stable
@@ -184,6 +204,7 @@ ocm runtime verify stable
 Use a runtime when you want:
 
 - a published OpenClaw release installed locally
+- a local OpenClaw checkout built and installed in the same package shape as a release
 - stable naming like `stable` or `2026.3.24`
 - verification and updates
 
@@ -207,7 +228,8 @@ Use a launcher when you want:
 ### The simple rule
 
 - published OpenClaw release: use `release` and `runtime`
-- local checkout or custom command: use `launcher`
+- local checkout as source command: use `launcher`
+- local checkout as built package: use `runtime build-local`
 - day-to-day work: use `env`
 
 ## Running commands inside environments
@@ -312,9 +334,10 @@ This updates channel-tracked environments and restarts their running services wh
 ```bash
 ocm upgrade mira --channel beta
 ocm upgrade mira --version 2026.3.24
+ocm upgrade mira --runtime main-local
 ```
 
-Use this when you want to deliberately move one environment to a different published release.
+Use this when you want to deliberately move one environment to a different published release or to an already installed runtime, such as a release-shaped local build created with `ocm runtime build-local`.
 
 ### Update `ocm` itself
 
