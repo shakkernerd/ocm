@@ -20,7 +20,7 @@ use crate::runtime::releases::{
 use crate::runtime::{
     AddRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
     InstallRuntimeFromUrlOptions, InstallRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind,
-    RuntimeSourceKind, is_official_openclaw_package_runtime,
+    RuntimeSourceKind, is_official_openclaw_package_runtime, is_openclaw_package_runtime,
 };
 
 use super::common::{ensure_dir, load_json_files, path_exists, read_json, write_json};
@@ -83,6 +83,14 @@ pub(crate) struct InstallContext<'a> {
     pub cwd: &'a Path,
 }
 
+#[derive(Clone, Debug)]
+pub struct BuildLocalRuntimeOptions {
+    pub name: String,
+    pub repo: String,
+    pub description: Option<String>,
+    pub force: bool,
+}
+
 fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
     for bytes in [stderr, stdout] {
         let text = String::from_utf8_lossy(bytes);
@@ -96,6 +104,14 @@ fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
     None
 }
 
+fn npm_program(env: &BTreeMap<String, String>) -> String {
+    env.get("OCM_INTERNAL_NPM_BIN")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("npm")
+        .to_string()
+}
+
 fn install_openclaw_package_with_npm(
     archive_path: &Path,
     install_files: &Path,
@@ -105,12 +121,7 @@ fn install_openclaw_package_with_npm(
     let host_ready = verify_official_openclaw_runtime_host(env).is_ok();
     let install_command = if host_ready {
         crate::managed_node::CommandSpec {
-            program: env
-                .get("OCM_INTERNAL_NPM_BIN")
-                .map(String::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or("npm")
-                .to_string(),
+            program: npm_program(env),
             args: Vec::new(),
         }
     } else {
@@ -155,6 +166,132 @@ fn install_openclaw_package_with_npm(
         "failed to install OpenClaw package dependencies with {}: {detail}",
         install_command.program
     ))
+}
+
+fn load_openclaw_repo_version(repo_path: &Path) -> Result<String, String> {
+    let package_json_path = repo_path.join("package.json");
+    let raw = fs::read_to_string(&package_json_path).map_err(|error| {
+        format!(
+            "failed to read OpenClaw package.json at {}: {error}",
+            display_path(&package_json_path)
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "failed to parse OpenClaw package.json at {}: {error}",
+            display_path(&package_json_path)
+        )
+    })?;
+
+    let package_name = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if package_name != "openclaw" {
+        return Err(format!(
+            "local runtime build requires an OpenClaw repo package named \"openclaw\"; found \"{package_name}\""
+        ));
+    }
+
+    value
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "OpenClaw package.json is missing a non-empty version".to_string())
+}
+
+fn git_short_commit(repo_path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .arg("rev-parse")
+        .arg("--short=7")
+        .arg("HEAD")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn default_local_build_description(version: &str, commit: Option<&str>) -> String {
+    match commit {
+        Some(commit) => format!("Local OpenClaw build {version} ({commit})"),
+        None => format!("Local OpenClaw build {version}"),
+    }
+}
+
+fn pack_local_openclaw_repo(
+    repo_path: &Path,
+    pack_dir: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<PathBuf, String> {
+    ensure_dir(pack_dir)?;
+    let npm = npm_program(env);
+    let output = Command::new(&npm)
+        .arg("pack")
+        .arg("--pack-destination")
+        .arg(pack_dir)
+        .env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
+        .env("npm_config_fund", "false")
+        .env("npm_config_audit", "false")
+        .env("npm_config_update_notifier", "false")
+        .current_dir(repo_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to run npm pack for local OpenClaw build in {}: {error}",
+                display_path(repo_path)
+            )
+        })?;
+
+    if !output.status.success() {
+        let detail =
+            summarize_command_output(&output.stdout, &output.stderr).unwrap_or_else(|| {
+                format!(
+                    "npm pack exited with code {}",
+                    output.status.code().unwrap_or(1)
+                )
+            });
+        return Err(format!("failed to pack local OpenClaw build: {detail}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.ends_with(".tgz") {
+            let candidate = pack_dir.join(trimmed);
+            if path_exists(&candidate) {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    let mut archives = fs::read_dir(pack_dir)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("tgz"))
+        .collect::<Vec<_>>();
+    archives.sort();
+    match archives.len() {
+        1 => Ok(archives.remove(0)),
+        0 => Err("npm pack did not produce an OpenClaw package archive".to_string()),
+        _ => Err(format!(
+            "npm pack produced multiple package archives in {}; expected one",
+            display_path(pack_dir)
+        )),
+    }
 }
 
 fn build_installed_runtime_meta(
@@ -290,37 +427,16 @@ fn install_runtime_from_openclaw_package(
             verify_file_integrity(&archive_path, source_integrity)?;
         }
 
-        install_openclaw_package_with_npm(
+        let meta = install_runtime_from_openclaw_package_archive(
+            &target,
             &archive_path,
-            &target.install_files,
-            context.cwd,
-            context.env,
-        )?;
+            source,
+            release,
+            description,
+            context,
+        );
         let _ = fs::remove_file(&archive_path);
-
-        let binary_path = installed_openclaw_binary_path(&target.install_files);
-        if !path_exists(&binary_path) {
-            let release_version = release.version.as_deref().unwrap_or("unknown");
-            return Err(format!(
-                "OpenClaw release \"{release_version}\" is missing node_modules/openclaw/openclaw.mjs after installation"
-            ));
-        }
-        #[cfg(unix)]
-        {
-            let mut permissions = fs::metadata(&binary_path)
-                .map_err(|error| error.to_string())?
-                .permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&binary_path, permissions).map_err(|error| error.to_string())?;
-        }
-        let binary_sha256 = file_sha256(&binary_path)?;
-
-        let mut source = source;
-        source.sha256 = Some(binary_sha256);
-        let meta =
-            build_installed_runtime_meta(&target, &binary_path, &source, &release, description);
-        write_json(&target.meta_path, &meta)?;
-        Ok(meta)
+        meta
     })();
 
     if result.is_err() {
@@ -329,6 +445,45 @@ fn install_runtime_from_openclaw_package(
     }
 
     result
+}
+
+fn install_runtime_from_openclaw_package_archive(
+    target: &RuntimeInstallTarget,
+    archive_path: &Path,
+    source: RuntimeSourceDetails,
+    release: RuntimeReleaseDetails,
+    description: Option<String>,
+    context: InstallContext<'_>,
+) -> Result<RuntimeMeta, String> {
+    install_openclaw_package_with_npm(
+        archive_path,
+        &target.install_files,
+        context.cwd,
+        context.env,
+    )?;
+
+    let binary_path = installed_openclaw_binary_path(&target.install_files);
+    if !path_exists(&binary_path) {
+        let release_version = release.version.as_deref().unwrap_or("unknown");
+        return Err(format!(
+            "OpenClaw package \"{release_version}\" is missing node_modules/openclaw/openclaw.mjs after installation"
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&binary_path)
+            .map_err(|error| error.to_string())?
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary_path, permissions).map_err(|error| error.to_string())?;
+    }
+    let binary_sha256 = file_sha256(&binary_path)?;
+
+    let mut source = source;
+    source.sha256 = Some(binary_sha256);
+    let meta = build_installed_runtime_meta(target, &binary_path, &source, &release, description);
+    write_json(&target.meta_path, &meta)?;
+    Ok(meta)
 }
 
 fn prepare_runtime_meta_path(
@@ -524,6 +679,82 @@ pub fn install_runtime_from_url(
     )
 }
 
+pub(crate) fn install_runtime_from_local_openclaw_build(
+    options: BuildLocalRuntimeOptions,
+    context: InstallContext<'_>,
+) -> Result<RuntimeMeta, String> {
+    let name = validate_name(&options.name, "Runtime name")?;
+    let meta_path = runtime_meta_path(&name, context.env, context.cwd)?;
+    if path_exists(&meta_path) && !options.force {
+        return Err(format!("runtime \"{name}\" already exists"));
+    }
+
+    let raw_repo = options.repo.trim();
+    if raw_repo.is_empty() {
+        return Err("OpenClaw repo path is required".to_string());
+    }
+    let repo_path = resolve_absolute_path(raw_repo, context.env, context.cwd)?;
+    let metadata = fs::metadata(&repo_path).map_err(|error| {
+        format!(
+            "OpenClaw repo path does not exist: {} ({error})",
+            display_path(&repo_path)
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "OpenClaw repo path must be a directory: {}",
+            display_path(&repo_path)
+        ));
+    }
+
+    let repo_path = fs::canonicalize(&repo_path).map_err(|error| error.to_string())?;
+    let version = load_openclaw_repo_version(&repo_path)?;
+    let commit = git_short_commit(&repo_path);
+    let stores = super::ensure_store(context.env, context.cwd)?;
+    let pack_dir = stores.runtimes_dir.join(format!(
+        ".{name}.pack-{}-{}",
+        std::process::id(),
+        now_utc().unix_timestamp_nanos()
+    ));
+    let _ = fs::remove_dir_all(&pack_dir);
+
+    let result = (|| {
+        let archive_path = pack_local_openclaw_repo(&repo_path, &pack_dir, context.env)?;
+        let target = prepare_runtime_install_target(name, options.force, context.env, context.cwd)?;
+        if path_exists(&target.install_root) {
+            return Err(format!(
+                "runtime install root already exists: {}",
+                display_path(&target.install_root)
+            ));
+        }
+        ensure_dir(&target.install_files)?;
+        let description = trim_description(options.description)
+            .or_else(|| Some(default_local_build_description(&version, commit.as_deref())));
+        let meta = install_runtime_from_openclaw_package_archive(
+            &target,
+            &archive_path,
+            RuntimeSourceDetails {
+                path: Some(repo_path),
+                ..RuntimeSourceDetails::default()
+            },
+            RuntimeReleaseDetails {
+                version: Some(version),
+                ..RuntimeReleaseDetails::default()
+            },
+            description,
+            context,
+        );
+        if meta.is_err() {
+            let _ = fs::remove_file(&target.meta_path);
+            let _ = fs::remove_dir_all(&target.install_root);
+        }
+        meta
+    })();
+
+    let _ = fs::remove_dir_all(&pack_dir);
+    result
+}
+
 pub fn install_runtime_from_release(
     options: InstallRuntimeFromReleaseOptions,
     env: &BTreeMap<String, String>,
@@ -700,7 +931,7 @@ pub fn runtime_integrity_issue(
         ));
     }
 
-    if is_official_openclaw_package_runtime(meta, env) {
+    if is_official_openclaw_package_runtime(meta, env) || is_openclaw_package_runtime(meta) {
         return None;
     }
 

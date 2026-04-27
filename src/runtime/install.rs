@@ -5,7 +5,8 @@ use crate::runtime::releases::{
     select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
 };
 use crate::store::{
-    InstallContext, RuntimeReleaseDetails, get_runtime, install_runtime,
+    BuildLocalRuntimeOptions as StoreBuildLocalRuntimeOptions, InstallContext,
+    RuntimeReleaseDetails, get_runtime, install_runtime, install_runtime_from_local_openclaw_build,
     install_runtime_from_official_openclaw_release, install_runtime_from_release,
     install_runtime_from_selected_official_openclaw_release, install_runtime_from_url,
     list_runtimes, runtime_integrity_issue,
@@ -43,6 +44,14 @@ pub struct InstallRuntimeFromOfficialReleaseOptions {
     pub name: String,
     pub version: Option<String>,
     pub channel: Option<String>,
+    pub description: Option<String>,
+    pub force: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuildLocalRuntimeOptions {
+    pub name: String,
+    pub repo: String,
     pub description: Option<String>,
     pub force: bool,
 }
@@ -275,6 +284,23 @@ impl<'a> RuntimeService<'a> {
         options: InstallRuntimeFromOfficialReleaseOptions,
     ) -> Result<RuntimeMeta, String> {
         let meta = install_runtime_from_official_openclaw_release(options, self.env, self.cwd)?;
+        self.refresh_supervisor_if_present()?;
+        Ok(meta)
+    }
+
+    pub fn build_local(&self, options: BuildLocalRuntimeOptions) -> Result<RuntimeMeta, String> {
+        let meta = install_runtime_from_local_openclaw_build(
+            StoreBuildLocalRuntimeOptions {
+                name: options.name,
+                repo: options.repo,
+                description: options.description,
+                force: options.force,
+            },
+            InstallContext {
+                env: self.env,
+                cwd: self.cwd,
+            },
+        )?;
         self.refresh_supervisor_if_present()?;
         Ok(meta)
     }

@@ -20,9 +20,7 @@ pub(crate) fn resolve_runtime_launch(
     cwd: &Path,
     bootstrap_managed_node: bool,
 ) -> Result<RuntimeLaunchSpec, String> {
-    if is_official_openclaw_package_runtime(meta, env)
-        && verify_official_openclaw_runtime_node(env).is_err()
-    {
+    if is_openclaw_package_runtime(meta) && verify_official_openclaw_runtime_node(env).is_err() {
         let managed = managed_runtime_launch_command(
             &meta.binary_path,
             openclaw_args,
@@ -44,12 +42,16 @@ pub(crate) fn resolve_runtime_launch(
     })
 }
 
+pub(crate) fn is_openclaw_package_runtime(meta: &RuntimeMeta) -> bool {
+    meta.source_kind == super::RuntimeSourceKind::Installed
+        && PathBuf::from(&meta.binary_path)
+            .ends_with(Path::new("node_modules/openclaw/openclaw.mjs"))
+}
+
 pub(crate) fn is_official_openclaw_package_runtime(
     meta: &RuntimeMeta,
     env: &BTreeMap<String, String>,
 ) -> bool {
-    meta.source_kind == super::RuntimeSourceKind::Installed
+    is_openclaw_package_runtime(meta)
         && is_official_openclaw_releases_url(meta.source_manifest_url.as_deref(), env)
-        && PathBuf::from(&meta.binary_path)
-            .ends_with(Path::new("node_modules/openclaw/openclaw.mjs"))
 }

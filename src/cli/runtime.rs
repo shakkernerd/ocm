@@ -1,7 +1,7 @@
 use crate::runtime::{
-    AddRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
-    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, OfficialRuntimePrepareAction,
-    RuntimeService, UpdateRuntimeFromReleaseOptions,
+    AddRuntimeOptions, BuildLocalRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions,
+    InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions,
+    OfficialRuntimePrepareAction, RuntimeService, UpdateRuntimeFromReleaseOptions,
 };
 
 use super::{Cli, render};
@@ -282,6 +282,44 @@ impl Cli {
         Ok(0)
     }
 
+    pub(super) fn handle_runtime_build_local(&self, args: Vec<String>) -> Result<i32, String> {
+        let (args, json_flag, profile) =
+            self.consume_human_output_flags(args, "runtime build-local")?;
+        let (args, force) = Self::consume_flag(args, "--force");
+        let (args, repo) = Self::consume_option(args, "--repo")?;
+        let repo = Self::require_option_value(repo, "--repo")?;
+        let Some(repo) = repo else {
+            return Err("--repo is required".to_string());
+        };
+        let (args, description) = Self::consume_option(args, "--description")?;
+        let Some(name) = args.first() else {
+            return Err("runtime name is required".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let meta = self.with_progress(format!("Building runtime {name}"), || {
+            self.runtime_service()
+                .build_local(BuildLocalRuntimeOptions {
+                    name: name.clone(),
+                    repo: repo.clone(),
+                    description,
+                    force,
+                })
+        })?;
+
+        if json_flag {
+            self.print_json(&meta)?;
+            return Ok(0);
+        }
+
+        self.stdout_lines(render::runtime::runtime_built(
+            &meta,
+            profile,
+            &self.command_example(),
+        ));
+        Ok(0)
+    }
+
     pub(super) fn handle_runtime_releases(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, version) = Self::consume_option(args, "--version")?;
@@ -423,6 +461,7 @@ impl Cli {
         match action {
             "add" => self.handle_runtime_add(rest),
             "install" => self.handle_runtime_install(rest),
+            "build-local" => self.handle_runtime_build_local(rest),
             "update" => self.handle_runtime_update(rest),
             "releases" => self.handle_runtime_releases(rest),
             "list" => self.handle_runtime_list(rest),

@@ -5,11 +5,14 @@ pub mod releases;
 mod verify;
 
 pub use install::{
-    InstallRuntimeFromOfficialReleaseOptions, InstallRuntimeFromReleaseOptions,
-    InstallRuntimeFromUrlOptions, InstallRuntimeOptions, OfficialRuntimePrepareAction,
-    RuntimeUpdateBatchSummary, RuntimeUpdateSummary, UpdateRuntimeFromReleaseOptions,
+    BuildLocalRuntimeOptions, InstallRuntimeFromOfficialReleaseOptions,
+    InstallRuntimeFromReleaseOptions, InstallRuntimeFromUrlOptions, InstallRuntimeOptions,
+    OfficialRuntimePrepareAction, RuntimeUpdateBatchSummary, RuntimeUpdateSummary,
+    UpdateRuntimeFromReleaseOptions,
 };
-pub(crate) use launch::{is_official_openclaw_package_runtime, resolve_runtime_launch};
+pub(crate) use launch::{
+    is_official_openclaw_package_runtime, is_openclaw_package_runtime, resolve_runtime_launch,
+};
 pub use registry::{
     AddRuntimeOptions, RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService, RuntimeSourceKind,
 };

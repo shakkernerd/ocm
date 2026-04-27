@@ -164,7 +164,7 @@ pub(crate) fn managed_runtime_launch_command(
     } else {
         load_existing_managed_node_toolchain(env, cwd)?.ok_or_else(|| {
             format!(
-                "managed Node.js is not installed yet for official OpenClaw runtimes; rerun a release flow like \"{} start\" or \"{} runtime install --channel stable\"",
+                "managed Node.js is not installed yet for OpenClaw package runtimes; rerun a release flow like \"{} start\" or \"{} runtime install --channel stable\"",
                 command_example(env),
                 command_example(env)
             )

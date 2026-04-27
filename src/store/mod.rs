@@ -40,8 +40,9 @@ pub(crate) use openclaw_state::{
     OpenClawStateAudit, audit_openclaw_state, clear_nonportable_runtime_state,
     prepare_migrated_runtime_state, repair_openclaw_runtime_state,
 };
+pub(crate) use runtimes::install_runtime_from_local_openclaw_build;
 pub(crate) use runtimes::install_runtime_from_selected_official_openclaw_release;
-pub(crate) use runtimes::{InstallContext, RuntimeReleaseDetails};
+pub(crate) use runtimes::{BuildLocalRuntimeOptions, InstallContext, RuntimeReleaseDetails};
 pub use runtimes::{
     add_runtime, get_runtime, get_runtime_verified, install_runtime,
     install_runtime_from_official_openclaw_release, install_runtime_from_release,

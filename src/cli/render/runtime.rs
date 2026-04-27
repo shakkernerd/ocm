@@ -466,6 +466,22 @@ pub fn runtime_installed(
     runtime_action_receipt("Runtime installed", meta, profile, command_example)
 }
 
+pub fn runtime_built(
+    meta: &RuntimeMeta,
+    profile: RenderProfile,
+    command_example: &str,
+) -> Vec<String> {
+    if !profile.pretty {
+        let mut lines = runtime_installed_raw(meta, command_example);
+        if let Some(first) = lines.first_mut() {
+            *first = format!("Built runtime {}", meta.name);
+        }
+        return lines;
+    }
+
+    runtime_action_receipt("Runtime built", meta, profile, command_example)
+}
+
 fn runtime_installed_raw(meta: &RuntimeMeta, command_example: &str) -> Vec<String> {
     let mut lines = vec![
         format!("Installed runtime {}", meta.name),

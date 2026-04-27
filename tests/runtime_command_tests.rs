@@ -1,6 +1,8 @@
 mod support;
 
+use std::collections::BTreeMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
@@ -12,7 +14,8 @@ use tar::{Builder, Header};
 
 use crate::support::{
     TestDir, TestHttpServer, install_fake_managed_node_archive, install_fake_node_and_npm, ocm_env,
-    path_string, run_ocm, stderr, stdout, write_executable_script,
+    openclaw_package_tarball as openclaw_package_tarball_with_version, path_string, run_ocm,
+    stderr, stdout, write_executable_script,
 };
 
 fn append_tar_file(
@@ -59,6 +62,88 @@ fn sha512_integrity(body: &[u8]) -> String {
 
 fn installed_openclaw_runtime_entrypoint(install_root: &std::path::Path) -> std::path::PathBuf {
     install_root.join("files/node_modules/openclaw/openclaw.mjs")
+}
+
+fn install_fake_node_and_packing_npm(
+    root: &TestDir,
+    env: &mut BTreeMap<String, String>,
+    archive_path: &Path,
+) -> PathBuf {
+    let bin_dir = root.child("fake-pack-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let log_path = root.child("fake-pack-npm.log");
+    write_executable_script(
+        &bin_dir.join("node"),
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'v22.14.0\\n'\n  exit 0\nfi\nprintf 'fake node\\n'\n",
+    );
+    let npm_script = format!(
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "{}"
+if [ "$1" = "--version" ]; then
+  printf '10.0.0\n'
+  exit 0
+fi
+
+if [ "$1" = "pack" ]; then
+  shift
+  destination=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --pack-destination)
+        shift
+        destination="$1"
+        ;;
+    esac
+    shift
+  done
+  if [ -z "$destination" ]; then
+    echo "fake npm pack expected --pack-destination" >&2
+    exit 1
+  fi
+  mkdir -p "$destination"
+  cp "{}" "$destination/openclaw-2026.4.25.tgz"
+  printf 'openclaw-2026.4.25.tgz\n'
+  exit 0
+fi
+
+prefix=""
+archive=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --prefix)
+      shift
+      prefix="$1"
+      ;;
+    install|--omit=dev|--no-save|--package-lock=false)
+      ;;
+    *)
+      archive="$1"
+      ;;
+  esac
+  shift
+done
+
+if [ -z "$prefix" ] || [ -z "$archive" ]; then
+  echo "fake npm expected --prefix and archive path" >&2
+  exit 1
+fi
+
+mkdir -p "$prefix/node_modules/openclaw"
+tar -xzf "$archive" -C "$prefix/node_modules/openclaw" --strip-components=1 package
+"#,
+        path_string(&log_path),
+        path_string(archive_path),
+    );
+    write_executable_script(&bin_dir.join("npm"), &npm_script);
+
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let combined_path = if existing_path.is_empty() {
+        path_string(&bin_dir)
+    } else {
+        format!("{}:{existing_path}", path_string(&bin_dir))
+    };
+    env.insert("PATH".to_string(), combined_path);
+    log_path
 }
 
 #[test]
@@ -243,6 +328,102 @@ fn runtime_install_from_url_downloads_into_the_managed_store() {
     assert!(show_stdout.contains("sourceKind: installed"));
     assert!(show_stdout.contains(&format!("sourceUrl: {}", server.url())));
     assert!(show_stdout.contains("description: downloaded runtime"));
+}
+
+#[test]
+fn runtime_build_local_packs_and_installs_release_shaped_package() {
+    let root = TestDir::new("runtime-build-local");
+    let cwd = root.child("workspace");
+    let repo = cwd.join("openclaw");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(
+        repo.join("package.json"),
+        br#"{"name":"openclaw","version":"2026.4.25","bin":{"openclaw":"openclaw.mjs"},"scripts":{"prepack":"node --import tsx scripts/openclaw-prepack.ts"}}"#,
+    )
+    .unwrap();
+    let archive_path = root.child("packed-openclaw.tgz");
+    fs::write(
+        &archive_path,
+        openclaw_package_tarball_with_version(
+            "#!/usr/bin/env node\nconsole.log('local package runtime');\n",
+            "2026.4.25",
+        ),
+    )
+    .unwrap();
+
+    let mut env = ocm_env(&root);
+    let npm_log = install_fake_node_and_packing_npm(&root, &mut env, &archive_path);
+
+    let build = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "build-local",
+            "main-local",
+            "--repo",
+            "./openclaw",
+            "--raw",
+        ],
+    );
+    assert!(build.status.success(), "{}", stderr(&build));
+    assert!(stdout(&build).contains("Built runtime main-local"));
+
+    let npm_log = fs::read_to_string(npm_log).unwrap();
+    assert!(npm_log.contains("pack --pack-destination"));
+    assert!(npm_log.contains("install --prefix"));
+
+    let install_root = runtime_install_root("main-local", &env, &cwd).unwrap();
+    let expected_binary = installed_openclaw_runtime_entrypoint(&install_root);
+    assert!(expected_binary.exists());
+    assert_eq!(
+        fs::read_to_string(&expected_binary).unwrap(),
+        "#!/usr/bin/env node\nconsole.log('local package runtime');\n"
+    );
+
+    let show_json = run_ocm(&cwd, &env, &["runtime", "show", "main-local", "--json"]);
+    assert!(show_json.status.success(), "{}", stderr(&show_json));
+    let value: Value = serde_json::from_str(&stdout(&show_json)).unwrap();
+    assert_eq!(value["name"], "main-local");
+    assert_eq!(value["sourceKind"], "installed");
+    assert_eq!(value["releaseVersion"], "2026.4.25");
+    assert_eq!(value["binaryPath"], path_string(&expected_binary));
+    assert_eq!(
+        value["sourcePath"],
+        path_string(&fs::canonicalize(&repo).unwrap())
+    );
+    assert!(value["sourceSha256"].as_str().is_some());
+
+    let verify = run_ocm(&cwd, &env, &["runtime", "verify", "main-local", "--raw"]);
+    assert!(verify.status.success(), "{}", stderr(&verify));
+}
+
+#[test]
+fn runtime_build_local_requires_an_openclaw_repo_package() {
+    let root = TestDir::new("runtime-build-local-invalid-repo");
+    let cwd = root.child("workspace");
+    let repo = cwd.join("not-openclaw");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(
+        repo.join("package.json"),
+        br#"{"name":"other","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let build = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "build-local",
+            "main-local",
+            "--repo",
+            "./not-openclaw",
+        ],
+    );
+    assert!(!build.status.success());
+    assert!(stderr(&build).contains("requires an OpenClaw repo package named \"openclaw\""));
 }
 
 #[test]
