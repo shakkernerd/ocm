@@ -52,6 +52,30 @@ fn openclaw_package_tarball(script_body: &str) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
+fn openclaw_package_tarball_with_dependencies(script_body: &str, version: &str) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    {
+        let mut builder = Builder::new(&mut encoder);
+        append_tar_file(
+            &mut builder,
+            "package/openclaw.mjs",
+            script_body.as_bytes(),
+            0o755,
+        );
+        append_tar_file(
+            &mut builder,
+            "package/package.json",
+            format!(
+                "{{\"name\":\"openclaw\",\"version\":\"{version}\",\"bin\":{{\"openclaw\":\"openclaw.mjs\"}},\"dependencies\":{{\"chokidar\":\"^5.0.0\"}}}}"
+            )
+            .as_bytes(),
+            0o644,
+        );
+        builder.finish().unwrap();
+    }
+    encoder.finish().unwrap()
+}
+
 fn sha512_integrity(body: &[u8]) -> String {
     let digest = Sha512::digest(body);
     format!(
@@ -130,6 +154,14 @@ fi
 
 mkdir -p "$prefix/node_modules/openclaw"
 tar -xzf "$archive" -C "$prefix/node_modules/openclaw" --strip-components=1 package
+if grep -q '"chokidar"' "$prefix/node_modules/openclaw/package.json"; then
+  mkdir -p "$prefix/node_modules/chokidar"
+  mkdir -p "$prefix/node_modules/readdirp"
+  mkdir -p "$prefix/node_modules/@scope/tool"
+  printf '{{"name":"chokidar","version":"5.0.0"}}\n' > "$prefix/node_modules/chokidar/package.json"
+  printf '{{"name":"readdirp","version":"4.1.2"}}\n' > "$prefix/node_modules/readdirp/package.json"
+  printf '{{"name":"@scope/tool","version":"1.0.0"}}\n' > "$prefix/node_modules/@scope/tool/package.json"
+fi
 "#,
         path_string(&log_path),
         path_string(archive_path),
@@ -556,6 +588,66 @@ fn runtime_install_from_official_release_installs_the_openclaw_package() {
 }
 
 #[test]
+fn runtime_install_exposes_package_dependencies_to_openclaw_package_root() {
+    let root = TestDir::new("runtime-install-package-deps");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball_with_dependencies(
+        "#!/usr/bin/env node\nconsole.log('stable with deps');\n",
+        "2026.4.25",
+    );
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.4.25.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.4.25\"}},\"versions\":{{\"2026.4.25\":{{\"version\":\"2026.4.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.4.25\":\"2026-04-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "install", "--version", "2026.4.25"],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let install_root = runtime_install_root("2026.4.25", &env, &cwd).unwrap();
+    assert!(
+        install_root
+            .join("files/node_modules/chokidar/package.json")
+            .exists()
+    );
+    assert!(
+        install_root
+            .join("files/node_modules/openclaw/node_modules/chokidar/package.json")
+            .exists()
+    );
+    assert!(
+        install_root
+            .join("files/node_modules/openclaw/node_modules/readdirp/package.json")
+            .exists()
+    );
+    assert!(
+        install_root
+            .join("files/node_modules/openclaw/node_modules/@scope/tool/package.json")
+            .exists()
+    );
+}
+
+#[test]
 fn official_runtime_install_produces_a_runnable_env_binding() {
     let root = TestDir::new("runtime-install-official-runnable");
     let cwd = root.child("workspace");
@@ -700,6 +792,70 @@ fn runtime_install_reuses_a_matching_official_runtime() {
     let second = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
     assert!(second.status.success(), "{}", stderr(&second));
     assert!(stdout(&second).contains("Using installed runtime stable"));
+}
+
+#[test]
+fn runtime_install_refreshes_a_matching_official_runtime_with_bad_package_dep_layout() {
+    let root = TestDir::new("runtime-install-official-bad-dep-layout");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball_with_dependencies(
+        "#!/usr/bin/env node\nconsole.log('stable with deps');\n",
+        "2026.4.25",
+    );
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.4.25.tgz",
+        "application/octet-stream",
+        &tarball,
+        2,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.4.25\"}},\"versions\":{{\"2026.4.25\":{{\"version\":\"2026.4.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.4.25\":\"2026-04-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let first = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "install", "--version", "2026.4.25"],
+    );
+    assert!(first.status.success(), "{}", stderr(&first));
+    let install_root = runtime_install_root("2026.4.25", &env, &cwd).unwrap();
+    let projected_dep =
+        install_root.join("files/node_modules/openclaw/node_modules/chokidar/package.json");
+    assert!(projected_dep.exists());
+    fs::remove_dir_all(install_root.join("files/node_modules/openclaw/node_modules")).unwrap();
+
+    let verify = run_ocm(&cwd, &env, &["runtime", "verify", "2026.4.25", "--json"]);
+    assert_eq!(verify.status.code(), Some(1));
+    let value: Value = serde_json::from_str(&stdout(&verify)).unwrap();
+    assert_eq!(value["healthy"], false);
+    assert!(
+        value["issue"]
+            .as_str()
+            .unwrap()
+            .contains("OpenClaw package runtime dependency layout is missing")
+    );
+
+    let second = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "install", "--version", "2026.4.25"],
+    );
+    assert!(second.status.success(), "{}", stderr(&second));
+    assert!(stdout(&second).contains("Updated runtime 2026.4.25"));
+    assert!(projected_dep.exists());
 }
 
 #[test]

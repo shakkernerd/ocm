@@ -410,6 +410,14 @@ fi
 
 mkdir -p "$prefix/node_modules/openclaw"
 tar -xzf "$archive" -C "$prefix/node_modules/openclaw" --strip-components=1 package
+if grep -q '"chokidar"' "$prefix/node_modules/openclaw/package.json"; then
+  mkdir -p "$prefix/node_modules/chokidar"
+  mkdir -p "$prefix/node_modules/readdirp"
+  mkdir -p "$prefix/node_modules/@scope/tool"
+  printf '{"name":"chokidar","version":"5.0.0"}\n' > "$prefix/node_modules/chokidar/package.json"
+  printf '{"name":"readdirp","version":"4.1.2"}\n' > "$prefix/node_modules/readdirp/package.json"
+  printf '{"name":"@scope/tool","version":"1.0.0"}\n' > "$prefix/node_modules/@scope/tool/package.json"
+fi
 "#;
     write_executable_script(&bin_dir.join("npm"), npm_script);
 

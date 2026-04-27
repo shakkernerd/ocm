@@ -23,7 +23,9 @@ use crate::runtime::{
     RuntimeSourceKind, is_official_openclaw_package_runtime, is_openclaw_package_runtime,
 };
 
-use super::common::{ensure_dir, load_json_files, path_exists, read_json, write_json};
+use super::common::{
+    copy_dir_recursive, ensure_dir, load_json_files, path_exists, read_json, write_json,
+};
 use super::layout::{
     clean_path, display_path, resolve_absolute_path, runtime_install_files_dir,
     runtime_install_root, runtime_meta_path, validate_name,
@@ -38,6 +40,187 @@ fn trim_description(description: Option<String>) -> Option<String> {
 
 fn installed_openclaw_binary_path(install_files: &Path) -> PathBuf {
     install_files.join("node_modules/openclaw/openclaw.mjs")
+}
+
+fn installed_openclaw_package_root(install_files: &Path) -> PathBuf {
+    install_files.join("node_modules/openclaw")
+}
+
+fn openclaw_package_root_from_binary(binary_path: &Path) -> Option<PathBuf> {
+    binary_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| *value == "openclaw.mjs")?;
+    let package_root = binary_path.parent()?.to_path_buf();
+    if package_root.file_name().and_then(|value| value.to_str()) != Some("openclaw") {
+        return None;
+    }
+    if package_root
+        .parent()
+        .and_then(|value| value.file_name())
+        .and_then(|value| value.to_str())
+        != Some("node_modules")
+    {
+        return None;
+    }
+    Some(package_root)
+}
+
+fn symlink_or_copy_dir(source: &Path, target: &Path) -> Result<(), String> {
+    if let Some(parent) = target.parent() {
+        ensure_dir(parent)?;
+    }
+    #[cfg(unix)]
+    {
+        match std::os::unix::fs::symlink(source, target) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(_) => {}
+        }
+    }
+    #[cfg(windows)]
+    {
+        match std::os::windows::fs::symlink_dir(source, target) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(_) => {}
+        }
+    }
+    copy_dir_recursive(source, target)
+}
+
+fn expose_openclaw_package_runtime_dependencies(install_files: &Path) -> Result<(), String> {
+    let package_root = installed_openclaw_package_root(install_files);
+    if !package_root.join("package.json").exists() {
+        return Ok(());
+    }
+
+    let prefix_node_modules = install_files.join("node_modules");
+    let package_node_modules = package_root.join("node_modules");
+    let entries = match fs::read_dir(&prefix_node_modules) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let source_dir = entry.path();
+        let package_name = entry.file_name().to_string_lossy().to_string();
+        if package_name == "openclaw" || package_name == ".bin" || package_name.starts_with('.') {
+            continue;
+        }
+        if package_name.starts_with('@') {
+            if !source_dir.is_dir() {
+                continue;
+            }
+            for scoped_entry in fs::read_dir(&source_dir).map_err(|error| error.to_string())? {
+                let scoped_entry = scoped_entry.map_err(|error| error.to_string())?;
+                let scoped_source_dir = scoped_entry.path();
+                if !scoped_source_dir.join("package.json").exists() {
+                    continue;
+                }
+                let scoped_name = scoped_entry.file_name().to_string_lossy().to_string();
+                let target_dir = package_node_modules.join(&package_name).join(scoped_name);
+                if !target_dir.exists() {
+                    symlink_or_copy_dir(&scoped_source_dir, &target_dir)?;
+                }
+            }
+            continue;
+        }
+        if !source_dir.join("package.json").exists() {
+            continue;
+        }
+        let target_dir = package_node_modules.join(package_name);
+        if !target_dir.exists() {
+            symlink_or_copy_dir(&source_dir, &target_dir)?;
+        }
+    }
+    Ok(())
+}
+
+fn openclaw_package_runtime_dependency_layout_issue(package_root: &Path) -> Option<String> {
+    if !package_root.join("package.json").exists() {
+        return None;
+    }
+    let Some(prefix_node_modules) = package_root.parent() else {
+        return Some(format!(
+            "OpenClaw package runtime has no node_modules parent: {}",
+            display_path(package_root)
+        ));
+    };
+    let package_node_modules = package_root.join("node_modules");
+    let entries = match fs::read_dir(prefix_node_modules) {
+        Ok(entries) => entries,
+        Err(error) => {
+            return Some(format!(
+                "failed to inspect OpenClaw package runtime dependencies at {}: {error}",
+                display_path(prefix_node_modules)
+            ));
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                return Some(format!(
+                    "failed to inspect OpenClaw package runtime dependency entry: {error}"
+                ));
+            }
+        };
+        let source_dir = entry.path();
+        let package_name = entry.file_name().to_string_lossy().to_string();
+        if package_name == "openclaw" || package_name == ".bin" || package_name.starts_with('.') {
+            continue;
+        }
+        if package_name.starts_with('@') {
+            if !source_dir.is_dir() {
+                continue;
+            }
+            let scoped_entries = match fs::read_dir(&source_dir) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    return Some(format!(
+                        "failed to inspect OpenClaw package runtime scoped dependencies at {}: {error}",
+                        display_path(&source_dir)
+                    ));
+                }
+            };
+            for scoped_entry in scoped_entries {
+                let scoped_entry = match scoped_entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        return Some(format!(
+                            "failed to inspect OpenClaw package runtime scoped dependency entry: {error}"
+                        ));
+                    }
+                };
+                let scoped_source_dir = scoped_entry.path();
+                if !scoped_source_dir.join("package.json").exists() {
+                    continue;
+                }
+                let scoped_name = scoped_entry.file_name().to_string_lossy().to_string();
+                let target_dir = package_node_modules.join(&package_name).join(scoped_name);
+                if !target_dir.join("package.json").exists() {
+                    return Some(format!(
+                        "OpenClaw package runtime dependency layout is missing {}",
+                        display_path(&target_dir.join("package.json"))
+                    ));
+                }
+            }
+            continue;
+        }
+        if !source_dir.join("package.json").exists() {
+            continue;
+        }
+        let target_dir = package_node_modules.join(package_name);
+        if !target_dir.join("package.json").exists() {
+            return Some(format!(
+                "OpenClaw package runtime dependency layout is missing {}",
+                display_path(&target_dir.join("package.json"))
+            ));
+        }
+    }
+    None
 }
 
 #[derive(Clone, Debug, Default)]
@@ -461,6 +644,7 @@ fn install_runtime_from_openclaw_package_archive(
         context.cwd,
         context.env,
     )?;
+    expose_openclaw_package_runtime_dependencies(&target.install_files)?;
 
     let binary_path = installed_openclaw_binary_path(&target.install_files);
     if !path_exists(&binary_path) {
@@ -932,7 +1116,9 @@ pub fn runtime_integrity_issue(
     }
 
     if is_official_openclaw_package_runtime(meta, env) || is_openclaw_package_runtime(meta) {
-        return None;
+        if let Some(package_root) = openclaw_package_root_from_binary(binary_path) {
+            return openclaw_package_runtime_dependency_layout_issue(&package_root);
+        }
     }
 
     None
