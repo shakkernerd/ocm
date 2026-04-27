@@ -1,0 +1,4 @@
+interface:
+  display_name: "OCM Operator"
+  short_description: "Use OpenClaw Manager safely and fully"
+  default_prompt: "Use $ocm-operator to manage OpenClaw environments, runtimes, services, upgrades, logs, and release testing through OCM without breaking user state."
