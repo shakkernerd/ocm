@@ -6,7 +6,7 @@ use std::path::Path;
 
 use ocm::env::EnvironmentService;
 use ocm::store::{now_utc, supervisor_runtime_path};
-use ocm::supervisor::{SupervisorRuntimeChild, SupervisorRuntimeState};
+use ocm::supervisor::{SupervisorRuntimeChild, SupervisorRuntimeService, SupervisorRuntimeState};
 use serde_json::Value;
 
 use crate::support::{
@@ -452,5 +452,98 @@ fn service_status_ignores_stale_runtime_children_when_the_daemon_is_down() {
             .as_str()
             .unwrap()
             .contains("OCM background service is not installed")
+    );
+}
+
+#[test]
+fn service_status_reports_clean_backoff_as_restarting_without_issue() {
+    let root = TestDir::new("service-status-clean-backoff");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = launchd_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    let started = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(started.status.success(), "{}", stderr(&started));
+
+    let runtime_path = supervisor_runtime_path(&env, &cwd).unwrap();
+    fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
+    let retry_at = now_utc();
+    let runtime = SupervisorRuntimeState {
+        kind: "ocm-supervisor-runtime".to_string(),
+        ocm_home: path_string(&root.child("ocm-home")),
+        updated_at: now_utc(),
+        services: vec![SupervisorRuntimeService {
+            env_name: "demo".to_string(),
+            binding_kind: "launcher".to_string(),
+            binding_name: "stable".to_string(),
+            gateway_state: "backoff".to_string(),
+            restart_count: 1,
+            child_port: 18789,
+            pid: None,
+            stdout_path: path_string(&root.child("demo.stdout.log")),
+            stderr_path: path_string(&root.child("demo.stderr.log")),
+            last_exit_code: Some(0),
+            last_error: Some("process exited with 0; retrying after backoff".to_string()),
+            last_event_at: Some(now_utc()),
+            next_retry_at: Some(retry_at),
+        }],
+        children: Vec::new(),
+    };
+    fs::write(&runtime_path, serde_json::to_vec(&runtime).unwrap()).unwrap();
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = json_output(&output);
+    assert_eq!(body["running"], false);
+    assert_eq!(body["gatewayState"], "restarting");
+    assert_eq!(body["lastExitCode"], 0);
+    assert_eq!(body["issue"], Value::Null);
+}
+
+#[test]
+fn service_status_keeps_failed_backoff_as_issue() {
+    let root = TestDir::new("service-status-failed-backoff");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = launchd_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    let started = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(started.status.success(), "{}", stderr(&started));
+
+    let runtime_path = supervisor_runtime_path(&env, &cwd).unwrap();
+    fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
+    let runtime = SupervisorRuntimeState {
+        kind: "ocm-supervisor-runtime".to_string(),
+        ocm_home: path_string(&root.child("ocm-home")),
+        updated_at: now_utc(),
+        services: vec![SupervisorRuntimeService {
+            env_name: "demo".to_string(),
+            binding_kind: "launcher".to_string(),
+            binding_name: "stable".to_string(),
+            gateway_state: "backoff".to_string(),
+            restart_count: 1,
+            child_port: 18789,
+            pid: None,
+            stdout_path: path_string(&root.child("demo.stdout.log")),
+            stderr_path: path_string(&root.child("demo.stderr.log")),
+            last_exit_code: Some(1),
+            last_error: Some("process exited with 1; retrying after backoff".to_string()),
+            last_event_at: Some(now_utc()),
+            next_retry_at: Some(now_utc()),
+        }],
+        children: Vec::new(),
+    };
+    fs::write(&runtime_path, serde_json::to_vec(&runtime).unwrap()).unwrap();
+
+    let output = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = json_output(&output);
+    assert_eq!(body["running"], false);
+    assert_eq!(body["gatewayState"], "backoff");
+    assert_eq!(
+        body["issue"],
+        "process exited with 1; retrying after backoff"
     );
 }

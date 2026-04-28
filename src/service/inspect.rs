@@ -213,7 +213,7 @@ fn build_service_summary(
     let running = runtime_child.is_some();
     let foreign_listener = !running && tcp_port_reachable(gateway_port);
     let gateway_state = runtime_service
-        .map(|service| service.gateway_state.clone())
+        .map(reported_gateway_state)
         .unwrap_or_else(|| service_state_label(installed, desired_running, running));
     let issue = service_issue(
         installed,
@@ -387,6 +387,9 @@ fn service_issue(
         if !daemon.running {
             return Some("OCM background service is not running".to_string());
         }
+        if gateway_state == "restarting" {
+            return None;
+        }
         if gateway_state == "backoff" {
             return runtime_service
                 .and_then(|service| service.last_error.clone())
@@ -404,6 +407,14 @@ fn service_issue(
         }
     }
     None
+}
+
+fn reported_gateway_state(service: &SupervisorRuntimeService) -> String {
+    if service.gateway_state == "backoff" && service.last_exit_code == Some(0) {
+        "restarting".to_string()
+    } else {
+        service.gateway_state.clone()
+    }
 }
 
 fn tcp_port_reachable(port: u32) -> bool {

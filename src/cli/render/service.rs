@@ -25,7 +25,7 @@ fn service_state(summary: &ServiceSummary) -> &str {
 fn state_tone(state: &str) -> Tone {
     match state {
         "running" => Tone::Success,
-        "pending" | "starting" | "loaded" | "installed" | "backoff" => Tone::Warning,
+        "pending" | "starting" | "loaded" | "installed" | "backoff" | "restarting" => Tone::Warning,
         "stopped" | "disabled" | "absent" => Tone::Muted,
         _ => Tone::Plain,
     }
