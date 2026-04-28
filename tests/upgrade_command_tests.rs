@@ -90,8 +90,8 @@ case "$1" in
     exit 0
     ;;
   plugins)
-    [ "$2" = "update" ] && has_arg "--all" "$@" && has_arg "--dry-run" "$@" || {{
-      echo "missing plugin dry-run flags" >&2
+    [ "$2" = "update" ] && has_arg "--all" "$@" || {{
+      echo "missing plugin update flags" >&2
       exit 1
     }}
     echo "No tracked plugins or hook packs to update."
@@ -294,10 +294,8 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
 
-    let old_tarball = openclaw_package_tarball(
-        "#!/usr/bin/env node\nconsole.log('2026.3.24');\n",
-        "2026.3.24",
-    );
+    let old_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.24");
     let old_integrity = sha512_integrity(&old_tarball);
     let old_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.24.tgz",
@@ -306,10 +304,8 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
         10,
     );
 
-    let new_tarball = openclaw_package_tarball(
-        "#!/usr/bin/env node\nconsole.log('2026.3.25');\n",
-        "2026.3.25",
-    );
+    let new_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.25"), "2026.3.25");
     let new_integrity = sha512_integrity(&new_tarball);
     let new_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.25.tgz",
@@ -371,6 +367,24 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     assert!(runtime.status.success(), "{}", stderr(&runtime));
     let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
     assert_eq!(runtime_json["releaseVersion"], "2026.3.25");
+
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_json: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    let env_root = Path::new(env_json["root"].as_str().unwrap());
+    let command_log = fs::read_to_string(env_root.join("sim-commands.log")).unwrap();
+    assert!(
+        command_log.contains("doctor --non-interactive --fix"),
+        "{command_log}"
+    );
+    assert!(
+        command_log.contains("plugins update --all"),
+        "{command_log}"
+    );
+    assert!(
+        !command_log.contains("plugins update --all --dry-run"),
+        "{command_log}"
+    );
 
     let snapshots = run_ocm(&cwd, &env, &["env", "snapshot", "list", "demo", "--json"]);
     assert!(snapshots.status.success(), "{}", stderr(&snapshots));
@@ -939,7 +953,8 @@ fn upgrade_rolls_back_runtime_when_service_restart_fails() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
 
-    let old_tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let old_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.24");
     let old_integrity = sha512_integrity(&old_tarball);
     let old_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.24.tgz",
@@ -948,7 +963,8 @@ fn upgrade_rolls_back_runtime_when_service_restart_fails() {
         10,
     );
 
-    let new_tarball = openclaw_package_tarball("console.log('2026.3.25');\n", "2026.3.25");
+    let new_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.25"), "2026.3.25");
     let new_integrity = sha512_integrity(&new_tarball);
     let new_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.25.tgz",
@@ -1143,7 +1159,7 @@ fn upgrade_can_switch_a_local_launcher_env_to_a_published_runtime() {
     let project_dir = cwd.join("openclaw");
     fs::create_dir_all(&project_dir).unwrap();
 
-    let tarball = openclaw_package_tarball("console.log('stable');\n", "2026.3.24");
+    let tarball = openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.24");
     let integrity = sha512_integrity(&tarball);
     let tarball_server = TestHttpServer::serve_bytes(
         "/openclaw-2026.3.24.tgz",
@@ -1201,8 +1217,8 @@ fn upgrade_can_switch_env_to_an_installed_runtime() {
 
     let old_runtime = root.child("old-openclaw");
     let new_runtime = root.child("new-openclaw");
-    write_executable_script(&old_runtime, "#!/bin/sh\necho old-openclaw\n");
-    write_executable_script(&new_runtime, "#!/bin/sh\necho new-openclaw\n");
+    write_executable_script(&old_runtime, &recording_openclaw_script("old-openclaw"));
+    write_executable_script(&new_runtime, &recording_openclaw_script("new-openclaw"));
 
     let env = ocm_env(&root);
     let add_old = run_ocm(
@@ -1258,7 +1274,7 @@ fn upgrade_keeps_a_stopped_installed_service_stopped() {
     let project_dir = cwd.join("openclaw");
     fs::create_dir_all(&project_dir).unwrap();
 
-    let tarball = openclaw_package_tarball("console.log('stable');\n", "2026.3.24");
+    let tarball = openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.24");
     let integrity = sha512_integrity(&tarball);
     let tarball_server = TestHttpServer::serve_bytes(
         "/openclaw-2026.3.24.tgz",
@@ -1316,7 +1332,8 @@ fn upgrade_all_updates_safe_envs_and_skips_local_or_pinned_ones() {
     let project_dir = cwd.join("openclaw");
     fs::create_dir_all(&project_dir).unwrap();
 
-    let old_tarball = openclaw_package_tarball("console.log('2026.3.24');\n", "2026.3.24");
+    let old_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.24");
     let old_integrity = sha512_integrity(&old_tarball);
     let old_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.24.tgz",
@@ -1324,7 +1341,8 @@ fn upgrade_all_updates_safe_envs_and_skips_local_or_pinned_ones() {
         &old_tarball,
         10,
     );
-    let new_tarball = openclaw_package_tarball("console.log('2026.3.25');\n", "2026.3.25");
+    let new_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.25"), "2026.3.25");
     let new_integrity = sha512_integrity(&new_tarball);
     let new_tarball_server = TestHttpServer::serve_bytes_times(
         "/openclaw-2026.3.25.tgz",

@@ -274,6 +274,7 @@ fn upgrade_help_is_available_from_help_and_flag() {
     assert!(output.contains("Simulations clone the source env"));
     assert!(output.contains("Channel-tracked runtimes move forward automatically."));
     assert!(output.contains("pre-upgrade snapshot"));
+    assert!(output.contains("update-mode doctor and plugin update"));
 }
 
 #[test]

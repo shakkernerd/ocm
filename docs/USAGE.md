@@ -149,6 +149,7 @@ Use `upgrade simulate` when you want to test what would happen against a publish
 - missing published targets fail before any simulation env is created
 - `--scenario all` runs built-in current, clean minimum, and Telegram-configured env shapes as separate simulation clones
 - a pre-upgrade snapshot is created before env state changes
+- when an env moves to a new runtime, OCM runs OpenClaw's update-mode `doctor --non-interactive --fix` and `plugins update --all` inside that env before service restart
 - if service reconciliation fails, OCM restores the snapshot and previous runtime unless `--no-rollback` is set
 - pinned runtimes stay pinned unless you pass `--version`, `--channel`, or `--runtime`
 - local-command environments are reported clearly instead of being changed behind your back

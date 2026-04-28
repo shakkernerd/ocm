@@ -568,6 +568,7 @@ pub fn upgrade_help(cmd: &str) -> String {
             "Post-update checks run update-mode doctor, plugin update dry-run, and gateway status.",
             "Channel-tracked runtimes move forward automatically.",
             "Upgrades create a pre-upgrade snapshot before changing env state.",
+            "When an env moves to a new runtime, upgrade runs update-mode doctor and plugin update inside the env before service restart.",
             "If service restart/start fails, ocm restores the snapshot and previous runtime unless --no-rollback is set.",
             "Pinned runtimes stay pinned unless you pass --version, --channel, or --runtime explicitly.",
             "Local-command environments are reported clearly instead of being changed behind your back.",

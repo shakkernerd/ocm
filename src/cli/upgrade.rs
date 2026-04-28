@@ -1,7 +1,11 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -1066,6 +1070,22 @@ impl Cli {
                 self.environment_service()
                     .set_runtime(env_name, prepared.name.as_str())?;
             }
+            let post_update_note = match self.run_post_core_update(env_name) {
+                Ok(note) => note,
+                Err(error) => {
+                    return self.rollback_failed_upgrade(
+                        env_name,
+                        "runtime",
+                        previous_binding_name,
+                        "runtime",
+                        prepared.name,
+                        prepared.meta.release_version,
+                        prepared.meta.release_channel,
+                        transaction,
+                        error,
+                    );
+                }
+            };
             let service_result =
                 self.reconcile_upgraded_service(env_name, service, binding_changed, true);
             let (service_action, service_note) = match service_result {
@@ -1084,13 +1104,14 @@ impl Cli {
                     );
                 }
             };
-            let note = service_note.or_else(|| {
+            let runtime_note = service_note.or_else(|| {
                 if binding_changed {
                     Some(format!("env now uses runtime {}", prepared.name))
                 } else {
                     note_for_official_prepare_action(&prepared.action)
                 }
             });
+            let note = join_optional_warnings(post_update_note, runtime_note);
 
             let summary = UpgradeEnvSummary {
                 env_name: env_name.to_string(),
@@ -1203,6 +1224,26 @@ impl Cli {
                 prepared.action,
                 OfficialRuntimePrepareAction::Installed | OfficialRuntimePrepareAction::Updated
             );
+            let post_update_note = if changed {
+                match self.run_post_core_update(env_name) {
+                    Ok(note) => note,
+                    Err(error) => {
+                        return self.rollback_failed_upgrade(
+                            env_name,
+                            "runtime",
+                            previous_binding_name,
+                            "runtime",
+                            prepared.name,
+                            prepared.meta.release_version,
+                            prepared.meta.release_channel,
+                            transaction,
+                            error,
+                        );
+                    }
+                }
+            } else {
+                None
+            };
             let service_result = self.reconcile_upgraded_service(env_name, service, false, changed);
             let (service_action, service_note) = match service_result {
                 Ok(result) => result,
@@ -1232,7 +1273,10 @@ impl Cli {
                 service_action,
                 snapshot_id: Some(transaction.snapshot_id.clone()),
                 rollback: None,
-                note: service_note.or_else(|| note_for_official_prepare_action(&prepared.action)),
+                note: join_optional_warnings(
+                    post_update_note,
+                    service_note.or_else(|| note_for_official_prepare_action(&prepared.action)),
+                ),
             };
             transaction.cleanup();
             return Ok(summary);
@@ -1267,6 +1311,22 @@ impl Cli {
                 );
             }
         };
+        let post_update_note = match self.run_post_core_update(env_name) {
+            Ok(note) => note,
+            Err(error) => {
+                return self.rollback_failed_upgrade(
+                    env_name,
+                    "runtime",
+                    previous_binding_name,
+                    "runtime",
+                    updated.name,
+                    updated.release_version,
+                    updated.release_channel,
+                    transaction,
+                    error,
+                );
+            }
+        };
         let service_result = self.reconcile_upgraded_service(env_name, service, false, true);
         let (service_action, service_note) = match service_result {
             Ok(result) => result,
@@ -1296,7 +1356,7 @@ impl Cli {
             service_action,
             snapshot_id: Some(transaction.snapshot_id.clone()),
             rollback: None,
-            note: service_note,
+            note: join_optional_warnings(post_update_note, service_note),
         };
         transaction.cleanup();
         Ok(summary)
@@ -1371,6 +1431,22 @@ impl Cli {
         };
         self.environment_service()
             .set_runtime(env_name, prepared.name.as_str())?;
+        let post_update_note = match self.run_post_core_update(env_name) {
+            Ok(note) => note,
+            Err(error) => {
+                return self.rollback_failed_upgrade(
+                    env_name,
+                    "launcher",
+                    launcher_name.to_string(),
+                    "runtime",
+                    prepared.name,
+                    prepared.meta.release_version,
+                    prepared.meta.release_channel,
+                    transaction,
+                    error,
+                );
+            }
+        };
         let service_result = self.reconcile_upgraded_service(env_name, service, true, true);
         let (service_action, service_note) = match service_result {
             Ok(result) => result,
@@ -1400,7 +1476,10 @@ impl Cli {
             service_action,
             snapshot_id: Some(transaction.snapshot_id.clone()),
             rollback: None,
-            note: service_note.or_else(|| Some(format!("env now uses runtime {}", prepared.name))),
+            note: join_optional_warnings(
+                post_update_note,
+                service_note.or_else(|| Some(format!("env now uses runtime {}", prepared.name))),
+            ),
         };
         transaction.cleanup();
         Ok(summary)
@@ -1466,7 +1545,10 @@ impl Cli {
                 .with_progress(format!("Restarting service for {env_name}"), || {
                     self.service_service().restart(env_name)
                 })?;
-            let note = join_warnings(&restart.warnings);
+            let note = join_optional_warnings(
+                join_warnings(&restart.warnings),
+                self.wait_for_restarted_gateway_health(env_name, restart.running)?,
+            );
             return Ok((Some("restarted".to_string()), note));
         }
 
@@ -1474,11 +1556,82 @@ impl Cli {
             let start = self.with_progress(format!("Starting service for {env_name}"), || {
                 self.service_service().start(env_name)
             })?;
-            let note = join_warnings(&start.warnings);
+            let note = join_optional_warnings(
+                join_warnings(&start.warnings),
+                self.wait_for_restarted_gateway_health(env_name, start.running)?,
+            );
             return Ok((Some("started".to_string()), note));
         }
 
         Ok((None, None))
+    }
+
+    fn wait_for_restarted_gateway_health(
+        &self,
+        env_name: &str,
+        action_reported_running: bool,
+    ) -> Result<Option<String>, String> {
+        if !action_reported_running {
+            return Ok(None);
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let mut latest_issue = None;
+        while Instant::now() < deadline {
+            let status = self.service_service().status(env_name)?;
+            latest_issue = status.issue.clone();
+            if status.running && gateway_health_ok(status.child_port.unwrap_or(status.gateway_port))
+            {
+                return Ok(None);
+            }
+            if status.gateway_state == "backoff" && status.last_exit_code != Some(0) {
+                let issue = status
+                    .issue
+                    .or(status.last_error)
+                    .unwrap_or_else(|| "gateway entered failed backoff after restart".to_string());
+                return Err(format!("service restart did not recover: {issue}"));
+            }
+            sleep(Duration::from_millis(500));
+        }
+
+        Ok(Some(format!(
+            "service restart returned before the gateway health endpoint became ready; latest status: {}",
+            latest_issue.unwrap_or_else(|| "starting".to_string())
+        )))
+    }
+
+    fn run_post_core_update(&self, env_name: &str) -> Result<Option<String>, String> {
+        self.run_update_mode_openclaw_command(
+            env_name,
+            "openclaw doctor",
+            &["doctor", "--non-interactive", "--fix"],
+        )?;
+        self.run_update_mode_openclaw_command(
+            env_name,
+            "openclaw plugins update",
+            &["plugins", "update", "--all"],
+        )?;
+        Ok(Some(
+            "post-update doctor and plugin update completed".to_string(),
+        ))
+    }
+
+    fn run_update_mode_openclaw_command(
+        &self,
+        env_name: &str,
+        name: &str,
+        args: &[&str],
+    ) -> Result<(), String> {
+        let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        let resolved = self
+            .environment_service()
+            .resolve(env_name, None, None, &args)
+            .map_err(|error| format!("{name} failed: {error}"))?;
+        match self.run_resolved_for_simulation(resolved, &[("OPENCLAW_UPDATE_IN_PROGRESS", "1")]) {
+            Ok(output) if output.status.success() => Ok(()),
+            Ok(output) => Err(format!("{name} failed: {}", output.failure_summary())),
+            Err(error) => Err(format!("{name} failed: {error}")),
+        }
     }
 
     fn begin_upgrade_transaction(
@@ -2077,4 +2230,37 @@ fn join_warnings(warnings: &[String]) -> Option<String> {
     } else {
         Some(warnings.join(" "))
     }
+}
+
+fn join_optional_warnings(left: Option<String>, right: Option<String>) -> Option<String> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(format!("{left} {right}")),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+fn gateway_health_ok(port: u32) -> bool {
+    if port == 0 || port > u16::MAX as u32 {
+        return false;
+    }
+    let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port as u16);
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr.into(), Duration::from_millis(500))
+    else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
+    let request =
+        format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = [0_u8; 256];
+    let Ok(read) = stream.read(&mut response) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&response[..read]);
+    text.starts_with("HTTP/1.1 200") || text.starts_with("HTTP/1.0 200")
 }
