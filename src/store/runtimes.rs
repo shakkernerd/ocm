@@ -275,16 +275,30 @@ pub struct BuildLocalRuntimeOptions {
 }
 
 fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    let mut fallback = Vec::new();
     for bytes in [stderr, stdout] {
         let text = String::from_utf8_lossy(bytes);
-        if let Some(line) = text.lines().find_map(|line| {
-            let trimmed = line.trim();
-            (!trimmed.is_empty()).then_some(trimmed)
-        }) {
-            return Some(line.to_string());
+        let meaningful = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .filter(|line| !line.starts_with("npm notice"))
+            .filter(|line| !line.starts_with("npm warn"))
+            .take(12)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if !meaningful.is_empty() {
+            return Some(meaningful.join("\n"));
         }
+        fallback.extend(
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .take(3)
+                .map(ToOwned::to_owned),
+        );
     }
-    None
+    (!fallback.is_empty()).then(|| fallback.join("\n"))
 }
 
 fn npm_program(env: &BTreeMap<String, String>) -> String {
@@ -1133,4 +1147,36 @@ pub fn verify_runtime_binary(
     }
 
     Ok(meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_command_output;
+
+    #[test]
+    fn command_summary_prefers_errors_over_npm_warnings() {
+        let stderr = br#"
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+npm error code 1
+npm error command failed
+npm error Error [ERR_MODULE_NOT_FOUND]: Cannot find module './missing.mjs'
+"#;
+
+        let summary = summarize_command_output(b"", stderr).unwrap();
+
+        assert!(summary.contains("npm error code 1"));
+        assert!(summary.contains("ERR_MODULE_NOT_FOUND"));
+        assert!(!summary.contains("deprecated node-domexception"));
+    }
+
+    #[test]
+    fn command_summary_falls_back_to_warnings_when_no_errors_exist() {
+        let stderr = br#"
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+"#;
+
+        let summary = summarize_command_output(b"", stderr).unwrap();
+
+        assert!(summary.contains("deprecated node-domexception"));
+    }
 }
