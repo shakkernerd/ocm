@@ -1005,7 +1005,7 @@ impl Cli {
         let previous_binding_name = current.name.clone();
 
         if target.is_explicit() {
-            let service = self.service_service().status(env_name)?;
+            let service = self.upgrade_service_status(env_name)?;
             if options.dry_run {
                 let target_runtime = target.canonical_runtime_name()?;
                 let binding_changed = target_runtime != current.name;
@@ -1023,7 +1023,7 @@ impl Cli {
                     runtime_release_version: None,
                     runtime_release_channel: target.release_channel_hint(),
                     service_action: service_action_for_dry_run(
-                        Some(&service),
+                        service.as_ref(),
                         binding_changed,
                         true,
                     ),
@@ -1078,7 +1078,7 @@ impl Cli {
                 }
             };
             let service_result =
-                self.reconcile_upgraded_service(env_name, Some(&service), binding_changed, true);
+                self.reconcile_upgraded_service(env_name, service.as_ref(), binding_changed, true);
             let (service_action, service_note) = match service_result {
                 Ok(result) => result,
                 Err(error) => {
@@ -1167,7 +1167,7 @@ impl Cli {
         }
 
         if options.dry_run {
-            let service = self.service_service().status(env_name)?;
+            let service = self.upgrade_service_status(env_name)?;
             return Ok(UpgradeEnvSummary {
                 env_name: env_name.to_string(),
                 previous_binding_kind: "runtime".to_string(),
@@ -1177,7 +1177,7 @@ impl Cli {
                 outcome: "would-update".to_string(),
                 runtime_release_version: current.release_version.clone(),
                 runtime_release_channel: current.release_channel.clone(),
-                service_action: service_action_for_dry_run(Some(&service), false, true),
+                service_action: service_action_for_dry_run(service.as_ref(), false, true),
                 snapshot_id: None,
                 rollback: None,
                 note: Some("dry run: no runtime, env, service, or snapshot changed".to_string()),
@@ -1185,7 +1185,7 @@ impl Cli {
         }
 
         if is_official_openclaw_releases_url(current.source_manifest_url.as_deref(), &self.env) {
-            let service = self.service_service().status(env_name)?;
+            let service = self.upgrade_service_status(env_name)?;
             let target = UpgradeTarget {
                 version: None,
                 channel: current.release_selector_value.clone(),
@@ -1238,7 +1238,7 @@ impl Cli {
                 None
             };
             let service_result =
-                self.reconcile_upgraded_service(env_name, Some(&service), false, changed);
+                self.reconcile_upgraded_service(env_name, service.as_ref(), false, changed);
             let (service_action, service_note) = match service_result {
                 Ok(result) => result,
                 Err(error) => {
@@ -1276,7 +1276,7 @@ impl Cli {
             return Ok(summary);
         }
 
-        let service = self.service_service().status(env_name)?;
+        let service = self.upgrade_service_status(env_name)?;
         let transaction = self.begin_upgrade_transaction(
             env_name,
             std::slice::from_ref(&current.name),
@@ -1322,7 +1322,8 @@ impl Cli {
                 );
             }
         };
-        let service_result = self.reconcile_upgraded_service(env_name, Some(&service), false, true);
+        let service_result =
+            self.reconcile_upgraded_service(env_name, service.as_ref(), false, true);
         let (service_action, service_note) = match service_result {
             Ok(result) => result,
             Err(error) => {
@@ -1384,7 +1385,7 @@ impl Cli {
             });
         }
 
-        let service = self.service_service().status(env_name)?;
+        let service = self.upgrade_service_status(env_name)?;
         if options.dry_run {
             return Ok(UpgradeEnvSummary {
                 env_name: env_name.to_string(),
@@ -1395,7 +1396,7 @@ impl Cli {
                 outcome: "would-switch".to_string(),
                 runtime_release_version: None,
                 runtime_release_channel: target.release_channel_hint(),
-                service_action: service_action_for_dry_run(Some(&service), true, true),
+                service_action: service_action_for_dry_run(service.as_ref(), true, true),
                 snapshot_id: None,
                 rollback: None,
                 note: Some("dry run: no runtime, env, service, or snapshot changed".to_string()),
@@ -1442,7 +1443,8 @@ impl Cli {
                 );
             }
         };
-        let service_result = self.reconcile_upgraded_service(env_name, Some(&service), true, true);
+        let service_result =
+            self.reconcile_upgraded_service(env_name, service.as_ref(), true, true);
         let (service_action, service_note) = match service_result {
             Ok(result) => result,
             Err(error) => {
@@ -1478,6 +1480,14 @@ impl Cli {
         };
         transaction.cleanup();
         Ok(summary)
+    }
+
+    fn upgrade_service_status(&self, env_name: &str) -> Result<Option<ServiceSummary>, String> {
+        let meta = self.environment_service().get(env_name)?;
+        if !meta.service_enabled || !meta.service_running {
+            return Ok(None);
+        }
+        self.service_service().status(env_name).map(Some)
     }
 
     fn prepare_upgrade_target(

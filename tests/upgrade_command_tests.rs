@@ -1534,7 +1534,12 @@ fn upgrade_all_updates_safe_envs_and_skips_local_or_pinned_ones() {
     assert!(local.status.success(), "{}", stderr(&local));
 
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "--all", "--json"]);
-    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    assert!(
+        upgrade.status.success(),
+        "stderr:\n{}\nstdout:\n{}",
+        stderr(&upgrade),
+        stdout(&upgrade)
+    );
     let json: Value = serde_json::from_str(&stdout(&upgrade)).unwrap();
     assert_eq!(json["count"], 3);
     assert_eq!(json["changed"], 1);
