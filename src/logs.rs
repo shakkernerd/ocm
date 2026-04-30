@@ -197,12 +197,12 @@ impl<'a> LogService<'a> {
 
             let metadata = fs::metadata(&target.path).map_err(|error| error.to_string())?;
             if !printed_snapshot {
-                let content = read_log_text(&target.path, tail_lines)?;
+                let (content, snapshot_offset) = read_log_snapshot(&target.path, tail_lines)?;
                 writer
                     .write_all(content.as_bytes())
                     .map_err(|error| error.to_string())?;
                 writer.flush().map_err(|error| error.to_string())?;
-                offset = metadata.len();
+                offset = snapshot_offset;
                 printed_snapshot = true;
             } else if metadata.len() < offset {
                 offset = 0;
@@ -233,25 +233,33 @@ impl<'a> LogService<'a> {
         writer: &mut W,
     ) -> Result<(), String> {
         let targets = self.targets(name, "all")?;
-        let summary = self.read(name, "all", tail_lines)?;
-        writer
-            .write_all(summary.content.as_bytes())
-            .map_err(|error| error.to_string())?;
-        writer.flush().map_err(|error| error.to_string())?;
-
-        let mut cursors = targets
-            .into_iter()
-            .map(|target| FollowCursor {
+        let mut contents = Vec::new();
+        let mut cursors = Vec::new();
+        for target in targets {
+            let mut cursor = FollowCursor {
                 target,
                 offset: 0,
                 pending: String::new(),
-            })
-            .collect::<Vec<_>>();
-        for cursor in &mut cursors {
-            if let Ok(metadata) = fs::metadata(&cursor.target.path) {
-                cursor.offset = metadata.len();
+            };
+            if cursor.target.path.exists() {
+                let (content, snapshot_offset) =
+                    read_log_snapshot(&cursor.target.path, tail_lines)?;
+                contents.push((cursor.target.stream.clone(), content));
+                cursor.offset = snapshot_offset;
             }
+            cursors.push(cursor);
         }
+        if contents.is_empty() {
+            return Err(format!(
+                "no logs exist for env \"{}\" across stdout or stderr",
+                name
+            ));
+        }
+        let content = merge_log_texts(contents, tail_lines);
+        writer
+            .write_all(content.as_bytes())
+            .map_err(|error| error.to_string())?;
+        writer.flush().map_err(|error| error.to_string())?;
 
         loop {
             let mut updates = Vec::new();
@@ -312,21 +320,36 @@ fn normalize_stream(stream: &str) -> Result<&str, String> {
 }
 
 fn read_log_text(path: &Path, tail_lines: Option<usize>) -> Result<String, String> {
+    read_log_snapshot(path, tail_lines).map(|(content, _offset)| content)
+}
+
+fn read_log_snapshot(path: &Path, tail_lines: Option<usize>) -> Result<(String, u64), String> {
     match tail_lines {
-        Some(limit) => read_log_tail(path, limit),
-        None => fs::read_to_string(path).map_err(|error| error.to_string()),
+        Some(limit) => read_log_tail_snapshot(path, limit),
+        None => {
+            let file = File::open(path).map_err(|error| error.to_string())?;
+            let offset = file.metadata().map_err(|error| error.to_string())?.len();
+            let mut content = String::new();
+            file.take(offset)
+                .read_to_string(&mut content)
+                .map_err(|error| error.to_string())?;
+            Ok((content, offset))
+        }
     }
 }
 
-fn read_log_tail(path: &Path, tail_lines: usize) -> Result<String, String> {
+fn read_log_tail_snapshot(path: &Path, tail_lines: usize) -> Result<(String, u64), String> {
     if tail_lines == 0 {
-        return Ok(String::new());
+        let file = File::open(path).map_err(|error| error.to_string())?;
+        let offset = file.metadata().map_err(|error| error.to_string())?.len();
+        return Ok((String::new(), offset));
     }
 
     let mut file = File::open(path).map_err(|error| error.to_string())?;
     let mut position = file
         .seek(SeekFrom::End(0))
         .map_err(|error| error.to_string())?;
+    let snapshot_offset = position;
     let mut chunks = Vec::new();
     let mut newline_count = 0_usize;
 
@@ -348,7 +371,7 @@ fn read_log_tail(path: &Path, tail_lines: usize) -> Result<String, String> {
         bytes.append(&mut chunk);
     }
     let raw = String::from_utf8_lossy(&bytes).into_owned();
-    Ok(tail_text(&raw, tail_lines))
+    Ok((tail_text(&raw, tail_lines), snapshot_offset))
 }
 
 fn tail_text(text: &str, tail_lines: usize) -> String {
