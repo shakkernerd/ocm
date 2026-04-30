@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+#[cfg(target_os = "linux")]
+use std::fs;
 use std::path::Path;
 #[cfg(unix)]
 use std::process::{Command, Stdio};
@@ -1134,6 +1136,7 @@ fn terminate_associated_processes(_meta: &EnvMeta) -> Result<usize, String> {
 #[cfg(unix)]
 fn associated_process_pids(meta: &EnvMeta) -> Result<Vec<u32>, String> {
     let processes = process_table()?;
+    let cwd_map = process_cwd_map(&processes)?;
     let parent_map = processes
         .iter()
         .map(|process| (process.pid, process.ppid))
@@ -1152,7 +1155,7 @@ fn associated_process_pids(meta: &EnvMeta) -> Result<Vec<u32>, String> {
         if interactive_shell_command(&command) {
             continue;
         }
-        if process_belongs_to_env(process.pid, meta)? {
+        if process_belongs_to_env(process.pid, &command, meta, &cwd_map) {
             seeds.insert(process.pid);
         }
     }
@@ -1184,7 +1187,12 @@ fn associated_process_pids(meta: &EnvMeta) -> Result<Vec<u32>, String> {
 }
 
 #[cfg(unix)]
-fn process_belongs_to_env(pid: u32, meta: &EnvMeta) -> Result<bool, String> {
+fn process_belongs_to_env(
+    pid: u32,
+    command: &str,
+    meta: &EnvMeta,
+    cwd_map: &std::collections::HashMap<u32, String>,
+) -> bool {
     let paths = derive_env_paths(Path::new(&meta.root));
     let mut markers = vec![
         meta.root.clone(),
@@ -1199,16 +1207,20 @@ fn process_belongs_to_env(pid: u32, meta: &EnvMeta) -> Result<bool, String> {
         markers.push(normalize_process_path(&dev.worktree_root));
     }
 
-    if let Some(cwd) = process_cwd(pid)?
+    let command = normalize_process_path(command);
+    if markers.iter().any(|marker| command.contains(marker)) {
+        return true;
+    }
+
+    if let Some(cwd) = cwd_map.get(&pid)
         && markers
             .iter()
             .any(|marker| normalize_process_path(&cwd).starts_with(marker))
     {
-        return Ok(true);
+        return true;
     }
 
-    let command = normalize_process_path(&process_command(pid)?);
-    Ok(markers.iter().any(|marker| command.contains(marker)))
+    false
 }
 
 #[cfg(unix)]
@@ -1282,19 +1294,56 @@ fn normalize_process_path(value: &str) -> String {
     value.strip_prefix("/private").unwrap_or(value).to_string()
 }
 
-#[cfg(unix)]
-fn process_cwd(pid: u32) -> Result<Option<String>, String> {
+#[cfg(target_os = "linux")]
+fn process_cwd_map(
+    processes: &[ProcessEntry],
+) -> Result<std::collections::HashMap<u32, String>, String> {
+    let mut cwd_map = std::collections::HashMap::new();
+    for process in processes {
+        match fs::read_link(format!("/proc/{}/cwd", process.pid)) {
+            Ok(path) => {
+                cwd_map.insert(process.pid, path.to_string_lossy().into_owned());
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                ) => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect process cwd for pid {}: {error}",
+                    process.pid
+                ));
+            }
+        }
+    }
+    Ok(cwd_map)
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_cwd_map(
+    _processes: &[ProcessEntry],
+) -> Result<std::collections::HashMap<u32, String>, String> {
     let output = Command::new("lsof")
-        .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+        .args(["-b", "-w", "-a", "-d", "cwd", "-Fpn"])
         .output()
-        .map_err(|error| format!("failed to inspect process cwd for pid {pid}: {error}"))?;
+        .map_err(|error| format!("failed to inspect process cwd: {error}"))?;
     if !output.status.success() {
-        return Ok(None);
+        return Ok(std::collections::HashMap::new());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| line.strip_prefix('n').map(|value| value.trim().to_string())))
+    let mut cwd_map = std::collections::HashMap::new();
+    let mut current_pid = None;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some(pid) = line.strip_prefix('p') {
+            current_pid = pid.parse::<u32>().ok();
+        } else if let Some(path) = line.strip_prefix('n')
+            && let Some(pid) = current_pid
+        {
+            cwd_map.insert(pid, path.trim().to_string());
+        }
+    }
+    Ok(cwd_map)
 }
 
 #[cfg(unix)]

@@ -158,6 +158,32 @@ fn wait_for_listener(port: u16) {
     panic!("listener on port {port} did not start in time");
 }
 
+#[cfg(unix)]
+fn wait_for_listener_port(
+    ready_path: &Path,
+    child: &mut std::process::Child,
+    log_path: &Path,
+) -> u16 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Ok(port_text) = fs::read_to_string(ready_path) {
+            let port = port_text
+                .trim()
+                .parse::<u16>()
+                .expect("listener helper wrote an invalid port");
+            wait_for_listener(port);
+            return port;
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            let log = fs::read_to_string(log_path).unwrap_or_default();
+            panic!("listener helper exited before becoming ready: {status}; {log}");
+        }
+        sleep(Duration::from_millis(50));
+    }
+    let log = fs::read_to_string(log_path).unwrap_or_default();
+    panic!("listener did not report a bound port in time; {log}");
+}
+
 #[test]
 fn env_destroy_preview_reports_service_snapshot_and_env_steps() {
     let root = TestDir::new("env-destroy-preview");
@@ -335,35 +361,40 @@ fn env_destroy_yes_terminates_live_listener_processes() {
     assert!(created.status.success(), "{}", stderr(&created));
 
     let server = root.child("listener.py");
+    let ready = root.child("listener-ready.txt");
+    let listener_log = root.child("listener.log");
     fs::write(
         &server,
         r#"import argparse, socket, time
 parser = argparse.ArgumentParser()
-parser.add_argument("--port", type=int, required=True)
+parser.add_argument("--ready", required=True)
 args = parser.parse_args()
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", args.port))
+s.bind(("127.0.0.1", 0))
 s.listen(1)
+with open(args.ready, "w", encoding="utf-8") as ready:
+    ready.write(str(s.getsockname()[1]))
+    ready.flush()
 time.sleep(60)
 "#,
     )
     .unwrap();
 
-    let mut child = Command::new("sh")
+    let listener_output = fs::File::create(&listener_log).unwrap();
+    let listener_error = listener_output.try_clone().unwrap();
+    let mut child = Command::new("python3")
         .current_dir(root.child("ocm-home/envs/demo"))
-        .arg("-c")
-        .arg(format!(
-            "python3 {} --port 18789 >/dev/null 2>&1 & wait",
-            path_string(&server)
-        ))
+        .arg(&server)
+        .arg("--ready")
+        .arg(&ready)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(listener_output))
+        .stderr(Stdio::from(listener_error))
         .spawn()
         .unwrap();
 
-    wait_for_listener(18789);
+    let port = wait_for_listener_port(&ready, &mut child, &listener_log);
 
     let destroy = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--yes"]);
     assert!(destroy.status.success(), "{}", stderr(&destroy));
@@ -377,10 +408,10 @@ time.sleep(60)
     }
     assert!(
         child.try_wait().unwrap().is_some(),
-        "listener wrapper should exit after destroy"
+        "listener should exit after destroy"
     );
     assert!(
-        TcpStream::connect(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 18789)).is_err(),
+        TcpStream::connect(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).is_err(),
         "listener port should be closed after destroy"
     );
 }
