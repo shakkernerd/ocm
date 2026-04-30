@@ -16,11 +16,15 @@ pub(crate) fn ensure_dir(path: &Path) -> Result<(), String> {
 pub(crate) fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
     ensure_dir(destination)?;
 
-    let entries = fs::read_dir(source).map_err(|error| error.to_string())?;
-    for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
+    let entries = fs::read_dir(source)
+        .map_err(|error| error.to_string())?
+        .map(|entry| {
+            let entry = entry.map_err(|error| error.to_string())?;
+            Ok((entry.path(), destination.join(entry.file_name())))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    for (source_path, destination_path) in entries {
         let metadata = fs::symlink_metadata(&source_path).map_err(|error| error.to_string())?;
         let file_type = metadata.file_type();
 
@@ -175,5 +179,29 @@ mod tests {
         );
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_dir_recursive_copies_deep_trees_without_retaining_parent_handles() {
+        let root = temp_root("deep-tree");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        let mut current = source.clone();
+        for index in 0..128 {
+            current = current.join(format!("d{index}"));
+            fs::create_dir_all(&current).unwrap();
+            fs::write(current.join("note.txt"), format!("level {index}\n")).unwrap();
+        }
+
+        copy_dir_recursive(&source, &destination).unwrap();
+
+        let deepest = (0..128).fold(destination, |path, index| path.join(format!("d{index}")));
+        assert_eq!(
+            fs::read_to_string(deepest.join("note.txt")).unwrap(),
+            "level 127\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 }
