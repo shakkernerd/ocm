@@ -393,6 +393,129 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     assert_eq!(snapshot_json[0]["label"], "pre-upgrade");
 }
 
+#[cfg(unix)]
+#[test]
+fn upgrade_switches_across_versions_from_runtime_with_broken_package_bin_symlink() {
+    let root = TestDir::new("upgrade-broken-runtime-symlink-versions");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let pairs = (0..10)
+        .map(|index| {
+            (
+                format!("2026.3.{}", 20 + index),
+                format!("2026.4.{}", 20 + index),
+            )
+        })
+        .collect::<Vec<_>>();
+    let versions = pairs
+        .iter()
+        .flat_map(|(source, target)| [source.clone(), target.clone()])
+        .collect::<Vec<_>>();
+    let mut tarball_servers = Vec::new();
+    let mut version_entries = Vec::new();
+    let mut time_entries = Vec::new();
+    for version in versions {
+        let tarball = openclaw_package_tarball(&recording_openclaw_script(&version), &version);
+        let integrity = sha512_integrity(&tarball);
+        let path = format!("/openclaw-{version}.tgz");
+        let server =
+            TestHttpServer::serve_bytes_times(&path, "application/octet-stream", &tarball, 4);
+        version_entries.push(format!(
+            "\"{version}\":{{\"version\":\"{version}\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{integrity}\"}}}}",
+            server.url()
+        ));
+        time_entries.push(format!("\"{version}\":\"2026-03-25T16:35:52.000Z\""));
+        tarball_servers.push(server);
+    }
+    let latest = pairs.last().unwrap().1.as_str();
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"{latest}\"}},\"versions\":{{{}}},\"time\":{{{}}}}}",
+        version_entries.join(","),
+        time_entries.join(",")
+    );
+    let packument_server = TestHttpServer::serve_bytes_times(
+        "/openclaw",
+        "application/json",
+        packument.as_bytes(),
+        80,
+    );
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    for (index, (source_version, target_version)) in pairs.iter().enumerate() {
+        let env_name = format!("demo-{index}");
+        let start = run_ocm(
+            &cwd,
+            &env,
+            &[
+                "start",
+                &env_name,
+                "--version",
+                source_version,
+                "--no-service",
+            ],
+        );
+        assert!(start.status.success(), "{}", stderr(&start));
+
+        let runtime = run_ocm(&cwd, &env, &["runtime", "show", source_version, "--json"]);
+        assert!(runtime.status.success(), "{}", stderr(&runtime));
+        let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
+        let install_root = Path::new(runtime_json["installRoot"].as_str().unwrap());
+        let bin_dir = install_root.join(format!(
+            "files/node_modules/openclaw/dist/extensions/demo-{index}/node_modules/.bin"
+        ));
+        fs::create_dir_all(&bin_dir).unwrap();
+        let broken_link = bin_dir.join("missing-tool");
+        std::os::unix::fs::symlink("../missing-package/bin/missing-tool", &broken_link).unwrap();
+        assert!(
+            fs::symlink_metadata(&broken_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!broken_link.exists());
+
+        let verify = run_ocm(&cwd, &env, &["runtime", "verify", source_version, "--json"]);
+        assert!(verify.status.success(), "{}", stderr(&verify));
+
+        let upgrade = run_ocm(
+            &cwd,
+            &env,
+            &["upgrade", &env_name, "--version", target_version],
+        );
+        assert!(
+            upgrade.status.success(),
+            "{source_version} -> {target_version}\nstdout:\n{}\nstderr:\n{}",
+            stdout(&upgrade),
+            stderr(&upgrade)
+        );
+        let output = stdout(&upgrade);
+        assert!(
+            output.contains(&format!("from=runtime:{source_version}")),
+            "{output}"
+        );
+        assert!(
+            output.contains(&format!("to=runtime:{target_version}")),
+            "{output}"
+        );
+        assert!(output.contains("outcome=switched"), "{output}");
+        assert!(output.contains("snapshot="), "{output}");
+
+        let env_show = run_ocm(&cwd, &env, &["env", "show", &env_name, "--json"]);
+        assert!(env_show.status.success(), "{}", stderr(&env_show));
+        let env_json: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+        assert_eq!(env_json["defaultRuntime"], *target_version);
+    }
+
+    assert_eq!(tarball_servers.len(), 20);
+}
+
 #[test]
 fn upgrade_dry_run_reports_without_changing_runtime_or_creating_snapshot() {
     let root = TestDir::new("upgrade-dry-run");

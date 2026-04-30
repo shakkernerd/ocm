@@ -21,9 +21,15 @@ pub(crate) fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()
         let entry = entry.map_err(|error| error.to_string())?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
-        let metadata = fs::metadata(&source_path).map_err(|error| error.to_string())?;
+        let metadata = fs::symlink_metadata(&source_path).map_err(|error| error.to_string())?;
+        let file_type = metadata.file_type();
 
-        if metadata.is_dir() {
+        if file_type.is_symlink() {
+            copy_symlink(&source_path, &destination_path)?;
+            continue;
+        }
+
+        if file_type.is_dir() {
             copy_dir_recursive(&source_path, &destination_path)?;
             continue;
         }
@@ -32,6 +38,33 @@ pub(crate) fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()
             ensure_dir(parent)?;
         }
         fs::copy(&source_path, &destination_path).map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn copy_symlink(source_path: &Path, destination_path: &Path) -> Result<(), String> {
+    if let Some(parent) = destination_path.parent() {
+        ensure_dir(parent)?;
+    }
+    let target = fs::read_link(source_path).map_err(|error| error.to_string())?;
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target, destination_path).map_err(|error| error.to_string())?;
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(&target, destination_path)
+            .or_else(|_| std::os::windows::fs::symlink_dir(&target, destination_path))
+            .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        return Err(format!(
+            "copying symlinks is not supported on this platform: {}",
+            source_path.display()
+        ));
     }
 
     Ok(())
@@ -93,4 +126,54 @@ pub(crate) fn load_json_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
 
     files.sort();
     Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_dir_recursive;
+
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_root(label: &str) -> PathBuf {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir()
+            .join("ocm-copy-dir-tests")
+            .join(format!("{label}-{}-{id}", std::process::id()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_dir_recursive_preserves_broken_symlinks() {
+        let root = temp_root("broken-symlink");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("node_modules/.bin")).unwrap();
+        fs::write(source.join("node_modules/package.json"), "{}\n").unwrap();
+        std::os::unix::fs::symlink(
+            "../missing-package/bin/tool",
+            source.join("node_modules/.bin/tool"),
+        )
+        .unwrap();
+
+        copy_dir_recursive(&source, &destination).unwrap();
+
+        let copied_link = destination.join("node_modules/.bin/tool");
+        let metadata = fs::symlink_metadata(&copied_link).unwrap();
+        assert!(metadata.file_type().is_symlink());
+        assert_eq!(
+            fs::read_link(&copied_link).unwrap(),
+            PathBuf::from("../missing-package/bin/tool")
+        );
+        assert!(!copied_link.exists());
+        assert_eq!(
+            fs::read_to_string(destination.join("node_modules/package.json")).unwrap(),
+            "{}\n"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
