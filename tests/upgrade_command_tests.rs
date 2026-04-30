@@ -1499,6 +1499,7 @@ fn upgrade_all_updates_safe_envs_and_skips_local_or_pinned_ones() {
     );
 
     let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
