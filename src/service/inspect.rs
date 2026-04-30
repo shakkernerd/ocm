@@ -375,11 +375,6 @@ fn service_issue(
     if !daemon.installed {
         return Some("OCM background service is not installed".to_string());
     }
-    if foreign_listener {
-        return Some(format!(
-            "port {gateway_port} is occupied by a process outside the OCM background service"
-        ));
-    }
     if desired_running {
         if let Some(reason) = skipped_reason {
             return Some(reason.clone());
@@ -402,6 +397,13 @@ fn service_issue(
                 .and_then(|service| service.last_error.clone())
                 .or_else(|| Some("env gateway exited and is not being restarted".to_string()));
         }
+    }
+    if foreign_listener {
+        return Some(format!(
+            "port {gateway_port} is occupied by a process outside the OCM background service"
+        ));
+    }
+    if desired_running {
         if gateway_state != "running" {
             return Some("env gateway is not running under the OCM background service".to_string());
         }
