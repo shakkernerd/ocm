@@ -89,12 +89,24 @@ fn sanitized_openclaw_base_env(base_env: &BTreeMap<String, String>) -> BTreeMap<
     base_env
         .iter()
         .filter(|(key, _)| {
-            !key.starts_with("OPENCLAW_")
+            (!key.starts_with("OPENCLAW_") || is_openclaw_diagnostics_passthrough_key(key))
                 && key.as_str() != "OCM_ACTIVE_ENV"
                 && key.as_str() != "OCM_ACTIVE_ENV_ROOT"
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
+}
+
+fn is_openclaw_diagnostics_passthrough_key(key: &str) -> bool {
+    matches!(
+        key,
+        "OPENCLAW_DIAGNOSTICS"
+            | "OPENCLAW_DIAGNOSTICS_RUN_ID"
+            | "OPENCLAW_DIAGNOSTICS_ENV"
+            | "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH"
+            | "OPENCLAW_DIAGNOSTICS_EVENT_LOOP"
+            | "OPENCLAW_GATEWAY_STARTUP_TRACE"
+    )
 }
 
 pub fn render_use_script(meta: &EnvMeta, shell: &str) -> String {
@@ -151,5 +163,92 @@ pub fn render_init_script(command: &str, shell: &str) -> Result<String, String> 
         "bash" | "sh" | "zsh" => Ok(render_init_posix(command)),
         "fish" => Ok(render_init_fish(command)),
         _ => Err(format!("unsupported shell: {shell}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::EnvMeta;
+    use time::OffsetDateTime;
+
+    #[test]
+    fn build_openclaw_env_preserves_diagnostics_passthrough_only() {
+        let meta = EnvMeta {
+            kind: "ocm-env".to_string(),
+            name: "demo".to_string(),
+            root: "/tmp/ocm/envs/demo".to_string(),
+            gateway_port: Some(19999),
+            service_enabled: true,
+            service_running: true,
+            default_runtime: None,
+            default_launcher: None,
+            dev: None,
+            protected: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            last_used_at: None,
+        };
+        let base = BTreeMap::from([
+            ("NODE_OPTIONS".to_string(), "--cpu-prof".to_string()),
+            ("OPENCLAW_HOME".to_string(), "/tmp/wrong".to_string()),
+            ("OPENCLAW_GATEWAY_PORT".to_string(), "12345".to_string()),
+            ("OPENCLAW_PROFILE".to_string(), "wrong".to_string()),
+            ("OPENCLAW_DIAGNOSTICS".to_string(), "timeline".to_string()),
+            (
+                "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH".to_string(),
+                "/tmp/kova/timeline.jsonl".to_string(),
+            ),
+            (
+                "OPENCLAW_DIAGNOSTICS_EVENT_LOOP".to_string(),
+                "1".to_string(),
+            ),
+            (
+                "OPENCLAW_GATEWAY_STARTUP_TRACE".to_string(),
+                "1".to_string(),
+            ),
+            (
+                "OPENCLAW_RANDOM_USER_VALUE".to_string(),
+                "strip-me".to_string(),
+            ),
+            ("OCM_ACTIVE_ENV".to_string(), "wrong".to_string()),
+        ]);
+
+        let env = build_openclaw_env(&meta, &base);
+
+        assert_eq!(
+            env.get("NODE_OPTIONS").map(String::as_str),
+            Some("--cpu-prof")
+        );
+        assert_eq!(
+            env.get("OPENCLAW_HOME").map(String::as_str),
+            Some("/tmp/ocm/envs/demo")
+        );
+        assert_eq!(
+            env.get("OPENCLAW_GATEWAY_PORT").map(String::as_str),
+            Some("19999")
+        );
+        assert_eq!(
+            env.get("OPENCLAW_DIAGNOSTICS").map(String::as_str),
+            Some("timeline")
+        );
+        assert_eq!(
+            env.get("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH")
+                .map(String::as_str),
+            Some("/tmp/kova/timeline.jsonl")
+        );
+        assert_eq!(
+            env.get("OPENCLAW_DIAGNOSTICS_EVENT_LOOP")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            env.get("OPENCLAW_GATEWAY_STARTUP_TRACE")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(env.get("OCM_ACTIVE_ENV").map(String::as_str), Some("demo"));
+        assert!(!env.contains_key("OPENCLAW_PROFILE"));
+        assert!(!env.contains_key("OPENCLAW_RANDOM_USER_VALUE"));
     }
 }
