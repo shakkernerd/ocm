@@ -148,7 +148,7 @@ fn dev_command_provisions_worktree_bootstraps_config_and_runs_gateway() {
         config["agents"]["defaults"]["workspace"],
         path_string(&workspace_dir)
     );
-    assert_eq!(config["agents"]["defaults"]["skipBootstrap"], true);
+    assert!(config["agents"]["defaults"].get("skipBootstrap").is_none());
     assert_eq!(config["agents"]["list"][0]["id"], "main");
     assert!(workspace_dir.exists());
 

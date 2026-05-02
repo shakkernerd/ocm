@@ -119,7 +119,11 @@ fn start_generates_an_env_name_and_uses_latest_stable_runtime() {
         serde_json::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
     assert_eq!(config_json["gateway"]["mode"], "local");
     assert_eq!(config_json["gateway"]["bind"], "loopback");
-    assert_eq!(config_json["agents"]["defaults"]["skipBootstrap"], true);
+    assert!(
+        config_json["agents"]["defaults"]
+            .get("skipBootstrap")
+            .is_none()
+    );
     assert_eq!(config_json["agents"]["list"][0]["id"], "main");
 }
 

@@ -2,8 +2,9 @@ mod support;
 
 use std::fs;
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout, write_text};
+use crate::support::{TestDir, ocm_env, path_string, run_ocm, stderr, stdout, write_text};
 use ocm::store::clean_path;
+use serde_json::Value;
 
 fn exported_gateway_port(output: &std::process::Output) -> u32 {
     let script = stdout(output);
@@ -121,6 +122,102 @@ fn env_run_uses_the_registered_launcher_and_its_cwd() {
         stdout(&run_output),
         format!("{}|{}", expected_run_dir.display(), env_root.display())
     );
+}
+
+#[test]
+fn env_run_onboard_clears_legacy_skip_bootstrap_by_default() {
+    let root = TestDir::new("behavior-env-run-onboard-bootstrap");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "noop", "--command", "/usr/bin/true"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "noop"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let env_root = clean_path(&root.child("ocm-home/envs/demo"));
+    let config_path = env_root.join(".openclaw/openclaw.json");
+    let workspace = env_root.join(".openclaw/workspace");
+    write_text(
+        &config_path,
+        &format!(
+            r#"{{
+  "agents": {{
+    "defaults": {{
+      "workspace": "{}",
+      "skipBootstrap": true
+    }}
+  }},
+  "gateway": {{
+    "mode": "local"
+  }}
+}}
+"#,
+            path_string(&workspace)
+        ),
+    );
+
+    let run_output = run_ocm(&cwd, &env, &["env", "run", "demo", "--", "onboard"]);
+    assert!(run_output.status.success(), "{}", stderr(&run_output));
+
+    let config: Value = serde_json::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
+    assert!(config["agents"]["defaults"].get("skipBootstrap").is_none());
+}
+
+#[test]
+fn env_run_onboard_preserves_explicit_skip_bootstrap() {
+    let root = TestDir::new("behavior-env-run-onboard-skip-bootstrap");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "noop", "--command", "/usr/bin/true"],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "noop"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let env_root = clean_path(&root.child("ocm-home/envs/demo"));
+    let config_path = env_root.join(".openclaw/openclaw.json");
+    let workspace = env_root.join(".openclaw/workspace");
+    write_text(
+        &config_path,
+        &format!(
+            r#"{{
+  "agents": {{
+    "defaults": {{
+      "workspace": "{}",
+      "skipBootstrap": true
+    }}
+  }},
+  "gateway": {{
+    "mode": "local"
+  }}
+}}
+"#,
+            path_string(&workspace)
+        ),
+    );
+
+    let run_output = run_ocm(
+        &cwd,
+        &env,
+        &["env", "run", "demo", "--", "onboard", "--skip-bootstrap"],
+    );
+    assert!(run_output.status.success(), "{}", stderr(&run_output));
+
+    let config: Value = serde_json::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
+    assert_eq!(config["agents"]["defaults"]["skipBootstrap"], true);
 }
 
 #[test]

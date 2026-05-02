@@ -20,7 +20,9 @@ use crate::env::{
 use crate::infra::process::{run_direct, run_shell};
 use crate::infra::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
 use crate::openclaw_repo::remove_openclaw_worktree;
-use crate::store::{derive_env_paths, summarize_env, validate_name};
+use crate::store::{
+    clear_skip_bootstrap_for_openclaw_onboarding, derive_env_paths, summarize_env, validate_name,
+};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +52,14 @@ pub(crate) struct EnvDestroySummary {
     pub processes_terminated: usize,
     pub worktree_removed: bool,
     pub removed: bool,
+}
+
+fn should_clear_skip_bootstrap_for_openclaw_args(args: &[String]) -> bool {
+    if !matches!(args.first().map(String::as_str), Some("onboard" | "setup")) {
+        return false;
+    }
+
+    !args.iter().any(|arg| arg == "--skip-bootstrap")
 }
 
 impl Cli {
@@ -955,6 +965,11 @@ impl Cli {
             return Err("environment name is required".to_string());
         };
         Self::assert_command_separator(&before, "env run requires -- before OpenClaw arguments")?;
+
+        if should_clear_skip_bootstrap_for_openclaw_args(&after) {
+            let meta = self.environment_service().get(name)?;
+            clear_skip_bootstrap_for_openclaw_onboarding(&derive_env_paths(Path::new(&meta.root)))?;
+        }
 
         let resolved = self.environment_service().resolve_run(
             name,

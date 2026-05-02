@@ -163,9 +163,6 @@ pub(crate) fn ensure_minimum_local_openclaw_config(
     defaults
         .entry("workspace".to_string())
         .or_insert_with(|| Value::String(workspace.clone()));
-    defaults
-        .entry("skipBootstrap".to_string())
-        .or_insert_with(|| Value::Bool(true));
 
     let list_needs_default = agents
         .get("list")
@@ -184,6 +181,35 @@ pub(crate) fn ensure_minimum_local_openclaw_config(
     }
 
     write_config_value(&target_paths.config_path, &value)
+}
+
+pub(crate) fn clear_skip_bootstrap_for_openclaw_onboarding(
+    target_paths: &EnvPaths,
+) -> Result<bool, String> {
+    if !path_exists(&target_paths.config_path) {
+        return Ok(false);
+    }
+    let raw = fs::read_to_string(&target_paths.config_path).map_err(|error| error.to_string())?;
+    let Ok(mut value) = serde_json::from_str::<Value>(&raw) else {
+        return Ok(false);
+    };
+
+    let Some(defaults) = value
+        .get_mut("agents")
+        .and_then(Value::as_object_mut)
+        .and_then(|agents| agents.get_mut("defaults"))
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(false);
+    };
+
+    if defaults.get("skipBootstrap") != Some(&Value::Bool(true)) {
+        return Ok(false);
+    }
+
+    defaults.remove("skipBootstrap");
+    write_config_value(&target_paths.config_path, &value)?;
+    Ok(true)
 }
 
 fn audit_openclaw_config_value(
