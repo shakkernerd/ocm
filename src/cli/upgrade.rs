@@ -1650,6 +1650,9 @@ impl Cli {
             .create_snapshot(CreateEnvSnapshotOptions {
                 env_name: env_name.to_string(),
                 label: Some("pre-upgrade".to_string()),
+            })
+            .map_err(|error| {
+                format!("failed to create pre-upgrade snapshot for env \"{env_name}\": {error}")
             })?;
         let mut seen = BTreeSet::new();
         let mut runtime_backups = Vec::new();

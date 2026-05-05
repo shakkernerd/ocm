@@ -51,10 +51,49 @@ pub struct ExtractedEnvArchive<T> {
     pub root_dir: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnvArchiveEntryKind {
+    Directory,
+    File,
+    Symlink,
+    Other,
+}
+
+#[derive(Clone, Copy)]
+pub struct EnvArchiveOptions {
+    pub should_skip_path: fn(&Path, EnvArchiveEntryKind) -> bool,
+}
+
+impl Default for EnvArchiveOptions {
+    fn default() -> Self {
+        Self {
+            should_skip_path: include_env_archive_path,
+        }
+    }
+}
+
+fn include_env_archive_path(_relative_path: &Path, _kind: EnvArchiveEntryKind) -> bool {
+    false
+}
+
 pub fn write_env_archive<T: Serialize>(
     metadata: &T,
     source_root: &Path,
     output_path: &Path,
+) -> Result<(), String> {
+    write_env_archive_with_options(
+        metadata,
+        source_root,
+        output_path,
+        EnvArchiveOptions::default(),
+    )
+}
+
+pub fn write_env_archive_with_options<T: Serialize>(
+    metadata: &T,
+    source_root: &Path,
+    output_path: &Path,
+    options: EnvArchiveOptions,
 ) -> Result<(), String> {
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -62,6 +101,7 @@ pub fn write_env_archive<T: Serialize>(
 
     let file = File::create(output_path).map_err(|error| error.to_string())?;
     let mut builder = Builder::new(file);
+    builder.follow_symlinks(false);
     let mut metadata_raw =
         serde_json::to_string_pretty(metadata).map_err(|error| error.to_string())?;
     metadata_raw.push('\n');
@@ -77,10 +117,83 @@ pub fn write_env_archive<T: Serialize>(
             Cursor::new(metadata_bytes),
         )
         .map_err(|error| error.to_string())?;
-    builder
-        .append_dir_all(ENV_ARCHIVE_ROOT_DIR, source_root)
-        .map_err(|error| error.to_string())?;
+    append_env_root(&mut builder, source_root, options)?;
     builder.finish().map_err(|error| error.to_string())
+}
+
+fn append_env_root(
+    builder: &mut Builder<File>,
+    source_root: &Path,
+    options: EnvArchiveOptions,
+) -> Result<(), String> {
+    builder
+        .append_dir(ENV_ARCHIVE_ROOT_DIR, source_root)
+        .map_err(|error| format!("failed to archive {}: {error}", source_root.display()))?;
+
+    let mut stack = sorted_child_paths(source_root)?;
+    while let Some(path) = stack.pop() {
+        let relative_path = path.strip_prefix(source_root).map_err(|error| {
+            format!(
+                "failed to resolve archive path for {}: {error}",
+                path.display()
+            )
+        })?;
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!("failed to inspect {} for archive: {error}", path.display())
+        })?;
+        let entry_kind = env_archive_entry_kind(&metadata);
+        if (options.should_skip_path)(relative_path, entry_kind) {
+            continue;
+        }
+
+        let archive_path = Path::new(ENV_ARCHIVE_ROOT_DIR).join(relative_path);
+        if metadata.is_dir() {
+            builder
+                .append_dir(&archive_path, &path)
+                .map_err(|error| format!("failed to archive {}: {error}", path.display()))?;
+            let mut children = sorted_child_paths(&path)?;
+            stack.append(&mut children);
+            continue;
+        }
+
+        builder
+            .append_path_with_name(&path, &archive_path)
+            .map_err(|error| format!("failed to archive {}: {error}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn sorted_child_paths(path: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut children = fs::read_dir(path)
+        .map_err(|error| {
+            format!(
+                "failed to read directory {} for archive: {error}",
+                path.display()
+            )
+        })?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    children.sort();
+    children.reverse();
+    Ok(children)
+}
+
+fn env_archive_entry_kind(metadata: &fs::Metadata) -> EnvArchiveEntryKind {
+    let file_type = metadata.file_type();
+    if file_type.is_dir() {
+        EnvArchiveEntryKind::Directory
+    } else if file_type.is_file() {
+        EnvArchiveEntryKind::File
+    } else if file_type.is_symlink() {
+        EnvArchiveEntryKind::Symlink
+    } else {
+        EnvArchiveEntryKind::Other
+    }
 }
 
 pub fn extract_env_archive<T: DeserializeOwned>(

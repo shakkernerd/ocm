@@ -850,6 +850,209 @@ fn environment_snapshot_captures_a_named_point_in_time() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn environment_snapshot_skips_legacy_plugin_dependency_state_and_preserves_symlinks() {
+    let root = TestDir::new("store-env-snapshot-legacy-plugin-deps");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            service_enabled: false,
+            service_running: false,
+            default_runtime: Some("stable".to_string()),
+            default_launcher: Some("shell".to_string()),
+            dev: None,
+            protected: true,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = std::path::Path::new(&created.root);
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "hello snapshot",
+    );
+    write_text(
+        &source_root.join(".openclaw/openclaw.json"),
+        "{\"gateway\":{\"port\":19789}}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/agents/main/agent/auth-profiles.json"),
+        "{\"default\":\"ok\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/agents/main/sessions/main.jsonl"),
+        "{\"runtime\":\"session\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/credentials/default.json"),
+        "{\"credential\":\"keep\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/cron/jobs.json"),
+        "{\"jobs\":[]}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/devices/local.json"),
+        "{\"device\":\"keep\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/identity/profile.json"),
+        "{\"identity\":\"keep\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/memory/store.json"),
+        "{\"memory\":\"keep\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/plugins/installed.json"),
+        "{\"plugins\":[]}\n",
+    );
+    std::os::unix::fs::symlink(
+        "../missing-workspace-target.txt",
+        source_root.join(".openclaw/workspace/missing-link"),
+    )
+    .unwrap();
+
+    let legacy_bin = source_root.join(".openclaw/plugin-runtime-deps/demo/node_modules/.bin");
+    fs::create_dir_all(&legacy_bin).unwrap();
+    std::os::unix::fs::symlink(
+        "../missing-package/bin/tool",
+        legacy_bin.join("missing-tool"),
+    )
+    .unwrap();
+    write_text(
+        &source_root.join(".openclaw/bundled-plugin-runtime-deps/stamp.txt"),
+        "generated dependency state",
+    );
+    write_text(
+        &source_root.join(".openclaw/.local/bundled-plugin-runtime-deps/stamp.txt"),
+        "generated local dependency state",
+    );
+    write_text(&source_root.join(".openclaw/run/gateway.pid"), "123\n");
+    write_text(
+        &source_root.join(".openclaw/logs/gateway.log"),
+        "runtime log\n",
+    );
+    write_text(&source_root.join(".openclaw/cache/index.json"), "{}\n");
+    write_text(
+        &source_root.join(".openclaw/extensions/demo/.openclaw-runtime-deps.json"),
+        "{}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/extensions/demo/node_modules/package/index.js"),
+        "module.exports = true;\n",
+    );
+    let future_cache = source_root.join(".openclaw/future-runtime-cache/tools/.bin");
+    fs::create_dir_all(&future_cache).unwrap();
+    std::os::unix::fs::symlink("../missing-future-tool", future_cache.join("tool")).unwrap();
+
+    let snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: Some("before-upgrade".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let extract_dir = root.child("snapshot-extracted");
+    let extracted = extract_env_archive::<EnvArchiveMetadata>(
+        std::path::Path::new(&snapshot.archive_path),
+        &extract_dir,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(extracted.root_dir.join(".openclaw/workspace/notes.txt")).unwrap(),
+        "hello snapshot"
+    );
+    assert_eq!(
+        fs::read_to_string(extracted.root_dir.join(".openclaw/openclaw.json")).unwrap(),
+        "{\"gateway\":{\"port\":19789}}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(
+            extracted
+                .root_dir
+                .join(".openclaw/agents/main/agent/auth-profiles.json")
+        )
+        .unwrap(),
+        "{\"default\":\"ok\"}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(
+            extracted
+                .root_dir
+                .join(".openclaw/agents/main/sessions/main.jsonl")
+        )
+        .unwrap(),
+        "{\"runtime\":\"session\"}\n"
+    );
+    for path in [
+        ".openclaw/credentials/default.json",
+        ".openclaw/cron/jobs.json",
+        ".openclaw/devices/local.json",
+        ".openclaw/identity/profile.json",
+        ".openclaw/memory/store.json",
+        ".openclaw/plugins/installed.json",
+    ] {
+        assert!(extracted.root_dir.join(path).exists(), "{path}");
+    }
+    assert!(
+        fs::symlink_metadata(extracted.root_dir.join(".openclaw/workspace/missing-link"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        !extracted
+            .root_dir
+            .join(".openclaw/plugin-runtime-deps")
+            .exists()
+    );
+    assert!(
+        !extracted
+            .root_dir
+            .join(".openclaw/bundled-plugin-runtime-deps")
+            .exists()
+    );
+    assert!(
+        !extracted
+            .root_dir
+            .join(".openclaw/.local/bundled-plugin-runtime-deps")
+            .exists()
+    );
+    assert!(!extracted.root_dir.join(".openclaw/run").exists());
+    assert!(!extracted.root_dir.join(".openclaw/logs").exists());
+    assert!(!extracted.root_dir.join(".openclaw/cache").exists());
+    assert!(
+        !extracted
+            .root_dir
+            .join(".openclaw/extensions/demo/.openclaw-runtime-deps.json")
+            .exists()
+    );
+    assert!(
+        !extracted
+            .root_dir
+            .join(".openclaw/extensions/demo/node_modules")
+            .exists()
+    );
+    assert!(
+        !extracted
+            .root_dir
+            .join(".openclaw/future-runtime-cache")
+            .exists()
+    );
+}
+
 #[test]
 fn environment_snapshot_listing_supports_env_scoped_and_global_views() {
     let root = TestDir::new("store-env-snapshot-list");

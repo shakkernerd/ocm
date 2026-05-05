@@ -9,7 +9,7 @@ use crate::env::{
     default_service_enabled, default_service_running,
 };
 use crate::infra::archive::{
-    ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive,
+    ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive_with_options,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -21,7 +21,7 @@ use super::layout::{
 };
 use super::{
     audit_openclaw_state, clear_nonportable_runtime_state, get_environment, list_environments,
-    now_utc, rewrite_openclaw_config_for_target, save_environment,
+    now_utc, openclaw_env_archive_options, rewrite_openclaw_config_for_target, save_environment,
 };
 
 static NEXT_RESTORE_ID: AtomicU64 = AtomicU64::new(0);
@@ -108,7 +108,12 @@ pub fn create_env_snapshot(
     };
 
     let result = (|| {
-        write_env_archive(&metadata, &env_paths.root, &archive_path)?;
+        write_env_archive_with_options(
+            &metadata,
+            &env_paths.root,
+            &archive_path,
+            openclaw_env_archive_options(),
+        )?;
         write_json(&meta_path, &snapshot)?;
         Ok(snapshot)
     })();

@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::env::EnvMeta;
+use crate::infra::archive::{EnvArchiveEntryKind, EnvArchiveOptions};
 
 use super::common::path_exists;
 use super::layout::{EnvPaths, clean_path, derive_env_paths, display_path};
@@ -69,6 +70,24 @@ pub(crate) fn audit_openclaw_state(meta: &EnvMeta, known_envs: &[EnvMeta]) -> Op
 pub(crate) fn repair_openclaw_runtime_state(meta: &EnvMeta) -> Result<bool, String> {
     let paths = derive_env_paths(Path::new(&meta.root));
     clear_nonportable_runtime_state(&paths)
+}
+
+pub(crate) fn openclaw_env_archive_options() -> EnvArchiveOptions {
+    EnvArchiveOptions {
+        should_skip_path: should_skip_openclaw_env_archive_path,
+    }
+}
+
+pub(crate) fn should_skip_openclaw_env_archive_path(
+    relative_path: &Path,
+    _kind: EnvArchiveEntryKind,
+) -> bool {
+    let components = path_components(relative_path);
+    if components.first().copied() != Some(".openclaw") {
+        return false;
+    }
+
+    !is_durable_openclaw_archive_path(&components)
 }
 
 pub(crate) fn prepare_migrated_runtime_state(
@@ -283,6 +302,31 @@ fn should_remove_volatile_runtime_path(name: &OsStr, is_dir: bool) -> bool {
     ) || matches!(
         name.to_str(),
         Some("pid") | Some("lock") | Some("sock") | Some("socket")
+    )
+}
+
+fn path_components(path: &Path) -> Vec<&str> {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect()
+}
+
+fn is_durable_openclaw_archive_path(components: &[&str]) -> bool {
+    matches!(
+        components,
+        [".openclaw"]
+            | [".openclaw", "workspace", ..]
+            | [".openclaw", "openclaw.json"]
+            | [".openclaw", "agents", ..]
+            | [".openclaw", "credentials", ..]
+            | [".openclaw", "cron", ..]
+            | [".openclaw", "devices", ..]
+            | [".openclaw", "identity", ..]
+            | [".openclaw", "memory", ..]
+            | [".openclaw", "plugins", ..]
     )
 }
 

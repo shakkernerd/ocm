@@ -39,7 +39,7 @@ pub(crate) use openclaw_config::{
 };
 pub(crate) use openclaw_state::{
     OpenClawStateAudit, audit_openclaw_state, clear_nonportable_runtime_state,
-    prepare_migrated_runtime_state, repair_openclaw_runtime_state,
+    openclaw_env_archive_options, prepare_migrated_runtime_state, repair_openclaw_runtime_state,
 };
 pub(crate) use runtimes::install_runtime_from_local_openclaw_build;
 pub(crate) use runtimes::install_runtime_from_selected_official_openclaw_release;

@@ -8,7 +8,7 @@ use crate::env::{
     ExportEnvironmentOptions, ImportEnvironmentOptions,
 };
 use crate::infra::archive::{
-    ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive,
+    ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive_with_options,
 };
 use crate::openclaw_repo::remove_openclaw_worktree;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,10 @@ use super::layout::{
     resolve_absolute_path, validate_name,
 };
 use super::now_utc;
-use super::{clear_nonportable_runtime_state, rewrite_openclaw_config_for_target};
+use super::{
+    clear_nonportable_runtime_state, openclaw_env_archive_options,
+    rewrite_openclaw_config_for_target,
+};
 
 static NEXT_IMPORT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -299,7 +302,12 @@ pub fn export_environment(
         },
     };
 
-    let result = write_env_archive(&metadata, &env_paths.root, &output_path);
+    let result = write_env_archive_with_options(
+        &metadata,
+        &env_paths.root,
+        &output_path,
+        openclaw_env_archive_options(),
+    );
     if result.is_err() {
         let _ = fs::remove_file(&output_path);
     }
