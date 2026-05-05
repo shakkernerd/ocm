@@ -17,8 +17,8 @@ use time::OffsetDateTime;
 use crate::env::{EnvironmentService, resolve_gateway_process_spec};
 use crate::service::inspect::inspect_job;
 use crate::service::platform::{
-    ManagedServiceDefinition, activate_managed_service, managed_service_identity,
-    write_managed_service_definition,
+    ManagedServiceDefinition, ServiceManagerKind, activate_managed_service,
+    managed_service_identity, service_manager_kind, write_managed_service_definition,
 };
 use crate::store::{
     display_path, ensure_dir, ensure_store, list_environments, now_utc,
@@ -44,6 +44,8 @@ const SERVICE_PROXY_ENV_KEYS: [&str; 8] = [
     "all_proxy",
 ];
 const SERVICE_EXTRA_ENV_KEYS: [&str; 2] = ["NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA"];
+const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
+const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -313,6 +315,8 @@ impl<'a> SupervisorService<'a> {
         ensure_store(self.env, self.cwd)?;
         let ocm_home = resolve_ocm_home(self.env, self.cwd)?;
         let logs_dir = supervisor_logs_dir(self.env, self.cwd)?;
+        let identity = managed_service_identity(self.env, self.cwd)?;
+        let service_manager = service_manager_kind(self.env);
         let env_service = EnvironmentService::new(self.env, self.cwd);
         let mut envs = list_environments(self.env, self.cwd)?;
         envs.sort_by(|left, right| left.name.cmp(&right.name));
@@ -345,6 +349,11 @@ impl<'a> SupervisorService<'a> {
                         .ok_or_else(|| format!("failed to resolve child port for env \"{name}\""))?
                         .parse::<u32>()
                         .map_err(|_| format!("failed to parse child port for env \"{name}\""))?;
+                    let process_env = build_supervised_openclaw_env(
+                        process.process_env,
+                        &identity.label,
+                        service_manager,
+                    );
                     children.push(SupervisorChildSpec {
                         env_name: name,
                         binding_kind: process.binding_kind,
@@ -363,7 +372,7 @@ impl<'a> SupervisorService<'a> {
                         stderr_path: display_path(
                             &logs_dir.join(format!("{}.stderr.log", process.env_name)),
                         ),
-                        process_env: process.process_env,
+                        process_env,
                     });
                 }
                 Err(reason) => skipped_envs.push(SkippedSupervisorEnv {
@@ -602,6 +611,7 @@ struct RunningSupervisorChild {
     spec: SupervisorChildSpec,
     child: Child,
     restart_count: usize,
+    quick_clean_restart_count: usize,
     started_at: Instant,
 }
 
@@ -609,6 +619,7 @@ struct RunningSupervisorChild {
 struct PendingSupervisorChild {
     spec: SupervisorChildSpec,
     restart_count: usize,
+    quick_clean_restart_count: usize,
     retry_at: Instant,
     retry_at_utc: OffsetDateTime,
     last_exit_code: Option<i32>,
@@ -620,7 +631,15 @@ struct ExitedSupervisorChild {
     env_name: String,
     exit_code: Option<i32>,
     restart_count: usize,
+    quick_clean_restart_count: usize,
     ran_for: Duration,
+}
+
+struct ExitedSupervisorChildDecision {
+    should_restart: bool,
+    quick_clean_handoff: bool,
+    log_action: &'static str,
+    last_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -637,6 +656,7 @@ struct InactiveSupervisorChild {
 fn spawn_running_child(
     spec: SupervisorChildSpec,
     restart_count: usize,
+    quick_clean_restart_count: usize,
 ) -> Result<RunningSupervisorChild, String> {
     eprintln!(
         "ocm service: starting {} ({})",
@@ -647,6 +667,7 @@ fn spawn_running_child(
         child: spawn_supervisor_child(&spec)?,
         spec,
         restart_count,
+        quick_clean_restart_count,
         started_at: Instant::now(),
     })
 }
@@ -827,7 +848,7 @@ fn reconcile_running_children(
                 if should_replace {
                     pending.insert(
                         env_name,
-                        pending_supervisor_child(next_spec.clone(), 0, 0, None, None),
+                        pending_supervisor_child(next_spec.clone(), 0, 0, 0, None, None),
                     );
                 }
             }
@@ -868,7 +889,7 @@ fn reconcile_running_children(
             stop_supervisor_child(&mut existing);
             pending.insert(
                 env_name,
-                pending_supervisor_child(next_spec.clone(), 0, 0, None, None),
+                pending_supervisor_child(next_spec.clone(), 0, 0, 0, None, None),
             );
             inactive.remove(&existing.spec.env_name);
             runtime_dirty = true;
@@ -893,6 +914,7 @@ fn collect_exited_children(
                 env_name: env_name.clone(),
                 exit_code: status.code(),
                 restart_count: running_child.restart_count,
+                quick_clean_restart_count: running_child.quick_clean_restart_count,
                 ran_for: running_child.started_at.elapsed(),
             });
         }
@@ -923,24 +945,6 @@ fn process_exited_children(
             exited_child.exit_code,
             exited_child.restart_count,
         ));
-        let should_restart = should_restart_exited_child(&exited_child);
-        eprintln!(
-            "ocm service: {} exited with {}; {}",
-            previous_child.spec.env_name,
-            exited_child
-                .exit_code
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "signal".to_string()),
-            if should_restart {
-                "restarting"
-            } else {
-                "leaving stopped after quick clean exit"
-            }
-        );
-        if stop_requested.load(Ordering::SeqCst) {
-            break;
-        }
-
         runtime_dirty |= refresh_active_state(
             state_path,
             active_state,
@@ -949,27 +953,48 @@ fn process_exited_children(
             pending,
             inactive,
         );
-        if should_restart
-            && let Some(next_spec) =
-                active_child_spec(active_state, &exited_child.env_name).cloned()
+        let next_spec = active_child_spec(active_state, &exited_child.env_name).cloned();
+        let decision = exited_child_restart_decision(
+            &exited_child,
+            next_spec
+                .as_ref()
+                .is_some_and(|spec| *spec == previous_child.spec),
+            next_spec.is_some(),
+        );
+        eprintln!(
+            "ocm service: {} exited with {}; {}",
+            previous_child.spec.env_name,
+            exited_child
+                .exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            decision.log_action
+        );
+        if stop_requested.load(Ordering::SeqCst) {
+            break;
+        }
+
+        if decision.should_restart
+            && let Some(next_spec) = next_spec
         {
             let next_restart_count = if next_spec == previous_child.spec {
                 exited_child.restart_count + 1
             } else {
                 0
             };
-            let issue = Some(format!(
-                "process exited with {}; retrying after backoff",
-                exited_child
-                    .exit_code
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "signal".to_string())
-            ));
+            let next_quick_clean_restart_count =
+                if next_spec == previous_child.spec && decision.quick_clean_handoff {
+                    exited_child.quick_clean_restart_count + 1
+                } else {
+                    0
+                };
+            let issue = decision.last_error.clone();
             pending.insert(
                 exited_child.env_name.clone(),
                 pending_supervisor_child(
                     next_spec.clone(),
                     next_restart_count,
+                    next_quick_clean_restart_count,
                     restart_delay_ms(next_restart_count),
                     exited_child.exit_code,
                     issue.clone(),
@@ -997,7 +1022,7 @@ fn process_exited_children(
                     "stopped",
                     exited_child.restart_count,
                     exited_child.exit_code,
-                    Some("process exited cleanly too quickly; leaving stopped".to_string()),
+                    decision.last_error.clone(),
                     now_utc(),
                     None,
                 ),
@@ -1008,9 +1033,59 @@ fn process_exited_children(
     Ok(runtime_dirty)
 }
 
-fn should_restart_exited_child(exited_child: &ExitedSupervisorChild) -> bool {
-    !(exited_child.exit_code == Some(0)
-        && exited_child.ran_for < Duration::from_millis(SUPERVISOR_STABLE_RUN_MS))
+fn exited_child_restart_decision(
+    exited_child: &ExitedSupervisorChild,
+    same_desired_child: bool,
+    desired_child_present: bool,
+) -> ExitedSupervisorChildDecision {
+    let exit_label = exited_child
+        .exit_code
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "signal".to_string());
+
+    if !desired_child_present {
+        return ExitedSupervisorChildDecision {
+            should_restart: false,
+            quick_clean_handoff: false,
+            log_action: "leaving stopped because service is no longer desired running",
+            last_error: Some("process exited after service stop; leaving stopped".to_string()),
+        };
+    }
+
+    let quick_clean_exit = exited_child.exit_code == Some(0)
+        && exited_child.ran_for < Duration::from_millis(SUPERVISOR_STABLE_RUN_MS);
+    if quick_clean_exit {
+        if !same_desired_child || exited_child.quick_clean_restart_count == 0 {
+            return ExitedSupervisorChildDecision {
+                should_restart: true,
+                quick_clean_handoff: true,
+                log_action: "restart handoff, retrying after backoff",
+                last_error: Some(
+                    "process exited cleanly for supervisor restart handoff; retrying after backoff"
+                        .to_string(),
+                ),
+            };
+        }
+
+        return ExitedSupervisorChildDecision {
+            should_restart: false,
+            quick_clean_handoff: false,
+            log_action: "leaving stopped after repeated quick clean exit",
+            last_error: Some(
+                "process exited cleanly too quickly after restart handoff; leaving stopped to avoid a restart loop"
+                    .to_string(),
+            ),
+        };
+    }
+
+    ExitedSupervisorChildDecision {
+        should_restart: true,
+        quick_clean_handoff: false,
+        log_action: "restarting",
+        last_error: Some(format!(
+            "process exited with {exit_label}; retrying after backoff"
+        )),
+    }
 }
 
 fn queue_missing_children(
@@ -1029,6 +1104,7 @@ fn queue_missing_children(
             PendingSupervisorChild {
                 spec: next_spec.clone(),
                 restart_count,
+                quick_clean_restart_count: 0,
                 retry_at,
                 retry_at_utc: now_utc(),
                 last_exit_code: None,
@@ -1076,7 +1152,11 @@ fn start_due_children(
             eprintln!("{error}");
             continue;
         }
-        match spawn_running_child(next_child.spec.clone(), next_child.restart_count) {
+        match spawn_running_child(
+            next_child.spec.clone(),
+            next_child.restart_count,
+            next_child.quick_clean_restart_count,
+        ) {
             Ok(running_child) => {
                 pending.remove(&env_name);
                 running.insert(env_name.clone(), running_child);
@@ -1178,6 +1258,7 @@ fn filter_conflicting_supervisor_children(
 fn pending_supervisor_child(
     spec: SupervisorChildSpec,
     restart_count: usize,
+    quick_clean_restart_count: usize,
     delay_ms: u64,
     last_exit_code: Option<i32>,
     last_error: Option<String>,
@@ -1185,6 +1266,7 @@ fn pending_supervisor_child(
     PendingSupervisorChild {
         spec,
         restart_count,
+        quick_clean_restart_count,
         retry_at: Instant::now() + Duration::from_millis(delay_ms),
         retry_at_utc: now_utc() + time::Duration::milliseconds(delay_ms as i64),
         last_exit_code,
@@ -1308,6 +1390,37 @@ fn supervisor_service_environment(
     service_env
 }
 
+fn build_supervised_openclaw_env(
+    mut process_env: BTreeMap<String, String>,
+    service_label: &str,
+    service_manager: ServiceManagerKind,
+) -> BTreeMap<String, String> {
+    process_env.insert(
+        "OPENCLAW_SERVICE_MARKER".to_string(),
+        OPENCLAW_SERVICE_MARKER.to_string(),
+    );
+    process_env.insert(
+        "OPENCLAW_SERVICE_KIND".to_string(),
+        OPENCLAW_GATEWAY_SERVICE_KIND.to_string(),
+    );
+    match service_manager {
+        ServiceManagerKind::Launchd => {
+            process_env.insert(
+                "OPENCLAW_LAUNCHD_LABEL".to_string(),
+                service_label.to_string(),
+            );
+        }
+        ServiceManagerKind::SystemdUser => {
+            process_env.insert(
+                "OPENCLAW_SYSTEMD_UNIT".to_string(),
+                format!("{service_label}.service"),
+            );
+        }
+        ServiceManagerKind::Unsupported => {}
+    }
+    process_env
+}
+
 fn write_supervisor_runtime_state(
     runtime_path: &Path,
     ocm_home: &str,
@@ -1401,5 +1514,136 @@ fn supervisor_runtime_service_inactive(
         last_error: inactive_child.last_error.clone(),
         last_event_at: inactive_child.last_event_at,
         next_retry_at: inactive_child.next_retry_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn exited_child(
+        exit_code: Option<i32>,
+        restart_count: usize,
+        ran_for: Duration,
+    ) -> ExitedSupervisorChild {
+        exited_child_with_clean_count(exit_code, restart_count, 0, ran_for)
+    }
+
+    fn exited_child_with_clean_count(
+        exit_code: Option<i32>,
+        restart_count: usize,
+        quick_clean_restart_count: usize,
+        ran_for: Duration,
+    ) -> ExitedSupervisorChild {
+        ExitedSupervisorChild {
+            env_name: "demo".to_string(),
+            exit_code,
+            restart_count,
+            quick_clean_restart_count,
+            ran_for,
+        }
+    }
+
+    #[test]
+    fn first_desired_quick_clean_exit_is_restart_handoff() {
+        let decision = exited_child_restart_decision(
+            &exited_child(Some(0), 0, Duration::from_millis(50)),
+            true,
+            true,
+        );
+
+        assert!(decision.should_restart);
+        assert_eq!(
+            decision.log_action,
+            "restart handoff, retrying after backoff"
+        );
+        assert!(
+            decision
+                .last_error
+                .unwrap()
+                .contains("supervisor restart handoff")
+        );
+    }
+
+    #[test]
+    fn quick_clean_exit_after_service_stop_stays_stopped() {
+        let decision = exited_child_restart_decision(
+            &exited_child(Some(0), 0, Duration::from_millis(50)),
+            false,
+            false,
+        );
+
+        assert!(!decision.should_restart);
+        assert!(decision.last_error.unwrap().contains("after service stop"));
+    }
+
+    #[test]
+    fn repeated_quick_clean_exit_stays_stopped() {
+        let decision = exited_child_restart_decision(
+            &exited_child_with_clean_count(Some(0), 1, 1, Duration::from_millis(50)),
+            true,
+            true,
+        );
+
+        assert!(!decision.should_restart);
+        assert!(
+            decision
+                .last_error
+                .unwrap()
+                .contains("avoid a restart loop")
+        );
+    }
+
+    #[test]
+    fn previous_crash_retry_does_not_consume_clean_handoff_allowance() {
+        let decision = exited_child_restart_decision(
+            &exited_child_with_clean_count(Some(0), 3, 0, Duration::from_millis(50)),
+            true,
+            true,
+        );
+
+        assert!(decision.should_restart);
+        assert!(decision.quick_clean_handoff);
+    }
+
+    #[test]
+    fn nonzero_exit_still_restarts() {
+        let decision = exited_child_restart_decision(
+            &exited_child(Some(1), 0, Duration::from_millis(50)),
+            true,
+            true,
+        );
+
+        assert!(decision.should_restart);
+        assert_eq!(
+            decision.last_error.unwrap(),
+            "process exited with 1; retrying after backoff"
+        );
+    }
+
+    #[test]
+    fn supervised_child_env_sets_openclaw_service_hints() {
+        let process_env = build_supervised_openclaw_env(
+            BTreeMap::new(),
+            "ai.openclaw.ocm",
+            ServiceManagerKind::Launchd,
+        );
+
+        assert_eq!(
+            process_env
+                .get("OPENCLAW_SERVICE_MARKER")
+                .map(String::as_str),
+            Some("openclaw")
+        );
+        assert_eq!(
+            process_env.get("OPENCLAW_SERVICE_KIND").map(String::as_str),
+            Some("gateway")
+        );
+        assert_eq!(
+            process_env
+                .get("OPENCLAW_LAUNCHD_LABEL")
+                .map(String::as_str),
+            Some("ai.openclaw.ocm")
+        );
     }
 }

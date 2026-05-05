@@ -72,6 +72,43 @@ fn wait_for_runtime_children(
     None
 }
 
+fn wait_for_file_value(path: &Path, expected: &str, timeout: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if let Ok(raw) = fs::read_to_string(path)
+            && raw.trim() == expected
+        {
+            return true;
+        }
+        sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+fn wait_for_runtime_service_state(
+    path: &Path,
+    env_name: &str,
+    gateway_state: &str,
+    timeout: Duration,
+) -> Option<Value> {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if let Ok(raw) = fs::read(path)
+            && let Ok(body) = serde_json::from_slice::<Value>(&raw)
+            && let Some(service) = body["services"].as_array().and_then(|services| {
+                services
+                    .iter()
+                    .find(|service| service["envName"] == env_name)
+            })
+            && service["gatewayState"] == gateway_state
+        {
+            return Some(service.clone());
+        }
+        sleep(Duration::from_millis(50));
+    }
+    None
+}
+
 fn read_persisted_service_state(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
@@ -274,6 +311,18 @@ fn service_state_plans_runnable_children_and_skips_disabled_envs() {
             .as_str()
             .unwrap()
             .contains("/envs/demo")
+    );
+    assert_eq!(demo["processEnv"]["OPENCLAW_SERVICE_MARKER"], "openclaw");
+    assert_eq!(demo["processEnv"]["OPENCLAW_SERVICE_KIND"], "gateway");
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        demo["processEnv"]["OPENCLAW_LAUNCHD_LABEL"],
+        "ai.openclaw.ocm"
+    );
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        demo["processEnv"]["OPENCLAW_SYSTEMD_UNIT"],
+        "ai.openclaw.ocm.service"
     );
 
     let prod = children
@@ -700,22 +749,22 @@ fn daemon_stops_the_full_dev_process_tree_after_service_stop() {
 }
 
 #[test]
-fn daemon_does_not_restart_a_quick_clean_exit_forever() {
+fn daemon_restarts_first_quick_clean_exit_for_desired_service() {
     let _guard = daemon_runtime_test_lock();
-    let root = TestDir::new("daemon-run-clean-exit");
+    let root = TestDir::new("daemon-run-clean-handoff");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
     let service = SupervisorService::new(&env, &cwd);
     let runtime_path = root.child("ocm-home/supervisor/runtime.json");
 
-    let started = root.child("started.txt");
+    let starts = root.child("starts.txt");
     let script = root.child("bin/openclaw");
     write_executable_script(
         &script,
         &format!(
-            "#!/bin/sh\nprintf 'started\\n' >> '{}'\nexit 0\n",
-            path_string(&started),
+            "#!/bin/sh\ncount=0\nif [ -f '{starts}' ]; then count=$(cat '{starts}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{starts}'\nif [ \"$count\" -eq 1 ]; then exit 0; fi\nsleep 10\n",
+            starts = path_string(&starts),
         ),
     );
 
@@ -732,13 +781,62 @@ fn daemon_does_not_restart_a_quick_clean_exit_forever() {
     service.sync().unwrap();
 
     let mut daemon = spawn_daemon_process(&cwd, &env);
-    assert!(wait_for_file(&started, Duration::from_secs(5)));
-    wait_for_runtime_children(&runtime_path, 0, None, Duration::from_secs(5))
-        .expect("daemon runtime state did not clear after the quick clean exit");
+    assert!(wait_for_file_value(&starts, "2", Duration::from_secs(6)));
+    let runtime = wait_for_runtime_children(&runtime_path, 1, Some("demo"), Duration::from_secs(5))
+        .expect("daemon runtime state did not report the restarted child");
+    assert!(runtime["children"][0]["restartCount"].as_u64().unwrap() >= 1);
+
+    stop_process(&mut daemon);
+}
+
+#[test]
+fn daemon_stops_repeated_quick_clean_exit_after_restart_handoff() {
+    let _guard = daemon_runtime_test_lock();
+    let root = TestDir::new("daemon-run-clean-exit");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+
+    let started = root.child("started.txt");
+    let script = root.child("bin/openclaw");
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\ncount=0\nif [ -f '{started}' ]; then count=$(cat '{started}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{started}'\nexit 0\n",
+            started = path_string(&started),
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", &path_string(&script)],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    set_service_enabled(&cwd, &env, "demo", true);
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    assert!(wait_for_file_value(&started, "2", Duration::from_secs(6)));
+    let service_state =
+        wait_for_runtime_service_state(&runtime_path, "demo", "stopped", Duration::from_secs(5))
+            .expect("daemon runtime state did not stop after the repeated quick clean exit");
+    assert_eq!(service_state["restartCount"], 1);
+    assert!(
+        service_state["lastError"]
+            .as_str()
+            .unwrap()
+            .contains("avoid a restart loop")
+    );
 
     sleep(Duration::from_secs(2));
     let starts = fs::read_to_string(&started).unwrap();
-    assert_eq!(starts.lines().count(), 1);
+    assert_eq!(starts.trim(), "2");
     assert!(daemon.try_wait().unwrap().is_none());
 
     stop_process(&mut daemon);
