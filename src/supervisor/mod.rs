@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -9,7 +11,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -46,6 +48,11 @@ const SERVICE_PROXY_ENV_KEYS: [&str; 8] = [
 const SERVICE_EXTRA_ENV_KEYS: [&str; 2] = ["NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA"];
 const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
 const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
+const OPENCLAW_RESTART_HANDOFF_FILE: &str = "gateway-supervisor-restart-handoff.json";
+const OPENCLAW_RESTART_HANDOFF_KIND: &str = "gateway-supervisor-restart-handoff";
+const OPENCLAW_RESTART_HANDOFF_TTL_MS: u64 = 60_000;
+const OPENCLAW_RESTART_HANDOFF_MAX_BYTES: u64 = 4096;
+const OPENCLAW_RESTART_HANDOFF_MAX_INTENT_ID_CHARS: usize = 120;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -632,6 +639,7 @@ struct ExitedSupervisorChild {
     exit_code: Option<i32>,
     restart_count: usize,
     quick_clean_restart_count: usize,
+    restart_handoff: Option<OpenClawRestartHandoff>,
     ran_for: Duration,
 }
 
@@ -640,6 +648,20 @@ struct ExitedSupervisorChildDecision {
     quick_clean_handoff: bool,
     log_action: &'static str,
     last_error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawRestartHandoff {
+    kind: String,
+    version: u8,
+    intent_id: String,
+    pid: u64,
+    created_at: u64,
+    expires_at: u64,
+    source: String,
+    restart_kind: String,
+    supervisor_mode: String,
 }
 
 #[derive(Clone)]
@@ -910,12 +932,21 @@ fn collect_exited_children(
                 running_child.spec.env_name
             )
         })? {
+            let ran_for = running_child.started_at.elapsed();
+            let restart_handoff = if status.code() == Some(0)
+                && ran_for < Duration::from_millis(SUPERVISOR_STABLE_RUN_MS)
+            {
+                consume_openclaw_restart_handoff(&running_child.spec, running_child.child.id())
+            } else {
+                None
+            };
             exited.push(ExitedSupervisorChild {
                 env_name: env_name.clone(),
                 exit_code: status.code(),
                 restart_count: running_child.restart_count,
                 quick_clean_restart_count: running_child.quick_clean_restart_count,
-                ran_for: running_child.started_at.elapsed(),
+                restart_handoff,
+                ran_for,
             });
         }
     }
@@ -1055,13 +1086,25 @@ fn exited_child_restart_decision(
     let quick_clean_exit = exited_child.exit_code == Some(0)
         && exited_child.ran_for < Duration::from_millis(SUPERVISOR_STABLE_RUN_MS);
     if quick_clean_exit {
+        if exited_child.restart_handoff.is_none() {
+            return ExitedSupervisorChildDecision {
+                should_restart: false,
+                quick_clean_handoff: false,
+                log_action: "leaving stopped after quick clean exit without restart handoff",
+                last_error: Some(
+                    "process exited cleanly too quickly without OpenClaw restart handoff; leaving stopped"
+                        .to_string(),
+                ),
+            };
+        }
+
         if !same_desired_child || exited_child.quick_clean_restart_count == 0 {
             return ExitedSupervisorChildDecision {
                 should_restart: true,
                 quick_clean_handoff: true,
-                log_action: "restart handoff, retrying after backoff",
+                log_action: "OpenClaw restart handoff, retrying after backoff",
                 last_error: Some(
-                    "process exited cleanly for supervisor restart handoff; retrying after backoff"
+                    "OpenClaw requested supervisor restart handoff; retrying after backoff"
                         .to_string(),
                 ),
             };
@@ -1086,6 +1129,98 @@ fn exited_child_restart_decision(
             "process exited with {exit_label}; retrying after backoff"
         )),
     }
+}
+
+fn openclaw_restart_handoff_path(spec: &SupervisorChildSpec) -> Option<PathBuf> {
+    if let Some(state_dir) = spec
+        .process_env
+        .get("OPENCLAW_STATE_DIR")
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Some(Path::new(state_dir).join(OPENCLAW_RESTART_HANDOFF_FILE));
+    }
+    spec.process_env
+        .get("OPENCLAW_HOME")
+        .filter(|value| !value.trim().is_empty())
+        .map(|home| {
+            Path::new(home)
+                .join(".openclaw")
+                .join(OPENCLAW_RESTART_HANDOFF_FILE)
+        })
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn read_openclaw_restart_handoff(path: &Path) -> Option<OpenClawRestartHandoff> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.file_type().is_file()
+        || openclaw_restart_handoff_has_multiple_links(&metadata)
+        || metadata.len() > OPENCLAW_RESTART_HANDOFF_MAX_BYTES
+    {
+        return None;
+    }
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+#[cfg(unix)]
+fn openclaw_restart_handoff_has_multiple_links(metadata: &fs::Metadata) -> bool {
+    metadata.nlink() > 1
+}
+
+#[cfg(not(unix))]
+fn openclaw_restart_handoff_has_multiple_links(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn valid_openclaw_restart_handoff(
+    handoff: &OpenClawRestartHandoff,
+    exited_pid: u32,
+    now_ms: u64,
+) -> bool {
+    let intent_id = handoff.intent_id.trim();
+    if handoff.kind != OPENCLAW_RESTART_HANDOFF_KIND
+        || handoff.version != 1
+        || intent_id.is_empty()
+        || intent_id.chars().count() > OPENCLAW_RESTART_HANDOFF_MAX_INTENT_ID_CHARS
+        || handoff.pid != u64::from(exited_pid)
+        || handoff.expires_at <= handoff.created_at
+        || handoff.expires_at.saturating_sub(handoff.created_at) > OPENCLAW_RESTART_HANDOFF_TTL_MS
+        || now_ms < handoff.created_at
+        || now_ms > handoff.expires_at
+    {
+        return false;
+    }
+    matches!(
+        handoff.source.as_str(),
+        "config-write"
+            | "gateway-update"
+            | "operator-restart"
+            | "plugin-change"
+            | "signal"
+            | "unknown"
+    ) && matches!(
+        handoff.restart_kind.as_str(),
+        "full-process" | "update-process"
+    ) && matches!(
+        handoff.supervisor_mode.as_str(),
+        "launchd" | "systemd" | "schtasks" | "external"
+    )
+}
+
+fn consume_openclaw_restart_handoff(
+    spec: &SupervisorChildSpec,
+    exited_pid: u32,
+) -> Option<OpenClawRestartHandoff> {
+    let path = openclaw_restart_handoff_path(spec)?;
+    let handoff = read_openclaw_restart_handoff(&path);
+    let _ = fs::remove_file(&path);
+    handoff.filter(|payload| valid_openclaw_restart_handoff(payload, exited_pid, now_millis()))
 }
 
 fn queue_missing_children(
@@ -1535,19 +1670,56 @@ mod tests {
         quick_clean_restart_count: usize,
         ran_for: Duration,
     ) -> ExitedSupervisorChild {
+        exited_child_with_handoff(
+            exit_code,
+            restart_count,
+            quick_clean_restart_count,
+            None,
+            ran_for,
+        )
+    }
+
+    fn exited_child_with_handoff(
+        exit_code: Option<i32>,
+        restart_count: usize,
+        quick_clean_restart_count: usize,
+        restart_handoff: Option<OpenClawRestartHandoff>,
+        ran_for: Duration,
+    ) -> ExitedSupervisorChild {
         ExitedSupervisorChild {
             env_name: "demo".to_string(),
             exit_code,
             restart_count,
             quick_clean_restart_count,
+            restart_handoff,
             ran_for,
         }
     }
 
+    fn restart_handoff(pid: u64) -> OpenClawRestartHandoff {
+        OpenClawRestartHandoff {
+            kind: OPENCLAW_RESTART_HANDOFF_KIND.to_string(),
+            version: 1,
+            intent_id: "intent-123".to_string(),
+            pid,
+            created_at: 1_000,
+            expires_at: 61_000,
+            source: "plugin-change".to_string(),
+            restart_kind: "full-process".to_string(),
+            supervisor_mode: "launchd".to_string(),
+        }
+    }
+
     #[test]
-    fn first_desired_quick_clean_exit_is_restart_handoff() {
+    fn desired_quick_clean_exit_with_handoff_restarts() {
         let decision = exited_child_restart_decision(
-            &exited_child(Some(0), 0, Duration::from_millis(50)),
+            &exited_child_with_handoff(
+                Some(0),
+                0,
+                0,
+                Some(restart_handoff(1234)),
+                Duration::from_millis(50),
+            ),
             true,
             true,
         );
@@ -1555,13 +1727,30 @@ mod tests {
         assert!(decision.should_restart);
         assert_eq!(
             decision.log_action,
-            "restart handoff, retrying after backoff"
+            "OpenClaw restart handoff, retrying after backoff"
         );
         assert!(
             decision
                 .last_error
                 .unwrap()
                 .contains("supervisor restart handoff")
+        );
+    }
+
+    #[test]
+    fn desired_quick_clean_exit_without_handoff_stays_stopped() {
+        let decision = exited_child_restart_decision(
+            &exited_child(Some(0), 0, Duration::from_millis(50)),
+            true,
+            true,
+        );
+
+        assert!(!decision.should_restart);
+        assert!(
+            decision
+                .last_error
+                .unwrap()
+                .contains("without OpenClaw restart handoff")
         );
     }
 
@@ -1580,7 +1769,13 @@ mod tests {
     #[test]
     fn repeated_quick_clean_exit_stays_stopped() {
         let decision = exited_child_restart_decision(
-            &exited_child_with_clean_count(Some(0), 1, 1, Duration::from_millis(50)),
+            &exited_child_with_handoff(
+                Some(0),
+                1,
+                1,
+                Some(restart_handoff(1234)),
+                Duration::from_millis(50),
+            ),
             true,
             true,
         );
@@ -1597,7 +1792,13 @@ mod tests {
     #[test]
     fn previous_crash_retry_does_not_consume_clean_handoff_allowance() {
         let decision = exited_child_restart_decision(
-            &exited_child_with_clean_count(Some(0), 3, 0, Duration::from_millis(50)),
+            &exited_child_with_handoff(
+                Some(0),
+                3,
+                0,
+                Some(restart_handoff(1234)),
+                Duration::from_millis(50),
+            ),
             true,
             true,
         );
@@ -1645,5 +1846,32 @@ mod tests {
                 .map(String::as_str),
             Some("ai.openclaw.ocm")
         );
+    }
+
+    #[test]
+    fn restart_handoff_validation_requires_matching_pid_and_supported_window() {
+        assert!(valid_openclaw_restart_handoff(
+            &restart_handoff(1234),
+            1234,
+            2_000
+        ));
+
+        assert!(!valid_openclaw_restart_handoff(
+            &restart_handoff(4321),
+            1234,
+            2_000
+        ));
+
+        let mut long_ttl = restart_handoff(1234);
+        long_ttl.expires_at = long_ttl.created_at + OPENCLAW_RESTART_HANDOFF_TTL_MS + 1;
+        assert!(!valid_openclaw_restart_handoff(&long_ttl, 1234, 2_000));
+
+        let mut missing_intent = restart_handoff(1234);
+        missing_intent.intent_id.clear();
+        assert!(!valid_openclaw_restart_handoff(
+            &missing_intent,
+            1234,
+            2_000
+        ));
     }
 }

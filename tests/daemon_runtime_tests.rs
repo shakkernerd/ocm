@@ -109,6 +109,16 @@ fn wait_for_runtime_service_state(
     None
 }
 
+fn restart_handoff_shell_snippet() -> &'static str {
+    r#"mkdir -p "$OPENCLAW_STATE_DIR"
+now=$(( $(date +%s) * 1000 ))
+expires=$((now + 60000))
+cat > "$OPENCLAW_STATE_DIR/gateway-supervisor-restart-handoff.json" <<JSON
+{"kind":"gateway-supervisor-restart-handoff","version":1,"intentId":"test-intent-1","pid":$$,"createdAt":$now,"expiresAt":$expires,"source":"plugin-change","restartKind":"full-process","supervisorMode":"external"}
+JSON
+"#
+}
+
 fn read_persisted_service_state(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
@@ -749,7 +759,7 @@ fn daemon_stops_the_full_dev_process_tree_after_service_stop() {
 }
 
 #[test]
-fn daemon_restarts_first_quick_clean_exit_for_desired_service() {
+fn daemon_restarts_quick_clean_exit_with_openclaw_handoff() {
     let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-clean-handoff");
     let cwd = root.child("workspace");
@@ -763,8 +773,9 @@ fn daemon_restarts_first_quick_clean_exit_for_desired_service() {
     write_executable_script(
         &script,
         &format!(
-            "#!/bin/sh\ncount=0\nif [ -f '{starts}' ]; then count=$(cat '{starts}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{starts}'\nif [ \"$count\" -eq 1 ]; then exit 0; fi\nsleep 10\n",
+            "#!/bin/sh\ncount=0\nif [ -f '{starts}' ]; then count=$(cat '{starts}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{starts}'\nif [ \"$count\" -eq 1 ]; then\n{handoff}exit 0\nfi\nsleep 10\n",
             starts = path_string(&starts),
+            handoff = restart_handoff_shell_snippet(),
         ),
     );
 
@@ -790,6 +801,59 @@ fn daemon_restarts_first_quick_clean_exit_for_desired_service() {
 }
 
 #[test]
+fn daemon_stops_quick_clean_exit_without_restart_handoff() {
+    let _guard = daemon_runtime_test_lock();
+    let root = TestDir::new("daemon-run-clean-no-handoff");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+
+    let started = root.child("started.txt");
+    let script = root.child("bin/openclaw");
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\ncount=0\nif [ -f '{started}' ]; then count=$(cat '{started}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{started}'\nexit 0\n",
+            started = path_string(&started),
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", &path_string(&script)],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    set_service_enabled(&cwd, &env, "demo", true);
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    assert!(wait_for_file_value(&started, "1", Duration::from_secs(6)));
+    let service_state =
+        wait_for_runtime_service_state(&runtime_path, "demo", "stopped", Duration::from_secs(5))
+            .expect("daemon runtime state did not stop after the quick clean exit");
+    assert_eq!(service_state["restartCount"], 0);
+    assert!(
+        service_state["lastError"]
+            .as_str()
+            .unwrap()
+            .contains("without OpenClaw restart handoff")
+    );
+
+    sleep(Duration::from_secs(2));
+    let starts = fs::read_to_string(&started).unwrap();
+    assert_eq!(starts.trim(), "1");
+    assert!(daemon.try_wait().unwrap().is_none());
+
+    stop_process(&mut daemon);
+}
+
+#[test]
 fn daemon_stops_repeated_quick_clean_exit_after_restart_handoff() {
     let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-clean-exit");
@@ -804,8 +868,9 @@ fn daemon_stops_repeated_quick_clean_exit_after_restart_handoff() {
     write_executable_script(
         &script,
         &format!(
-            "#!/bin/sh\ncount=0\nif [ -f '{started}' ]; then count=$(cat '{started}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{started}'\nexit 0\n",
+            "#!/bin/sh\ncount=0\nif [ -f '{started}' ]; then count=$(cat '{started}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{started}'\n{handoff}exit 0\n",
             started = path_string(&started),
+            handoff = restart_handoff_shell_snippet(),
         ),
     );
 
