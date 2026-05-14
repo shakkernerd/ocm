@@ -74,6 +74,22 @@ case "$1" in
     exit 0
     ;;
   update)
+    if [ "$2" = "finalize" ]; then
+      has_arg "--json" "$@" && has_arg "--yes" "$@" && has_arg "--no-restart" "$@" || {{
+        echo "missing update finalize flags" >&2
+        exit 1
+      }}
+      if [ "${{OPENCLAW_UPDATE_IN_PROGRESS:-}}" != "1" ]; then
+        echo "missing OPENCLAW_UPDATE_IN_PROGRESS" >&2
+        exit 1
+      fi
+      if [ "${{OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE:-}}" != "1" ]; then
+        echo "missing OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE" >&2
+        exit 1
+      fi
+      printf '{{"status":"ok","mode":"finalize","postUpdate":{{"doctor":{{"status":"ok"}},"plugins":{{"status":"ok"}}}}}}\n'
+      exit 0
+    fi
     printf '{{"dryRun":true}}\n'
     exit 0
     ;;
@@ -374,15 +390,15 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     let env_root = Path::new(env_json["root"].as_str().unwrap());
     let command_log = fs::read_to_string(env_root.join("sim-commands.log")).unwrap();
     assert!(
-        command_log.contains("doctor --non-interactive --fix"),
+        command_log.contains("update finalize --json --yes --no-restart"),
         "{command_log}"
     );
     assert!(
-        command_log.contains("plugins update --all"),
+        !command_log.contains("doctor --non-interactive --fix"),
         "{command_log}"
     );
     assert!(
-        !command_log.contains("plugins update --all --dry-run"),
+        !command_log.contains("plugins update --all\n"),
         "{command_log}"
     );
 
@@ -1388,6 +1404,20 @@ fn upgrade_can_switch_env_to_an_installed_runtime() {
     assert!(show.status.success(), "{}", stderr(&show));
     let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
     assert_eq!(env_json["defaultRuntime"], "new-local");
+    let env_root = Path::new(env_json["root"].as_str().unwrap());
+    let command_log = fs::read_to_string(env_root.join("sim-commands.log")).unwrap();
+    assert!(
+        command_log.contains("update finalize --json --yes --no-restart"),
+        "{command_log}"
+    );
+    assert!(
+        !command_log.contains("doctor --non-interactive --fix"),
+        "{command_log}"
+    );
+    assert!(
+        !command_log.contains("plugins update --all\n"),
+        "{command_log}"
+    );
 }
 
 #[test]

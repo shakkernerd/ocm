@@ -1608,17 +1608,10 @@ impl Cli {
     fn run_post_core_update(&self, env_name: &str) -> Result<Option<String>, String> {
         self.run_update_mode_openclaw_command(
             env_name,
-            "openclaw doctor",
-            &["doctor", "--non-interactive", "--fix"],
+            "openclaw update finalize",
+            &["update", "finalize", "--json", "--yes", "--no-restart"],
         )?;
-        self.run_update_mode_openclaw_command(
-            env_name,
-            "openclaw plugins update",
-            &["plugins", "update", "--all"],
-        )?;
-        Ok(Some(
-            "post-update doctor and plugin update completed".to_string(),
-        ))
+        Ok(Some("OpenClaw update finalization completed".to_string()))
     }
 
     fn run_update_mode_openclaw_command(
@@ -1632,7 +1625,13 @@ impl Cli {
             .environment_service()
             .resolve(env_name, None, None, &args)
             .map_err(|error| format!("{name} failed: {error}"))?;
-        match self.run_resolved_for_simulation(resolved, &[("OPENCLAW_UPDATE_IN_PROGRESS", "1")]) {
+        match self.run_resolved_for_simulation(
+            resolved,
+            &[
+                ("OPENCLAW_UPDATE_IN_PROGRESS", "1"),
+                ("OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE", "1"),
+            ],
+        ) {
             Ok(output) if output.status.success() => Ok(()),
             Ok(output) => Err(format!("{name} failed: {}", output.failure_summary())),
             Err(error) => Err(format!("{name} failed: {error}")),

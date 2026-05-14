@@ -130,7 +130,9 @@ ocm upgrade simulate mira --to ./openclaw
 
 `upgrade` creates a pre-upgrade snapshot before changing an environment. If a
 running service cannot be restarted or started after the change, OCM restores
-the snapshot and previous runtime by default.
+the snapshot and previous runtime by default. When an environment moves to a new
+runtime, OCM runs OpenClaw's update finalization path inside that environment
+before service restart.
 
 `upgrade simulate` clones the source env, leaves the real env untouched, and
 cleans temporary simulation envs and runtimes when the run finishes. For
