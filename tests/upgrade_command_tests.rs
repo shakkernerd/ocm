@@ -397,6 +397,7 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
         command_log.contains("update finalize --json --yes --no-restart"),
         "{command_log}"
     );
+    assert!(command_log.contains("--version"), "{command_log}");
     assert!(
         !command_log.contains("doctor --non-interactive --fix"),
         "{command_log}"
@@ -1245,6 +1246,77 @@ fn upgrade_restores_runtime_when_runtime_preparation_fails() {
     assert!(output.contains("rollback=restored"), "{output}");
     assert!(
         output.contains("runtime artifact integrity is invalid"),
+        "{output}"
+    );
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
+    assert_eq!(runtime_json["releaseVersion"], "2026.3.24");
+}
+
+#[test]
+fn upgrade_rolls_back_when_post_upgrade_version_verification_fails() {
+    let root = TestDir::new("upgrade-version-verification-rollback");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.24");
+    let old_integrity = sha512_integrity(&old_tarball);
+    let old_tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &old_tarball,
+    );
+
+    let wrong_version_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.25");
+    let wrong_version_integrity = sha512_integrity(&wrong_version_tarball);
+    let wrong_version_tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.25.tgz",
+        "application/octet-stream",
+        &wrong_version_tarball,
+    );
+
+    let initial_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity
+    );
+    let updated_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.25\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25\":{{\"version\":\"2026.3.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\",\"2026.3.25\":\"2026-03-26T09:00:00.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity,
+        wrong_version_tarball_server.url(),
+        wrong_version_integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![
+            initial_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+        ],
+    );
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--no-service"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
+    assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("outcome=rolled-back"), "{output}");
+    assert!(output.contains("rollback=restored"), "{output}");
+    assert!(
+        output.contains("post-upgrade version verification failed"),
         "{output}"
     );
 

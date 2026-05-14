@@ -1102,7 +1102,30 @@ impl Cli {
                     note_for_official_prepare_action(&prepared.action)
                 }
             });
-            let note = join_optional_warnings(post_update_note, runtime_note);
+            let verification_note = match self.verify_upgraded_openclaw(
+                env_name,
+                prepared.meta.release_version.as_deref(),
+                service_action.is_some(),
+            ) {
+                Ok(note) => note,
+                Err(error) => {
+                    return self.rollback_failed_upgrade(
+                        env_name,
+                        "runtime",
+                        previous_binding_name,
+                        "runtime",
+                        prepared.name,
+                        prepared.meta.release_version,
+                        prepared.meta.release_channel,
+                        transaction,
+                        error,
+                    );
+                }
+            };
+            let note = join_optional_warnings(
+                join_optional_warnings(post_update_note, runtime_note),
+                verification_note,
+            );
 
             let summary = UpgradeEnvSummary {
                 env_name: env_name.to_string(),
@@ -1255,6 +1278,26 @@ impl Cli {
                     );
                 }
             };
+            let verification_note = match self.verify_upgraded_openclaw(
+                env_name,
+                prepared.meta.release_version.as_deref(),
+                service_action.is_some(),
+            ) {
+                Ok(note) => note,
+                Err(error) => {
+                    return self.rollback_failed_upgrade(
+                        env_name,
+                        "runtime",
+                        previous_binding_name,
+                        "runtime",
+                        prepared.name,
+                        prepared.meta.release_version,
+                        prepared.meta.release_channel,
+                        transaction,
+                        error,
+                    );
+                }
+            };
             let summary = UpgradeEnvSummary {
                 env_name: env_name.to_string(),
                 previous_binding_kind: "runtime".to_string(),
@@ -1268,8 +1311,11 @@ impl Cli {
                 snapshot_id: Some(transaction.snapshot_id.clone()),
                 rollback: None,
                 note: join_optional_warnings(
-                    post_update_note,
-                    service_note.or_else(|| note_for_official_prepare_action(&prepared.action)),
+                    join_optional_warnings(
+                        post_update_note,
+                        service_note.or_else(|| note_for_official_prepare_action(&prepared.action)),
+                    ),
+                    verification_note,
                 ),
             };
             transaction.cleanup();
@@ -1340,6 +1386,26 @@ impl Cli {
                 );
             }
         };
+        let verification_note = match self.verify_upgraded_openclaw(
+            env_name,
+            updated.release_version.as_deref(),
+            service_action.is_some(),
+        ) {
+            Ok(note) => note,
+            Err(error) => {
+                return self.rollback_failed_upgrade(
+                    env_name,
+                    "runtime",
+                    previous_binding_name,
+                    "runtime",
+                    updated.name,
+                    updated.release_version,
+                    updated.release_channel,
+                    transaction,
+                    error,
+                );
+            }
+        };
         let summary = UpgradeEnvSummary {
             env_name: env_name.to_string(),
             previous_binding_kind: "runtime".to_string(),
@@ -1352,7 +1418,10 @@ impl Cli {
             service_action,
             snapshot_id: Some(transaction.snapshot_id.clone()),
             rollback: None,
-            note: join_optional_warnings(post_update_note, service_note),
+            note: join_optional_warnings(
+                join_optional_warnings(post_update_note, service_note),
+                verification_note,
+            ),
         };
         transaction.cleanup();
         Ok(summary)
@@ -1461,6 +1530,26 @@ impl Cli {
                 );
             }
         };
+        let verification_note = match self.verify_upgraded_openclaw(
+            env_name,
+            prepared.meta.release_version.as_deref(),
+            service_action.is_some(),
+        ) {
+            Ok(note) => note,
+            Err(error) => {
+                return self.rollback_failed_upgrade(
+                    env_name,
+                    "launcher",
+                    launcher_name.to_string(),
+                    "runtime",
+                    prepared.name,
+                    prepared.meta.release_version,
+                    prepared.meta.release_channel,
+                    transaction,
+                    error,
+                );
+            }
+        };
         let summary = UpgradeEnvSummary {
             env_name: env_name.to_string(),
             previous_binding_kind: "launcher".to_string(),
@@ -1474,8 +1563,12 @@ impl Cli {
             snapshot_id: Some(transaction.snapshot_id.clone()),
             rollback: None,
             note: join_optional_warnings(
-                post_update_note,
-                service_note.or_else(|| Some(format!("env now uses runtime {}", prepared.name))),
+                join_optional_warnings(
+                    post_update_note,
+                    service_note
+                        .or_else(|| Some(format!("env now uses runtime {}", prepared.name))),
+                ),
+                verification_note,
             ),
         };
         transaction.cleanup();
@@ -1603,6 +1696,55 @@ impl Cli {
             "service restart returned before the gateway health endpoint became ready; latest status: {}",
             latest_issue.unwrap_or_else(|| "starting".to_string())
         )))
+    }
+
+    fn verify_upgraded_openclaw(
+        &self,
+        env_name: &str,
+        expected_version: Option<&str>,
+        verify_gateway: bool,
+    ) -> Result<Option<String>, String> {
+        let version = self.run_openclaw_command(env_name, "openclaw --version", &["--version"])?;
+        let actual_version = version.first_line();
+        if let Some(expected_version) = expected_version
+            && actual_version.trim() != expected_version
+        {
+            return Err(format!(
+                "post-upgrade version verification failed: expected {expected_version}, got {}",
+                actual_version.trim()
+            ));
+        }
+
+        if verify_gateway {
+            self.run_openclaw_command(
+                env_name,
+                "openclaw gateway status",
+                &["gateway", "status", "--deep", "--json"],
+            )?;
+        }
+
+        Ok(Some(format!(
+            "post-upgrade verification completed for OpenClaw {}",
+            actual_version.trim()
+        )))
+    }
+
+    fn run_openclaw_command(
+        &self,
+        env_name: &str,
+        name: &str,
+        args: &[&str],
+    ) -> Result<SimulationCommandOutput, String> {
+        let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        let resolved = self
+            .environment_service()
+            .resolve(env_name, None, None, &args)
+            .map_err(|error| format!("{name} failed: {error}"))?;
+        match self.run_resolved_for_simulation(resolved, &[]) {
+            Ok(output) if output.status.success() => Ok(output),
+            Ok(output) => Err(format!("{name} failed: {}", output.failure_summary())),
+            Err(error) => Err(format!("{name} failed: {error}")),
+        }
     }
 
     fn run_post_core_update(&self, env_name: &str) -> Result<Option<String>, String> {
