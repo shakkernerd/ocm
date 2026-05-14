@@ -75,6 +75,10 @@ case "$1" in
     ;;
   update)
     if [ "$2" = "finalize" ]; then
+      if [ "${{OCM_TEST_FAIL_UPDATE_FINALIZE:-}}" = "1" ]; then
+        echo "forced update finalize failure" >&2
+        exit 23
+      fi
       has_arg "--json" "$@" && has_arg "--yes" "$@" && has_arg "--no-restart" "$@" || {{
         echo "missing update finalize flags" >&2
         exit 1
@@ -1418,6 +1422,68 @@ fn upgrade_can_switch_env_to_an_installed_runtime() {
         !command_log.contains("plugins update --all\n"),
         "{command_log}"
     );
+}
+
+#[test]
+fn upgrade_rolls_back_runtime_binding_when_update_finalization_fails() {
+    let root = TestDir::new("upgrade-finalize-rollback");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_runtime = root.child("old-openclaw");
+    let new_runtime = root.child("new-openclaw");
+    write_executable_script(&old_runtime, &recording_openclaw_script("old-openclaw"));
+    write_executable_script(&new_runtime, &recording_openclaw_script("new-openclaw"));
+
+    let mut env = ocm_env(&root);
+    let add_old = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "add",
+            "old-local",
+            "--path",
+            &old_runtime.display().to_string(),
+        ],
+    );
+    assert!(add_old.status.success(), "{}", stderr(&add_old));
+
+    let add_new = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "add",
+            "new-local",
+            "--path",
+            &new_runtime.display().to_string(),
+        ],
+    );
+    assert!(add_new.status.success(), "{}", stderr(&add_new));
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "old-local"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    env.insert("OCM_TEST_FAIL_UPDATE_FINALIZE".to_string(), "1".to_string());
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--runtime", "new-local"]);
+    assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("outcome=rolled-back"), "{output}");
+    assert!(output.contains("rollback=restored"), "{output}");
+    assert!(
+        output.contains("openclaw update finalize failed"),
+        "{output}"
+    );
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(env_json["defaultRuntime"], "old-local");
 }
 
 #[test]
