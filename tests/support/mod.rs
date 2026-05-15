@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
@@ -145,16 +146,28 @@ impl TestHttpServer {
 
 impl Drop for TestHttpServer {
     fn drop(&mut self) {
-        while self.served.load(Ordering::SeqCst) < self.request_limit {
-            let Ok(mut stream) = TcpStream::connect(&self.addr) else {
-                break;
-            };
-            let _ = write!(
-                stream,
-                "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-                self.path, self.addr
-            );
-            let _ = stream.flush();
+        if let Ok(addr) = self.addr.parse::<SocketAddr>() {
+            let remaining = self
+                .request_limit
+                .saturating_sub(self.served.load(Ordering::SeqCst));
+
+            for _ in 0..remaining {
+                if self.served.load(Ordering::SeqCst) >= self.request_limit {
+                    break;
+                }
+
+                let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(100))
+                else {
+                    break;
+                };
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
+                let _ = write!(
+                    stream,
+                    "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                    self.path, self.addr
+                );
+                let _ = stream.flush();
+            }
         }
 
         if let Some(handle) = self.handle.take() {
