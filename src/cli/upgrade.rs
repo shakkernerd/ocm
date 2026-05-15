@@ -1707,7 +1707,7 @@ impl Cli {
         let version = self.run_openclaw_command(env_name, "openclaw --version", &["--version"])?;
         let actual_version = version.first_line();
         if let Some(expected_version) = expected_version
-            && actual_version.trim() != expected_version
+            && !version_output_matches_expected(actual_version.trim(), expected_version)
         {
             return Err(format!(
                 "post-upgrade version verification failed: expected {expected_version}, got {}",
@@ -2217,6 +2217,51 @@ fn missing_simulation_version_error(version: &str, releases: &[OpenClawRelease])
         ". Use an exact published version, a channel such as beta, or a local OpenClaw repo path.",
     );
     message
+}
+
+fn version_output_matches_expected(actual: &str, expected: &str) -> bool {
+    let actual = actual.trim();
+    if actual == expected {
+        return true;
+    }
+
+    actual
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '+'))
+        .any(|token| token == expected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_output_matches_expected;
+
+    #[test]
+    fn version_output_accepts_exact_version() {
+        assert!(version_output_matches_expected("2026.5.14", "2026.5.14"));
+    }
+
+    #[test]
+    fn version_output_accepts_decorated_openclaw_version() {
+        assert!(version_output_matches_expected(
+            "OpenClaw 2026.5.14 (62375ae)",
+            "2026.5.14"
+        ));
+    }
+
+    #[test]
+    fn version_output_accepts_beta_version_tokens() {
+        assert!(version_output_matches_expected(
+            "OpenClaw 2026.5.12-beta.8 (local)",
+            "2026.5.12-beta.8"
+        ));
+    }
+
+    #[test]
+    fn version_output_rejects_partial_token_matches() {
+        assert!(!version_output_matches_expected(
+            "OpenClaw 12026.5.14",
+            "2026.5.14"
+        ));
+    }
 }
 
 fn simulation_env_name(source_name: &str, scenario: &str) -> String {
