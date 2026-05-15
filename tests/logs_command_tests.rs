@@ -105,6 +105,18 @@ fn logs_rejects_unknown_stream_level() {
 }
 
 #[test]
+fn logs_rejects_json_with_follow_alias() {
+    let root = TestDir::new("logs-json-follow-short");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["logs", "demo", "--json", "-f"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("logs cannot combine --json with --follow"));
+}
+
+#[test]
 fn logs_fall_back_to_supervisor_logs_when_gateway_logs_are_missing() {
     let root = TestDir::new("logs-service-fallback");
     let cwd = root.child("workspace");
@@ -163,7 +175,7 @@ fn logs_follow_streams_new_lines() {
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_ocm"))
         .current_dir(&cwd)
-        .args(["logs", "demo", "--follow", "--tail", "1", "--raw"])
+        .args(["logs", "demo", "-f", "--tail", "1", "--raw"])
         .env_clear()
         .envs(&env)
         .stdin(Stdio::null())

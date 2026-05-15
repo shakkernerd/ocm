@@ -52,7 +52,9 @@ impl<W: Write> Write for PrettyLogWriter<'_, W> {
 impl Cli {
     pub(super) fn handle_logs_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "logs")?;
-        let (args, follow) = Self::consume_flag(args, "--follow");
+        let (args, follow_long) = Self::consume_flag(args, "--follow");
+        let (args, follow_short) = Self::consume_flag(args, "-f");
+        let follow = follow_long || follow_short;
         let (args, stream_raw) = Self::consume_option(args, "--stream")?;
         let (args, tail_raw) = Self::consume_option(args, "--tail")?;
         let tail_lines = match tail_raw.as_deref() {

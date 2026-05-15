@@ -86,9 +86,11 @@ fn logs_help_is_available_from_help_and_flag() {
     assert_eq!(output, stdout(&via_flag));
     assert!(output.contains("Read env logs"));
     assert!(output.contains(
-        "ocm logs <env> [--stream <info|error>] [--tail <count>] [--follow] [--raw] [--json]"
+        "ocm logs <env> [--stream <info|error>] [--tail <count>] [--follow|-f] [--raw] [--json]"
     ));
+    assert!(output.contains("--follow, -f"));
     assert!(output.contains("ocm logs mira --follow"));
+    assert!(output.contains("ocm logs mira -f"));
     assert!(output.contains("ocm logs mira --stream error --follow"));
     assert!(output.contains("By default OCM shows both stdout and stderr together in time order."));
     assert!(output.contains("Default output shows the last 50 lines."));
