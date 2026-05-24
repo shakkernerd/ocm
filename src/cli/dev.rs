@@ -126,6 +126,20 @@ impl Cli {
         }
         let name = validate_name(name, "Environment name")?;
 
+        if let Some(existing) = self.environment_service().find(&name)?
+            && existing.dev.is_none()
+        {
+            return self.handle_existing_env_source_watch(
+                existing,
+                repo_root,
+                root,
+                gateway_port,
+                watch,
+                force,
+                onboard,
+            );
+        }
+
         let (meta, created) = self.ensure_dev_env(&name, repo_root, root, gateway_port)?;
         let dev = meta
             .dev
@@ -209,7 +223,7 @@ impl Cli {
                 ),
                 stderr_profile,
             ));
-            let code = self.run_dev_gateway_watch(&meta)?;
+            let watch_result = self.run_dev_gateway_watch(&meta);
             if watch_takes_over_service {
                 self.stderr_lines(render_dev_run_step(
                     "Restore",
@@ -223,7 +237,7 @@ impl Cli {
                     self.dev_stdout_profile(),
                 ));
             }
-            return Ok(code);
+            return watch_result;
         }
 
         self.stderr_lines(render_dev_run_step(
@@ -237,6 +251,100 @@ impl Cli {
             stderr_profile,
         ));
         self.run_dev_gateway(&meta)
+    }
+
+    fn handle_existing_env_source_watch(
+        &self,
+        existing: EnvMeta,
+        repo_root: Option<String>,
+        root: Option<String>,
+        gateway_port: Option<u32>,
+        watch: bool,
+        force: bool,
+        onboard: bool,
+    ) -> Result<i32, String> {
+        if !watch || !force {
+            return Err(format!(
+                "environment \"{}\" is not a dev env; use a new env name for `ocm dev`, or rerun with --repo <path> --watch --force to take it over temporarily",
+                existing.name
+            ));
+        }
+        if onboard {
+            return Err(
+                "dev takeover cannot combine --onboard with an existing non-dev env".to_string(),
+            );
+        }
+        if root.is_some() {
+            return Err("dev takeover uses the existing env root; remove --root".to_string());
+        }
+        if gateway_port.is_some() {
+            return Err(
+                "dev takeover uses the existing env gateway port; remove --port".to_string(),
+            );
+        }
+        let Some(repo_root) = repo_root else {
+            return Err(
+                "dev takeover of an existing non-dev env requires --repo <path>".to_string(),
+            );
+        };
+        let repo_root = resolve_absolute_path(&repo_root, &self.env, &self.cwd)?;
+        let repo_root = detect_openclaw_checkout(&repo_root).ok_or_else(|| {
+            format!(
+                "OpenClaw checkout not found at {}",
+                display_path(&repo_root)
+            )
+        })?;
+        let meta = self
+            .environment_service()
+            .apply_effective_gateway_port(existing)?;
+        let stderr_profile = self.dev_stderr_profile();
+        self.stderr_lines(render_source_watch_takeover_summary(
+            &meta,
+            &repo_root,
+            stderr_profile,
+        ));
+
+        let restore_service = meta.service_running;
+        if restore_service {
+            self.stderr_lines(render_dev_run_step(
+                "Takeover",
+                format!(
+                    "Stopping background service for {} while source watch takes over; OCM will restore it when watch exits",
+                    meta.name
+                ),
+                stderr_profile,
+            ));
+            self.service_service().stop(&meta.name)?;
+        }
+
+        self.stderr_lines(render_dev_run_step(
+            "Watch",
+            format!(
+                "Watching {} on port {} for env {}",
+                display_path(&repo_root),
+                meta.gateway_port.unwrap_or_default(),
+                meta.name
+            ),
+            stderr_profile,
+        ));
+        let watch_result = self.run_source_gateway_watch(&meta, &repo_root);
+
+        if restore_service {
+            self.stderr_lines(render_dev_run_step(
+                "Restore",
+                format!("Starting background service for {}", meta.name),
+                stderr_profile,
+            ));
+            self.service_service().start(&meta.name)?;
+            self.stdout_lines(render_source_watch_service_restored(
+                &meta,
+                &repo_root,
+                &self.command_example(),
+                self.dev_stdout_profile(),
+            ));
+        }
+
+        watch_result
     }
 
     fn ensure_dev_env(
@@ -498,6 +606,10 @@ impl Cli {
             .dev
             .as_ref()
             .ok_or_else(|| format!("environment \"{}\" is missing its dev binding", meta.name))?;
+        self.run_source_gateway_watch(meta, Path::new(&dev.worktree_root))
+    }
+
+    fn run_source_gateway_watch(&self, meta: &EnvMeta, repo_root: &Path) -> Result<i32, String> {
         let args = vec![
             "scripts/watch-node.mjs".to_string(),
             "gateway".to_string(),
@@ -519,7 +631,7 @@ impl Cli {
             .stderr(Stdio::inherit())
             .env_clear()
             .envs(build_openclaw_env(meta, &self.env))
-            .current_dir(Path::new(&dev.worktree_root))
+            .current_dir(repo_root)
             .status()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
 
@@ -834,6 +946,100 @@ fn render_dev_run_step(title: &str, detail: String, profile: RenderProfile) -> V
     }
 
     render_key_value_card(title, &[KeyValueRow::accent("Step", detail)], profile.color)
+}
+
+fn render_source_watch_takeover_summary(
+    meta: &EnvMeta,
+    repo_root: &Path,
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return vec![
+            format!("taking over env {}", meta.name),
+            "binding=unchanged".to_string(),
+            format!("port={}", meta.gateway_port.unwrap_or_default()),
+            format!("root={}", meta.root),
+            format!("repo={}", display_path(repo_root)),
+            "mode=watch".to_string(),
+        ];
+    }
+
+    let mut lines = vec![paint(
+        &format!("Source watch {}", meta.name),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.extend(render_key_value_card(
+        "Environment",
+        &[
+            KeyValueRow::accent("Port", meta.gateway_port.unwrap_or_default().to_string()),
+            KeyValueRow::plain("Root", meta.root.clone()),
+            KeyValueRow::plain("Binding", "unchanged"),
+        ],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "Source",
+        &[KeyValueRow::plain("Repo", display_path(repo_root))],
+        profile.color,
+    ));
+    lines
+}
+
+fn render_source_watch_service_restored(
+    meta: &EnvMeta,
+    repo_root: &Path,
+    command_example: &str,
+    profile: RenderProfile,
+) -> Vec<String> {
+    if !profile.pretty {
+        return vec![
+            format!("service restored for {}", meta.name),
+            format!("port={}", meta.gateway_port.unwrap_or_default()),
+            format!(
+                "url={}",
+                dev_gateway_url(meta.gateway_port.unwrap_or_default())
+            ),
+            format!("repo={}", display_path(repo_root)),
+            "binding=unchanged".to_string(),
+            format!("status={} service status {}", command_example, meta.name),
+            format!("logs={} logs {} --follow", command_example, meta.name),
+        ];
+    }
+
+    let mut lines = vec![paint(
+        &format!("Env service {}", meta.name),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.extend(render_key_value_card(
+        "Service",
+        &[
+            KeyValueRow::success("State", "restored"),
+            KeyValueRow::accent("Port", meta.gateway_port.unwrap_or_default().to_string()),
+            KeyValueRow::plain(
+                "URL",
+                dev_gateway_url(meta.gateway_port.unwrap_or_default()),
+            ),
+            KeyValueRow::plain("Binding", "unchanged"),
+        ],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "Next",
+        &[
+            KeyValueRow::plain(
+                "Status",
+                format!("{command_example} service status {}", meta.name),
+            ),
+            KeyValueRow::plain(
+                "Logs",
+                format!("{command_example} logs {} --follow", meta.name),
+            ),
+        ],
+        profile.color,
+    ));
+    lines
 }
 
 fn render_dev_status_list(summaries: &[DevStatusSummary], profile: RenderProfile) -> Vec<String> {

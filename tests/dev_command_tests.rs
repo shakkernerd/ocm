@@ -411,6 +411,138 @@ fn dev_command_rejects_watch_plus_service() {
     assert!(stderr(&run).contains("dev cannot combine --watch with --service"));
 }
 
+fn create_runtime_backed_env(cwd: &Path, env: &std::collections::BTreeMap<String, String>) {
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_executable_script(&bin_dir.join("stable"), "#!/bin/sh\nexit 0\n");
+
+    let runtime = run_ocm(
+        cwd,
+        env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+
+    let created = run_ocm(
+        cwd,
+        env,
+        &[
+            "env",
+            "create",
+            "demo",
+            "--runtime",
+            "stable",
+            "--port",
+            "21901",
+        ],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+}
+
+#[test]
+fn dev_watch_force_takes_over_runtime_env_without_rebinding() {
+    let root = TestDir::new("dev-command-runtime-watch-force");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = service_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+    create_runtime_backed_env(&cwd, &env);
+
+    let start = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let watch = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "dev",
+            "demo",
+            "--repo",
+            &path_string(&repo),
+            "--watch",
+            "--force",
+        ],
+    );
+    assert!(watch.status.success(), "{}", stderr(&watch));
+    assert!(stdout(&watch).contains("service restored for demo"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["defaultRuntime"], "stable");
+    assert!(show_json["devRepoRoot"].is_null());
+    assert!(show_json["devWorktreeRoot"].is_null());
+    assert_eq!(show_json["gatewayPort"], 21901);
+    assert_eq!(show_json["serviceEnabled"], true);
+    assert_eq!(show_json["serviceRunning"], true);
+
+    let node_log = fs::read_to_string(root.child("node.log")).unwrap();
+    assert!(node_log.contains(&path_string(&repo)));
+    assert!(node_log.contains(show_json["configPath"].as_str().unwrap()));
+    assert!(node_log.contains("21901|scripts/watch-node.mjs gateway run --port 21901"));
+}
+
+#[test]
+fn dev_watch_force_restores_runtime_service_when_source_watch_cannot_spawn() {
+    let root = TestDir::new("dev-command-runtime-watch-spawn-fails");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = service_env(&root);
+    create_runtime_backed_env(&cwd, &env);
+
+    let start = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let empty_bin = root.child("empty-bin");
+    fs::create_dir_all(&empty_bin).unwrap();
+    let mut watch_env = env.clone();
+    watch_env.insert("PATH".to_string(), path_string(&empty_bin));
+    let watch = run_ocm(
+        &cwd,
+        &watch_env,
+        &[
+            "dev",
+            "demo",
+            "--repo",
+            &path_string(&repo),
+            "--watch",
+            "--force",
+        ],
+    );
+    assert!(!watch.status.success());
+    assert!(stderr(&watch).contains("failed to run \"node\""));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["defaultRuntime"], "stable");
+    assert_eq!(show_json["serviceEnabled"], true);
+    assert_eq!(show_json["serviceRunning"], true);
+}
+
+#[test]
+fn dev_command_still_rejects_plain_runtime_env_reuse() {
+    let root = TestDir::new("dev-command-runtime-plain-reuse");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+    create_runtime_backed_env(&cwd, &env);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(!run.status.success());
+    assert!(stderr(&run).contains("environment \"demo\" is not a dev env"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["defaultRuntime"], "stable");
+    assert!(show_json["devRepoRoot"].is_null());
+}
+
 #[test]
 fn dev_watch_force_temporarily_takes_over_and_restores_the_background_service() {
     let root = TestDir::new("dev-command-watch-force");

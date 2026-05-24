@@ -97,11 +97,12 @@ ocm dev shaks
 ocm dev shaks --root /tmp/shaks
 ocm dev shaks --watch
 ocm dev shaks --watch --force
+ocm dev shaks --repo /path/to/openclaw --watch --force
 ocm dev shaks --service
 ocm dev shaks --onboard
 ```
 
-`dev` creates or reuses an isolated env, provisions an OpenClaw worktree under the repo's own `.worktrees/`, bootstraps the minimum local config so the gateway can run immediately, and then starts the gateway in the foreground. `--root` lets you place that env anywhere. `--watch` keeps a source-run gateway rebuilding in place. `--service` installs and starts the dev env in the OCM background service instead of keeping the process in the current terminal. If a dev env is already running in the background, `--watch --force` temporarily takes it over for the watch session and restores the background service when watch exits. `--onboard` runs local onboarding first and then starts the dev gateway. If OCM cannot infer the repo on the first run, it asks once for the OpenClaw repo path and then reuses that repo for later dev envs.
+`dev` creates or reuses an isolated env, provisions an OpenClaw worktree under the repo's own `.worktrees/`, bootstraps the minimum local config so the gateway can run immediately, and then starts the gateway in the foreground. `--root` lets you place that env anywhere. `--watch` keeps a source-run gateway rebuilding in place. `--service` installs and starts the dev env in the OCM background service instead of keeping the process in the current terminal. If a dev env is already running in the background, `--watch --force` temporarily takes it over for the watch session and restores the background service when watch exits. For an existing runtime or launcher env, `--repo <path> --watch --force` temporarily runs that source checkout against the env's real root, config, state, and port without changing its binding, then restores a running background service when watch exits. `--onboard` runs local onboarding first and then starts the dev gateway. If OCM cannot infer the repo on the first run, it asks once for the OpenClaw repo path and then reuses that repo for later dev envs.
 
 If you already have a plain `~/.openclaw` home you care about, use `ocm migrate <env>` instead of starting fresh. `setup` and `start` now point that out when they detect an existing plain OpenClaw home.
 
@@ -151,9 +152,10 @@ runtimes for debugging.
 ocm dev luna
 ocm dev luna --root ~/scratch/luna
 ocm dev luna --watch
+ocm dev existing-env --repo ~/src/openclaw --watch --force
 ```
 
-Use `ocm dev` when you want an isolated source-run checkout with its own env root and gateway port. If you are already inside an OpenClaw checkout, `ocm setup` can detect that and suggest a local path automatically.
+Use `ocm dev` when you want an isolated source-run checkout with its own env root and gateway port, or when you want to temporarily run source against an existing env in watch mode without rebinding it. If you are already inside an OpenClaw checkout, `ocm setup` can detect that and suggest a local path automatically.
 
 ### Try beta or pin a specific release
 

@@ -242,7 +242,7 @@ pub fn logs_help(cmd: &str) -> String {
 pub fn dev_help(cmd: &str) -> String {
     render_group(
         "Development envs",
-        "Provision OpenClaw dev envs from a checkout worktree, bootstrap the minimum local config, and run the gateway in the foreground. If OCM cannot infer the repo on the first run, it asks once and reuses that repo for later dev envs.",
+        "Provision OpenClaw dev envs from a checkout worktree, bootstrap the minimum local config, and run the gateway in the foreground. Existing runtime or launcher envs can also be temporarily taken over with --repo <path> --watch --force; OCM keeps their binding unchanged and restores a running background service when watch exits. If OCM cannot infer the repo on the first run, it asks once and reuses that repo for later dev envs.",
         vec![format!(
             "{cmd} dev <env> [--repo <path>] [--root <path>] [--port <port>] [--watch] [--force] [--service] [--onboard]"
         )],
@@ -255,6 +255,7 @@ pub fn dev_help(cmd: &str) -> String {
             format!("{cmd} dev shaks --root /tmp/shaks"),
             format!("{cmd} dev shaks --watch"),
             format!("{cmd} dev shaks --watch --force"),
+            format!("{cmd} dev shaks --repo /path/to/openclaw --watch --force"),
             format!("{cmd} dev shaks --service"),
             format!("{cmd} dev shaks --onboard"),
             format!("{cmd} dev status"),
