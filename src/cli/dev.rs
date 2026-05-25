@@ -1,9 +1,12 @@
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::thread::{self, JoinHandle};
 
 use serde::{Deserialize, Serialize};
 
@@ -327,7 +330,7 @@ impl Cli {
             ),
             stderr_profile,
         ));
-        let watch_result = self.run_source_gateway_watch(&meta, &repo_root);
+        let watch_result = self.run_source_gateway_watch(&meta, &repo_root, true);
 
         if restore_service {
             self.stderr_lines(render_dev_run_step(
@@ -606,10 +609,15 @@ impl Cli {
             .dev
             .as_ref()
             .ok_or_else(|| format!("environment \"{}\" is missing its dev binding", meta.name))?;
-        self.run_source_gateway_watch(meta, Path::new(&dev.worktree_root))
+        self.run_source_gateway_watch(meta, Path::new(&dev.worktree_root), false)
     }
 
-    fn run_source_gateway_watch(&self, meta: &EnvMeta, repo_root: &Path) -> Result<i32, String> {
+    fn run_source_gateway_watch(
+        &self,
+        meta: &EnvMeta,
+        repo_root: &Path,
+        tee_to_env_logs: bool,
+    ) -> Result<i32, String> {
         let args = vec![
             "scripts/watch-node.mjs".to_string(),
             "gateway".to_string(),
@@ -624,16 +632,57 @@ impl Cli {
         })
         .map_err(|error| format!("failed to install dev watch signal handler: {error}"))?;
 
-        let status = Command::new("node")
+        let mut command = Command::new("node");
+        command
             .args(&args)
             .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
             .env_clear()
             .envs(build_openclaw_env(meta, &self.env))
-            .current_dir(repo_root)
-            .status()
+            .current_dir(repo_root);
+
+        let mut log_files = if tee_to_env_logs {
+            Some(open_source_watch_log_files(meta)?)
+        } else {
+            None
+        };
+
+        if log_files.is_some() {
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        } else {
+            command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        }
+
+        let mut child = command
+            .spawn()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
+        let mut tee_threads = Vec::new();
+        if let Some(log_files) = log_files.take() {
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| "failed to capture source watch stdout".to_string())?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| "failed to capture source watch stderr".to_string())?;
+            tee_threads.push(spawn_tee_thread(
+                stdout,
+                io::stdout(),
+                log_files.stdout,
+                "stdout",
+            ));
+            tee_threads.push(spawn_tee_thread(
+                stderr,
+                io::stderr(),
+                log_files.stderr,
+                "stderr",
+            ));
+        }
+
+        let status = child
+            .wait()
+            .map_err(|error| format!("failed waiting for source watch: {error}"))?;
+        wait_for_tee_threads(tee_threads)?;
 
         Ok(match status.code() {
             Some(code) => code,
@@ -953,6 +1002,7 @@ fn render_source_watch_takeover_summary(
     repo_root: &Path,
     profile: RenderProfile,
 ) -> Vec<String> {
+    let log_paths = source_watch_log_paths(meta);
     if !profile.pretty {
         return vec![
             format!("taking over env {}", meta.name),
@@ -960,6 +1010,8 @@ fn render_source_watch_takeover_summary(
             format!("port={}", meta.gateway_port.unwrap_or_default()),
             format!("root={}", meta.root),
             format!("repo={}", display_path(repo_root)),
+            format!("stdoutLog={}", display_path(&log_paths.stdout)),
+            format!("stderrLog={}", display_path(&log_paths.stderr)),
             "mode=watch".to_string(),
         ];
     }
@@ -981,6 +1033,14 @@ fn render_source_watch_takeover_summary(
     lines.extend(render_key_value_card(
         "Source",
         &[KeyValueRow::plain("Repo", display_path(repo_root))],
+        profile.color,
+    ));
+    lines.extend(render_key_value_card(
+        "Logs",
+        &[
+            KeyValueRow::plain("Stdout", display_path(&log_paths.stdout)),
+            KeyValueRow::plain("Stderr", display_path(&log_paths.stderr)),
+        ],
         profile.color,
     ));
     lines
@@ -1040,6 +1100,100 @@ fn render_source_watch_service_restored(
         profile.color,
     ));
     lines
+}
+
+struct SourceWatchLogPaths {
+    stdout: PathBuf,
+    stderr: PathBuf,
+}
+
+struct SourceWatchLogFiles {
+    stdout: File,
+    stderr: File,
+}
+
+fn source_watch_log_paths(meta: &EnvMeta) -> SourceWatchLogPaths {
+    let env_paths = derive_env_paths(Path::new(&meta.root));
+    let logs_dir = env_paths.state_dir.join("logs");
+    SourceWatchLogPaths {
+        stdout: logs_dir.join("gateway.log"),
+        stderr: logs_dir.join("gateway.err.log"),
+    }
+}
+
+fn open_source_watch_log_files(meta: &EnvMeta) -> Result<SourceWatchLogFiles, String> {
+    let paths = source_watch_log_paths(meta);
+    if let Some(parent) = paths.stdout.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed creating env log directory for {}: {error}",
+                meta.name
+            )
+        })?;
+    }
+    Ok(SourceWatchLogFiles {
+        stdout: open_append_log(&paths.stdout, &meta.name, "stdout")?,
+        stderr: open_append_log(&paths.stderr, &meta.name, "stderr")?,
+    })
+}
+
+fn open_append_log(path: &Path, env_name: &str, stream: &str) -> Result<File, String> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| {
+            format!(
+                "failed opening {stream} log for env \"{env_name}\": {}: {error}",
+                display_path(path)
+            )
+        })
+}
+
+fn spawn_tee_thread<R, W>(
+    input: R,
+    terminal: W,
+    log_file: File,
+    stream: &'static str,
+) -> JoinHandle<Result<(), String>>
+where
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+{
+    thread::spawn(move || {
+        tee_stream(input, terminal, log_file)
+            .map_err(|error| format!("failed writing source watch {stream} log: {error}"))
+    })
+}
+
+fn tee_stream<R, W>(mut input: R, mut terminal: W, mut log_file: File) -> io::Result<()>
+where
+    R: Read,
+    W: Write,
+{
+    let mut buffer = [0_u8; 8 * 1024];
+    loop {
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        let chunk = &buffer[..count];
+        terminal.write_all(chunk)?;
+        terminal.flush()?;
+        log_file.write_all(chunk)?;
+        log_file.flush()?;
+    }
+    Ok(())
+}
+
+fn wait_for_tee_threads(threads: Vec<JoinHandle<Result<(), String>>>) -> Result<(), String> {
+    for thread in threads {
+        let result = thread
+            .join()
+            .map_err(|_| "source watch log tee thread panicked".to_string())?;
+        result?;
+    }
+    Ok(())
 }
 
 fn render_dev_status_list(summaries: &[DevStatusSummary], profile: RenderProfile) -> Vec<String> {

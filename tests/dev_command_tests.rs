@@ -104,7 +104,7 @@ fn install_fake_dev_runners(root: &TestDir, env: &mut std::collections::BTreeMap
         path_string(&pnpm_log)
     );
     let node = format!(
-        "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$PWD\" \"$OPENCLAW_CONFIG_PATH\" \"$OPENCLAW_GATEWAY_PORT\" \"$*\" >> \"{}\"\n",
+        "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$PWD\" \"$OPENCLAW_CONFIG_PATH\" \"$OPENCLAW_GATEWAY_PORT\" \"$*\" >> \"{}\"\nif [ -n \"$OCM_TEST_NODE_STDOUT\" ]; then printf '%s\\n' \"$OCM_TEST_NODE_STDOUT\"; fi\nif [ -n \"$OCM_TEST_NODE_STDERR\" ]; then printf '%s\\n' \"$OCM_TEST_NODE_STDERR\" >&2; fi\n",
         path_string(&node_log)
     );
     write_executable_script(&bin_dir.join("pnpm"), &pnpm);
@@ -447,6 +447,14 @@ fn dev_watch_force_takes_over_runtime_env_without_rebinding() {
     fs::create_dir_all(&cwd).unwrap();
     let mut env = service_env(&root);
     install_fake_dev_runners(&root, &mut env);
+    env.insert(
+        "OCM_TEST_NODE_STDOUT".to_string(),
+        "source watch stdout".to_string(),
+    );
+    env.insert(
+        "OCM_TEST_NODE_STDERR".to_string(),
+        "source watch stderr".to_string(),
+    );
     create_runtime_backed_env(&cwd, &env);
 
     let start = run_ocm(&cwd, &env, &["service", "start", "demo"]);
@@ -481,6 +489,26 @@ fn dev_watch_force_takes_over_runtime_env_without_rebinding() {
     assert!(node_log.contains(&path_string(&repo)));
     assert!(node_log.contains(show_json["configPath"].as_str().unwrap()));
     assert!(node_log.contains("21901|scripts/watch-node.mjs gateway run --port 21901"));
+    assert!(stdout(&watch).contains("source watch stdout"));
+    assert!(stderr(&watch).contains("source watch stderr"));
+
+    let state_dir = PathBuf::from(show_json["stateDir"].as_str().unwrap());
+    let gateway_log = fs::read_to_string(state_dir.join("logs/gateway.log")).unwrap();
+    let gateway_err_log = fs::read_to_string(state_dir.join("logs/gateway.err.log")).unwrap();
+    assert!(gateway_log.contains("source watch stdout"));
+    assert!(gateway_err_log.contains("source watch stderr"));
+
+    let logs = run_ocm(&cwd, &env, &["logs", "demo", "--tail", "5", "--raw"]);
+    assert!(logs.status.success(), "{}", stderr(&logs));
+    assert!(stdout(&logs).contains("source watch stdout"));
+
+    let error_logs = run_ocm(
+        &cwd,
+        &env,
+        &["logs", "demo", "--stream", "error", "--tail", "5", "--raw"],
+    );
+    assert!(error_logs.status.success(), "{}", stderr(&error_logs));
+    assert!(stdout(&error_logs).contains("source watch stderr"));
 }
 
 #[test]
