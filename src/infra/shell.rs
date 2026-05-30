@@ -94,6 +94,10 @@ pub fn build_openclaw_dev_source_env(
     let extensions_dir = source_root.join("extensions");
     if extensions_dir.is_dir() {
         next.insert(
+            "OPENCLAW_DEV_SOURCE_ROOT".to_string(),
+            source_root.to_string_lossy().into_owned(),
+        );
+        next.insert(
             "OPENCLAW_BUNDLED_PLUGINS_DIR".to_string(),
             extensions_dir.to_string_lossy().into_owned(),
         );
@@ -294,6 +298,10 @@ mod tests {
         assert_eq!(
             env.get("OPENCLAW_BUNDLED_PLUGINS_DIR").map(String::as_str),
             Some(root.join("extensions").to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            env.get("OPENCLAW_DEV_SOURCE_ROOT").map(String::as_str),
+            Some(root.to_string_lossy().as_ref())
         );
         let _ = std::fs::remove_dir_all(&root);
     }

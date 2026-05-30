@@ -106,11 +106,11 @@ fn install_fake_dev_runners(root: &TestDir, env: &mut std::collections::BTreeMap
     let pnpm_log = root.child("pnpm.log");
     let node_log = root.child("node.log");
     let pnpm = format!(
-        "#!/bin/sh\nprintf '%s|%s|%s|%s|bundled=%s\\n' \"$PWD\" \"$OPENCLAW_CONFIG_PATH\" \"$OPENCLAW_GATEWAY_PORT\" \"$*\" \"$OPENCLAW_BUNDLED_PLUGINS_DIR\" >> \"{}\"\n",
+        "#!/bin/sh\nprintf '%s|%s|%s|%s|bundled=%s|devroot=%s\\n' \"$PWD\" \"$OPENCLAW_CONFIG_PATH\" \"$OPENCLAW_GATEWAY_PORT\" \"$*\" \"$OPENCLAW_BUNDLED_PLUGINS_DIR\" \"$OPENCLAW_DEV_SOURCE_ROOT\" >> \"{}\"\n",
         path_string(&pnpm_log)
     );
     let node = format!(
-        "#!/bin/sh\nprintf '%s|%s|%s|%s|bundled=%s\\n' \"$PWD\" \"$OPENCLAW_CONFIG_PATH\" \"$OPENCLAW_GATEWAY_PORT\" \"$*\" \"$OPENCLAW_BUNDLED_PLUGINS_DIR\" >> \"{}\"\nif [ -n \"$OCM_TEST_NODE_STDOUT\" ]; then printf '%s\\n' \"$OCM_TEST_NODE_STDOUT\"; fi\nif [ -n \"$OCM_TEST_NODE_STDERR\" ]; then printf '%s\\n' \"$OCM_TEST_NODE_STDERR\" >&2; fi\n",
+        "#!/bin/sh\nprintf '%s|%s|%s|%s|bundled=%s|devroot=%s\\n' \"$PWD\" \"$OPENCLAW_CONFIG_PATH\" \"$OPENCLAW_GATEWAY_PORT\" \"$*\" \"$OPENCLAW_BUNDLED_PLUGINS_DIR\" \"$OPENCLAW_DEV_SOURCE_ROOT\" >> \"{}\"\nif [ -n \"$OCM_TEST_NODE_STDOUT\" ]; then printf '%s\\n' \"$OCM_TEST_NODE_STDOUT\"; fi\nif [ -n \"$OCM_TEST_NODE_STDERR\" ]; then printf '%s\\n' \"$OCM_TEST_NODE_STDERR\" >&2; fi\n",
         path_string(&node_log)
     );
     write_executable_script(&bin_dir.join("pnpm"), &pnpm);
@@ -167,6 +167,7 @@ fn dev_command_provisions_worktree_bootstraps_config_and_runs_gateway() {
         "|bundled={}",
         path_string(&worktree_root.join("extensions"))
     )));
+    assert!(pnpm_log.contains(&format!("|devroot={}", path_string(&worktree_root))));
 }
 
 #[test]
@@ -503,6 +504,7 @@ fn dev_watch_force_takes_over_runtime_env_without_rebinding() {
         "|bundled={}",
         path_string(&repo.join("extensions"))
     )));
+    assert!(node_log.contains(&format!("|devroot={}", path_string(&repo))));
     assert!(stdout(&watch).contains("source watch stdout"));
     assert!(stderr(&watch).contains("source watch stderr"));
 
