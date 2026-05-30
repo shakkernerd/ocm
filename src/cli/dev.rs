@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::Cli;
 use super::render::RenderProfile;
@@ -168,6 +170,11 @@ impl Cli {
             onboard,
             stderr_profile,
         ));
+        self.stderr_lines(render_dev_external_plugin_warnings(
+            &meta,
+            Path::new(&dev.worktree_root),
+            stderr_profile,
+        ));
 
         let install_code = self.ensure_dev_dependencies(&meta)?;
         if install_code != 0 {
@@ -302,6 +309,11 @@ impl Cli {
             .apply_effective_gateway_port(existing)?;
         let stderr_profile = self.dev_stderr_profile();
         self.stderr_lines(render_source_watch_takeover_summary(
+            &meta,
+            &repo_root,
+            stderr_profile,
+        ));
+        self.stderr_lines(render_dev_external_plugin_warnings(
             &meta,
             &repo_root,
             stderr_profile,
@@ -997,6 +1009,27 @@ fn render_dev_run_step(title: &str, detail: String, profile: RenderProfile) -> V
     render_key_value_card(title, &[KeyValueRow::accent("Step", detail)], profile.color)
 }
 
+fn render_dev_external_plugin_warnings(
+    meta: &EnvMeta,
+    source_root: &Path,
+    profile: RenderProfile,
+) -> Vec<String> {
+    let external_plugins = collect_external_installed_plugin_ids(meta, source_root);
+    external_plugins
+        .into_iter()
+        .flat_map(|plugin_id| {
+            render_dev_run_step(
+                "Warning",
+                format!(
+                    "Installed plugin \"{plugin_id}\" is not present in {}; dev mode will keep using the env-installed plugin for that id",
+                    display_path(&source_root.join("extensions"))
+                ),
+                profile,
+            )
+        })
+        .collect()
+}
+
 fn render_source_watch_takeover_summary(
     meta: &EnvMeta,
     repo_root: &Path,
@@ -1044,6 +1077,109 @@ fn render_source_watch_takeover_summary(
         profile.color,
     ));
     lines
+}
+
+fn collect_external_installed_plugin_ids(meta: &EnvMeta, source_root: &Path) -> BTreeSet<String> {
+    let source_ids = collect_source_plugin_ids(source_root);
+    collect_installed_plugin_ids(meta)
+        .into_iter()
+        .filter(|plugin_id| !source_ids.contains(plugin_id))
+        .collect()
+}
+
+fn collect_source_plugin_ids(source_root: &Path) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    let extensions_dir = source_root.join("extensions");
+    let Ok(entries) = fs::read_dir(extensions_dir) else {
+        return ids;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let plugin_dir = entry.path();
+        if let Some(id) =
+            read_json_string_at_path(&plugin_dir.join("openclaw.plugin.json"), &["id"])
+        {
+            ids.insert(id);
+            continue;
+        }
+        if let Some(id) =
+            read_json_string_at_path(&plugin_dir.join("package.json"), &["openclaw", "id"])
+        {
+            ids.insert(id);
+        }
+    }
+    ids
+}
+
+fn collect_installed_plugin_ids(meta: &EnvMeta) -> BTreeSet<String> {
+    let paths = derive_env_paths(Path::new(&meta.root));
+    let mut ids = collect_installed_plugin_ids_from_json_file(&paths.config_path);
+    ids.extend(collect_installed_plugin_ids_from_json_file(
+        &paths.state_dir.join("plugins/installs.json"),
+    ));
+    ids
+}
+
+fn collect_installed_plugin_ids_from_json_file(path: &Path) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    let Ok(raw) = fs::read_to_string(path) else {
+        return ids;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return ids;
+    };
+    collect_installed_plugin_ids_from_value(&value, &mut ids);
+    ids
+}
+
+fn collect_installed_plugin_ids_from_value(value: &Value, ids: &mut BTreeSet<String>) {
+    if let Some(installs) = value
+        .pointer("/plugins/installs")
+        .and_then(Value::as_object)
+    {
+        ids.extend(
+            installs
+                .keys()
+                .filter(|key| !key.trim().is_empty())
+                .cloned(),
+        );
+    }
+    if let Some(install_records) = value.get("installRecords").and_then(Value::as_object) {
+        ids.extend(
+            install_records
+                .keys()
+                .filter(|key| !key.trim().is_empty())
+                .cloned(),
+        );
+    }
+    if let Some(plugins) = value.get("plugins").and_then(Value::as_array) {
+        ids.extend(
+            plugins
+                .iter()
+                .filter_map(|plugin| plugin.get("pluginId").and_then(Value::as_str))
+                .filter(|plugin_id| !plugin_id.trim().is_empty())
+                .map(ToOwned::to_owned),
+        );
+    }
+}
+
+fn read_json_string_at_path(path: &Path, keys: &[&str]) -> Option<String> {
+    let raw = fs::read_to_string(path).ok()?;
+    let value = serde_json::from_str::<Value>(&raw).ok()?;
+    let mut current = &value;
+    for key in keys {
+        current = current.get(*key)?;
+    }
+    current
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn render_source_watch_service_restored(

@@ -526,6 +526,43 @@ fn dev_watch_force_takes_over_runtime_env_without_rebinding() {
 }
 
 #[test]
+fn dev_watch_force_warns_for_installed_plugins_missing_from_source() {
+    let root = TestDir::new("dev-command-runtime-watch-external-plugin");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = service_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+    create_runtime_backed_env(&cwd, &env);
+
+    let installs_path = root.child("ocm-home/envs/demo/.openclaw/plugins/installs.json");
+    fs::create_dir_all(installs_path.parent().unwrap()).unwrap();
+    fs::write(
+        &installs_path,
+        r#"{"installRecords":{"external-chat":{"source":"npm","spec":"external-chat"},"codex":{"source":"npm","spec":"@openclaw/codex"}}}"#,
+    )
+    .unwrap();
+
+    let watch = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "dev",
+            "demo",
+            "--repo",
+            &path_string(&repo),
+            "--watch",
+            "--force",
+        ],
+    );
+    assert!(watch.status.success(), "{}", stderr(&watch));
+
+    let watch_stderr = stderr(&watch);
+    assert!(watch_stderr.contains("Installed plugin \"external-chat\" is not present"));
+    assert!(!watch_stderr.contains("Installed plugin \"codex\" is not present"));
+}
+
+#[test]
 fn dev_watch_force_restores_runtime_service_when_source_watch_cannot_spawn() {
     let root = TestDir::new("dev-command-runtime-watch-spawn-fails");
     let repo = init_openclaw_repo(&root);
