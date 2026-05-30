@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::{EnvMeta, EnvironmentService};
-use crate::infra::shell::build_openclaw_env;
+use crate::infra::shell::{build_openclaw_dev_source_env, build_openclaw_env};
 use crate::launcher::{
     build_launcher_command, resolve_direct_launcher_command, resolve_launcher_run_dir,
 };
@@ -183,7 +183,11 @@ pub fn resolve_gateway_process_spec(
                 runtime_release_channel: None,
                 args,
                 run_dir: PathBuf::from(&dev.worktree_root),
-                process_env: build_openclaw_env(env_meta, process_env),
+                process_env: build_openclaw_dev_source_env(
+                    env_meta,
+                    process_env,
+                    Path::new(&dev.worktree_root),
+                ),
             })
         }
     }

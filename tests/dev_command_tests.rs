@@ -14,9 +14,15 @@ use crate::support::{
 fn init_openclaw_repo(root: &TestDir) -> PathBuf {
     let repo = root.child("repo/openclaw");
     fs::create_dir_all(repo.join("scripts")).unwrap();
+    fs::create_dir_all(repo.join("extensions/codex")).unwrap();
     fs::write(
         repo.join("package.json"),
         r#"{"name":"openclaw","version":"2026.4.19"}"#,
+    )
+    .unwrap();
+    fs::write(
+        repo.join("extensions/codex/openclaw.plugin.json"),
+        r#"{"id":"codex"}"#,
     )
     .unwrap();
     fs::write(repo.join("scripts/run-node.mjs"), "console.log('run');\n").unwrap();
@@ -100,11 +106,11 @@ fn install_fake_dev_runners(root: &TestDir, env: &mut std::collections::BTreeMap
     let pnpm_log = root.child("pnpm.log");
     let node_log = root.child("node.log");
     let pnpm = format!(
-        "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$PWD\" \"$OPENCLAW_CONFIG_PATH\" \"$OPENCLAW_GATEWAY_PORT\" \"$*\" >> \"{}\"\n",
+        "#!/bin/sh\nprintf '%s|%s|%s|%s|bundled=%s\\n' \"$PWD\" \"$OPENCLAW_CONFIG_PATH\" \"$OPENCLAW_GATEWAY_PORT\" \"$*\" \"$OPENCLAW_BUNDLED_PLUGINS_DIR\" >> \"{}\"\n",
         path_string(&pnpm_log)
     );
     let node = format!(
-        "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$PWD\" \"$OPENCLAW_CONFIG_PATH\" \"$OPENCLAW_GATEWAY_PORT\" \"$*\" >> \"{}\"\nif [ -n \"$OCM_TEST_NODE_STDOUT\" ]; then printf '%s\\n' \"$OCM_TEST_NODE_STDOUT\"; fi\nif [ -n \"$OCM_TEST_NODE_STDERR\" ]; then printf '%s\\n' \"$OCM_TEST_NODE_STDERR\" >&2; fi\n",
+        "#!/bin/sh\nprintf '%s|%s|%s|%s|bundled=%s\\n' \"$PWD\" \"$OPENCLAW_CONFIG_PATH\" \"$OPENCLAW_GATEWAY_PORT\" \"$*\" \"$OPENCLAW_BUNDLED_PLUGINS_DIR\" >> \"{}\"\nif [ -n \"$OCM_TEST_NODE_STDOUT\" ]; then printf '%s\\n' \"$OCM_TEST_NODE_STDOUT\"; fi\nif [ -n \"$OCM_TEST_NODE_STDERR\" ]; then printf '%s\\n' \"$OCM_TEST_NODE_STDERR\" >&2; fi\n",
         path_string(&node_log)
     );
     write_executable_script(&bin_dir.join("pnpm"), &pnpm);
@@ -157,6 +163,10 @@ fn dev_command_provisions_worktree_bootstraps_config_and_runs_gateway() {
     assert!(pnpm_log.contains("openclaw gateway run --port"));
     assert!(pnpm_log.contains(&path_string(&worktree_root)));
     assert!(pnpm_log.contains(&path_string(&config_path)));
+    assert!(pnpm_log.contains(&format!(
+        "|bundled={}",
+        path_string(&worktree_root.join("extensions"))
+    )));
 }
 
 #[test]
@@ -489,6 +499,10 @@ fn dev_watch_force_takes_over_runtime_env_without_rebinding() {
     assert!(node_log.contains(&path_string(&repo)));
     assert!(node_log.contains(show_json["configPath"].as_str().unwrap()));
     assert!(node_log.contains("21901|scripts/watch-node.mjs gateway run --port 21901"));
+    assert!(node_log.contains(&format!(
+        "|bundled={}",
+        path_string(&repo.join("extensions"))
+    )));
     assert!(stdout(&watch).contains("source watch stdout"));
     assert!(stderr(&watch).contains("source watch stderr"));
 

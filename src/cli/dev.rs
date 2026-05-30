@@ -14,7 +14,7 @@ use super::Cli;
 use super::render::RenderProfile;
 use crate::env::{CreateEnvironmentOptions, EnvDevMeta, EnvMeta};
 use crate::infra::process::run_direct;
-use crate::infra::shell::build_openclaw_env;
+use crate::infra::shell::{build_openclaw_dev_source_env, build_openclaw_env};
 use crate::infra::terminal::{Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table};
 use crate::openclaw_repo::{
     detect_openclaw_checkout, discover_openclaw_checkout, ensure_openclaw_worktree,
@@ -579,7 +579,7 @@ impl Cli {
         run_direct(
             "pnpm",
             &args,
-            &build_openclaw_env(meta, &self.env),
+            &build_openclaw_dev_source_env(meta, &self.env, Path::new(&dev.worktree_root)),
             Path::new(&dev.worktree_root),
         )
     }
@@ -599,7 +599,7 @@ impl Cli {
         run_direct(
             "pnpm",
             &args,
-            &build_openclaw_env(meta, &self.env),
+            &build_openclaw_dev_source_env(meta, &self.env, Path::new(&dev.worktree_root)),
             Path::new(&dev.worktree_root),
         )
     }
@@ -637,7 +637,7 @@ impl Cli {
             .args(&args)
             .stdin(Stdio::inherit())
             .env_clear()
-            .envs(build_openclaw_env(meta, &self.env))
+            .envs(build_openclaw_dev_source_env(meta, &self.env, repo_root))
             .current_dir(repo_root);
 
         let mut log_files = if tee_to_env_logs {

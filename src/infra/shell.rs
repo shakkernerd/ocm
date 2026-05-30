@@ -85,6 +85,22 @@ pub fn build_openclaw_env(
     next
 }
 
+pub fn build_openclaw_dev_source_env(
+    meta: &EnvMeta,
+    base_env: &BTreeMap<String, String>,
+    source_root: &Path,
+) -> BTreeMap<String, String> {
+    let mut next = build_openclaw_env(meta, base_env);
+    let extensions_dir = source_root.join("extensions");
+    if extensions_dir.is_dir() {
+        next.insert(
+            "OPENCLAW_BUNDLED_PLUGINS_DIR".to_string(),
+            extensions_dir.to_string_lossy().into_owned(),
+        );
+    }
+    next
+}
+
 fn sanitized_openclaw_base_env(base_env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     base_env
         .iter()
@@ -250,5 +266,35 @@ mod tests {
         assert_eq!(env.get("OCM_ACTIVE_ENV").map(String::as_str), Some("demo"));
         assert!(!env.contains_key("OPENCLAW_PROFILE"));
         assert!(!env.contains_key("OPENCLAW_RANDOM_USER_VALUE"));
+    }
+
+    #[test]
+    fn build_openclaw_dev_source_env_points_bundled_plugins_at_source_extensions() {
+        let meta = EnvMeta {
+            kind: "ocm-env".to_string(),
+            name: "demo".to_string(),
+            root: "/tmp/ocm/envs/demo".to_string(),
+            gateway_port: Some(19999),
+            service_enabled: true,
+            service_running: true,
+            default_runtime: None,
+            default_launcher: None,
+            dev: None,
+            protected: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            last_used_at: None,
+        };
+        let root = std::env::temp_dir().join(format!("ocm-dev-source-env-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("extensions/codex")).unwrap();
+
+        let env = build_openclaw_dev_source_env(&meta, &BTreeMap::new(), &root);
+
+        assert_eq!(
+            env.get("OPENCLAW_BUNDLED_PLUGINS_DIR").map(String::as_str),
+            Some(root.join("extensions").to_string_lossy().as_ref())
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
