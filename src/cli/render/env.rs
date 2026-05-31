@@ -7,7 +7,8 @@ use crate::env::{
     EnvStatusSummary, EnvSummary, ExecutionSummary,
 };
 use crate::infra::terminal::{
-    Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, render_tags,
+    Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, render_table_with_limit,
+    render_tags, terminal_width,
 };
 
 use super::{RenderProfile, format_key_value_lines, format_rfc3339};
@@ -1190,7 +1191,8 @@ mod tests {
 
     use super::{
         RenderProfile, env_destroy_preview, env_destroyed, env_doctor, env_list, env_resolved,
-        env_show, env_snapshot_list, env_snapshot_prune_preview, env_snapshot_show, env_status,
+        env_show, env_snapshot_list_with_width, env_snapshot_prune_preview, env_snapshot_show,
+        env_status,
     };
     use crate::cli::env::{EnvDestroyStepSummary, EnvDestroySummary};
     use crate::env::{
@@ -1623,9 +1625,10 @@ mod tests {
 
     #[test]
     fn env_snapshot_list_pretty_uses_a_table() {
-        let lines = env_snapshot_list(
+        let lines = env_snapshot_list_with_width(
             &[sample_snapshot("demo", "before-upgrade")],
             RenderProfile::pretty(false),
+            Some(120),
         )
         .unwrap();
 
@@ -2317,6 +2320,14 @@ pub fn env_snapshot_list(
     snapshots: &[EnvSnapshotSummary],
     profile: RenderProfile,
 ) -> Result<Vec<String>, String> {
+    env_snapshot_list_with_width(snapshots, profile, terminal_width())
+}
+
+fn env_snapshot_list_with_width(
+    snapshots: &[EnvSnapshotSummary],
+    profile: RenderProfile,
+    width: Option<usize>,
+) -> Result<Vec<String>, String> {
     if snapshots.is_empty() {
         return Ok(vec!["No snapshots.".to_string()]);
     }
@@ -2337,10 +2348,11 @@ pub fn env_snapshot_list(
             ])
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(render_table(
+    Ok(render_table_with_limit(
         &["Snapshot", "Env", "Label", "Port", "Binding", "Created"],
         &rows,
         profile.color,
+        width,
     ))
 }
 

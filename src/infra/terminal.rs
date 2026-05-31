@@ -128,7 +128,7 @@ pub fn render_table(headers: &[&str], rows: &[Vec<Cell>], color: bool) -> Vec<St
     render_table_with_limit(headers, rows, color, terminal_width())
 }
 
-fn render_table_with_limit(
+pub(crate) fn render_table_with_limit(
     headers: &[&str],
     rows: &[Vec<Cell>],
     color: bool,
