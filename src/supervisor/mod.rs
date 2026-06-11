@@ -46,14 +46,8 @@ const SERVICE_PROXY_ENV_KEYS: [&str; 8] = [
     "all_proxy",
 ];
 const SERVICE_EXTRA_ENV_KEYS: [&str; 2] = ["NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA"];
-const SUPERVISED_CHILD_BASE_ENV_KEYS: [&str; 6] = [
-    "HOME",
-    "PATH",
-    "TMPDIR",
-    "OCM_HOME",
-    "OCM_SELF",
-    "SHELL",
-];
+const SUPERVISED_CHILD_BASE_ENV_KEYS: [&str; 6] =
+    ["HOME", "PATH", "TMPDIR", "OCM_HOME", "OCM_SELF", "SHELL"];
 const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
 const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
 const OPENCLAW_RESTART_HANDOFF_FILE: &str = "gateway-supervisor-restart-handoff.json";
@@ -1565,20 +1559,58 @@ fn build_supervised_openclaw_env(
     process_env
 }
 
-fn stable_supervised_child_env(
-    process_env: BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    process_env
-        .into_iter()
-        .filter(|(key, value)| {
-            !value.trim().is_empty()
-                && (key.starts_with("OPENCLAW_")
-                    || key.starts_with("OCM_")
-                    || SUPERVISED_CHILD_BASE_ENV_KEYS.contains(&key.as_str())
-                    || SERVICE_PROXY_ENV_KEYS.contains(&key.as_str())
-                    || SERVICE_EXTRA_ENV_KEYS.contains(&key.as_str()))
-        })
-        .collect()
+fn stable_supervised_child_env(process_env: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut stable_env = BTreeMap::new();
+    for (key, value) in process_env {
+        let value = value.trim();
+        if value.is_empty()
+            || !(key.starts_with("OPENCLAW_")
+                || key.starts_with("OCM_")
+                || SUPERVISED_CHILD_BASE_ENV_KEYS.contains(&key.as_str())
+                || SERVICE_PROXY_ENV_KEYS.contains(&key.as_str())
+                || SERVICE_EXTRA_ENV_KEYS.contains(&key.as_str()))
+        {
+            continue;
+        }
+
+        let value = if key == "PATH" {
+            stable_supervised_child_path(value).unwrap_or_else(|| DEFAULT_SERVICE_PATH.to_string())
+        } else {
+            value.to_string()
+        };
+        stable_env.insert(key, value);
+    }
+    stable_env
+}
+
+fn stable_supervised_child_path(path: &str) -> Option<String> {
+    let mut entries = Vec::new();
+    for raw_entry in path.split(':') {
+        let entry = raw_entry.trim();
+        if entry.is_empty() || volatile_supervised_path_entry(entry) {
+            continue;
+        }
+        if !entries.iter().any(|existing| existing == entry) {
+            entries.push(entry.to_string());
+        }
+    }
+
+    if entries.is_empty() {
+        None
+    } else {
+        Some(entries.join(":"))
+    }
+}
+
+fn volatile_supervised_path_entry(entry: &str) -> bool {
+    let normalized = entry.replace('\\', "/");
+    normalized.contains("/codex-home/tmp/")
+        || normalized.contains("/.codex/tmp/")
+        || normalized.contains("/tmp/arg0/")
+        || (normalized.contains("/node_modules/@openai/codex")
+            && normalized.ends_with("/codex-path"))
+        || normalized.contains("/Cellar/node/")
+        || normalized.contains("/Cellar/node@")
 }
 
 fn write_supervisor_runtime_state(
@@ -1889,14 +1921,20 @@ mod tests {
                 ("HTTPS_PROXY".to_string(), "http://proxy".to_string()),
                 ("GH_TOKEN".to_string(), "caller-token".to_string()),
                 ("PWD".to_string(), "/tmp/caller-workspace".to_string()),
-                ("XPC_SERVICE_NAME".to_string(), "agent-heartbeat".to_string()),
+                (
+                    "XPC_SERVICE_NAME".to_string(),
+                    "agent-heartbeat".to_string(),
+                ),
                 ("CODEX_SESSION_ID".to_string(), "session-123".to_string()),
             ]),
             "ai.openclaw.ocm",
             ServiceManagerKind::Launchd,
         );
 
-        assert_eq!(process_env.get("HOME").map(String::as_str), Some("/Users/demo"));
+        assert_eq!(
+            process_env.get("HOME").map(String::as_str),
+            Some("/Users/demo")
+        );
         assert_eq!(
             process_env.get("OPENCLAW_HOME").map(String::as_str),
             Some("/Users/demo/.ocm/envs/rescue/.openclaw")
@@ -1909,10 +1947,45 @@ mod tests {
             process_env.get("HTTPS_PROXY").map(String::as_str),
             Some("http://proxy")
         );
+        assert_eq!(
+            process_env.get("PATH").map(String::as_str),
+            Some("/usr/bin:/bin")
+        );
         assert!(!process_env.contains_key("GH_TOKEN"));
         assert!(!process_env.contains_key("PWD"));
         assert!(!process_env.contains_key("XPC_SERVICE_NAME"));
         assert!(!process_env.contains_key("CODEX_SESSION_ID"));
+    }
+
+    #[test]
+    fn supervised_child_env_sanitizes_volatile_path_entries() {
+        let process_env = build_supervised_openclaw_env(
+            BTreeMap::from([
+                ("HOME".to_string(), "/Users/demo".to_string()),
+                (
+                    "PATH".to_string(),
+                    [
+                        "/opt/homebrew/bin",
+                        "/usr/bin",
+                        "/bin",
+                        "/usr/bin",
+                        "/Users/demo/.ocm/envs/rescue/.openclaw/agents/main/agent/codex-home/tmp/arg0/codex-arg0abc",
+                        "/Users/demo/.codex/tmp/arg0/codex-arg0def",
+                        "/Users/demo/.ocm/envs/rescue/.openclaw/npm/projects/openclaw-codex/node_modules/@openclaw/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path",
+                        "/opt/homebrew/Cellar/node/26.3.0/bin",
+                        "/Users/demo/.local/bin",
+                    ]
+                    .join(":"),
+                ),
+            ]),
+            "ai.openclaw.ocm",
+            ServiceManagerKind::Launchd,
+        );
+
+        assert_eq!(
+            process_env.get("PATH").map(String::as_str),
+            Some("/opt/homebrew/bin:/usr/bin:/bin:/Users/demo/.local/bin")
+        );
     }
 
     #[test]
