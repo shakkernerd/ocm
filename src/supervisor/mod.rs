@@ -46,6 +46,14 @@ const SERVICE_PROXY_ENV_KEYS: [&str; 8] = [
     "all_proxy",
 ];
 const SERVICE_EXTRA_ENV_KEYS: [&str; 2] = ["NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA"];
+const SUPERVISED_CHILD_BASE_ENV_KEYS: [&str; 6] = [
+    "HOME",
+    "PATH",
+    "TMPDIR",
+    "OCM_HOME",
+    "OCM_SELF",
+    "SHELL",
+];
 const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
 const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
 const OPENCLAW_RESTART_HANDOFF_FILE: &str = "gateway-supervisor-restart-handoff.json";
@@ -1526,10 +1534,11 @@ fn supervisor_service_environment(
 }
 
 fn build_supervised_openclaw_env(
-    mut process_env: BTreeMap<String, String>,
+    process_env: BTreeMap<String, String>,
     service_label: &str,
     service_manager: ServiceManagerKind,
 ) -> BTreeMap<String, String> {
+    let mut process_env = stable_supervised_child_env(process_env);
     process_env.insert(
         "OPENCLAW_SERVICE_MARKER".to_string(),
         OPENCLAW_SERVICE_MARKER.to_string(),
@@ -1554,6 +1563,22 @@ fn build_supervised_openclaw_env(
         ServiceManagerKind::Unsupported => {}
     }
     process_env
+}
+
+fn stable_supervised_child_env(
+    process_env: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    process_env
+        .into_iter()
+        .filter(|(key, value)| {
+            !value.trim().is_empty()
+                && (key.starts_with("OPENCLAW_")
+                    || key.starts_with("OCM_")
+                    || SUPERVISED_CHILD_BASE_ENV_KEYS.contains(&key.as_str())
+                    || SERVICE_PROXY_ENV_KEYS.contains(&key.as_str())
+                    || SERVICE_EXTRA_ENV_KEYS.contains(&key.as_str()))
+        })
+        .collect()
 }
 
 fn write_supervisor_runtime_state(
@@ -1846,6 +1871,48 @@ mod tests {
                 .map(String::as_str),
             Some("ai.openclaw.ocm")
         );
+    }
+
+    #[test]
+    fn supervised_child_env_drops_volatile_caller_context() {
+        let process_env = build_supervised_openclaw_env(
+            BTreeMap::from([
+                ("HOME".to_string(), "/Users/demo".to_string()),
+                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ("TMPDIR".to_string(), "/tmp/demo".to_string()),
+                ("OCM_HOME".to_string(), "/Users/demo/.ocm".to_string()),
+                ("OCM_ACTIVE_ENV".to_string(), "rescue".to_string()),
+                (
+                    "OPENCLAW_HOME".to_string(),
+                    "/Users/demo/.ocm/envs/rescue/.openclaw".to_string(),
+                ),
+                ("HTTPS_PROXY".to_string(), "http://proxy".to_string()),
+                ("GH_TOKEN".to_string(), "caller-token".to_string()),
+                ("PWD".to_string(), "/tmp/caller-workspace".to_string()),
+                ("XPC_SERVICE_NAME".to_string(), "agent-heartbeat".to_string()),
+                ("CODEX_SESSION_ID".to_string(), "session-123".to_string()),
+            ]),
+            "ai.openclaw.ocm",
+            ServiceManagerKind::Launchd,
+        );
+
+        assert_eq!(process_env.get("HOME").map(String::as_str), Some("/Users/demo"));
+        assert_eq!(
+            process_env.get("OPENCLAW_HOME").map(String::as_str),
+            Some("/Users/demo/.ocm/envs/rescue/.openclaw")
+        );
+        assert_eq!(
+            process_env.get("OCM_ACTIVE_ENV").map(String::as_str),
+            Some("rescue")
+        );
+        assert_eq!(
+            process_env.get("HTTPS_PROXY").map(String::as_str),
+            Some("http://proxy")
+        );
+        assert!(!process_env.contains_key("GH_TOKEN"));
+        assert!(!process_env.contains_key("PWD"));
+        assert!(!process_env.contains_key("XPC_SERVICE_NAME"));
+        assert!(!process_env.contains_key("CODEX_SESSION_ID"));
     }
 
     #[test]
