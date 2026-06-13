@@ -524,7 +524,7 @@ fn env_changes_refresh_persisted_service_state_without_extra_commands() {
 fn child_restart_request_rebuilds_missing_or_stale_state() {
     let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("restart-request-rebuilds-state");
-    let (cwd, env) = setup_service_fixture(&root);
+    let (cwd, mut env) = setup_service_fixture(&root);
     let service = SupervisorService::new(&env, &cwd);
     let state_path = root.child("ocm-home/supervisor/state.json");
 
@@ -562,6 +562,32 @@ fn child_restart_request_rebuilds_missing_or_stale_state() {
             .iter()
             .any(|request| request["envName"] == "demo"
                 && request["requestId"] == stale_state_request)
+    );
+
+    env.insert(
+        "NODE_OPTIONS".to_string(),
+        "--max-old-space-size=2048".to_string(),
+    );
+    let service = SupervisorService::new(&env, &cwd);
+    let refreshed_env_request = service.request_child_restart("demo").unwrap();
+    let state = read_persisted_service_state(&state_path);
+    let demo = state["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|child| child["envName"] == "demo")
+        .expect("demo child spec should be rebuilt");
+    assert_eq!(
+        demo["processEnv"]["NODE_OPTIONS"],
+        "--max-old-space-size=2048"
+    );
+    assert!(
+        state["restartRequests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|request| request["envName"] == "demo"
+                && request["requestId"] == refreshed_env_request)
     );
 }
 

@@ -330,11 +330,8 @@ impl<'a> SupervisorService<'a> {
     }
 
     pub fn request_child_restart(&self, name: &str) -> Result<String, String> {
-        let (mut state_path, mut state) = self.read_or_rebuild_persisted_state()?;
-        if active_child_spec(&state, name).is_none() {
-            let _ = self.sync()?;
-            (state_path, state) = self.read_persisted_state()?;
-        }
+        let _ = self.sync()?;
+        let (state_path, mut state) = self.read_persisted_state()?;
         if active_child_spec(&state, name).is_none() {
             return Err(format!(
                 "env \"{name}\" is not present in the persisted supervisor state"
@@ -461,16 +458,6 @@ impl<'a> SupervisorService<'a> {
         }
         let state = read_json(&state_path)?;
         Ok((state_path, state))
-    }
-
-    fn read_or_rebuild_persisted_state(&self) -> Result<(PathBuf, SupervisorState), String> {
-        match self.read_persisted_state() {
-            Ok(state) => Ok(state),
-            Err(_) => {
-                let _ = self.sync()?;
-                self.read_persisted_state()
-            }
-        }
     }
 
     fn refresh_daemon(&self, action: &str) -> Result<SupervisorDaemonSummary, String> {
