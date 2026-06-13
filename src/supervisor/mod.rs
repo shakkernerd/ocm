@@ -249,8 +249,9 @@ impl<'a> SupervisorService<'a> {
     }
 
     pub fn sync(&self) -> Result<SupervisorView, String> {
-        let state = self.build_state()?;
         let state_path = supervisor_state_path(self.env, self.cwd)?;
+        let mut state = self.build_state()?;
+        preserve_persisted_restart_requests(&state_path, &mut state);
         if let Some(parent) = state_path.parent() {
             ensure_dir(parent)?;
         }
@@ -327,7 +328,11 @@ impl<'a> SupervisorService<'a> {
     }
 
     pub fn request_child_restart(&self, name: &str) -> Result<String, String> {
-        let (state_path, mut state) = self.read_persisted_state()?;
+        let (mut state_path, mut state) = self.read_or_rebuild_persisted_state()?;
+        if active_child_spec(&state, name).is_none() {
+            let _ = self.sync()?;
+            (state_path, state) = self.read_persisted_state()?;
+        }
         if active_child_spec(&state, name).is_none() {
             return Err(format!(
                 "env \"{name}\" is not present in the persisted supervisor state"
@@ -454,6 +459,16 @@ impl<'a> SupervisorService<'a> {
         }
         let state = read_json(&state_path)?;
         Ok((state_path, state))
+    }
+
+    fn read_or_rebuild_persisted_state(&self) -> Result<(PathBuf, SupervisorState), String> {
+        match self.read_persisted_state() {
+            Ok(state) => Ok(state),
+            Err(_) => {
+                let _ = self.sync()?;
+                self.read_persisted_state()
+            }
+        }
     }
 
     fn refresh_daemon(&self, action: &str) -> Result<SupervisorDaemonSummary, String> {
@@ -854,6 +869,30 @@ fn child_map(children: &[SupervisorChildSpec]) -> BTreeMap<String, SupervisorChi
         .cloned()
         .map(|child| (child.env_name.clone(), child))
         .collect()
+}
+
+fn preserve_persisted_restart_requests(state_path: &Path, state: &mut SupervisorState) {
+    let Ok(persisted_state) = read_json::<SupervisorState>(state_path) else {
+        return;
+    };
+
+    preserve_restart_requests(state, persisted_state.restart_requests);
+}
+
+fn preserve_restart_requests(
+    state: &mut SupervisorState,
+    requests: impl IntoIterator<Item = SupervisorRestartRequest>,
+) {
+    for request in requests {
+        if active_child_spec(state, &request.env_name).is_none()
+            || state.restart_requests.iter().any(|existing| {
+                existing.env_name == request.env_name && existing.request_id == request.request_id
+            })
+        {
+            continue;
+        }
+        state.restart_requests.push(request);
+    }
 }
 
 fn read_updated_supervisor_state(
@@ -2102,6 +2141,32 @@ mod tests {
 
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].request_id, "restart-2");
+    }
+
+    #[test]
+    fn preserve_restart_requests_keeps_only_active_children() {
+        let mut state = supervisor_state(Vec::new());
+        preserve_restart_requests(
+            &mut state,
+            [
+                SupervisorRestartRequest {
+                    env_name: "demo".to_string(),
+                    request_id: "restart-1".to_string(),
+                },
+                SupervisorRestartRequest {
+                    env_name: "missing".to_string(),
+                    request_id: "restart-2".to_string(),
+                },
+            ],
+        );
+
+        assert_eq!(
+            state.restart_requests,
+            vec![SupervisorRestartRequest {
+                env_name: "demo".to_string(),
+                request_id: "restart-1".to_string(),
+            }]
+        );
     }
 
     #[test]

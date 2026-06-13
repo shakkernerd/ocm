@@ -109,6 +109,40 @@ fn wait_for_runtime_service_state(
     None
 }
 
+fn runtime_child_pid(body: &Value, env_name: &str) -> Option<u64> {
+    body["children"].as_array().and_then(|children| {
+        children
+            .iter()
+            .find(|child| child["envName"] == env_name)
+            .and_then(|child| child["pid"].as_u64())
+    })
+}
+
+fn wait_for_runtime_child_pid_change(
+    path: &Path,
+    target_env: &str,
+    previous_target_pid: u64,
+    sibling_env: &str,
+    previous_sibling_pid: u64,
+    timeout: Duration,
+) -> Option<Value> {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if let Ok(raw) = fs::read(path)
+            && let Ok(body) = serde_json::from_slice::<Value>(&raw)
+            && body["children"].as_array().map(|children| children.len()) == Some(2)
+            && let Some(target_pid) = runtime_child_pid(&body, target_env)
+            && let Some(sibling_pid) = runtime_child_pid(&body, sibling_env)
+            && target_pid != previous_target_pid
+            && sibling_pid == previous_sibling_pid
+        {
+            return Some(body);
+        }
+        sleep(Duration::from_millis(50));
+    }
+    None
+}
+
 fn restart_handoff_shell_snippet() -> &'static str {
     r#"mkdir -p "$OPENCLAW_STATE_DIR"
 now=$(( $(date +%s) * 1000 ))
@@ -121,6 +155,11 @@ JSON
 
 fn read_persisted_service_state(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+fn write_persisted_service_state(path: &Path, value: &Value) {
+    let raw = serde_json::to_string_pretty(value).unwrap();
+    fs::write(path, format!("{raw}\n")).unwrap();
 }
 
 fn stop_process(child: &mut Child) {
@@ -482,6 +521,51 @@ fn env_changes_refresh_persisted_service_state_without_extra_commands() {
 }
 
 #[test]
+fn child_restart_request_rebuilds_missing_or_stale_state() {
+    let _guard = daemon_runtime_test_lock();
+    let root = TestDir::new("restart-request-rebuilds-state");
+    let (cwd, env) = setup_service_fixture(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let state_path = root.child("ocm-home/supervisor/state.json");
+
+    service.sync().unwrap();
+    fs::remove_file(&state_path).unwrap();
+
+    let missing_state_request = service.request_child_restart("demo").unwrap();
+    let state = read_persisted_service_state(&state_path);
+    assert!(
+        state["restartRequests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|request| request["envName"] == "demo"
+                && request["requestId"] == missing_state_request)
+    );
+
+    let mut stale_state = state.clone();
+    stale_state["children"] = Value::Array(Vec::new());
+    write_persisted_service_state(&state_path, &stale_state);
+
+    let stale_state_request = service.request_child_restart("demo").unwrap();
+    let state = read_persisted_service_state(&state_path);
+    assert!(
+        state["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|child| child["envName"] == "demo")
+    );
+    assert!(
+        state["restartRequests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|request| request["envName"] == "demo"
+                && request["requestId"] == stale_state_request)
+    );
+}
+
+#[test]
 fn daemon_run_reloads_children_after_binding_changes() {
     let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-reconcile");
@@ -550,6 +634,111 @@ fn daemon_run_reloads_children_after_binding_changes() {
 
     assert!(wait_for_file(&old_stopped, Duration::from_secs(5)));
     assert!(wait_for_file(&new_started, Duration::from_secs(5)));
+
+    stop_process(&mut daemon);
+}
+
+#[test]
+fn service_restart_restarts_only_the_target_child() {
+    let _guard = daemon_runtime_test_lock();
+    let root = TestDir::new("daemon-targeted-service-restart");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+
+    let rescue_started = root.child("rescue-started.txt");
+    let rescue_stopped = root.child("rescue-stopped.txt");
+    let main_started = root.child("main-started.txt");
+    let main_stopped = root.child("main-stopped.txt");
+    let rescue_script = root.child("bin/rescue-openclaw");
+    let main_script = root.child("bin/main-openclaw");
+    write_executable_script(
+        &rescue_script,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$$\" >> '{}'\ntrap 'printf \"%s\\n\" \"$$\" >> \"{}\"; exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&rescue_started),
+            path_string(&rescue_stopped),
+        ),
+    );
+    write_executable_script(
+        &main_script,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$$\" >> '{}'\ntrap 'printf \"%s\\n\" \"$$\" >> \"{}\"; exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&main_started),
+            path_string(&main_stopped),
+        ),
+    );
+
+    let rescue_launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "rescue",
+            "--command",
+            &path_string(&rescue_script),
+        ],
+    );
+    assert!(
+        rescue_launcher.status.success(),
+        "{}",
+        stderr(&rescue_launcher)
+    );
+    let main_launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "main",
+            "--command",
+            &path_string(&main_script),
+        ],
+    );
+    assert!(main_launcher.status.success(), "{}", stderr(&main_launcher));
+
+    let rescue_env = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "rescue", "--launcher", "rescue"],
+    );
+    assert!(rescue_env.status.success(), "{}", stderr(&rescue_env));
+    set_service_enabled(&cwd, &env, "rescue", true);
+    let main_env = run_ocm(&cwd, &env, &["env", "create", "main", "--launcher", "main"]);
+    assert!(main_env.status.success(), "{}", stderr(&main_env));
+    set_service_enabled(&cwd, &env, "main", true);
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    assert!(wait_for_file(&rescue_started, Duration::from_secs(5)));
+    assert!(wait_for_file(&main_started, Duration::from_secs(5)));
+    let initial_runtime = wait_for_runtime_children(&runtime_path, 2, None, Duration::from_secs(5))
+        .expect("daemon runtime state did not report both running children");
+    let rescue_pid = runtime_child_pid(&initial_runtime, "rescue").unwrap();
+    let main_pid = runtime_child_pid(&initial_runtime, "main").unwrap();
+
+    let restart = run_ocm(&cwd, &env, &["service", "restart", "rescue", "--json"]);
+    assert!(restart.status.success(), "{}", stderr(&restart));
+    let restarted = wait_for_runtime_child_pid_change(
+        &runtime_path,
+        "rescue",
+        rescue_pid,
+        "main",
+        main_pid,
+        Duration::from_secs(10),
+    )
+    .expect("targeted restart did not replace only the requested child");
+
+    assert_eq!(runtime_child_pid(&restarted, "main"), Some(main_pid));
+    assert_ne!(runtime_child_pid(&restarted, "rescue"), Some(rescue_pid));
+    assert!(wait_for_file(&rescue_stopped, Duration::from_secs(5)));
+    assert!(
+        !main_stopped.exists(),
+        "sibling child was stopped by targeted restart"
+    );
 
     stop_process(&mut daemon);
 }

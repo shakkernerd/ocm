@@ -36,6 +36,12 @@ enum ServiceSupervisorPolicy {
     EnsureRunning,
 }
 
+struct RestartActionStatus {
+    summary: ServiceSummary,
+    warnings: Vec<String>,
+    observed_restart: bool,
+}
+
 pub fn install_service(
     name: &str,
     env: &BTreeMap<String, String>,
@@ -137,21 +143,23 @@ pub fn restart_service(
     let supervisor = SupervisorService::new(env, cwd);
     let request_id = supervisor.request_child_restart(name)?;
     let restart_result = wait_for_restart_action_summary(name, previous_pid, env, cwd);
-    let clear_result = supervisor.clear_child_restart_request(name, &request_id);
-    match (restart_result, clear_result) {
-        (Ok((summary, warnings)), Ok(())) => {
-            Ok(service_action_summary("restart", summary, warnings))
+    match restart_result {
+        Ok(mut status) => {
+            if status.observed_restart {
+                if let Err(clear_error) = supervisor.clear_child_restart_request(name, &request_id)
+                {
+                    status.warnings.push(format!(
+                        "restart completed, but failed to clear restart request: {clear_error}"
+                    ));
+                }
+            }
+            Ok(service_action_summary(
+                "restart",
+                status.summary,
+                status.warnings,
+            ))
         }
-        (Ok((summary, mut warnings)), Err(clear_error)) => {
-            warnings.push(format!(
-                "restart completed, but failed to clear restart request: {clear_error}"
-            ));
-            Ok(service_action_summary("restart", summary, warnings))
-        }
-        (Err(restart_error), Ok(())) => Err(restart_error),
-        (Err(restart_error), Err(clear_error)) => Err(format!(
-            "{restart_error}; additionally failed to clear restart request: {clear_error}"
-        )),
+        Err(restart_error) => Err(restart_error),
     }
 }
 
@@ -250,7 +258,7 @@ fn wait_for_restart_action_summary(
     previous_pid: u32,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) -> Result<(ServiceSummary, Vec<String>), String> {
+) -> Result<RestartActionStatus, String> {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut latest = super::inspect::service_status_fast(name, env, cwd)?;
     while Instant::now() < deadline {
@@ -259,18 +267,23 @@ fn wait_for_restart_action_summary(
                 .child_pid
                 .is_some_and(|child_pid| child_pid != previous_pid)
         {
-            return Ok((latest, Vec::new()));
+            return Ok(RestartActionStatus {
+                summary: latest,
+                warnings: Vec::new(),
+                observed_restart: true,
+            });
         }
         sleep(Duration::from_millis(100));
         latest = super::inspect::service_status_fast(name, env, cwd)?;
     }
 
-    Ok((
-        latest,
-        vec![format!(
+    Ok(RestartActionStatus {
+        summary: latest,
+        warnings: vec![format!(
             "gateway restart is still in progress; previous child pid was {previous_pid}"
         )],
-    ))
+        observed_restart: false,
+    })
 }
 
 fn service_action_summary(
