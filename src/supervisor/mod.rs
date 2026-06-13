@@ -48,6 +48,8 @@ const SERVICE_PROXY_ENV_KEYS: [&str; 8] = [
 const SERVICE_EXTRA_ENV_KEYS: [&str; 2] = ["NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA"];
 const SUPERVISED_CHILD_BASE_ENV_KEYS: [&str; 6] =
     ["HOME", "PATH", "TMPDIR", "OCM_HOME", "OCM_SELF", "SHELL"];
+const SUPERVISED_CHILD_RUNTIME_ENV_KEYS: [&str; 4] =
+    ["NODE_OPTIONS", "NODE_ENV", "NODE_PATH", "PNPM_HOME"];
 const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
 const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
 const OPENCLAW_RESTART_HANDOFF_FILE: &str = "gateway-supervisor-restart-handoff.json";
@@ -1762,13 +1764,7 @@ fn stable_supervised_child_env(process_env: BTreeMap<String, String>) -> BTreeMa
     let mut stable_env = BTreeMap::new();
     for (key, value) in process_env {
         let value = value.trim();
-        if value.is_empty()
-            || !(key.starts_with("OPENCLAW_")
-                || key.starts_with("OCM_")
-                || SUPERVISED_CHILD_BASE_ENV_KEYS.contains(&key.as_str())
-                || SERVICE_PROXY_ENV_KEYS.contains(&key.as_str())
-                || SERVICE_EXTRA_ENV_KEYS.contains(&key.as_str()))
-        {
+        if value.is_empty() || !stable_supervised_child_env_key(&key) {
             continue;
         }
 
@@ -1780,6 +1776,18 @@ fn stable_supervised_child_env(process_env: BTreeMap<String, String>) -> BTreeMa
         stable_env.insert(key, value);
     }
     stable_env
+}
+
+fn stable_supervised_child_env_key(key: &str) -> bool {
+    key.starts_with("OPENCLAW_")
+        || key.starts_with("OCM_")
+        || key.starts_with("NPM_CONFIG_")
+        || key.starts_with("npm_config_")
+        || key.starts_with("COREPACK_")
+        || SUPERVISED_CHILD_BASE_ENV_KEYS.contains(&key)
+        || SUPERVISED_CHILD_RUNTIME_ENV_KEYS.contains(&key)
+        || SERVICE_PROXY_ENV_KEYS.contains(&key)
+        || SERVICE_EXTRA_ENV_KEYS.contains(&key)
 }
 
 fn stable_supervised_child_path(path: &str) -> Option<String> {
@@ -2332,6 +2340,63 @@ mod tests {
             process_env.get("PATH").map(String::as_str),
             Some("/opt/homebrew/bin:/usr/bin:/bin:/Users/demo/.local/bin")
         );
+    }
+
+    #[test]
+    fn supervised_child_env_preserves_stable_runtime_tool_env() {
+        let process_env = build_supervised_openclaw_env(
+            BTreeMap::from([
+                (
+                    "NODE_OPTIONS".to_string(),
+                    "--max-old-space-size=4096".to_string(),
+                ),
+                ("NODE_ENV".to_string(), "production".to_string()),
+                (
+                    "NPM_CONFIG_REGISTRY".to_string(),
+                    "https://registry.example".to_string(),
+                ),
+                ("npm_config_cache".to_string(), "/tmp/npm-cache".to_string()),
+                (
+                    "COREPACK_HOME".to_string(),
+                    "/Users/demo/.cache/corepack".to_string(),
+                ),
+                (
+                    "PNPM_HOME".to_string(),
+                    "/Users/demo/.local/share/pnpm".to_string(),
+                ),
+                ("GH_TOKEN".to_string(), "caller-token".to_string()),
+                ("PWD".to_string(), "/tmp/caller-workspace".to_string()),
+            ]),
+            "ai.openclaw.ocm",
+            ServiceManagerKind::Launchd,
+        );
+
+        assert_eq!(
+            process_env.get("NODE_OPTIONS").map(String::as_str),
+            Some("--max-old-space-size=4096")
+        );
+        assert_eq!(
+            process_env.get("NODE_ENV").map(String::as_str),
+            Some("production")
+        );
+        assert_eq!(
+            process_env.get("NPM_CONFIG_REGISTRY").map(String::as_str),
+            Some("https://registry.example")
+        );
+        assert_eq!(
+            process_env.get("npm_config_cache").map(String::as_str),
+            Some("/tmp/npm-cache")
+        );
+        assert_eq!(
+            process_env.get("COREPACK_HOME").map(String::as_str),
+            Some("/Users/demo/.cache/corepack")
+        );
+        assert_eq!(
+            process_env.get("PNPM_HOME").map(String::as_str),
+            Some("/Users/demo/.local/share/pnpm")
+        );
+        assert!(!process_env.contains_key("GH_TOKEN"));
+        assert!(!process_env.contains_key("PWD"));
     }
 
     #[test]
