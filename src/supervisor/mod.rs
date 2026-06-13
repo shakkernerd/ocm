@@ -330,8 +330,12 @@ impl<'a> SupervisorService<'a> {
     }
 
     pub fn request_child_restart(&self, name: &str) -> Result<String, String> {
-        let _ = self.sync()?;
-        let (state_path, mut state) = self.read_persisted_state()?;
+        let state_path = supervisor_state_path(self.env, self.cwd)?;
+        let mut state = self.build_state()?;
+        if let Ok(persisted_state) = read_json::<SupervisorState>(&state_path) {
+            preserve_persisted_child_specs_except(&mut state, persisted_state.children, name);
+            preserve_restart_requests(&mut state, persisted_state.restart_requests);
+        }
         if active_child_spec(&state, name).is_none() {
             return Err(format!(
                 "env \"{name}\" is not present in the persisted supervisor state"
@@ -346,6 +350,10 @@ impl<'a> SupervisorService<'a> {
             env_name: name.to_string(),
             request_id: request_id.clone(),
         });
+        if let Some(parent) = state_path.parent() {
+            ensure_dir(parent)?;
+        }
+        ensure_dir(&supervisor_logs_dir(self.env, self.cwd)?)?;
         write_json(&state_path, &state)?;
         Ok(request_id)
     }
@@ -866,6 +874,25 @@ fn preserve_persisted_restart_requests(state_path: &Path, state: &mut Supervisor
     };
 
     preserve_restart_requests(state, persisted_state.restart_requests);
+}
+
+fn preserve_persisted_child_specs_except(
+    state: &mut SupervisorState,
+    persisted_children: Vec<SupervisorChildSpec>,
+    refreshed_env_name: &str,
+) {
+    let persisted = persisted_children
+        .into_iter()
+        .map(|child| (child.env_name.clone(), child))
+        .collect::<BTreeMap<_, _>>();
+    for child in &mut state.children {
+        if child.env_name == refreshed_env_name {
+            continue;
+        }
+        if let Some(persisted_child) = persisted.get(&child.env_name) {
+            *child = persisted_child.clone();
+        }
+    }
 }
 
 fn preserve_restart_requests(
@@ -1803,8 +1830,6 @@ fn volatile_supervised_path_entry(entry: &str) -> bool {
         || normalized.contains("/tmp/arg0/")
         || (normalized.contains("/node_modules/@openai/codex")
             && normalized.ends_with("/codex-path"))
-        || normalized.contains("/Cellar/node/")
-        || normalized.contains("/Cellar/node@")
 }
 
 fn write_supervisor_runtime_state(
@@ -2314,6 +2339,7 @@ mod tests {
                         "/Users/demo/.codex/tmp/arg0/codex-arg0def",
                         "/Users/demo/.ocm/envs/rescue/.openclaw/npm/projects/openclaw-codex/node_modules/@openclaw/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path",
                         "/opt/homebrew/Cellar/node/26.3.0/bin",
+                        "/opt/homebrew/Cellar/node@22/22.17.0/bin",
                         "/Users/demo/.local/bin",
                     ]
                     .join(":"),
@@ -2325,7 +2351,9 @@ mod tests {
 
         assert_eq!(
             process_env.get("PATH").map(String::as_str),
-            Some("/opt/homebrew/bin:/usr/bin:/bin:/Users/demo/.local/bin")
+            Some(
+                "/opt/homebrew/bin:/usr/bin:/bin:/opt/homebrew/Cellar/node/26.3.0/bin:/opt/homebrew/Cellar/node@22/22.17.0/bin:/Users/demo/.local/bin"
+            )
         );
     }
 

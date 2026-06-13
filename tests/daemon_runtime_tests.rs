@@ -746,7 +746,16 @@ fn service_restart_restarts_only_the_target_child() {
     let rescue_pid = runtime_child_pid(&initial_runtime, "rescue").unwrap();
     let main_pid = runtime_child_pid(&initial_runtime, "main").unwrap();
 
-    let restart = run_ocm(&cwd, &env, &["service", "restart", "rescue", "--json"]);
+    let mut restart_env = env.clone();
+    restart_env.insert(
+        "NODE_OPTIONS".to_string(),
+        "--max-old-space-size=2048".to_string(),
+    );
+    let restart = run_ocm(
+        &cwd,
+        &restart_env,
+        &["service", "restart", "rescue", "--json"],
+    );
     assert!(restart.status.success(), "{}", stderr(&restart));
     let restarted = wait_for_runtime_child_pid_change(
         &runtime_path,
