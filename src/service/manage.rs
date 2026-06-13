@@ -115,19 +115,7 @@ pub fn restart_service(
     }
 
     let before = super::inspect::service_status_fast(name, env, cwd)?;
-    let Some(previous_pid) = before.child_pid else {
-        return update_service(
-            name,
-            "restart",
-            Some(true),
-            Some(true),
-            false,
-            ServiceSupervisorPolicy::EnsureRunning,
-            env,
-            cwd,
-        );
-    };
-    if !(before.ocm_service_running && before.running) {
+    if !before.ocm_service_running {
         return update_service(
             name,
             "restart",
@@ -142,7 +130,7 @@ pub fn restart_service(
 
     let supervisor = SupervisorService::new(env, cwd);
     let request_id = supervisor.request_child_restart(name)?;
-    let restart_result = wait_for_restart_action_summary(name, previous_pid, env, cwd);
+    let restart_result = wait_for_restart_action_summary(name, before.child_pid, env, cwd);
     match restart_result {
         Ok(mut status) => {
             if status.observed_restart {
@@ -255,7 +243,7 @@ fn wait_for_action_summary(
 
 fn wait_for_restart_action_summary(
     name: &str,
-    previous_pid: u32,
+    previous_pid: Option<u32>,
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<RestartActionStatus, String> {
@@ -265,7 +253,7 @@ fn wait_for_restart_action_summary(
         if latest.running
             && latest
                 .child_pid
-                .is_some_and(|child_pid| child_pid != previous_pid)
+                .is_some_and(|child_pid| previous_pid != Some(child_pid))
         {
             return Ok(RestartActionStatus {
                 summary: latest,
@@ -277,11 +265,16 @@ fn wait_for_restart_action_summary(
         latest = super::inspect::service_status_fast(name, env, cwd)?;
     }
 
+    let warning = match previous_pid {
+        Some(previous_pid) => {
+            format!("gateway restart is still in progress; previous child pid was {previous_pid}")
+        }
+        None => "gateway restart is still in progress; no replacement child pid has been observed"
+            .to_string(),
+    };
     Ok(RestartActionStatus {
         summary: latest,
-        warnings: vec![format!(
-            "gateway restart is still in progress; previous child pid was {previous_pid}"
-        )],
+        warnings: vec![warning],
         observed_restart: false,
     })
 }

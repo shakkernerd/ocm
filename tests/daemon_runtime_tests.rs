@@ -770,6 +770,59 @@ fn service_restart_restarts_only_the_target_child() {
 }
 
 #[test]
+fn service_restart_requeues_a_stopped_desired_child() {
+    let _guard = daemon_runtime_test_lock();
+    let root = TestDir::new("daemon-restart-stopped-child");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+
+    let exit_once = root.child("exit-once");
+    let started = root.child("started.txt");
+    let script = root.child("bin/openclaw");
+    fs::write(&exit_once, "1\n").unwrap();
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nif [ -f '{}' ]; then rm -f '{}'; exit 0; fi\nprintf '%s\\n' \"$$\" >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&exit_once),
+            path_string(&exit_once),
+            path_string(&started),
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", &path_string(&script)],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    set_service_enabled(&cwd, &env, "demo", true);
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    wait_for_runtime_service_state(&runtime_path, "demo", "stopped", Duration::from_secs(5))
+        .expect("daemon runtime state did not report the quick clean exit as stopped");
+    assert!(!started.exists());
+
+    let restart = run_ocm(&cwd, &env, &["service", "restart", "demo", "--json"]);
+    assert!(restart.status.success(), "{}", stderr(&restart));
+    let runtime =
+        wait_for_runtime_children(&runtime_path, 1, Some("demo"), Duration::from_secs(10))
+            .expect("service restart did not requeue the stopped desired child");
+
+    assert!(runtime_child_pid(&runtime, "demo").is_some());
+    assert!(wait_for_file(&started, Duration::from_secs(5)));
+
+    stop_process(&mut daemon);
+}
+
+#[test]
 fn daemon_keeps_running_when_one_env_fails_to_spawn() {
     let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-spawn-failure");
