@@ -12,7 +12,10 @@ use ocm::env::EnvironmentService;
 use ocm::supervisor::SupervisorService;
 use serde_json::{Value, to_value};
 
-use crate::support::{TestDir, ocm_env, path_string, run_ocm, stderr, write_executable_script};
+use crate::support::{
+    TestDir, install_fake_systemd_tools, ocm_env, path_string, run_ocm, stderr,
+    write_executable_script,
+};
 
 static DAEMON_RUNTIME_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -670,7 +673,8 @@ fn service_restart_restarts_only_the_target_child() {
     let root = TestDir::new("daemon-targeted-service-restart");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let mut env = ocm_env(&root);
+    install_fake_systemd_tools(&root, &mut env);
     let service = SupervisorService::new(&env, &cwd);
     let runtime_path = root.child("ocm-home/supervisor/runtime.json");
 
@@ -737,6 +741,7 @@ fn service_restart_restarts_only_the_target_child() {
     assert!(main_env.status.success(), "{}", stderr(&main_env));
     set_service_enabled(&cwd, &env, "main", true);
     service.sync().unwrap();
+    service.install_daemon().unwrap();
 
     let mut daemon = spawn_daemon_process(&cwd, &env);
     assert!(wait_for_file(&rescue_started, Duration::from_secs(5)));
@@ -784,7 +789,8 @@ fn service_restart_requeues_a_stopped_desired_child() {
     let root = TestDir::new("daemon-restart-stopped-child");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let mut env = ocm_env(&root);
+    install_fake_systemd_tools(&root, &mut env);
     let service = SupervisorService::new(&env, &cwd);
     let runtime_path = root.child("ocm-home/supervisor/runtime.json");
 
@@ -813,6 +819,7 @@ fn service_restart_requeues_a_stopped_desired_child() {
     assert!(created.status.success(), "{}", stderr(&created));
     set_service_enabled(&cwd, &env, "demo", true);
     service.sync().unwrap();
+    service.install_daemon().unwrap();
 
     let mut daemon = spawn_daemon_process(&cwd, &env);
     wait_for_runtime_service_state(&runtime_path, "demo", "stopped", Duration::from_secs(5))
