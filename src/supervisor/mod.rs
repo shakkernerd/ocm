@@ -46,6 +46,10 @@ const SERVICE_PROXY_ENV_KEYS: [&str; 8] = [
     "all_proxy",
 ];
 const SERVICE_EXTRA_ENV_KEYS: [&str; 2] = ["NODE_EXTRA_CA_CERTS", "NODE_USE_SYSTEM_CA"];
+const SUPERVISED_CHILD_BASE_ENV_KEYS: [&str; 6] =
+    ["HOME", "PATH", "TMPDIR", "OCM_HOME", "OCM_SELF", "SHELL"];
+const SUPERVISED_CHILD_RUNTIME_ENV_KEYS: [&str; 4] =
+    ["NODE_OPTIONS", "NODE_ENV", "NODE_PATH", "PNPM_HOME"];
 const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
 const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
 const OPENCLAW_RESTART_HANDOFF_FILE: &str = "gateway-supervisor-restart-handoff.json";
@@ -80,6 +84,13 @@ pub struct SkippedSupervisorEnv {
     pub reason: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorRestartRequest {
+    pub env_name: String,
+    pub request_id: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SupervisorState {
@@ -89,6 +100,8 @@ pub struct SupervisorState {
     pub generated_at: OffsetDateTime,
     pub children: Vec<SupervisorChildSpec>,
     pub skipped_envs: Vec<SkippedSupervisorEnv>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub restart_requests: Vec<SupervisorRestartRequest>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -238,8 +251,9 @@ impl<'a> SupervisorService<'a> {
     }
 
     pub fn sync(&self) -> Result<SupervisorView, String> {
-        let state = self.build_state()?;
         let state_path = supervisor_state_path(self.env, self.cwd)?;
+        let mut state = self.build_state()?;
+        preserve_persisted_restart_requests(&state_path, &mut state);
         if let Some(parent) = state_path.parent() {
             ensure_dir(parent)?;
         }
@@ -313,6 +327,47 @@ impl<'a> SupervisorService<'a> {
             return Ok(status);
         }
         self.activate_daemon("install")
+    }
+
+    pub fn request_child_restart(&self, name: &str) -> Result<String, String> {
+        let state_path = supervisor_state_path(self.env, self.cwd)?;
+        let mut state = self.build_state()?;
+        if let Ok(persisted_state) = read_json::<SupervisorState>(&state_path) {
+            preserve_persisted_child_specs_except(&mut state, persisted_state.children, name);
+            preserve_restart_requests(&mut state, persisted_state.restart_requests);
+        }
+        if active_child_spec(&state, name).is_none() {
+            return Err(format!(
+                "env \"{name}\" is not present in the persisted supervisor state"
+            ));
+        }
+
+        let request_id = supervisor_restart_request_id(name);
+        state
+            .restart_requests
+            .retain(|request| request.env_name != name);
+        state.restart_requests.push(SupervisorRestartRequest {
+            env_name: name.to_string(),
+            request_id: request_id.clone(),
+        });
+        if let Some(parent) = state_path.parent() {
+            ensure_dir(parent)?;
+        }
+        ensure_dir(&supervisor_logs_dir(self.env, self.cwd)?)?;
+        write_json(&state_path, &state)?;
+        Ok(request_id)
+    }
+
+    pub fn clear_child_restart_request(&self, name: &str, request_id: &str) -> Result<(), String> {
+        let (state_path, mut state) = self.read_persisted_state()?;
+        let previous_len = state.restart_requests.len();
+        state
+            .restart_requests
+            .retain(|request| !(request.env_name == name && request.request_id == request_id));
+        if state.restart_requests.len() != previous_len {
+            write_json(&state_path, &state)?;
+        }
+        Ok(())
     }
 
     pub fn daemon_status(&self) -> Result<SupervisorDaemonSummary, String> {
@@ -398,6 +453,7 @@ impl<'a> SupervisorService<'a> {
             generated_at: now_utc(),
             children,
             skipped_envs,
+            restart_requests: Vec::new(),
         })
     }
 
@@ -812,6 +868,49 @@ fn child_map(children: &[SupervisorChildSpec]) -> BTreeMap<String, SupervisorChi
         .collect()
 }
 
+fn preserve_persisted_restart_requests(state_path: &Path, state: &mut SupervisorState) {
+    let Ok(persisted_state) = read_json::<SupervisorState>(state_path) else {
+        return;
+    };
+
+    preserve_restart_requests(state, persisted_state.restart_requests);
+}
+
+fn preserve_persisted_child_specs_except(
+    state: &mut SupervisorState,
+    persisted_children: Vec<SupervisorChildSpec>,
+    refreshed_env_name: &str,
+) {
+    let persisted = persisted_children
+        .into_iter()
+        .map(|child| (child.env_name.clone(), child))
+        .collect::<BTreeMap<_, _>>();
+    for child in &mut state.children {
+        if child.env_name == refreshed_env_name {
+            continue;
+        }
+        if let Some(persisted_child) = persisted.get(&child.env_name) {
+            *child = persisted_child.clone();
+        }
+    }
+}
+
+fn preserve_restart_requests(
+    state: &mut SupervisorState,
+    requests: impl IntoIterator<Item = SupervisorRestartRequest>,
+) {
+    for request in requests {
+        if active_child_spec(state, &request.env_name).is_none()
+            || state.restart_requests.iter().any(|existing| {
+                existing.env_name == request.env_name && existing.request_id == request.request_id
+            })
+        {
+            continue;
+        }
+        state.restart_requests.push(request);
+    }
+}
+
 fn read_updated_supervisor_state(
     state_path: &Path,
     active_state: &SupervisorState,
@@ -844,9 +943,13 @@ fn refresh_active_state(
     let Some(next_state) = read_updated_supervisor_state(state_path, active_state) else {
         return false;
     };
-    let runtime_dirty = reconcile_running_children(running, pending, inactive, &next_state);
+    let restart_requests = new_supervisor_restart_requests(active_state, &next_state);
+    let mut runtime_dirty = reconcile_running_children(running, pending, inactive, &next_state);
+    runtime_dirty |=
+        reconcile_restart_requests(&restart_requests, running, pending, inactive, &next_state);
     *managed_child_count = next_state.children.len();
     *active_state = next_state;
+    clear_processed_restart_requests(state_path, &restart_requests);
     runtime_dirty
 }
 
@@ -919,6 +1022,115 @@ fn reconcile_running_children(
     }
     queue_missing_children(pending, running, &desired_state.children, 0, Instant::now());
     runtime_dirty
+}
+
+fn reconcile_restart_requests(
+    restart_requests: &[SupervisorRestartRequest],
+    running: &mut BTreeMap<String, RunningSupervisorChild>,
+    pending: &mut BTreeMap<String, PendingSupervisorChild>,
+    inactive: &mut BTreeMap<String, InactiveSupervisorChild>,
+    desired_state: &SupervisorState,
+) -> bool {
+    if restart_requests.is_empty() {
+        return false;
+    }
+
+    let desired = child_map(&desired_state.children);
+    let mut runtime_dirty = false;
+    for request in restart_requests {
+        let Some(next_spec) = desired.get(&request.env_name).cloned() else {
+            continue;
+        };
+
+        if let Some(mut existing) = running.remove(&request.env_name) {
+            eprintln!(
+                "ocm service: restarting {} ({})",
+                existing.spec.env_name,
+                child_binding_label(&next_spec)
+            );
+            let restart_count = existing.restart_count + 1;
+            stop_supervisor_child(&mut existing);
+            pending.insert(
+                request.env_name.clone(),
+                pending_supervisor_child(next_spec, restart_count, 0, 0, None, None),
+            );
+            inactive.remove(&request.env_name);
+            runtime_dirty = true;
+            continue;
+        }
+
+        if let Some(pending_child) = pending.get_mut(&request.env_name) {
+            pending_child.spec = next_spec;
+            pending_child.retry_at = Instant::now();
+            pending_child.retry_at_utc = now_utc();
+            pending_child.last_error = None;
+            pending_child.last_event_at = Some(now_utc());
+            inactive.remove(&request.env_name);
+            runtime_dirty = true;
+            continue;
+        }
+
+        pending.insert(
+            request.env_name.clone(),
+            pending_supervisor_child(next_spec, 0, 0, 0, None, None),
+        );
+        inactive.remove(&request.env_name);
+        runtime_dirty = true;
+    }
+    runtime_dirty
+}
+
+fn new_supervisor_restart_requests(
+    active_state: &SupervisorState,
+    next_state: &SupervisorState,
+) -> Vec<SupervisorRestartRequest> {
+    next_state
+        .restart_requests
+        .iter()
+        .filter(|request| {
+            !active_state.restart_requests.iter().any(|existing| {
+                existing.env_name == request.env_name && existing.request_id == request.request_id
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+fn clear_processed_restart_requests(
+    state_path: &Path,
+    restart_requests: &[SupervisorRestartRequest],
+) {
+    if restart_requests.is_empty() {
+        return;
+    }
+
+    let mut state = match read_json::<SupervisorState>(state_path) {
+        Ok(state) => state,
+        Err(error) => {
+            eprintln!(
+                "ocm service: failed reading state to clear processed restart request {}: {}",
+                display_path(state_path),
+                error
+            );
+            return;
+        }
+    };
+    let previous_len = state.restart_requests.len();
+    state.restart_requests.retain(|request| {
+        !restart_requests.iter().any(|processed| {
+            processed.env_name == request.env_name && processed.request_id == request.request_id
+        })
+    });
+    if state.restart_requests.len() == previous_len {
+        return;
+    }
+    if let Err(error) = write_json(state_path, &state) {
+        eprintln!(
+            "ocm service: failed clearing processed restart request {}: {}",
+            display_path(state_path),
+            error
+        );
+    }
 }
 
 fn collect_exited_children(
@@ -1156,6 +1368,10 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
+fn supervisor_restart_request_id(name: &str) -> String {
+    format!("{}-{}-{}", name, std::process::id(), now_millis())
+}
+
 fn read_openclaw_restart_handoff(path: &Path) -> Option<OpenClawRestartHandoff> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if !metadata.file_type().is_file()
@@ -1351,6 +1567,7 @@ fn supervisor_state_equivalent(left: &SupervisorState, right: &SupervisorState) 
         && left.ocm_home == right.ocm_home
         && left.children == right.children
         && left.skipped_envs == right.skipped_envs
+        && left.restart_requests == right.restart_requests
 }
 
 fn active_child_spec<'a>(
@@ -1526,10 +1743,11 @@ fn supervisor_service_environment(
 }
 
 fn build_supervised_openclaw_env(
-    mut process_env: BTreeMap<String, String>,
+    process_env: BTreeMap<String, String>,
     service_label: &str,
     service_manager: ServiceManagerKind,
 ) -> BTreeMap<String, String> {
+    let mut process_env = stable_supervised_child_env(process_env);
     process_env.insert(
         "OPENCLAW_SERVICE_MARKER".to_string(),
         OPENCLAW_SERVICE_MARKER.to_string(),
@@ -1554,6 +1772,64 @@ fn build_supervised_openclaw_env(
         ServiceManagerKind::Unsupported => {}
     }
     process_env
+}
+
+fn stable_supervised_child_env(process_env: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut stable_env = BTreeMap::new();
+    for (key, value) in process_env {
+        let value = value.trim();
+        if value.is_empty() || !stable_supervised_child_env_key(&key) {
+            continue;
+        }
+
+        let value = if key == "PATH" {
+            stable_supervised_child_path(value).unwrap_or_else(|| DEFAULT_SERVICE_PATH.to_string())
+        } else {
+            value.to_string()
+        };
+        stable_env.insert(key, value);
+    }
+    stable_env
+}
+
+fn stable_supervised_child_env_key(key: &str) -> bool {
+    key.starts_with("OPENCLAW_")
+        || key.starts_with("OCM_")
+        || key.starts_with("NPM_CONFIG_")
+        || key.starts_with("npm_config_")
+        || key.starts_with("COREPACK_")
+        || SUPERVISED_CHILD_BASE_ENV_KEYS.contains(&key)
+        || SUPERVISED_CHILD_RUNTIME_ENV_KEYS.contains(&key)
+        || SERVICE_PROXY_ENV_KEYS.contains(&key)
+        || SERVICE_EXTRA_ENV_KEYS.contains(&key)
+}
+
+fn stable_supervised_child_path(path: &str) -> Option<String> {
+    let mut entries = Vec::new();
+    for raw_entry in path.split(':') {
+        let entry = raw_entry.trim();
+        if entry.is_empty() || volatile_supervised_path_entry(entry) {
+            continue;
+        }
+        if !entries.iter().any(|existing| existing == entry) {
+            entries.push(entry.to_string());
+        }
+    }
+
+    if entries.is_empty() {
+        None
+    } else {
+        Some(entries.join(":"))
+    }
+}
+
+fn volatile_supervised_path_entry(entry: &str) -> bool {
+    let normalized = entry.replace('\\', "/");
+    normalized.contains("/codex-home/tmp/")
+        || normalized.contains("/.codex/tmp/")
+        || normalized.contains("/tmp/arg0/")
+        || (normalized.contains("/node_modules/@openai/codex")
+            && normalized.ends_with("/codex-path"))
 }
 
 fn write_supervisor_runtime_state(
@@ -1655,6 +1931,36 @@ fn supervisor_runtime_service_inactive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn child_spec(name: &str, child_port: u32) -> SupervisorChildSpec {
+        SupervisorChildSpec {
+            env_name: name.to_string(),
+            binding_kind: "runtime".to_string(),
+            binding_name: "stable".to_string(),
+            command: None,
+            binary_path: Some("/usr/bin/true".to_string()),
+            runtime_source_kind: Some("managed".to_string()),
+            runtime_release_version: Some("1.0.0".to_string()),
+            runtime_release_channel: Some("stable".to_string()),
+            args: Vec::new(),
+            run_dir: format!("/tmp/{name}"),
+            child_port,
+            stdout_path: format!("/tmp/{name}.stdout.log"),
+            stderr_path: format!("/tmp/{name}.stderr.log"),
+            process_env: BTreeMap::new(),
+        }
+    }
+
+    fn supervisor_state(restart_requests: Vec<SupervisorRestartRequest>) -> SupervisorState {
+        SupervisorState {
+            kind: SUPERVISOR_STATE_KIND.to_string(),
+            ocm_home: "/tmp/ocm".to_string(),
+            generated_at: OffsetDateTime::UNIX_EPOCH,
+            children: vec![child_spec("demo", 19999)],
+            skipped_envs: Vec::new(),
+            restart_requests,
+        }
+    }
 
     fn exited_child(
         exit_code: Option<i32>,
@@ -1823,6 +2129,123 @@ mod tests {
     }
 
     #[test]
+    fn restart_requests_are_part_of_supervisor_state_equivalence() {
+        let active = supervisor_state(Vec::new());
+        let requested = supervisor_state(vec![SupervisorRestartRequest {
+            env_name: "demo".to_string(),
+            request_id: "restart-1".to_string(),
+        }]);
+
+        assert!(!supervisor_state_equivalent(&active, &requested));
+        assert!(supervisor_state_equivalent(&requested, &requested));
+    }
+
+    #[test]
+    fn new_restart_requests_only_include_unseen_ids() {
+        let active = supervisor_state(vec![SupervisorRestartRequest {
+            env_name: "demo".to_string(),
+            request_id: "restart-1".to_string(),
+        }]);
+        let next = supervisor_state(vec![
+            SupervisorRestartRequest {
+                env_name: "demo".to_string(),
+                request_id: "restart-1".to_string(),
+            },
+            SupervisorRestartRequest {
+                env_name: "demo".to_string(),
+                request_id: "restart-2".to_string(),
+            },
+        ]);
+
+        let requests = new_supervisor_restart_requests(&active, &next);
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].request_id, "restart-2");
+    }
+
+    #[test]
+    fn preserve_restart_requests_keeps_only_active_children() {
+        let mut state = supervisor_state(Vec::new());
+        preserve_restart_requests(
+            &mut state,
+            [
+                SupervisorRestartRequest {
+                    env_name: "demo".to_string(),
+                    request_id: "restart-1".to_string(),
+                },
+                SupervisorRestartRequest {
+                    env_name: "missing".to_string(),
+                    request_id: "restart-2".to_string(),
+                },
+            ],
+        );
+
+        assert_eq!(
+            state.restart_requests,
+            vec![SupervisorRestartRequest {
+                env_name: "demo".to_string(),
+                request_id: "restart-1".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn restart_request_requeues_only_target_pending_child() {
+        let next_rescue = child_spec("rescue", 18790);
+        let main = child_spec("main", 19123);
+        let state = SupervisorState {
+            kind: SUPERVISOR_STATE_KIND.to_string(),
+            ocm_home: "/tmp/ocm".to_string(),
+            generated_at: OffsetDateTime::UNIX_EPOCH,
+            children: vec![main.clone(), next_rescue.clone()],
+            skipped_envs: Vec::new(),
+            restart_requests: Vec::new(),
+        };
+        let mut running = BTreeMap::new();
+        let mut pending = BTreeMap::from([
+            (
+                "main".to_string(),
+                pending_supervisor_child(
+                    main.clone(),
+                    7,
+                    0,
+                    30_000,
+                    Some(1),
+                    Some("backoff".to_string()),
+                ),
+            ),
+            (
+                "rescue".to_string(),
+                pending_supervisor_child(
+                    child_spec("rescue", 11111),
+                    5,
+                    0,
+                    30_000,
+                    Some(1),
+                    Some("backoff".to_string()),
+                ),
+            ),
+        ]);
+        let mut inactive = BTreeMap::new();
+
+        let runtime_dirty = reconcile_restart_requests(
+            &[SupervisorRestartRequest {
+                env_name: "rescue".to_string(),
+                request_id: "restart-1".to_string(),
+            }],
+            &mut running,
+            &mut pending,
+            &mut inactive,
+            &state,
+        );
+
+        assert!(runtime_dirty);
+        assert_eq!(pending.get("rescue").unwrap().spec, next_rescue);
+        assert_eq!(pending.get("main").unwrap().spec, main);
+        assert_eq!(pending.get("main").unwrap().restart_count, 7);
+    }
+
+    #[test]
     fn supervised_child_env_sets_openclaw_service_hints() {
         let process_env = build_supervised_openclaw_env(
             BTreeMap::new(),
@@ -1846,6 +2269,149 @@ mod tests {
                 .map(String::as_str),
             Some("ai.openclaw.ocm")
         );
+    }
+
+    #[test]
+    fn supervised_child_env_drops_volatile_caller_context() {
+        let process_env = build_supervised_openclaw_env(
+            BTreeMap::from([
+                ("HOME".to_string(), "/Users/demo".to_string()),
+                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ("TMPDIR".to_string(), "/tmp/demo".to_string()),
+                ("OCM_HOME".to_string(), "/Users/demo/.ocm".to_string()),
+                ("OCM_ACTIVE_ENV".to_string(), "rescue".to_string()),
+                (
+                    "OPENCLAW_HOME".to_string(),
+                    "/Users/demo/.ocm/envs/rescue/.openclaw".to_string(),
+                ),
+                ("HTTPS_PROXY".to_string(), "http://proxy".to_string()),
+                ("GH_TOKEN".to_string(), "caller-token".to_string()),
+                ("PWD".to_string(), "/tmp/caller-workspace".to_string()),
+                (
+                    "XPC_SERVICE_NAME".to_string(),
+                    "agent-heartbeat".to_string(),
+                ),
+                ("CODEX_SESSION_ID".to_string(), "session-123".to_string()),
+            ]),
+            "ai.openclaw.ocm",
+            ServiceManagerKind::Launchd,
+        );
+
+        assert_eq!(
+            process_env.get("HOME").map(String::as_str),
+            Some("/Users/demo")
+        );
+        assert_eq!(
+            process_env.get("OPENCLAW_HOME").map(String::as_str),
+            Some("/Users/demo/.ocm/envs/rescue/.openclaw")
+        );
+        assert_eq!(
+            process_env.get("OCM_ACTIVE_ENV").map(String::as_str),
+            Some("rescue")
+        );
+        assert_eq!(
+            process_env.get("HTTPS_PROXY").map(String::as_str),
+            Some("http://proxy")
+        );
+        assert_eq!(
+            process_env.get("PATH").map(String::as_str),
+            Some("/usr/bin:/bin")
+        );
+        assert!(!process_env.contains_key("GH_TOKEN"));
+        assert!(!process_env.contains_key("PWD"));
+        assert!(!process_env.contains_key("XPC_SERVICE_NAME"));
+        assert!(!process_env.contains_key("CODEX_SESSION_ID"));
+    }
+
+    #[test]
+    fn supervised_child_env_sanitizes_volatile_path_entries() {
+        let process_env = build_supervised_openclaw_env(
+            BTreeMap::from([
+                ("HOME".to_string(), "/Users/demo".to_string()),
+                (
+                    "PATH".to_string(),
+                    [
+                        "/opt/homebrew/bin",
+                        "/usr/bin",
+                        "/bin",
+                        "/usr/bin",
+                        "/Users/demo/.ocm/envs/rescue/.openclaw/agents/main/agent/codex-home/tmp/arg0/codex-arg0abc",
+                        "/Users/demo/.codex/tmp/arg0/codex-arg0def",
+                        "/Users/demo/.ocm/envs/rescue/.openclaw/npm/projects/openclaw-codex/node_modules/@openclaw/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path",
+                        "/opt/homebrew/Cellar/node/26.3.0/bin",
+                        "/opt/homebrew/Cellar/node@22/22.17.0/bin",
+                        "/Users/demo/.local/bin",
+                    ]
+                    .join(":"),
+                ),
+            ]),
+            "ai.openclaw.ocm",
+            ServiceManagerKind::Launchd,
+        );
+
+        assert_eq!(
+            process_env.get("PATH").map(String::as_str),
+            Some(
+                "/opt/homebrew/bin:/usr/bin:/bin:/opt/homebrew/Cellar/node/26.3.0/bin:/opt/homebrew/Cellar/node@22/22.17.0/bin:/Users/demo/.local/bin"
+            )
+        );
+    }
+
+    #[test]
+    fn supervised_child_env_preserves_stable_runtime_tool_env() {
+        let process_env = build_supervised_openclaw_env(
+            BTreeMap::from([
+                (
+                    "NODE_OPTIONS".to_string(),
+                    "--max-old-space-size=4096".to_string(),
+                ),
+                ("NODE_ENV".to_string(), "production".to_string()),
+                (
+                    "NPM_CONFIG_REGISTRY".to_string(),
+                    "https://registry.example".to_string(),
+                ),
+                ("npm_config_cache".to_string(), "/tmp/npm-cache".to_string()),
+                (
+                    "COREPACK_HOME".to_string(),
+                    "/Users/demo/.cache/corepack".to_string(),
+                ),
+                (
+                    "PNPM_HOME".to_string(),
+                    "/Users/demo/.local/share/pnpm".to_string(),
+                ),
+                ("GH_TOKEN".to_string(), "caller-token".to_string()),
+                ("PWD".to_string(), "/tmp/caller-workspace".to_string()),
+            ]),
+            "ai.openclaw.ocm",
+            ServiceManagerKind::Launchd,
+        );
+
+        assert_eq!(
+            process_env.get("NODE_OPTIONS").map(String::as_str),
+            Some("--max-old-space-size=4096")
+        );
+        assert_eq!(
+            process_env.get("NODE_ENV").map(String::as_str),
+            Some("production")
+        );
+        assert_eq!(
+            process_env.get("NPM_CONFIG_REGISTRY").map(String::as_str),
+            Some("https://registry.example")
+        );
+        assert_eq!(
+            process_env.get("npm_config_cache").map(String::as_str),
+            Some("/tmp/npm-cache")
+        );
+        assert_eq!(
+            process_env.get("COREPACK_HOME").map(String::as_str),
+            Some("/Users/demo/.cache/corepack")
+        );
+        assert_eq!(
+            process_env.get("PNPM_HOME").map(String::as_str),
+            Some("/Users/demo/.local/share/pnpm")
+        );
+        assert!(!process_env.contains_key("GH_TOKEN"));
+        assert!(!process_env.contains_key("PWD"));
     }
 
     #[test]

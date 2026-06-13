@@ -36,6 +36,12 @@ enum ServiceSupervisorPolicy {
     EnsureRunning,
 }
 
+struct RestartActionStatus {
+    summary: ServiceSummary,
+    warnings: Vec<String>,
+    observed_restart: bool,
+}
+
 pub fn install_service(
     name: &str,
     env: &BTreeMap<String, String>,
@@ -92,21 +98,57 @@ pub fn restart_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
+    ensure_gateway_binding(name, env, cwd)?;
     let env_service = EnvironmentService::new(env, cwd);
     let meta = env_service.get(name)?;
-    if meta.service_enabled && meta.service_running {
-        env_service.set_service_policy(name, Some(true), Some(false))?;
+    if !(meta.service_enabled && meta.service_running) {
+        return update_service(
+            name,
+            "restart",
+            Some(true),
+            Some(true),
+            false,
+            ServiceSupervisorPolicy::EnsureRunning,
+            env,
+            cwd,
+        );
     }
-    update_service(
-        name,
-        "restart",
-        Some(true),
-        Some(true),
-        true,
-        ServiceSupervisorPolicy::EnsureRunning,
-        env,
-        cwd,
-    )
+
+    let before = super::inspect::service_status_fast(name, env, cwd)?;
+    if !before.ocm_service_running {
+        return update_service(
+            name,
+            "restart",
+            Some(true),
+            Some(true),
+            false,
+            ServiceSupervisorPolicy::EnsureRunning,
+            env,
+            cwd,
+        );
+    }
+
+    let supervisor = SupervisorService::new(env, cwd);
+    let request_id = supervisor.request_child_restart(name)?;
+    let restart_result = wait_for_restart_action_summary(name, before.child_pid, env, cwd);
+    match restart_result {
+        Ok(mut status) => {
+            if status.observed_restart {
+                if let Err(clear_error) = supervisor.clear_child_restart_request(name, &request_id)
+                {
+                    status.warnings.push(format!(
+                        "restart completed, but failed to clear restart request: {clear_error}"
+                    ));
+                }
+            }
+            Ok(service_action_summary(
+                "restart",
+                status.summary,
+                status.warnings,
+            ))
+        }
+        Err(restart_error) => Err(restart_error),
+    }
 }
 
 pub fn uninstall_service(
@@ -197,6 +239,44 @@ fn wait_for_action_summary(
         );
     }
     Ok((latest, warnings))
+}
+
+fn wait_for_restart_action_summary(
+    name: &str,
+    previous_pid: Option<u32>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<RestartActionStatus, String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut latest = super::inspect::service_status_fast(name, env, cwd)?;
+    while Instant::now() < deadline {
+        if latest.running
+            && latest
+                .child_pid
+                .is_some_and(|child_pid| previous_pid != Some(child_pid))
+        {
+            return Ok(RestartActionStatus {
+                summary: latest,
+                warnings: Vec::new(),
+                observed_restart: true,
+            });
+        }
+        sleep(Duration::from_millis(100));
+        latest = super::inspect::service_status_fast(name, env, cwd)?;
+    }
+
+    let warning = match previous_pid {
+        Some(previous_pid) => {
+            format!("gateway restart is still in progress; previous child pid was {previous_pid}")
+        }
+        None => "gateway restart is still in progress; no replacement child pid has been observed"
+            .to_string(),
+    };
+    Ok(RestartActionStatus {
+        summary: latest,
+        warnings: vec![warning],
+        observed_restart: false,
+    })
 }
 
 fn service_action_summary(
