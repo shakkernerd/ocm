@@ -496,6 +496,17 @@ impl Cli {
             };
         }
 
+        if group == "__daemon" && action == "identity" {
+            return match cli.dispatch_internal_command(action.as_str(), rest) {
+                Ok(code) => code,
+                Err(error) => {
+                    cli.stderr_line(format!("ocm: {error}"));
+                    cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
+                    1
+                }
+            };
+        }
+
         if let Err(error) = ensure_store(&cli.env, &cli.cwd) {
             cli.stderr_line(format!("ocm: {error}"));
             cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));

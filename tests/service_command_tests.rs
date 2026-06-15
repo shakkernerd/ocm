@@ -95,6 +95,27 @@ fn prepend_path(env: &mut BTreeMap<String, String>, dir: &Path) {
 }
 
 #[test]
+fn daemon_identity_does_not_initialize_a_store() {
+    let root = TestDir::new("daemon-identity-no-store");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ocm"))
+        .current_dir(&cwd)
+        .env_clear()
+        .args(["__daemon", "identity"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "ocm-service-supervisor"
+    );
+    assert!(!cwd.join(".ocm").exists());
+}
+
+#[test]
 fn service_install_requires_a_target_env() {
     let root = TestDir::new("service-install-validation");
     let cwd = root.child("workspace");
