@@ -50,6 +50,7 @@ const SUPERVISED_CHILD_BASE_ENV_KEYS: [&str; 6] =
     ["HOME", "PATH", "TMPDIR", "OCM_HOME", "OCM_SELF", "SHELL"];
 const SUPERVISED_CHILD_RUNTIME_ENV_KEYS: [&str; 4] =
     ["NODE_OPTIONS", "NODE_ENV", "NODE_PATH", "PNPM_HOME"];
+const SERVICE_EXECUTABLE_OVERRIDE: &str = "OCM_SERVICE_EXECUTABLE";
 const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
 const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
 const OPENCLAW_RESTART_HANDOFF_FILE: &str = "gateway-supervisor-restart-handoff.json";
@@ -534,11 +535,16 @@ impl<'a> SupervisorService<'a> {
     }
 
     fn supervisor_executable_path(&self) -> Result<PathBuf, String> {
-        std::env::current_exe().map_err(|error| {
+        let current_exe = std::env::current_exe().map_err(|error| {
             format!(
                 "failed to resolve the current ocm executable for the OCM background service: {error}"
             )
-        })
+        })?;
+        Ok(resolve_supervisor_executable_path(
+            self.env,
+            self.cwd,
+            &current_exe,
+        ))
     }
 
     fn read_runtime_state(&self) -> Result<Option<SupervisorRuntimeState>, String> {
@@ -1742,6 +1748,93 @@ fn supervisor_service_environment(
     service_env
 }
 
+fn resolve_supervisor_executable_path(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    current_exe: &Path,
+) -> PathBuf {
+    if let Some(path) = service_executable_from_override(env, cwd) {
+        return path;
+    }
+
+    if !is_cargo_dev_executable(current_exe) || is_cargo_test_executable(current_exe) {
+        return current_exe.to_path_buf();
+    }
+
+    service_executable_from_self(env, cwd)
+        .or_else(|| service_executable_from_path(env, current_exe))
+        .unwrap_or_else(|| current_exe.to_path_buf())
+}
+
+fn service_executable_from_override(env: &BTreeMap<String, String>, cwd: &Path) -> Option<PathBuf> {
+    let path = env_path_value(env, SERVICE_EXECUTABLE_OVERRIDE, cwd)?;
+    service_executable_candidate(path)
+}
+
+fn service_executable_from_self(env: &BTreeMap<String, String>, cwd: &Path) -> Option<PathBuf> {
+    let path = env_path_value(env, "OCM_SELF", cwd)?;
+    service_executable_candidate(path)
+}
+
+fn env_path_value(env: &BTreeMap<String, String>, key: &str, cwd: &Path) -> Option<PathBuf> {
+    let value = env.get(key)?.trim();
+    if value.is_empty() || !looks_like_path(value) {
+        return None;
+    }
+    let path = PathBuf::from(value);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    })
+}
+
+fn looks_like_path(value: &str) -> bool {
+    value.contains('/') || value.contains('\\')
+}
+
+fn service_executable_from_path(
+    env: &BTreeMap<String, String>,
+    current_exe: &Path,
+) -> Option<PathBuf> {
+    let path_value = env.get("PATH")?;
+    std::env::split_paths(path_value)
+        .map(|dir| dir.join("ocm"))
+        .filter(|candidate| candidate != current_exe)
+        .find_map(service_executable_candidate)
+}
+
+fn service_executable_candidate(path: PathBuf) -> Option<PathBuf> {
+    if !path.is_file() || is_shebang_script(&path) {
+        return None;
+    }
+    Some(path)
+}
+
+fn is_shebang_script(path: &Path) -> bool {
+    fs::read(path)
+        .map(|bytes| bytes.starts_with(b"#!"))
+        .unwrap_or(false)
+}
+
+fn is_cargo_dev_executable(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == "target")
+}
+
+fn is_cargo_test_executable(path: &Path) -> bool {
+    let mut saw_target = false;
+    let mut saw_deps = false;
+    for component in path.components() {
+        if component.as_os_str() == "target" {
+            saw_target = true;
+        } else if saw_target && component.as_os_str() == "deps" {
+            saw_deps = true;
+        }
+    }
+    saw_deps
+}
+
 fn build_supervised_openclaw_env(
     process_env: BTreeMap<String, String>,
     service_label: &str,
@@ -1930,6 +2023,9 @@ fn supervisor_runtime_service_inactive(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     fn child_spec(name: &str, child_port: u32) -> SupervisorChildSpec {
@@ -2014,6 +2110,114 @@ mod tests {
             restart_kind: "full-process".to_string(),
             supervisor_mode: "launchd".to_string(),
         }
+    }
+
+    fn unique_test_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "ocm-supervisor-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos()
+        ))
+    }
+
+    fn write_executable_fixture(path: &Path, body: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, body).unwrap();
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
+    #[test]
+    fn supervisor_executable_prefers_path_ocm_for_dev_artifacts() {
+        let root = unique_test_root("path-ocm");
+        let installed_dir = root.join("installed-bin");
+        let installed_ocm = installed_dir.join("ocm");
+        write_executable_fixture(&installed_ocm, b"binary");
+
+        let current_exe = root.join("repo/target/bin-ocm/debug/ocm");
+        write_executable_fixture(&current_exe, b"dev-binary");
+        let wrapper = root.join("repo/bin/ocm");
+        write_executable_fixture(&wrapper, b"#!/bin/sh\ncargo run \"$@\"\n");
+
+        let env = BTreeMap::from([
+            ("PATH".to_string(), display_path(&installed_dir)),
+            ("OCM_SELF".to_string(), display_path(&wrapper)),
+        ]);
+
+        assert_eq!(
+            resolve_supervisor_executable_path(&env, &root, &current_exe),
+            installed_ocm
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn supervisor_executable_keeps_cargo_test_binary() {
+        let root = unique_test_root("test-binary");
+        let installed_dir = root.join("installed-bin");
+        let installed_ocm = installed_dir.join("ocm");
+        write_executable_fixture(&installed_ocm, b"binary");
+
+        let current_exe = root.join("repo/target/debug/deps/daemon_runtime_tests-123");
+        write_executable_fixture(&current_exe, b"test-binary");
+        let env = BTreeMap::from([("PATH".to_string(), display_path(&installed_dir))]);
+
+        assert_eq!(
+            resolve_supervisor_executable_path(&env, &root, &current_exe),
+            current_exe
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn supervisor_executable_accepts_explicit_binary_override() {
+        let root = unique_test_root("override");
+        let override_path = root.join("custom/ocm");
+        write_executable_fixture(&override_path, b"binary");
+
+        let current_exe = root.join("repo/target/bin-ocm/debug/ocm");
+        write_executable_fixture(&current_exe, b"dev-binary");
+        let env = BTreeMap::from([(
+            SERVICE_EXECUTABLE_OVERRIDE.to_string(),
+            display_path(&override_path),
+        )]);
+
+        assert_eq!(
+            resolve_supervisor_executable_path(&env, &root, &current_exe),
+            override_path
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn supervisor_executable_keeps_release_binary() {
+        let root = unique_test_root("release");
+        let installed_dir = root.join("other-bin");
+        let other_ocm = installed_dir.join("ocm");
+        write_executable_fixture(&other_ocm, b"binary");
+
+        let current_exe = root.join(".local/bin/ocm");
+        write_executable_fixture(&current_exe, b"release-binary");
+        let env = BTreeMap::from([("PATH".to_string(), display_path(&installed_dir))]);
+
+        assert_eq!(
+            resolve_supervisor_executable_path(&env, &root, &current_exe),
+            current_exe
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
