@@ -1762,7 +1762,7 @@ fn resolve_supervisor_executable_path(
     }
 
     service_executable_from_self(env, cwd)
-        .or_else(|| service_executable_from_path(env, current_exe))
+        .or_else(|| service_executable_from_path(env, cwd, current_exe))
         .unwrap_or_else(|| current_exe.to_path_buf())
 }
 
@@ -1795,10 +1795,18 @@ fn looks_like_path(value: &str) -> bool {
 
 fn service_executable_from_path(
     env: &BTreeMap<String, String>,
+    cwd: &Path,
     current_exe: &Path,
 ) -> Option<PathBuf> {
     let path_value = env.get("PATH")?;
     std::env::split_paths(path_value)
+        .map(|dir| {
+            if dir.is_absolute() {
+                dir
+            } else {
+                cwd.join(dir)
+            }
+        })
         .map(|dir| dir.join("ocm"))
         .filter(|candidate| candidate != current_exe)
         .find_map(service_executable_candidate)
@@ -2155,6 +2163,26 @@ mod tests {
 
         assert_eq!(
             resolve_supervisor_executable_path(&env, &root, &current_exe),
+            installed_ocm
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn supervisor_executable_resolves_relative_path_ocm_for_services() {
+        let root = unique_test_root("relative-path-ocm");
+        let cwd = root.join("repo");
+        fs::create_dir_all(&cwd).unwrap();
+        let installed_ocm = cwd.join("target/release/ocm");
+        write_executable_fixture(&installed_ocm, b"binary");
+
+        let current_exe = cwd.join("target/bin-ocm/debug/ocm");
+        write_executable_fixture(&current_exe, b"dev-binary");
+        let env = BTreeMap::from([("PATH".to_string(), "target/release".to_string())]);
+
+        assert_eq!(
+            resolve_supervisor_executable_path(&env, &cwd, &current_exe),
             installed_ocm
         );
 
