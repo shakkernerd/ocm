@@ -35,6 +35,7 @@ pub(crate) struct LaunchdJobStatus {
     pub(crate) running: bool,
     pub(crate) pid: Option<u32>,
     pub(crate) state: Option<String>,
+    pub(crate) definition_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -472,6 +473,7 @@ pub(crate) fn inspect_job(
             let text = String::from_utf8_lossy(&output.stdout);
             status.loaded = true;
             parse_launchctl_print(&text, &mut status);
+            discard_stale_loaded_job(service_path, &mut status);
         }
         ServiceManagerKind::SystemdUser => {
             let output = Command::new(systemctl_binary(env))
@@ -490,6 +492,7 @@ pub(crate) fn inspect_job(
             }
 
             parse_systemctl_show(&String::from_utf8_lossy(&output.stdout), &mut status);
+            discard_stale_loaded_job(service_path, &mut status);
         }
         ServiceManagerKind::Unsupported => {}
     }
@@ -508,9 +511,35 @@ pub(crate) fn current_uid() -> Option<u32> {
         .ok()
 }
 
+fn discard_stale_loaded_job(service_path: &Path, status: &mut LaunchdJobStatus) {
+    let Some(loaded_path) = status.definition_path.as_deref() else {
+        return;
+    };
+    if service_paths_match(loaded_path, service_path) {
+        return;
+    }
+
+    status.loaded = false;
+    status.running = false;
+    status.pid = None;
+    status.state = Some("stale".to_string());
+}
+
+fn service_paths_match(loaded_path: &str, service_path: &Path) -> bool {
+    let loaded_path = Path::new(loaded_path);
+    if let (Ok(loaded), Ok(expected)) = (loaded_path.canonicalize(), service_path.canonicalize()) {
+        return loaded == expected;
+    }
+    loaded_path == service_path || loaded_path.to_string_lossy() == display_path(service_path)
+}
+
 fn parse_launchctl_print(raw: &str, status: &mut LaunchdJobStatus) {
     for line in raw.lines() {
         let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("path = ") {
+            status.definition_path = Some(value.trim().to_string());
+            continue;
+        }
         if let Some(value) = trimmed.strip_prefix("state = ") {
             let value = value.trim().to_string();
             status.running = matches!(value.as_str(), "running" | "active");
@@ -552,6 +581,10 @@ fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
         }
         if let Some(value) = line.strip_prefix("MainPID=") {
             status.pid = value.trim().parse::<u32>().ok().filter(|pid| *pid > 0);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("FragmentPath=") {
+            status.definition_path = Some(value.trim().to_string());
             continue;
         }
         if line.starts_with("ExecStart=") {
@@ -616,15 +649,66 @@ mod service_issue_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{LaunchdJobStatus, parse_launchctl_print};
+    use std::path::Path;
+
+    use super::{
+        LaunchdJobStatus, discard_stale_loaded_job, parse_launchctl_print, parse_systemctl_show,
+    };
 
     #[test]
     fn launchctl_active_state_counts_as_running() {
         let mut status = LaunchdJobStatus::default();
-        parse_launchctl_print("state = active\npid = 78428\n", &mut status);
+        parse_launchctl_print(
+            "path = /Users/demo/Library/LaunchAgents/ai.openclaw.ocm.plist\nstate = active\npid = 78428\n",
+            &mut status,
+        );
 
         assert!(status.running);
         assert_eq!(status.pid, Some(78428));
         assert_eq!(status.state.as_deref(), Some("active"));
+        assert_eq!(
+            status.definition_path.as_deref(),
+            Some("/Users/demo/Library/LaunchAgents/ai.openclaw.ocm.plist")
+        );
+    }
+
+    #[test]
+    fn launchctl_loaded_path_mismatch_is_stale() {
+        let mut status = LaunchdJobStatus::default();
+        parse_launchctl_print(
+            "path = /tmp/ocm-tests/home/Library/LaunchAgents/ai.openclaw.ocm.plist\nstate = running\npid = 78428\n",
+            &mut status,
+        );
+        status.loaded = true;
+
+        discard_stale_loaded_job(
+            Path::new("/Users/demo/Library/LaunchAgents/ai.openclaw.ocm.plist"),
+            &mut status,
+        );
+
+        assert!(!status.loaded);
+        assert!(!status.running);
+        assert_eq!(status.pid, None);
+        assert_eq!(status.state.as_deref(), Some("stale"));
+    }
+
+    #[test]
+    fn systemd_fragment_path_mismatch_is_stale() {
+        let mut status = LaunchdJobStatus::default();
+        parse_systemctl_show(
+            "LoadState=loaded\nUnitFileState=enabled\nActiveState=active\nSubState=running\nMainPID=78428\nFragmentPath=/tmp/ocm-tests/home/.config/systemd/user/ai.openclaw.ocm.service\n",
+            &mut status,
+        );
+        status.loaded = true;
+
+        discard_stale_loaded_job(
+            Path::new("/Users/demo/.config/systemd/user/ai.openclaw.ocm.service"),
+            &mut status,
+        );
+
+        assert!(!status.loaded);
+        assert!(!status.running);
+        assert_eq!(status.pid, None);
+        assert_eq!(status.state.as_deref(), Some("stale"));
     }
 }

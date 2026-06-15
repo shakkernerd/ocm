@@ -379,9 +379,10 @@ fn activate_launchd_service(
 ) -> Result<(), String> {
     let domain = gui_domain();
     let definition_path = display_path(definition_path);
+    let target = format!("{domain}/{label}");
+    let _ = run_launchctl(env, ["bootout", target.as_str()]);
     let _ = run_launchctl(env, ["bootout", domain.as_str(), definition_path.as_str()]);
     let _ = run_launchctl(env, ["unload", definition_path.as_str()]);
-    let target = format!("{domain}/{label}");
     let _ = run_launchctl(env, ["enable", target.as_str()]);
     let bootstrap = run_launchctl(
         env,

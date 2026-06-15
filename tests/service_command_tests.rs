@@ -191,6 +191,45 @@ fn service_start_marks_the_env_running() {
 }
 
 #[test]
+fn service_start_replaces_stale_launchd_job_with_same_label() {
+    let root = TestDir::new("service-start-stale-launchd");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = launchd_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    let stale_plist = root.child("stale-home/Library/LaunchAgents/ai.openclaw.ocm.plist");
+    fs::write(
+        root.child("launchctl-print.txt"),
+        format!(
+            "path = {}\nstate = running\npid = 78428\n",
+            path_string(&stale_plist)
+        ),
+    )
+    .unwrap();
+
+    let output = run_ocm(&cwd, &env, &["service", "start", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let body = json_output(&output);
+    assert_eq!(body["installed"], true);
+    assert_eq!(body["desiredRunning"], true);
+
+    let log = fs::read_to_string(root.child("launchctl.log")).unwrap();
+    assert!(
+        log.lines()
+            .any(|line| line.starts_with("bootout gui/") && line.ends_with("/ai.openclaw.ocm")),
+        "{log}"
+    );
+    assert!(
+        log.lines().any(|line| line.starts_with("bootstrap gui/")
+            && line.ends_with(&path_string(&managed_service_definition_path(
+                &env, &cwd, "ocm"
+            )))),
+        "{log}"
+    );
+}
+
+#[test]
 fn service_stop_keeps_the_env_installed_but_stopped() {
     let root = TestDir::new("service-stop");
     let cwd = root.child("workspace");
