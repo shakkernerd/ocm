@@ -1863,9 +1863,32 @@ fn has_service_executable_identity(path: &Path) -> bool {
 }
 
 fn service_executable_identity_output(path: &Path) -> Option<Output> {
+    let probe_dir = identity_probe_dir()?;
+    fs::create_dir_all(&probe_dir).ok()?;
+    let output = service_executable_identity_output_in(path, &probe_dir);
+    let _ = fs::remove_dir_all(&probe_dir);
+    output
+}
+
+fn identity_probe_dir() -> Option<PathBuf> {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(std::env::temp_dir().join(format!(
+        "ocm-service-identity-{}-{unique}",
+        std::process::id()
+    )))
+}
+
+fn service_executable_identity_output_in(path: &Path, probe_dir: &Path) -> Option<Output> {
     let mut child = Command::new(path)
         .args(["__daemon", "identity"])
+        .current_dir(probe_dir)
         .env_clear()
+        .env("HOME", probe_dir.join("home"))
+        .env("OCM_HOME", probe_dir.join("ocm-home"))
+        .env("PATH", DEFAULT_SERVICE_PATH)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()

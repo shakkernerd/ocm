@@ -224,7 +224,7 @@ fn service_install_skips_conflicting_path_ocm_before_valid_candidate() {
     let mut env = launchd_env(&root);
     let bad_dir = root.child("bad-bin");
     let bad_ocm = bad_dir.join("ocm");
-    copy_executable_fixture(Path::new("/bin/echo"), &bad_ocm);
+    copy_executable_fixture(Path::new("/bin/mkdir"), &bad_ocm);
     let installed_dir = root.child("installed-bin");
     let installed_ocm = installed_dir.join("ocm");
     copy_test_ocm_binary(&installed_ocm);
@@ -238,6 +238,8 @@ fn service_install_skips_conflicting_path_ocm_before_valid_candidate() {
     let plist = fs::read_to_string(managed_service_definition_path(&env, &cwd, "ocm")).unwrap();
     assert!(plist.contains(&path_string(&installed_ocm)), "{plist}");
     assert!(!plist.contains(&path_string(&bad_ocm)), "{plist}");
+    assert!(!cwd.join("__daemon").exists());
+    assert!(!cwd.join("identity").exists());
 }
 
 #[test]
