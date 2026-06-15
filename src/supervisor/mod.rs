@@ -5,7 +5,7 @@ use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -51,6 +51,8 @@ const SUPERVISED_CHILD_BASE_ENV_KEYS: [&str; 6] =
 const SUPERVISED_CHILD_RUNTIME_ENV_KEYS: [&str; 4] =
     ["NODE_OPTIONS", "NODE_ENV", "NODE_PATH", "PNPM_HOME"];
 const SERVICE_EXECUTABLE_OVERRIDE: &str = "OCM_SERVICE_EXECUTABLE";
+pub(crate) const SERVICE_EXECUTABLE_IDENTITY: &str = "ocm-service-supervisor";
+const SERVICE_EXECUTABLE_IDENTITY_TIMEOUT_MS: u64 = 1_000;
 const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
 const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
 const OPENCLAW_RESTART_HANDOFF_FILE: &str = "gateway-supervisor-restart-handoff.json";
@@ -1768,12 +1770,12 @@ fn resolve_supervisor_executable_path(
 
 fn service_executable_from_override(env: &BTreeMap<String, String>, cwd: &Path) -> Option<PathBuf> {
     let path = env_path_value(env, SERVICE_EXECUTABLE_OVERRIDE, cwd)?;
-    service_executable_candidate(path)
+    explicit_service_executable_candidate(path)
 }
 
 fn service_executable_from_self(env: &BTreeMap<String, String>, cwd: &Path) -> Option<PathBuf> {
     let path = env_path_value(env, "OCM_SELF", cwd)?;
-    service_executable_candidate(path)
+    discovered_service_executable_candidate(path)
 }
 
 fn env_path_value(env: &BTreeMap<String, String>, key: &str, cwd: &Path) -> Option<PathBuf> {
@@ -1809,20 +1811,86 @@ fn service_executable_from_path(
         })
         .map(|dir| dir.join("ocm"))
         .filter(|candidate| candidate != current_exe)
-        .find_map(service_executable_candidate)
+        .find_map(discovered_service_executable_candidate)
 }
 
-fn service_executable_candidate(path: PathBuf) -> Option<PathBuf> {
-    if !path.is_file() || is_shebang_script(&path) {
+fn explicit_service_executable_candidate(path: PathBuf) -> Option<PathBuf> {
+    is_executable_file(&path).then_some(path)
+}
+
+fn discovered_service_executable_candidate(path: PathBuf) -> Option<PathBuf> {
+    if !is_executable_file(&path)
+        || is_shebang_script(&path)
+        || !has_service_executable_identity(&path)
+    {
         return None;
     }
     Some(path)
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        metadata.mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn is_shebang_script(path: &Path) -> bool {
     fs::read(path)
         .map(|bytes| bytes.starts_with(b"#!"))
         .unwrap_or(false)
+}
+
+fn has_service_executable_identity(path: &Path) -> bool {
+    let output = service_executable_identity_output(path);
+    let Some(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    String::from_utf8_lossy(&output.stdout).trim() == SERVICE_EXECUTABLE_IDENTITY
+}
+
+fn service_executable_identity_output(path: &Path) -> Option<Output> {
+    let mut child = Command::new(path)
+        .args(["__daemon", "identity"])
+        .env_clear()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) => {
+                if started.elapsed()
+                    >= Duration::from_millis(SERVICE_EXECUTABLE_IDENTITY_TIMEOUT_MS)
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                sleep(Duration::from_millis(10));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 fn is_cargo_dev_executable(path: &Path) -> bool {
@@ -2145,8 +2213,8 @@ mod tests {
     }
 
     #[test]
-    fn supervisor_executable_prefers_path_ocm_for_dev_artifacts() {
-        let root = unique_test_root("path-ocm");
+    fn supervisor_executable_rejects_unidentified_path_ocm_for_dev_artifacts() {
+        let root = unique_test_root("unidentified-path-ocm");
         let installed_dir = root.join("installed-bin");
         let installed_ocm = installed_dir.join("ocm");
         write_executable_fixture(&installed_ocm, b"binary");
@@ -2163,14 +2231,14 @@ mod tests {
 
         assert_eq!(
             resolve_supervisor_executable_path(&env, &root, &current_exe),
-            installed_ocm
+            current_exe
         );
 
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn supervisor_executable_resolves_relative_path_ocm_for_services() {
+    fn supervisor_executable_rejects_unidentified_relative_path_ocm() {
         let root = unique_test_root("relative-path-ocm");
         let cwd = root.join("repo");
         fs::create_dir_all(&cwd).unwrap();
@@ -2183,7 +2251,7 @@ mod tests {
 
         assert_eq!(
             resolve_supervisor_executable_path(&env, &cwd, &current_exe),
-            installed_ocm
+            current_exe
         );
 
         fs::remove_dir_all(root).unwrap();

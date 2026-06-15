@@ -2,7 +2,10 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::process::Command;
 
 use ocm::env::EnvironmentService;
 use ocm::store::{now_utc, supervisor_runtime_path};
@@ -52,6 +55,43 @@ fn setup_launcher_env(cwd: &Path, env: &BTreeMap<String, String>) {
 
 fn json_output(output: &std::process::Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
+}
+
+fn copy_executable_fixture(source: &Path, destination: &Path) {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::copy(source, destination).unwrap();
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(destination).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(destination, permissions).unwrap();
+    }
+}
+
+fn copy_test_ocm_binary(destination: &Path) {
+    copy_executable_fixture(Path::new(env!("CARGO_BIN_EXE_ocm")), destination);
+    let identity = Command::new(destination)
+        .args(["__daemon", "identity"])
+        .env_clear()
+        .output()
+        .unwrap();
+    assert!(identity.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&identity.stdout).trim(),
+        "ocm-service-supervisor"
+    );
+}
+
+fn prepend_path(env: &mut BTreeMap<String, String>, dir: &Path) {
+    let existing_path = env.get("PATH").cloned().unwrap_or_default();
+    let path = if existing_path.is_empty() {
+        path_string(dir)
+    } else {
+        format!("{}:{existing_path}", path_string(dir))
+    };
+    env.insert("PATH".to_string(), path);
 }
 
 #[test]
@@ -134,6 +174,69 @@ fn service_install_enables_the_env_and_installs_the_ocm_service() {
         "missing {}",
         path_string(&service_path)
     );
+}
+
+#[test]
+fn service_install_uses_valid_path_ocm_for_dev_artifact() {
+    let root = TestDir::new("service-install-valid-path-ocm");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = launchd_env(&root);
+    let installed_dir = root.child("installed-bin");
+    let installed_ocm = installed_dir.join("ocm");
+    copy_test_ocm_binary(&installed_ocm);
+    prepend_path(&mut env, &installed_dir);
+    setup_launcher_env(&cwd, &env);
+
+    let output = run_ocm(&cwd, &env, &["service", "install", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let plist = fs::read_to_string(managed_service_definition_path(&env, &cwd, "ocm")).unwrap();
+    assert!(plist.contains(&path_string(&installed_ocm)), "{plist}");
+}
+
+#[test]
+fn service_install_skips_conflicting_path_ocm_before_valid_candidate() {
+    let root = TestDir::new("service-install-conflicting-path-ocm");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = launchd_env(&root);
+    let bad_dir = root.child("bad-bin");
+    let bad_ocm = bad_dir.join("ocm");
+    copy_executable_fixture(Path::new("/bin/echo"), &bad_ocm);
+    let installed_dir = root.child("installed-bin");
+    let installed_ocm = installed_dir.join("ocm");
+    copy_test_ocm_binary(&installed_ocm);
+    prepend_path(&mut env, &installed_dir);
+    prepend_path(&mut env, &bad_dir);
+    setup_launcher_env(&cwd, &env);
+
+    let output = run_ocm(&cwd, &env, &["service", "install", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let plist = fs::read_to_string(managed_service_definition_path(&env, &cwd, "ocm")).unwrap();
+    assert!(plist.contains(&path_string(&installed_ocm)), "{plist}");
+    assert!(!plist.contains(&path_string(&bad_ocm)), "{plist}");
+}
+
+#[test]
+fn service_install_resolves_relative_path_ocm_for_service_definition() {
+    let root = TestDir::new("service-install-relative-path-ocm");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = launchd_env(&root);
+    let relative_dir = Path::new("target/release");
+    let installed_ocm = cwd.join(relative_dir).join("ocm");
+    copy_test_ocm_binary(&installed_ocm);
+    prepend_path(&mut env, relative_dir);
+    setup_launcher_env(&cwd, &env);
+
+    let output = run_ocm(&cwd, &env, &["service", "install", "demo", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let plist = fs::read_to_string(managed_service_definition_path(&env, &cwd, "ocm")).unwrap();
+    assert!(plist.contains(&path_string(&installed_ocm)), "{plist}");
+    assert!(!plist.contains(">target/release/ocm<"), "{plist}");
 }
 
 #[test]

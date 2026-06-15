@@ -1,6 +1,12 @@
 use super::Cli;
 
 impl Cli {
+    fn handle_daemon_identity(&self, args: Vec<String>) -> Result<i32, String> {
+        Self::assert_no_extra_args(&args)?;
+        self.stdout_line(crate::supervisor::SERVICE_EXECUTABLE_IDENTITY);
+        Ok(0)
+    }
+
     fn handle_daemon_run(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag) = Self::consume_flag(args, "--json");
         let (args, once) = Self::consume_flag(args, "--once");
@@ -26,6 +32,7 @@ impl Cli {
         rest: Vec<String>,
     ) -> Result<i32, String> {
         match action {
+            "identity" => self.handle_daemon_identity(rest),
             "run" => self.handle_daemon_run(rest),
             _ => Err(format!("unknown internal command: {action}")),
         }
