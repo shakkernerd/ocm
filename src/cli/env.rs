@@ -922,6 +922,24 @@ impl Cli {
         let meta = self
             .environment_service()
             .apply_effective_gateway_port(self.environment_service().touch(name)?)?;
+        if let Some(source) = self
+            .environment_service()
+            .active_source_watch_override(&meta.name)?
+        {
+            let source_env =
+                build_openclaw_dev_source_env(&meta, &self.env, Path::new(&source.repo_root));
+            if after[0] == "openclaw" {
+                let mut node_args = vec![source.openclaw_entry_path().display().to_string()];
+                node_args.extend(after[1..].iter().cloned());
+                return run_direct(
+                    "node",
+                    &node_args,
+                    &source_env,
+                    Path::new(&source.repo_root),
+                );
+            }
+            return run_direct(&after[0], &after[1..], &source_env, &self.cwd);
+        }
         run_direct(
             &after[0],
             &after[1..],
