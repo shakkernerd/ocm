@@ -26,6 +26,7 @@ fn init_openclaw_repo(root: &TestDir) -> PathBuf {
     )
     .unwrap();
     fs::write(repo.join("scripts/run-node.mjs"), "console.log('run');\n").unwrap();
+    fs::write(repo.join("openclaw.mjs"), "console.log('openclaw');\n").unwrap();
     fs::write(
         repo.join("scripts/watch-node.mjs"),
         "console.log('watch');\n",
@@ -118,6 +119,10 @@ fn install_fake_dev_runners(root: &TestDir, env: &mut std::collections::BTreeMap
     prepend_fake_bin(env, &bin_dir);
 }
 
+fn source_watch_override_path(root: &TestDir, name: &str) -> PathBuf {
+    root.child(format!("ocm-home/source-watch/{name}.json"))
+}
+
 fn service_env(root: &TestDir) -> std::collections::BTreeMap<String, String> {
     let mut env = ocm_env(root);
     install_fake_service_manager(root, &mut env);
@@ -199,6 +204,7 @@ fn dev_command_can_onboard_then_watch() {
 
     let node_log = fs::read_to_string(root.child("node.log")).unwrap();
     assert!(node_log.contains("scripts/watch-node.mjs gateway run --port"));
+    assert!(!source_watch_override_path(&root, "demo").exists());
 }
 
 #[test]
@@ -495,6 +501,7 @@ fn dev_watch_force_takes_over_runtime_env_without_rebinding() {
     assert_eq!(show_json["gatewayPort"], 21901);
     assert_eq!(show_json["serviceEnabled"], true);
     assert_eq!(show_json["serviceRunning"], true);
+    assert!(!source_watch_override_path(&root, "demo").exists());
 
     let node_log = fs::read_to_string(root.child("node.log")).unwrap();
     assert!(node_log.contains(&path_string(&repo)));
@@ -649,6 +656,7 @@ fn dev_watch_force_temporarily_takes_over_and_restores_the_background_service() 
     let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
     assert_eq!(show_json["serviceEnabled"], true);
     assert_eq!(show_json["serviceRunning"], true);
+    assert!(!source_watch_override_path(&root, "demo").exists());
 
     let node_log = fs::read_to_string(root.child("node.log")).unwrap();
     assert!(node_log.contains("scripts/watch-node.mjs gateway run --port"));

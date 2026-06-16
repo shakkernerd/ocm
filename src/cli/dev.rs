@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use super::Cli;
 use super::render::RenderProfile;
-use crate::env::{CreateEnvironmentOptions, EnvDevMeta, EnvMeta};
+use crate::env::{CreateEnvironmentOptions, CreateSourceWatchOverrideOptions, EnvDevMeta, EnvMeta};
 use crate::infra::process::run_direct;
 use crate::infra::shell::{build_openclaw_dev_source_env, build_openclaw_env};
 use crate::infra::terminal::{Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table};
@@ -667,6 +667,20 @@ impl Cli {
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
+        let source_watch = match self.environment_service().create_source_watch_override(
+            CreateSourceWatchOverrideOptions {
+                env_name: meta.name.clone(),
+                repo_root: repo_root.to_path_buf(),
+                watch_pid: child.id(),
+            },
+        ) {
+            Ok(source_watch) => source_watch,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
         let mut tee_threads = Vec::new();
         if let Some(log_files) = log_files.take() {
             let stdout = child
@@ -691,10 +705,17 @@ impl Cli {
             ));
         }
 
-        let status = child
+        let status_result = child
             .wait()
-            .map_err(|error| format!("failed waiting for source watch: {error}"))?;
-        wait_for_tee_threads(tee_threads)?;
+            .map_err(|error| format!("failed waiting for source watch: {error}"));
+        let tee_result = wait_for_tee_threads(tee_threads);
+        let clear_result = self
+            .environment_service()
+            .clear_source_watch_override(&meta.name, &source_watch.token);
+
+        let status = status_result?;
+        tee_result?;
+        clear_result?;
 
         Ok(match status.code() {
             Some(code) => code,
