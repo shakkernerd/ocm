@@ -242,7 +242,7 @@ pub fn logs_help(cmd: &str) -> String {
 pub fn dev_help(cmd: &str) -> String {
     render_group(
         "Development envs",
-        "Provision OpenClaw dev envs from a checkout worktree, bootstrap the minimum local config, and run the gateway in the foreground with bundled plugins resolved from that source checkout. Existing runtime or launcher envs can also be temporarily taken over with --repo <path> --watch --force; OCM keeps their binding unchanged, warns for installed plugins not present in the source tree, tees the foreground output to the env gateway logs, and restores a running background service when watch exits. If OCM cannot infer the repo on the first run, it asks once and reuses that repo for later dev envs.",
+        "Provision OpenClaw dev envs from a checkout worktree, bootstrap the minimum local config, and run the gateway in the foreground with bundled plugins resolved from that source checkout. Existing runtime or launcher envs can also be temporarily taken over with --repo <path> --watch --force; OCM keeps their binding unchanged, routes OpenClaw commands for that env through the watched checkout while watch is active, warns for installed plugins not present in the source tree, tees the foreground output to the env gateway logs, and restores a running background service when watch exits. If OCM cannot infer the repo on the first run, it asks once and reuses that repo for later dev envs.",
         vec![format!(
             "{cmd} dev <env> [--repo <path>] [--root <path>] [--port <port>] [--watch] [--force] [--service] [--onboard]"
         )],
@@ -1207,11 +1207,14 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} env exec mira -- env | rg OPENCLAW"),
                 format!("{cmd} env exec mira -- openclaw status"),
             ],
-            &["`--` is required before the command to execute."],
+            &[
+                "`--` is required before the command to execute.",
+                "When source watch is active for this env, commands inherit source checkout variables; literal `openclaw` runs through the watched checkout's built openclaw.mjs.",
+            ],
         ),
         "resolve" => render_leaf(
             "Show what an environment would run",
-            "Resolve the runtime or launcher that would be used without executing it.",
+            "Resolve the runtime, launcher, or active source-watch checkout that would be used without executing it.",
             vec![format!(
                 "{cmd} env resolve <name> [--runtime <name> | --launcher <name>] [--raw] [--json] [-- <openclaw args...>]"
             )],
@@ -1238,11 +1241,12 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "TTY output uses grouped cards by default. Piped output stays plain.",
                 "Arguments after `--` are treated as OpenClaw arguments.",
+                "An active source watch for the env takes precedence unless --runtime or --launcher is passed.",
             ],
         ),
         "run" => render_leaf(
             "Run OpenClaw inside an environment",
-            "Resolve the runtime or launcher and execute OpenClaw inside the target environment.",
+            "Resolve the runtime, launcher, or active source-watch checkout and execute OpenClaw inside the target environment.",
             vec![format!(
                 "{cmd} env run <name> [--runtime <name> | --launcher <name>] -- <openclaw args...>"
             )],
@@ -1265,6 +1269,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             &[
                 "`--` is required before OpenClaw arguments.",
+                "When source watch is active for this env, OCM runs node <checkout>/openclaw.mjs directly instead of rebuilding through the package script.",
                 "If an environment is active, you can also use the root-level `--` shortcut.",
                 "For one-shot explicit env runs, use the root-level `@<env>` shortcut.",
             ],
