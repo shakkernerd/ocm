@@ -278,6 +278,18 @@ pub fn supervisor_logs_dir(env: &BTreeMap<String, String>, cwd: &Path) -> Result
     Ok(stores.supervisor_dir.join("logs"))
 }
 
+pub fn source_watch_override_path(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let stores = resolve_store_paths(env, cwd)?;
+    Ok(stores
+        .home
+        .join("source-watch")
+        .join(format!("{name}.json")))
+}
+
 pub fn snapshot_archive_path(
     env_name: &str,
     snapshot_id: &str,

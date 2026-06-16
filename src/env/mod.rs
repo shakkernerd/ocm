@@ -4,6 +4,7 @@ mod health;
 mod inspect;
 mod lifecycle;
 mod snapshots;
+mod source_watch;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -27,6 +28,7 @@ pub use snapshots::{
     EnvSnapshotSummary, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
     select_snapshot_prune_candidates,
 };
+pub use source_watch::{CreateSourceWatchOverrideOptions, SourceWatchOverride};
 
 pub struct EnvironmentService<'a> {
     env: &'a BTreeMap<String, String>,
