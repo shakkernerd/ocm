@@ -81,6 +81,15 @@ impl<'a> EnvironmentService<'a> {
             summary.service_issue = service.issue.clone();
         }
 
+        if let Some(source) = self.active_source_watch_override(&env.name)? {
+            summary.resolved_kind = Some("source-watch".to_string());
+            summary.resolved_name = Some("source-watch".to_string());
+            summary.command = Some(source.command_label());
+            summary.binary_path = Some(source.openclaw_entry_path().display().to_string());
+            summary.run_dir = Some(source.repo_root);
+            return Ok(summary);
+        }
+
         match resolve_execution_binding(&env, None, None) {
             Ok(ExecutionBinding::Runtime(runtime_name)) => {
                 summary.resolved_kind = Some("runtime".to_string());

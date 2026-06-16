@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::env::{EnvironmentService, resolve_gateway_process_spec};
+use crate::env::EnvironmentService;
 use crate::service::inspect::inspect_job;
 use crate::service::platform::{
     ManagedServiceDefinition, ServiceManagerKind, activate_managed_service,
@@ -405,7 +405,7 @@ impl<'a> SupervisorService<'a> {
                 });
                 continue;
             }
-            match resolve_gateway_process_spec(&env_meta, self.env, self.cwd, false) {
+            match env_service.resolve_gateway_process(&env_meta.name, false) {
                 Ok(process) => {
                     let args = process.args.clone();
                     let child_port = process

@@ -18,7 +18,9 @@ use crate::env::{
     RestoreEnvSnapshotOptions,
 };
 use crate::infra::process::{run_direct, run_shell};
-use crate::infra::shell::{build_openclaw_env, render_use_script, resolve_shell_name};
+use crate::infra::shell::{
+    build_openclaw_dev_source_env, build_openclaw_env, render_use_script, resolve_shell_name,
+};
 use crate::openclaw_repo::remove_openclaw_worktree;
 use crate::store::{
     clear_skip_bootstrap_for_openclaw_onboarding, derive_env_paths, summarize_env, validate_name,
@@ -998,6 +1000,7 @@ impl Cli {
             ),
             crate::env::ResolvedExecution::Dev {
                 env,
+                worktree_root,
                 program,
                 program_args,
                 run_dir,
@@ -1005,7 +1008,20 @@ impl Cli {
             } => run_direct(
                 &program,
                 &program_args,
-                &build_openclaw_env(&env, &self.env),
+                &build_openclaw_dev_source_env(&env, &self.env, Path::new(&worktree_root)),
+                &run_dir,
+            ),
+            crate::env::ResolvedExecution::SourceWatch {
+                env,
+                source,
+                program,
+                program_args,
+                run_dir,
+                ..
+            } => run_direct(
+                &program,
+                &program_args,
+                &build_openclaw_dev_source_env(&env, &self.env, Path::new(&source.repo_root)),
                 &run_dir,
             ),
         }

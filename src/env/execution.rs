@@ -9,7 +9,9 @@ use crate::launcher::{
     build_launcher_command, resolve_direct_launcher_command, resolve_launcher_run_dir,
 };
 use crate::runtime::resolve_runtime_launch;
-use crate::store::{get_launcher, get_runtime_verified};
+use crate::store::{display_path, get_launcher, get_runtime_verified};
+
+use super::SourceWatchOverride;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -244,6 +246,14 @@ pub enum ResolvedExecution {
         program_args: Vec<String>,
         run_dir: PathBuf,
     },
+    SourceWatch {
+        env: EnvMeta,
+        source: SourceWatchOverride,
+        forwarded_args: Vec<String>,
+        program: String,
+        program_args: Vec<String>,
+        run_dir: PathBuf,
+    },
 }
 
 impl GatewayProcessSpec {
@@ -289,6 +299,9 @@ impl<'a> EnvironmentService<'a> {
         bootstrap_managed_node: bool,
     ) -> Result<GatewayProcessSpec, String> {
         let env = self.apply_effective_gateway_port(self.get(name)?)?;
+        if let Some(source) = self.active_source_watch_override(&env.name)? {
+            return Ok(source_watch_gateway_process_spec(&env, self.env, source)?);
+        }
         resolve_gateway_process_spec(&env, self.env, self.cwd, bootstrap_managed_node)
     }
 
@@ -300,6 +313,34 @@ impl<'a> EnvironmentService<'a> {
         args: &[String],
     ) -> Result<ResolvedExecution, String> {
         let args = normalize_openclaw_args_for_env(args)?;
+        let has_runtime_override = runtime_override
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        let has_launcher_override = launcher_override
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+
+        if has_runtime_override && has_launcher_override {
+            return Err("env run accepts only one of --runtime or --launcher".to_string());
+        }
+
+        if !has_runtime_override && !has_launcher_override {
+            if let Some(source) = self.active_source_watch_override(&env.name)? {
+                let program_args = source_watch_openclaw_program_args(&source, &args);
+                let run_dir = PathBuf::from(&source.repo_root);
+                return Ok(ResolvedExecution::SourceWatch {
+                    env,
+                    source,
+                    forwarded_args: args,
+                    program: "node".to_string(),
+                    program_args,
+                    run_dir,
+                });
+            }
+        }
+
         match resolve_execution_binding(&env, runtime_override, launcher_override)? {
             ExecutionBinding::Launcher(launcher_name) => {
                 let launcher = get_launcher(&launcher_name, self.env, self.cwd)?;
@@ -407,6 +448,77 @@ impl ResolvedExecution {
                 forwarded_args,
                 run_dir: run_dir.display().to_string(),
             },
+            Self::SourceWatch {
+                env,
+                source,
+                forwarded_args,
+                run_dir,
+                ..
+            } => ExecutionSummary {
+                env_name: env.name,
+                binding_kind: "source-watch".to_string(),
+                binding_name: "source-watch".to_string(),
+                command: Some(source_watch_command_label(&source, &forwarded_args)),
+                binary_path: Some(display_path(&source.openclaw_entry_path())),
+                runtime_source_kind: None,
+                runtime_release_version: None,
+                runtime_release_channel: None,
+                forwarded_args,
+                run_dir: run_dir.display().to_string(),
+            },
         }
     }
+}
+
+fn source_watch_gateway_process_spec(
+    env_meta: &EnvMeta,
+    process_env: &BTreeMap<String, String>,
+    source: SourceWatchOverride,
+) -> Result<GatewayProcessSpec, String> {
+    let port = env_meta.gateway_port.ok_or_else(|| {
+        format!(
+            "failed to resolve gateway port for env \"{}\"",
+            env_meta.name
+        )
+    })?;
+    let gateway_args = vec![
+        "gateway".to_string(),
+        "run".to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ];
+    let args = source_watch_openclaw_program_args(&source, &gateway_args);
+
+    Ok(GatewayProcessSpec {
+        env_name: env_meta.name.clone(),
+        binding_kind: "source-watch".to_string(),
+        binding_name: "source-watch".to_string(),
+        command: Some(source_watch_command_label(&source, &gateway_args)),
+        binary_path: Some("node".to_string()),
+        runtime_source_kind: None,
+        runtime_release_version: None,
+        runtime_release_channel: None,
+        args,
+        run_dir: PathBuf::from(&source.repo_root),
+        process_env: build_openclaw_dev_source_env(
+            env_meta,
+            process_env,
+            Path::new(&source.repo_root),
+        ),
+    })
+}
+
+fn source_watch_openclaw_program_args(
+    source: &SourceWatchOverride,
+    openclaw_args: &[String],
+) -> Vec<String> {
+    let mut program_args = vec![display_path(&source.openclaw_entry_path())];
+    program_args.extend(openclaw_args.iter().cloned());
+    program_args
+}
+
+fn source_watch_command_label(source: &SourceWatchOverride, openclaw_args: &[String]) -> String {
+    let mut parts = vec![source.command_label()];
+    parts.extend(openclaw_args.iter().cloned());
+    parts.join(" ")
 }

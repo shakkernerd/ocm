@@ -14,7 +14,7 @@ use super::{Cli, render};
 use crate::env::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, EnvDevMeta, RestoreEnvSnapshotOptions,
 };
-use crate::infra::shell::build_openclaw_env;
+use crate::infra::shell::{build_openclaw_dev_source_env, build_openclaw_env};
 use crate::openclaw_repo::{detect_openclaw_checkout, ensure_openclaw_worktree};
 use crate::runtime::releases::{
     OpenClawRelease, is_official_openclaw_releases_url, normalize_openclaw_channel_selector,
@@ -829,7 +829,7 @@ impl Cli {
         resolved: crate::env::ResolvedExecution,
         extra_env: &[(&str, &str)],
     ) -> Result<SimulationCommandOutput, String> {
-        let (mut command, env_meta) = match resolved {
+        let (mut command, env_meta, source_root) = match resolved {
             crate::env::ResolvedExecution::Launcher {
                 env,
                 command,
@@ -838,16 +838,9 @@ impl Cli {
             } => {
                 let mut process = shell_command(&command);
                 process.current_dir(run_dir);
-                (process, env)
+                (process, env, None)
             }
             crate::env::ResolvedExecution::Runtime {
-                env,
-                program,
-                program_args,
-                run_dir,
-                ..
-            }
-            | crate::env::ResolvedExecution::Dev {
                 env,
                 program,
                 program_args,
@@ -856,10 +849,37 @@ impl Cli {
             } => {
                 let mut process = Command::new(program);
                 process.args(program_args).current_dir(run_dir);
-                (process, env)
+                (process, env, None)
+            }
+            crate::env::ResolvedExecution::Dev {
+                env,
+                worktree_root,
+                program,
+                program_args,
+                run_dir,
+                ..
+            } => {
+                let mut process = Command::new(program);
+                process.args(program_args).current_dir(run_dir);
+                (process, env, Some(PathBuf::from(worktree_root)))
+            }
+            crate::env::ResolvedExecution::SourceWatch {
+                env,
+                source,
+                program,
+                program_args,
+                run_dir,
+                ..
+            } => {
+                let mut process = Command::new(program);
+                process.args(program_args).current_dir(run_dir);
+                (process, env, Some(PathBuf::from(source.repo_root)))
             }
         };
-        let mut process_env = build_openclaw_env(&env_meta, &self.env);
+        let mut process_env = match source_root {
+            Some(source_root) => build_openclaw_dev_source_env(&env_meta, &self.env, &source_root),
+            None => build_openclaw_env(&env_meta, &self.env),
+        };
         for (key, value) in extra_env {
             process_env.insert((*key).to_string(), (*value).to_string());
         }
