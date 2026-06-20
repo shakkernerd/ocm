@@ -140,6 +140,15 @@ pub fn restart_service(
                         "restart completed, but failed to clear restart request: {clear_error}"
                     ));
                 }
+            } else {
+                match supervisor.ensure_daemon_running() {
+                    Ok(_) => status.warnings.push(
+                        "gateway restart was not observed; restart request was retained and the supervisor was rechecked".to_string(),
+                    ),
+                    Err(error) => status.warnings.push(format!(
+                        "gateway restart was not observed; restart request was retained, but supervisor recovery failed: {error}"
+                    )),
+                }
             }
             Ok(service_action_summary(
                 "restart",
