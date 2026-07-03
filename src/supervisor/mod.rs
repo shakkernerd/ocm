@@ -2307,6 +2307,22 @@ mod tests {
     }
 
     #[test]
+    fn service_executable_identity_probe_stops_after_busy_retry_limit() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+
+        let output = service_executable_identity_output_with_spawn(|| {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+        });
+
+        assert!(output.is_none());
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            SERVICE_EXECUTABLE_IDENTITY_BUSY_ATTEMPTS
+        );
+    }
+
+    #[test]
     fn supervisor_executable_rejects_unidentified_path_ocm_for_dev_artifacts() {
         let root = unique_test_root("unidentified-path-ocm");
         let installed_dir = root.join("installed-bin");
