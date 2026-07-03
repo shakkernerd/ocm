@@ -1882,17 +1882,25 @@ fn identity_probe_dir() -> Option<PathBuf> {
 }
 
 fn service_executable_identity_output_in(path: &Path, probe_dir: &Path) -> Option<Output> {
-    let mut child = Command::new(path)
-        .args(["__daemon", "identity"])
-        .current_dir(probe_dir)
-        .env_clear()
-        .env("HOME", probe_dir.join("home"))
-        .env("OCM_HOME", probe_dir.join("ocm-home"))
-        .env("PATH", DEFAULT_SERVICE_PATH)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    service_executable_identity_output_with_spawn(|| {
+        Command::new(path)
+            .args(["__daemon", "identity"])
+            .current_dir(probe_dir)
+            .env_clear()
+            .env("HOME", probe_dir.join("home"))
+            .env("OCM_HOME", probe_dir.join("ocm-home"))
+            .env("PATH", DEFAULT_SERVICE_PATH)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+    })
+}
+
+fn service_executable_identity_output_with_spawn<F>(mut spawn: F) -> Option<Output>
+where
+    F: FnMut() -> std::io::Result<Child>,
+{
+    let mut child = spawn().ok()?;
     let started = Instant::now();
     loop {
         match child.try_wait() {
