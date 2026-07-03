@@ -2294,6 +2294,19 @@ mod tests {
     }
 
     #[test]
+    fn service_executable_identity_probe_rejects_non_busy_spawn_errors() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+
+        let output = service_executable_identity_output_with_spawn(|| {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        });
+
+        assert!(output.is_none());
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn supervisor_executable_rejects_unidentified_path_ocm_for_dev_artifacts() {
         let root = unique_test_root("unidentified-path-ocm");
         let installed_dir = root.join("installed-bin");
