@@ -2266,6 +2266,33 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn service_executable_identity_probe_retries_temporarily_busy_binary() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+
+        let output = service_executable_identity_output_with_spawn(|| {
+            if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy));
+            }
+
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("printf '{}\\n'", SERVICE_EXECUTABLE_IDENTITY))
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+        })
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            SERVICE_EXECUTABLE_IDENTITY
+        );
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
     #[test]
     fn supervisor_executable_rejects_unidentified_path_ocm_for_dev_artifacts() {
         let root = unique_test_root("unidentified-path-ocm");
