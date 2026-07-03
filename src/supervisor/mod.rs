@@ -53,6 +53,8 @@ const SUPERVISED_CHILD_RUNTIME_ENV_KEYS: [&str; 4] =
 const SERVICE_EXECUTABLE_OVERRIDE: &str = "OCM_SERVICE_EXECUTABLE";
 pub(crate) const SERVICE_EXECUTABLE_IDENTITY: &str = "ocm-service-supervisor";
 const SERVICE_EXECUTABLE_IDENTITY_TIMEOUT_MS: u64 = 1_000;
+const SERVICE_EXECUTABLE_IDENTITY_BUSY_ATTEMPTS: usize = 5;
+const SERVICE_EXECUTABLE_IDENTITY_BUSY_RETRY_MS: u64 = 20;
 const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
 const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
 const OPENCLAW_RESTART_HANDOFF_FILE: &str = "gateway-supervisor-restart-handoff.json";
@@ -1882,17 +1884,25 @@ fn identity_probe_dir() -> Option<PathBuf> {
 }
 
 fn service_executable_identity_output_in(path: &Path, probe_dir: &Path) -> Option<Output> {
-    let mut child = Command::new(path)
-        .args(["__daemon", "identity"])
-        .current_dir(probe_dir)
-        .env_clear()
-        .env("HOME", probe_dir.join("home"))
-        .env("OCM_HOME", probe_dir.join("ocm-home"))
-        .env("PATH", DEFAULT_SERVICE_PATH)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    service_executable_identity_output_with_spawn(|| {
+        Command::new(path)
+            .args(["__daemon", "identity"])
+            .current_dir(probe_dir)
+            .env_clear()
+            .env("HOME", probe_dir.join("home"))
+            .env("OCM_HOME", probe_dir.join("ocm-home"))
+            .env("PATH", DEFAULT_SERVICE_PATH)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+    })
+}
+
+fn service_executable_identity_output_with_spawn<F>(mut spawn: F) -> Option<Output>
+where
+    F: FnMut() -> std::io::Result<Child>,
+{
+    let mut child = spawn_service_executable_identity_child(&mut spawn)?;
     let started = Instant::now();
     loop {
         match child.try_wait() {
@@ -1914,6 +1924,27 @@ fn service_executable_identity_output_in(path: &Path, probe_dir: &Path) -> Optio
             }
         }
     }
+}
+
+fn spawn_service_executable_identity_child<F>(spawn: &mut F) -> Option<Child>
+where
+    F: FnMut() -> std::io::Result<Child>,
+{
+    for attempt in 0..SERVICE_EXECUTABLE_IDENTITY_BUSY_ATTEMPTS {
+        match spawn() {
+            Ok(child) => return Some(child),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && attempt + 1 < SERVICE_EXECUTABLE_IDENTITY_BUSY_ATTEMPTS =>
+            {
+                sleep(Duration::from_millis(
+                    SERVICE_EXECUTABLE_IDENTITY_BUSY_RETRY_MS,
+                ));
+            }
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 fn is_cargo_dev_executable(path: &Path) -> bool {
@@ -2233,6 +2264,62 @@ mod tests {
             permissions.set_mode(0o755);
             fs::set_permissions(path, permissions).unwrap();
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_executable_identity_probe_retries_temporarily_busy_binary() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+
+        let output = service_executable_identity_output_with_spawn(|| {
+            if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy));
+            }
+
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("printf '{}\\n'", SERVICE_EXECUTABLE_IDENTITY))
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+        })
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            SERVICE_EXECUTABLE_IDENTITY
+        );
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn service_executable_identity_probe_rejects_non_busy_spawn_errors() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+
+        let output = service_executable_identity_output_with_spawn(|| {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        });
+
+        assert!(output.is_none());
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn service_executable_identity_probe_stops_after_busy_retry_limit() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+
+        let output = service_executable_identity_output_with_spawn(|| {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+        });
+
+        assert!(output.is_none());
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            SERVICE_EXECUTABLE_IDENTITY_BUSY_ATTEMPTS
+        );
     }
 
     #[test]
