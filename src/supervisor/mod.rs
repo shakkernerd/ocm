@@ -53,6 +53,8 @@ const SUPERVISED_CHILD_RUNTIME_ENV_KEYS: [&str; 4] =
 const SERVICE_EXECUTABLE_OVERRIDE: &str = "OCM_SERVICE_EXECUTABLE";
 pub(crate) const SERVICE_EXECUTABLE_IDENTITY: &str = "ocm-service-supervisor";
 const SERVICE_EXECUTABLE_IDENTITY_TIMEOUT_MS: u64 = 1_000;
+const SERVICE_EXECUTABLE_IDENTITY_BUSY_ATTEMPTS: usize = 5;
+const SERVICE_EXECUTABLE_IDENTITY_BUSY_RETRY_MS: u64 = 20;
 const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
 const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
 const OPENCLAW_RESTART_HANDOFF_FILE: &str = "gateway-supervisor-restart-handoff.json";
@@ -1900,7 +1902,7 @@ fn service_executable_identity_output_with_spawn<F>(mut spawn: F) -> Option<Outp
 where
     F: FnMut() -> std::io::Result<Child>,
 {
-    let mut child = spawn().ok()?;
+    let mut child = spawn_service_executable_identity_child(&mut spawn)?;
     let started = Instant::now();
     loop {
         match child.try_wait() {
@@ -1922,6 +1924,27 @@ where
             }
         }
     }
+}
+
+fn spawn_service_executable_identity_child<F>(spawn: &mut F) -> Option<Child>
+where
+    F: FnMut() -> std::io::Result<Child>,
+{
+    for attempt in 0..SERVICE_EXECUTABLE_IDENTITY_BUSY_ATTEMPTS {
+        match spawn() {
+            Ok(child) => return Some(child),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && attempt + 1 < SERVICE_EXECUTABLE_IDENTITY_BUSY_ATTEMPTS =>
+            {
+                sleep(Duration::from_millis(
+                    SERVICE_EXECUTABLE_IDENTITY_BUSY_RETRY_MS,
+                ));
+            }
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 fn is_cargo_dev_executable(path: &Path) -> bool {
