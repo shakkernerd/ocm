@@ -4,11 +4,13 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::RuntimeService;
-use crate::infra::download::fetch_json;
+use crate::infra::download::{fetch_json, fetch_json_with_accept};
 use crate::store::list_runtimes;
 
 const DEFAULT_OPENCLAW_RELEASES_URL: &str = "https://registry.npmjs.org/openclaw";
 const INTERNAL_OPENCLAW_RELEASES_URL_ENV: &str = "OCM_INTERNAL_OPENCLAW_RELEASES_URL";
+const NPM_INSTALL_METADATA_ACCEPT: &str =
+    "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +89,14 @@ pub fn load_release_manifest(url: &str) -> Result<RuntimeReleaseManifest, String
 
 pub fn load_official_openclaw_releases(url: &str) -> Result<Vec<OpenClawRelease>, String> {
     let manifest: OpenClawPackageManifest = fetch_json(url)?;
+    validate_official_openclaw_releases(manifest)
+}
+
+pub(crate) fn load_official_openclaw_release_selection(
+    url: &str,
+) -> Result<Vec<OpenClawRelease>, String> {
+    let manifest: OpenClawPackageManifest =
+        fetch_json_with_accept(url, NPM_INSTALL_METADATA_ACCEPT)?;
     validate_official_openclaw_releases(manifest)
 }
 
@@ -269,7 +279,12 @@ impl<'a> RuntimeService<'a> {
         version: Option<&str>,
         channel: Option<&str>,
     ) -> Result<Vec<OpenClawRelease>, String> {
-        let releases = load_official_openclaw_releases(&official_openclaw_releases_url(self.env))?;
+        let url = official_openclaw_releases_url(self.env);
+        let releases = if version.is_some() || channel.is_some() {
+            load_official_openclaw_release_selection(&url)?
+        } else {
+            load_official_openclaw_releases(&url)?
+        };
         query_official_openclaw_releases(&releases, version, channel)
     }
 
@@ -278,7 +293,8 @@ impl<'a> RuntimeService<'a> {
         version: Option<&str>,
         channel: Option<&str>,
     ) -> Result<Vec<OpenClawReleaseCatalogEntry>, String> {
-        let releases = self.official_openclaw_releases(version, channel)?;
+        let releases = load_official_openclaw_releases(&official_openclaw_releases_url(self.env))?;
+        let releases = query_official_openclaw_releases(&releases, version, channel)?;
         let runtimes = list_runtimes(self.env, self.cwd)?;
 
         Ok(releases

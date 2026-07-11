@@ -48,20 +48,41 @@ pub fn download_to_file(url: &str, destination: &Path) -> Result<(), String> {
 
 pub fn fetch_json<T: DeserializeOwned>(url: &str) -> Result<T, String> {
     let reader = open_url_reader(url)?;
+    parse_json_reader(reader, url)
+}
+
+pub fn fetch_json_with_accept<T: DeserializeOwned>(url: &str, accept: &str) -> Result<T, String> {
+    let reader = open_url_reader_with_accept(url, Some(accept))?;
+    parse_json_reader(reader, url)
+}
+
+fn parse_json_reader<T: DeserializeOwned>(
+    reader: Box<dyn io::Read>,
+    url: &str,
+) -> Result<T, String> {
     serde_json::from_reader(reader)
         .map_err(|error| format!("failed to parse runtime URL \"{}\": {error}", url.trim()))
 }
 
 fn open_url_reader(url: &str) -> Result<Box<dyn io::Read>, String> {
+    open_url_reader_with_accept(url, None)
+}
+
+fn open_url_reader_with_accept(
+    url: &str,
+    accept: Option<&str>,
+) -> Result<Box<dyn io::Read>, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err("runtime URL is required".to_string());
     }
 
-    let response = HTTP_AGENT
-        .get(trimmed)
-        .call()
-        .map_err(|error| format!("failed to download runtime URL \"{trimmed}\": {error}"))?;
+    let request = HTTP_AGENT.get(trimmed);
+    let response = match accept {
+        Some(accept) => request.header("Accept", accept).call(),
+        None => request.call(),
+    }
+    .map_err(|error| format!("failed to download runtime URL \"{trimmed}\": {error}"))?;
     Ok(Box::new(response.into_body().into_reader()))
 }
 
