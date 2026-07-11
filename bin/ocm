@@ -13,6 +13,19 @@ if [[ -z "${RUSTUP_HOME:-}" ]]; then
   CARGO_BIN="$(command -v cargo || true)"
   if [[ -n "$CARGO_BIN" && "$CARGO_BIN" == */.cargo/bin/cargo ]]; then
     export RUSTUP_HOME="${CARGO_BIN%/.cargo/bin/cargo}/.rustup"
+  elif [[ -n "$CARGO_BIN" && "$(readlink "$CARGO_BIN" || true)" == *rustup* ]]; then
+    USER_NAME="$(id -un 2>/dev/null || true)"
+    if [[ -n "$USER_NAME" ]] && command -v getent >/dev/null 2>&1; then
+      USER_HOME="$(getent passwd "$USER_NAME" 2>/dev/null | cut -d: -f6 || true)"
+    elif [[ -n "$USER_NAME" ]] && command -v dscl >/dev/null 2>&1; then
+      USER_HOME="$(
+        dscl . -read "/Users/$USER_NAME" NFSHomeDirectory 2>/dev/null |
+          sed 's/^[^:]*:[[:space:]]*//' || true
+      )"
+    fi
+    if [[ -n "${USER_HOME:-}" && -d "$USER_HOME/.rustup" ]]; then
+      export RUSTUP_HOME="$USER_HOME/.rustup"
+    fi
   fi
 fi
 
