@@ -938,6 +938,11 @@ fn runtime_releases_without_manifest_url_use_the_official_openclaw_source() {
     let output = stdout(&output);
     assert!(output.contains("2026.3.24"));
     assert!(output.contains("channel=stable"));
+    assert!(
+        server.requests()[0]
+            .to_ascii_lowercase()
+            .contains("accept: application/vnd.npm.install-v1+json")
+    );
 }
 
 #[test]

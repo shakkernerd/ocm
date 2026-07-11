@@ -8,9 +8,9 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -32,6 +32,7 @@ pub struct TestHttpServer {
     addr: String,
     path: String,
     served: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<String>>>,
     request_limit: usize,
     handle: Option<JoinHandle<()>>,
 }
@@ -100,6 +101,8 @@ impl TestHttpServer {
         let request_limit = response_bodies.len();
         let served = Arc::new(AtomicUsize::new(0));
         let served_flag = Arc::clone(&served);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let request_log = Arc::clone(&requests);
         let handle = thread::spawn(move || {
             for response_body in response_bodies {
                 let Ok((mut stream, _)) = listener.accept() else {
@@ -108,6 +111,7 @@ impl TestHttpServer {
                 let mut request = [0_u8; 4096];
                 let _ = stream.read(&mut request);
                 let request_text = String::from_utf8_lossy(&request);
+                request_log.lock().unwrap().push(request_text.to_string());
                 let status_line = if request_text.starts_with(&format!("GET {response_path} ")) {
                     "HTTP/1.1 200 OK"
                 } else {
@@ -134,6 +138,7 @@ impl TestHttpServer {
             addr: addr_string,
             path: path_string,
             served,
+            requests,
             request_limit,
             handle: Some(handle),
         }
@@ -141,6 +146,10 @@ impl TestHttpServer {
 
     pub fn url(&self) -> String {
         format!("http://{}{}", self.addr, self.path)
+    }
+
+    pub fn requests(&self) -> Vec<String> {
+        self.requests.lock().unwrap().clone()
     }
 }
 

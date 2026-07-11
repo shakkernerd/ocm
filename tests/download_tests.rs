@@ -3,8 +3,8 @@ mod support;
 use std::fs;
 
 use ocm::infra::download::{
-    artifact_file_name_from_url, download_to_file, fetch_json, file_sha256, normalize_sha256,
-    verify_file_sha256,
+    artifact_file_name_from_url, download_to_file, fetch_json, fetch_json_with_accept, file_sha256,
+    normalize_sha256, verify_file_sha256,
 };
 use serde_json::Value;
 
@@ -92,6 +92,24 @@ fn fetch_json_can_consume_sequential_http_responses() {
 
     assert_eq!(first["releases"][0]["version"], "0.2.0");
     assert_eq!(second["releases"][0]["version"], "0.3.0");
+}
+
+#[test]
+fn fetch_json_can_request_a_specific_representation() {
+    let server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        br#"{"releases":[]}"#,
+    );
+
+    let _: Value =
+        fetch_json_with_accept(&server.url(), "application/vnd.npm.install-v1+json").unwrap();
+
+    assert!(
+        server.requests()[0]
+            .to_ascii_lowercase()
+            .contains("accept: application/vnd.npm.install-v1+json")
+    );
 }
 
 #[test]
