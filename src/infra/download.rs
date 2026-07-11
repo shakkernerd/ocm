@@ -2,10 +2,14 @@ use std::fs::{self, File};
 use std::io;
 use std::io::Read;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use base64::Engine;
+use flate2::read::GzDecoder;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256, Sha512};
+
+static HTTP_AGENT: LazyLock<ureq::Agent> = LazyLock::new(ureq::agent);
 
 pub fn artifact_file_name_from_url(url: &str) -> Result<String, String> {
     let trimmed = url.trim();
@@ -32,7 +36,7 @@ pub fn artifact_file_name_from_url(url: &str) -> Result<String, String> {
 }
 
 pub fn download_to_file(url: &str, destination: &Path) -> Result<(), String> {
-    let mut reader = open_url_reader(url)?;
+    let mut reader = open_url_reader(url, None, false)?;
 
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -44,21 +48,53 @@ pub fn download_to_file(url: &str, destination: &Path) -> Result<(), String> {
 }
 
 pub fn fetch_json<T: DeserializeOwned>(url: &str) -> Result<T, String> {
-    let reader = open_url_reader(url)?;
+    let reader = open_url_reader(url, None, true)?;
+    parse_json_reader(reader, url)
+}
+
+pub fn fetch_json_with_accept<T: DeserializeOwned>(url: &str, accept: &str) -> Result<T, String> {
+    let reader = open_url_reader(url, Some(accept), true)?;
+    parse_json_reader(reader, url)
+}
+
+fn parse_json_reader<T: DeserializeOwned>(
+    reader: Box<dyn io::Read>,
+    url: &str,
+) -> Result<T, String> {
     serde_json::from_reader(reader)
         .map_err(|error| format!("failed to parse runtime URL \"{}\": {error}", url.trim()))
 }
 
-fn open_url_reader(url: &str) -> Result<Box<dyn io::Read>, String> {
+fn open_url_reader(
+    url: &str,
+    accept: Option<&str>,
+    compressed_json: bool,
+) -> Result<Box<dyn io::Read>, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err("runtime URL is required".to_string());
     }
 
-    let response = ureq::get(trimmed)
-        .call()
-        .map_err(|error| format!("failed to download runtime URL \"{trimmed}\": {error}"))?;
-    Ok(Box::new(response.into_body().into_reader()))
+    let mut request = HTTP_AGENT.get(trimmed);
+    if compressed_json {
+        request = request.header("Accept-Encoding", "gzip");
+    }
+    let response = match accept {
+        Some(accept) => request.header("Accept", accept).call(),
+        None => request.call(),
+    }
+    .map_err(|error| format!("failed to download runtime URL \"{trimmed}\": {error}"))?;
+    let gzip_encoded = response
+        .headers()
+        .get("Content-Encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("gzip"));
+    let reader = response.into_body().into_reader();
+    if compressed_json && gzip_encoded {
+        Ok(Box::new(GzDecoder::new(reader)))
+    } else {
+        Ok(Box::new(reader))
+    }
 }
 
 pub fn file_sha256(path: &Path) -> Result<String, String> {

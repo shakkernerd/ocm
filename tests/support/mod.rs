@@ -8,9 +8,9 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -32,6 +32,7 @@ pub struct TestHttpServer {
     addr: String,
     path: String,
     served: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<String>>>,
     request_limit: usize,
     handle: Option<JoinHandle<()>>,
 }
@@ -68,6 +69,15 @@ impl TestHttpServer {
         Self::serve_bytes_times(path, content_type, body, 1)
     }
 
+    pub fn serve_bytes_with_headers(
+        path: &str,
+        content_type: &str,
+        body: &[u8],
+        headers: &[(&str, &str)],
+    ) -> Self {
+        Self::serve_bytes_sequence_with_headers(path, content_type, vec![body.to_vec()], headers)
+    }
+
     pub fn serve_bytes_times(
         path: &str,
         content_type: &str,
@@ -82,6 +92,15 @@ impl TestHttpServer {
     }
 
     pub fn serve_bytes_sequence(path: &str, content_type: &str, bodies: Vec<Vec<u8>>) -> Self {
+        Self::serve_bytes_sequence_with_headers(path, content_type, bodies, &[])
+    }
+
+    fn serve_bytes_sequence_with_headers(
+        path: &str,
+        content_type: &str,
+        bodies: Vec<Vec<u8>>,
+        headers: &[(&str, &str)],
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let addr_string = format!("127.0.0.1:{}", addr.port());
@@ -92,6 +111,10 @@ impl TestHttpServer {
         };
         let response_path = path_string.clone();
         let response_type = content_type.to_string();
+        let response_headers = headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect::<String>();
         let response_bodies = if bodies.is_empty() {
             vec![Vec::new()]
         } else {
@@ -100,6 +123,8 @@ impl TestHttpServer {
         let request_limit = response_bodies.len();
         let served = Arc::new(AtomicUsize::new(0));
         let served_flag = Arc::clone(&served);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let request_log = Arc::clone(&requests);
         let handle = thread::spawn(move || {
             for response_body in response_bodies {
                 let Ok((mut stream, _)) = listener.accept() else {
@@ -108,6 +133,7 @@ impl TestHttpServer {
                 let mut request = [0_u8; 4096];
                 let _ = stream.read(&mut request);
                 let request_text = String::from_utf8_lossy(&request);
+                request_log.lock().unwrap().push(request_text.to_string());
                 let status_line = if request_text.starts_with(&format!("GET {response_path} ")) {
                     "HTTP/1.1 200 OK"
                 } else {
@@ -119,7 +145,7 @@ impl TestHttpServer {
                     b"not found".to_vec()
                 };
                 let response = format!(
-                    "{status_line}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+                    "{status_line}\r\nContent-Length: {}\r\nContent-Type: {}\r\n{response_headers}Connection: close\r\n\r\n",
                     body.len(),
                     response_type
                 );
@@ -134,6 +160,7 @@ impl TestHttpServer {
             addr: addr_string,
             path: path_string,
             served,
+            requests,
             request_limit,
             handle: Some(handle),
         }
@@ -141,6 +168,10 @@ impl TestHttpServer {
 
     pub fn url(&self) -> String {
         format!("http://{}{}", self.addr, self.path)
+    }
+
+    pub fn requests(&self) -> Vec<String> {
+        self.requests.lock().unwrap().clone()
     }
 }
 

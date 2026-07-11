@@ -1,6 +1,6 @@
 use super::{RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService};
 use crate::runtime::releases::{
-    is_official_openclaw_releases_url, load_official_openclaw_releases,
+    is_official_openclaw_releases_url, load_official_openclaw_release_selection,
     normalize_openclaw_channel_selector, official_openclaw_releases_url,
     select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
 };
@@ -172,7 +172,7 @@ impl<'a> RuntimeService<'a> {
         }
 
         let releases_url = official_openclaw_releases_url(self.env);
-        let releases = load_official_openclaw_releases(&releases_url)?;
+        let releases = load_official_openclaw_release_selection(&releases_url)?;
         let selected_release = match (version.as_deref(), channel.as_deref()) {
             (Some(version), None) => {
                 select_official_openclaw_release_by_version(&releases, version)?

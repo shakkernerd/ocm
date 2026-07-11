@@ -12,7 +12,7 @@ use crate::infra::download::{
 };
 use crate::managed_node::managed_runtime_install_command;
 use crate::runtime::releases::{
-    OpenClawRelease, load_official_openclaw_releases, load_release_manifest,
+    OpenClawRelease, load_official_openclaw_release_selection, load_release_manifest,
     normalize_openclaw_channel_selector, official_openclaw_releases_url,
     select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
     select_release,
@@ -1016,7 +1016,7 @@ pub fn install_runtime_from_official_openclaw_release(
         .transpose()?;
 
     let releases_url = official_openclaw_releases_url(env);
-    let releases = load_official_openclaw_releases(&releases_url)?;
+    let releases = load_official_openclaw_release_selection(&releases_url)?;
     let (release_selector_kind, release_selector_value) =
         match (options.version.as_deref(), channel.as_deref()) {
             (Some(version), None) => (

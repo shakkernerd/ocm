@@ -55,6 +55,14 @@ fn sha512_integrity(body: &[u8]) -> String {
     )
 }
 
+fn requests_install_metadata(server: &TestHttpServer) -> bool {
+    server.requests().iter().any(|request| {
+        request
+            .to_ascii_lowercase()
+            .contains("accept: application/vnd.npm.install-v1+json")
+    })
+}
+
 fn packument_body() -> Vec<u8> {
     json!({
         "dist-tags": {
@@ -132,6 +140,7 @@ fn release_list_can_filter_by_channel_and_release_show_prints_one_version() {
     let stable_stdout = stdout(&stable);
     assert!(stable_stdout.contains("\"version\": \"2026.3.24\""));
     assert!(!stable_stdout.contains("2026.3.24-beta.2"));
+    assert!(!requests_install_metadata(&list_server));
 
     let show_server =
         TestHttpServer::serve_bytes("/openclaw-show", "application/json", &packument_body());
@@ -144,6 +153,8 @@ fn release_list_can_filter_by_channel_and_release_show_prints_one_version() {
     let show_stdout = stdout(&show);
     assert!(show_stdout.contains("version: 2026.3.24"));
     assert!(show_stdout.contains("channel: stable"));
+    assert!(show_stdout.contains("publishedAt: 2026-03-25T16:35:52Z"));
+    assert!(!requests_install_metadata(&show_server));
     assert!(
         show_stdout
             .contains("tarballUrl: https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz")
@@ -261,6 +272,7 @@ fn release_install_uses_the_published_openclaw_source() {
     assert!(output.contains("Installed runtime stable"));
     assert!(output.contains("install root:"));
     assert!(output.contains("use in env: ocm env create mira --runtime stable"));
+    assert!(requests_install_metadata(&server));
 }
 
 #[test]
