@@ -1,7 +1,9 @@
 mod support;
 
 use std::fs;
+use std::io::Write;
 
+use flate2::{Compression, write::GzEncoder};
 use ocm::infra::download::{
     artifact_file_name_from_url, download_to_file, fetch_json, fetch_json_with_accept, file_sha256,
     normalize_sha256, verify_file_sha256,
@@ -75,6 +77,28 @@ fn download_to_file_can_reuse_a_repeatable_server() {
 }
 
 #[test]
+fn download_to_file_preserves_content_encoded_artifact_bytes() {
+    let root = TestDir::new("download-helper-encoded-artifact");
+    let destination = root.child("downloads/openclaw.tar.gz");
+    let encoded = gzip_bytes(b"archive-bytes");
+    let server = TestHttpServer::serve_bytes_with_headers(
+        "/artifacts/openclaw.tar.gz",
+        "application/gzip",
+        &encoded,
+        &[("Content-Encoding", "gzip")],
+    );
+
+    download_to_file(&server.url(), &destination).unwrap();
+
+    assert_eq!(fs::read(&destination).unwrap(), encoded);
+    assert!(
+        !server.requests()[0]
+            .to_ascii_lowercase()
+            .contains("accept-encoding: gzip")
+    );
+}
+
+#[test]
 fn fetch_json_can_consume_sequential_http_responses() {
     let server = TestHttpServer::serve_bytes_sequence(
         "/manifests/releases.json",
@@ -109,6 +133,26 @@ fn fetch_json_can_request_a_specific_representation() {
         server.requests()[0]
             .to_ascii_lowercase()
             .contains("accept: application/vnd.npm.install-v1+json")
+    );
+}
+
+#[test]
+fn fetch_json_requests_and_decodes_gzip_responses() {
+    let encoded = gzip_bytes(br#"{"releases":[{"version":"0.3.0"}]}"#);
+    let server = TestHttpServer::serve_bytes_with_headers(
+        "/manifests/releases.json",
+        "application/json",
+        &encoded,
+        &[("Content-Encoding", "gzip")],
+    );
+
+    let manifest: Value = fetch_json(&server.url()).unwrap();
+
+    assert_eq!(manifest["releases"][0]["version"], "0.3.0");
+    assert!(
+        server.requests()[0]
+            .to_ascii_lowercase()
+            .contains("accept-encoding: gzip")
     );
 }
 
@@ -154,4 +198,10 @@ fn verify_file_sha256_reports_mismatches() {
     .unwrap_err();
     assert!(error.contains("sha256 mismatch"));
     assert!(error.contains("expected aaaaaaaa"));
+}
+
+fn gzip_bytes(body: &[u8]) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(body).unwrap();
+    encoder.finish().unwrap()
 }
