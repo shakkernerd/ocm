@@ -2,10 +2,13 @@ use std::fs::{self, File};
 use std::io;
 use std::io::Read;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use base64::Engine;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256, Sha512};
+
+static HTTP_AGENT: LazyLock<ureq::Agent> = LazyLock::new(ureq::agent);
 
 pub fn artifact_file_name_from_url(url: &str) -> Result<String, String> {
     let trimmed = url.trim();
@@ -55,7 +58,8 @@ fn open_url_reader(url: &str) -> Result<Box<dyn io::Read>, String> {
         return Err("runtime URL is required".to_string());
     }
 
-    let response = ureq::get(trimmed)
+    let response = HTTP_AGENT
+        .get(trimmed)
         .call()
         .map_err(|error| format!("failed to download runtime URL \"{trimmed}\": {error}"))?;
     Ok(Box::new(response.into_body().into_reader()))
