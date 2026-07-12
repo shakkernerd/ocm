@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
@@ -565,6 +566,7 @@ fn runtime_install_from_official_release_installs_the_openclaw_package() {
     assert!(show_stdout.contains("releaseVersion: 2026.3.24"));
     assert!(show_stdout.contains("releaseChannel: stable"));
     assert!(show_stdout.contains("sourceManifestUrl:"));
+    assert!(show_stdout.contains(&format!("sourceIntegrity: {integrity}")));
     assert!(show_stdout.contains("sourceKind: installed"));
 
     let which = run_ocm(&cwd, &env, &["runtime", "which", "stable"]);
@@ -860,6 +862,70 @@ fn concurrent_official_runtime_installs_reuse_the_published_runtime() {
 
     assert_eq!(installed, 1);
     assert_eq!(reused, 1);
+}
+
+#[test]
+fn concurrent_official_runtime_installs_reject_changed_integrity() {
+    let root = TestDir::new("runtime-install-official-concurrent-integrity");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let changed_integrity = sha512_integrity(b"different package bytes");
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = |integrity: &str| {
+        format!(
+            "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+            tarball_server.url(),
+            integrity
+        )
+        .into_bytes()
+    };
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![packument(&integrity), packument(&changed_integrity)],
+    );
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+    let slow_npm = root.child("slow-npm");
+    write_executable_script(
+        &slow_npm,
+        &format!(
+            "#!/bin/sh\n/bin/sleep 1\nexec '{}' \"$@\"\n",
+            root.child("fake-node-bin/npm").display()
+        ),
+    );
+    env.insert(
+        "OCM_INTERNAL_NPM_BIN".to_string(),
+        slow_npm.display().to_string(),
+    );
+
+    let mut first = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    first
+        .current_dir(&cwd)
+        .args(["runtime", "install", "--channel", "stable"])
+        .env_clear()
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let first = first.spawn().unwrap();
+    std::thread::sleep(Duration::from_millis(250));
+
+    let second = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    let first = first.wait_with_output().unwrap();
+    assert!(first.status.success(), "{}", stderr(&first));
+    assert_eq!(second.status.code(), Some(1));
+    assert!(stderr(&second).contains("runtime \"stable\" already exists"));
 }
 
 #[test]

@@ -255,6 +255,7 @@ struct RuntimeSourceDetails {
     url: Option<String>,
     manifest_url: Option<String>,
     sha256: Option<String>,
+    integrity: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -555,6 +556,7 @@ fn build_installed_runtime_meta(
         source_url: source.url.clone(),
         source_manifest_url: source.manifest_url.clone(),
         source_sha256: source.sha256.clone(),
+        source_integrity: source.integrity.clone(),
         release_version: release.version.clone(),
         release_channel: release.channel.clone(),
         release_selector_kind: release.selector_kind.clone(),
@@ -678,7 +680,8 @@ fn prepare_official_runtime_install_target(
             && existing.release_selector_kind == release.selector_kind
             && existing.release_selector_value == release.selector_value
             && existing.source_url == source.url
-            && existing.source_manifest_url == source.manifest_url;
+            && existing.source_manifest_url == source.manifest_url
+            && existing.source_integrity == source.integrity;
         if same_release && runtime_integrity_issue(&existing, context.env).is_none() {
             return Ok(OfficialRuntimeInstallTarget::Reuse(existing));
         }
@@ -708,7 +711,6 @@ fn lock_runtime(
 fn install_runtime_from_openclaw_package(
     target: RuntimeInstallTarget,
     source: RuntimeSourceDetails,
-    source_integrity: String,
     release: RuntimeReleaseDetails,
     description: Option<String>,
     context: InstallContext<'_>,
@@ -724,10 +726,13 @@ fn install_runtime_from_openclaw_package(
         let tarball_url = source.url.as_deref().ok_or_else(|| {
             "official OpenClaw runtime install requires a tarball URL".to_string()
         })?;
+        let source_integrity = source.integrity.as_deref().ok_or_else(|| {
+            "official OpenClaw runtime install requires source integrity".to_string()
+        })?;
         let archive_name = artifact_file_name_from_url(tarball_url)?;
         let archive_path = target.install_files.join(&archive_name);
         download_to_file(tarball_url, &archive_path)?;
-        verify_file_integrity(&archive_path, &source_integrity)?;
+        verify_file_integrity(&archive_path, source_integrity)?;
 
         let meta = stage_runtime_from_openclaw_package_archive(
             &target,
@@ -942,6 +947,7 @@ pub fn add_runtime(
         source_url: None,
         source_manifest_url: None,
         source_sha256: None,
+        source_integrity: None,
         release_version: None,
         release_channel: None,
         release_selector_kind: None,
@@ -1253,6 +1259,7 @@ pub(crate) fn install_runtime_from_selected_official_openclaw_release(
     let source = RuntimeSourceDetails {
         url: Some(release.tarball_url),
         manifest_url: Some(releases_url),
+        integrity: Some(source_integrity),
         ..RuntimeSourceDetails::default()
     };
     let release = RuntimeReleaseDetails {
@@ -1265,18 +1272,13 @@ pub(crate) fn install_runtime_from_selected_official_openclaw_release(
         OfficialRuntimeInstallTarget::Reuse(meta) => {
             Ok(OfficialRuntimeInstallResult { meta, reused: true })
         }
-        OfficialRuntimeInstallTarget::Install(target) => install_runtime_from_openclaw_package(
-            target,
-            source,
-            source_integrity,
-            release,
-            description,
-            context,
-        )
-        .map(|meta| OfficialRuntimeInstallResult {
-            meta,
-            reused: false,
-        }),
+        OfficialRuntimeInstallTarget::Install(target) => {
+            install_runtime_from_openclaw_package(target, source, release, description, context)
+                .map(|meta| OfficialRuntimeInstallResult {
+                    meta,
+                    reused: false,
+                })
+        }
     }
 }
 
