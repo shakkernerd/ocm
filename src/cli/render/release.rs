@@ -144,6 +144,7 @@ pub fn release_show(
     release: &OpenClawReleaseCatalogEntry,
     profile: RenderProfile,
     command_example: &str,
+    install_channel: Option<&str>,
 ) -> Result<Vec<String>, String> {
     if !profile.pretty {
         return release_show_raw(release);
@@ -207,7 +208,7 @@ pub fn release_show(
         profile.color,
     );
 
-    let next_steps = release_show_next_steps(release, command_example);
+    let next_steps = release_show_next_steps(release, command_example, install_channel);
     if !next_steps.is_empty() {
         push_card(&mut lines, "Next", next_steps, profile.color);
     }
@@ -218,8 +219,9 @@ pub fn release_show(
 fn release_show_next_steps(
     release: &OpenClawReleaseCatalogEntry,
     command_example: &str,
+    install_channel: Option<&str>,
 ) -> Vec<KeyValueRow> {
-    let install_command = match release.release.channel.as_deref() {
+    let install_command = match install_channel {
         Some(channel) => format!("{command_example} release install --channel {channel}"),
         None => format!(
             "{command_example} release install --version {}",
@@ -318,8 +320,13 @@ mod tests {
 
     #[test]
     fn release_show_pretty_uses_cards() {
-        let lines =
-            release_show(&sample_catalog_entry(), RenderProfile::pretty(false), "ocm").unwrap();
+        let lines = release_show(
+            &sample_catalog_entry(),
+            RenderProfile::pretty(false),
+            "ocm",
+            None,
+        )
+        .unwrap();
 
         assert_eq!(lines[0], "Release 2026.3.24");
         assert!(lines.iter().any(|line| line.contains("Published release")));
@@ -334,15 +341,20 @@ mod tests {
     }
 
     #[test]
-    fn release_show_pretty_includes_next_steps() {
-        let lines =
-            release_show(&sample_catalog_entry(), RenderProfile::pretty(false), "ocm").unwrap();
+    fn release_show_pretty_pins_version_next_step() {
+        let lines = release_show(
+            &sample_catalog_entry(),
+            RenderProfile::pretty(false),
+            "ocm",
+            None,
+        )
+        .unwrap();
 
         assert!(lines.iter().any(|line| line.contains("Next")));
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("ocm release install --channel stable"))
+                .any(|line| line.contains("ocm release install --version 2026.3.24"))
         );
         assert!(
             lines
@@ -352,8 +364,26 @@ mod tests {
     }
 
     #[test]
+    fn release_show_pretty_preserves_channel_next_step() {
+        let lines = release_show(
+            &sample_catalog_entry(),
+            RenderProfile::pretty(false),
+            "ocm",
+            Some("stable"),
+        )
+        .unwrap();
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("ocm release install --channel stable"))
+        );
+    }
+
+    #[test]
     fn release_show_raw_keeps_key_value_lines() {
-        let lines = release_show(&sample_catalog_entry(), RenderProfile::raw(), "ocm").unwrap();
+        let lines =
+            release_show(&sample_catalog_entry(), RenderProfile::raw(), "ocm", None).unwrap();
 
         assert!(lines.iter().any(|line| line == "version: 2026.3.24"));
         assert!(lines.iter().any(|line| line == "channel: stable"));

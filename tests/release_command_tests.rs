@@ -155,10 +155,36 @@ fn release_list_can_filter_by_channel_and_release_show_prints_one_version() {
     assert!(show_stdout.contains("channel: stable"));
     assert!(show_stdout.contains("publishedAt: 2026-03-25T16:35:52Z"));
     assert!(!requests_install_metadata(&show_server));
-    assert!(
-        show_stdout
-            .contains("tarballUrl: https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz")
+    assert!(show_stdout.contains("https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"));
+
+    let version_show_server = TestHttpServer::serve_bytes(
+        "/openclaw-show-version",
+        "application/json",
+        &packument_body(),
     );
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        version_show_server.url(),
+    );
+    let version_show = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "release",
+            "show",
+            "--version",
+            "2026.3.24",
+            "--color",
+            "always",
+        ],
+    );
+    assert!(version_show.status.success(), "{}", stderr(&version_show));
+    let version_show_stdout = stdout(&version_show);
+    assert!(
+        version_show_stdout.contains("ocm release install --version 2026.3.24"),
+        "{version_show_stdout}"
+    );
+    assert!(!version_show_stdout.contains("ocm release install --channel stable"));
 
     let channel_show_server = TestHttpServer::serve_bytes(
         "/openclaw-show-channel",
@@ -174,6 +200,35 @@ fn release_list_can_filter_by_channel_and_release_show_prints_one_version() {
     let channel_show_stdout = stdout(&channel_show);
     assert!(channel_show_stdout.contains("version: 2026.3.24"));
     assert!(channel_show_stdout.contains("channel: stable"));
+
+    let pretty_channel_show_server = TestHttpServer::serve_bytes(
+        "/openclaw-show-pretty-channel",
+        "application/json",
+        &packument_body(),
+    );
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        pretty_channel_show_server.url(),
+    );
+    let pretty_channel_show = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "release",
+            "show",
+            "--channel",
+            "stable",
+            "--color",
+            "always",
+        ],
+    );
+    assert!(
+        pretty_channel_show.status.success(),
+        "{}",
+        stderr(&pretty_channel_show)
+    );
+    let pretty_channel_show_stdout = stdout(&pretty_channel_show);
+    assert!(pretty_channel_show_stdout.contains("ocm release install --channel stable"));
 
     let latest_server =
         TestHttpServer::serve_bytes("/openclaw-latest", "application/json", &packument_body());
