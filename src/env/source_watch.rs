@@ -2,6 +2,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -23,6 +25,8 @@ use crate::store::{
 };
 
 const SOURCE_WATCH_OVERRIDE_KIND: &str = "ocm-source-watch-override";
+const SOURCE_WATCH_LOCK_RETRY_ATTEMPTS: usize = 20;
+const SOURCE_WATCH_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -169,7 +173,7 @@ impl<'a> EnvironmentService<'a> {
             })?;
         #[cfg(windows)]
         let lease_event = acquire_windows_source_watch_event(&lock_path, &env_name)?;
-        match FileExt::try_lock_exclusive(&lock_file) {
+        match try_lock_source_watch_exclusive(&lock_file) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 #[cfg(windows)]
@@ -394,6 +398,21 @@ fn write_source_watch_lock(lock_file: &mut File, value: &str) -> Result<(), Stri
         .and_then(|()| lock_file.seek(SeekFrom::Start(0)).map(|_| ()))
         .and_then(|()| writeln!(lock_file, "{value}"))
         .map_err(|error| format!("failed recording source watch lock: {error}"))
+}
+
+fn try_lock_source_watch_exclusive(lock_file: &File) -> io::Result<()> {
+    for attempt in 0..=SOURCE_WATCH_LOCK_RETRY_ATTEMPTS {
+        match FileExt::try_lock_exclusive(lock_file) {
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    && attempt < SOURCE_WATCH_LOCK_RETRY_ATTEMPTS =>
+            {
+                thread::sleep(SOURCE_WATCH_LOCK_RETRY_DELAY);
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded source watch lock retry must return")
 }
 
 fn source_watch_lock_is_restoring(lock_value: &str) -> bool {
@@ -683,5 +702,41 @@ mod tests {
         assert!(!legacy_source_watch_command_matches(
             "cargo test source_watch"
         ));
+    }
+
+    #[test]
+    fn exclusive_source_watch_lock_retries_transient_shared_readers() {
+        let path = std::env::temp_dir().join(format!(
+            "ocm-source-watch-lock-retry-{}-{}",
+            std::process::id(),
+            now_utc().unix_timestamp_nanos()
+        ));
+        let reader = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        let contender = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        FileExt::lock_shared(&reader).unwrap();
+        let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let release_flag = std::sync::Arc::clone(&released);
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(30));
+            FileExt::unlock(&reader).unwrap();
+            release_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        try_lock_source_watch_exclusive(&contender).unwrap();
+
+        assert!(released.load(std::sync::atomic::Ordering::SeqCst));
+        FileExt::unlock(&contender).unwrap();
+        release.join().unwrap();
+        fs::remove_file(path).unwrap();
     }
 }
