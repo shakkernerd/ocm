@@ -660,10 +660,12 @@ impl<'a> SupervisorService<'a> {
                 &stop_requested,
                 &mut active_state,
                 &mut managed_child_count,
-                &mut running,
-                &mut pending,
-                &mut inactive,
-                &mut child_results,
+                SupervisorChildCollections {
+                    running: &mut running,
+                    pending: &mut pending,
+                    inactive: &mut inactive,
+                    results: &mut child_results,
+                },
             )?;
 
             runtime_dirty |= start_due_children(&mut running, &mut pending, &mut inactive)?;
@@ -767,6 +769,13 @@ struct InactiveSupervisorChild {
     last_error: Option<String>,
     last_event_at: Option<OffsetDateTime>,
     next_retry_at: Option<OffsetDateTime>,
+}
+
+struct SupervisorChildCollections<'a> {
+    running: &'a mut BTreeMap<String, RunningSupervisorChild>,
+    pending: &'a mut BTreeMap<String, PendingSupervisorChild>,
+    inactive: &'a mut BTreeMap<String, InactiveSupervisorChild>,
+    results: &'a mut Vec<SupervisorChildRunResult>,
 }
 
 fn spawn_running_child(
@@ -1219,11 +1228,14 @@ fn process_exited_children(
     stop_requested: &AtomicBool,
     active_state: &mut SupervisorState,
     managed_child_count: &mut usize,
-    running: &mut BTreeMap<String, RunningSupervisorChild>,
-    pending: &mut BTreeMap<String, PendingSupervisorChild>,
-    inactive: &mut BTreeMap<String, InactiveSupervisorChild>,
-    child_results: &mut Vec<SupervisorChildRunResult>,
+    children: SupervisorChildCollections<'_>,
 ) -> Result<bool, String> {
+    let SupervisorChildCollections {
+        running,
+        pending,
+        inactive,
+        results,
+    } = children;
     let exited = collect_exited_children(running)?;
     let mut runtime_dirty = false;
 
@@ -1232,7 +1244,7 @@ fn process_exited_children(
             continue;
         };
         runtime_dirty = true;
-        child_results.push(child_run_result(
+        results.push(child_run_result(
             &previous_child.spec,
             exited_child.exit_code,
             exited_child.restart_count,
