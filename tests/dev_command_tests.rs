@@ -270,6 +270,77 @@ fn dev_command_recreates_an_exactly_registered_missing_worktree() {
 }
 
 #[test]
+fn dev_command_rejects_a_stale_registration_replaced_by_an_unrelated_clone() {
+    let root = TestDir::new("dev-command-stale-replacement");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let first = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    let worktree_root = PathBuf::from(show_json["devWorktreeRoot"].as_str().unwrap());
+    fs::remove_dir_all(&worktree_root).unwrap();
+    init_nested_openclaw_repo(&worktree_root);
+
+    let second = run_ocm(&cwd, &env, &["dev", "demo"]);
+    assert!(!second.status.success());
+    assert!(
+        stderr(&second).contains("registered worktree is not a valid OpenClaw checkout"),
+        "{}",
+        stderr(&second)
+    );
+    assert_eq!(
+        fs::read_to_string(worktree_root.join("SENTINEL")).unwrap(),
+        "preserve me\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_command_rejects_a_symlink_alias_to_another_registered_worktree() {
+    let root = TestDir::new("dev-command-symlink-alias");
+    let repo = init_openclaw_repo(&root);
+    let other_worktree = repo.join(".worktrees/other");
+    let add = Command::new("git")
+        .args([
+            "-C",
+            &path_string(&repo),
+            "worktree",
+            "add",
+            "--detach",
+            &path_string(&other_worktree),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    fs::write(other_worktree.join("SENTINEL"), "preserve me\n").unwrap();
+    std::os::unix::fs::symlink("other", repo.join(".worktrees/demo")).unwrap();
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(!run.status.success());
+    assert!(
+        stderr(&run).contains("is not registered to this OpenClaw checkout"),
+        "{}",
+        stderr(&run)
+    );
+    assert_eq!(
+        fs::read_to_string(other_worktree.join("SENTINEL")).unwrap(),
+        "preserve me\n"
+    );
+}
+
+#[test]
 fn env_remove_preserves_an_untracked_dev_worktree() {
     let root = TestDir::new("dev-command-dirty-remove");
     let repo = init_openclaw_repo(&root);

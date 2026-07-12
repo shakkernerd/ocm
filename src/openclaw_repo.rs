@@ -3,6 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+
 use serde_json::Value;
 
 use crate::store::{clean_path, display_path};
@@ -55,7 +58,7 @@ pub(crate) fn ensure_openclaw_worktree(
     if worktree_registered {
         if !worktree_root.exists() {
             remove_registered_worktree(&repo_root, &worktree_root)?;
-        } else if is_existing_openclaw_worktree(&worktree_root) {
+        } else if is_existing_openclaw_worktree(&repo_root, &worktree_root) {
             return Ok(worktree_root);
         } else {
             return Err(format!(
@@ -92,7 +95,7 @@ pub(crate) fn ensure_openclaw_worktree(
 
     let registered = registered_worktree_paths(&repo_root)?;
     if !contains_worktree_path(&registered, &worktree_root)
-        || !is_existing_openclaw_worktree(&worktree_root)
+        || !is_existing_openclaw_worktree(&repo_root, &worktree_root)
     {
         return Err(format!(
             "created worktree is not a valid OpenClaw checkout: {}",
@@ -153,13 +156,15 @@ fn registered_worktree_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
         return Err(format!("git worktree list failed: {detail}"));
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .map_err(|_| "git worktree list returned a non-UTF-8 path".to_string())?;
-    Ok(stdout
-        .split('\0')
-        .filter_map(|field| field.strip_prefix("worktree "))
-        .map(PathBuf::from)
-        .collect())
+    parse_registered_worktree_paths(&output.stdout)
+}
+
+fn parse_registered_worktree_paths(output: &[u8]) -> Result<Vec<PathBuf>, String> {
+    output
+        .split(|byte| *byte == 0)
+        .filter_map(|field| field.strip_prefix(b"worktree "))
+        .map(|path| git_path_from_bytes(path).map(PathBuf::from))
+        .collect()
 }
 
 fn contains_worktree_path(registered: &[PathBuf], expected: &Path) -> bool {
@@ -170,11 +175,14 @@ fn contains_worktree_path(registered: &[PathBuf], expected: &Path) -> bool {
 }
 
 fn normalize_worktree_path(path: &Path) -> PathBuf {
-    if let Ok(path) = fs::canonicalize(path) {
-        return path;
-    }
+    let Some(parent) = path.parent() else {
+        return clean_path(path);
+    };
+    let Some(name) = path.file_name() else {
+        return clean_path(path);
+    };
 
-    let mut ancestor = path;
+    let mut ancestor = parent;
     let mut missing = Vec::<OsString>::new();
     while !ancestor.exists() {
         let Some(name) = ancestor.file_name() else {
@@ -191,18 +199,64 @@ fn normalize_worktree_path(path: &Path) -> PathBuf {
     for component in missing.into_iter().rev() {
         normalized.push(component);
     }
+    normalized.push(name);
     clean_path(&normalized)
 }
 
-fn is_existing_openclaw_worktree(path: &Path) -> bool {
+fn is_existing_openclaw_worktree(repo_root: &Path, path: &Path) -> bool {
     path.exists()
         && path.join(".git").exists()
         && detect_openclaw_checkout(path).is_some()
-        && Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
+        && git_common_dir(repo_root)
+            .zip(git_common_dir(path))
+            .is_some_and(|(repo, worktree)| repo == worktree)
+}
+
+fn git_common_dir(path: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let common_dir = output.stdout.strip_suffix(b"\n").unwrap_or(&output.stdout);
+    let common_dir = common_dir.strip_suffix(b"\r").unwrap_or(common_dir);
+    let common_dir = PathBuf::from(git_path_from_bytes(common_dir).ok()?);
+    fs::canonicalize(&common_dir)
+        .ok()
+        .or_else(|| Some(clean_path(&common_dir)))
+}
+
+#[cfg(unix)]
+fn git_path_from_bytes(path: &[u8]) -> Result<OsString, String> {
+    Ok(OsString::from_vec(path.to_vec()))
+}
+
+#[cfg(not(unix))]
+fn git_path_from_bytes(path: &[u8]) -> Result<OsString, String> {
+    String::from_utf8(path.to_vec())
+        .map(OsString::from)
+        .map_err(|_| "git returned a non-UTF-8 path".to_string())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::ffi::OsStrExt;
+
+    use super::parse_registered_worktree_paths;
+
+    #[test]
+    fn worktree_porcelain_parser_preserves_non_utf8_paths() {
+        let paths = parse_registered_worktree_paths(
+            b"worktree /tmp/openclaw\0HEAD abc\0\0worktree /tmp/other\xff\0HEAD def\0\0",
+        )
+        .unwrap();
+
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[1].as_os_str().as_bytes(), b"/tmp/other\xff");
+    }
 }
