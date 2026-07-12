@@ -359,6 +359,7 @@ mod tests {
             name: "demo".to_string(),
             root: "/tmp/ocm/envs/demo".to_string(),
             gateway_port: None,
+            gateway_port_auto_assigned: false,
             service_enabled: false,
             service_running: false,
             default_runtime: None,
