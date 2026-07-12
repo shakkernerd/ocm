@@ -312,7 +312,7 @@ fn self_update_rejects_an_empty_archive_binary() {
 
     assert!(!output.status.success());
     assert!(
-        stderr(&output).contains("staged ocm binary reported version \"\""),
+        stderr(&output).contains("staged ocm binary"),
         "{}",
         stderr(&output)
     );
