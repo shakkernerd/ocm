@@ -1,11 +1,13 @@
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, File, OpenOptions};
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use semver::Version;
 use serde::Serialize;
 
 use crate::infra::archive::extract_tar_gz;
-use crate::infra::download::download_to_file;
+use crate::infra::download::{download_to_file, verify_file_sha256};
 
 use super::{Cli, render};
 
@@ -67,6 +69,120 @@ struct GitHubRelease {
 struct GitHubReleaseAsset {
     name: String,
     browser_download_url: String,
+    #[serde(default)]
+    digest: Option<String>,
+}
+
+struct SelfUpdateTempDir {
+    path: PathBuf,
+}
+
+impl SelfUpdateTempDir {
+    fn create() -> Result<Self, String> {
+        let unique = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+        for attempt in 0..100 {
+            let path = std::env::temp_dir().join(format!(
+                "ocm-self-update-{}-{unique}-{attempt}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(format!(
+                        "failed to create self-update temporary directory {}: {error}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        Err("failed to allocate a unique self-update temporary directory".to_string())
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for SelfUpdateTempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+struct StagedBinary {
+    path: PathBuf,
+}
+
+impl StagedBinary {
+    fn copy_from(source: &Path, parent: &Path) -> Result<Self, String> {
+        let metadata = fs::symlink_metadata(source)
+            .map_err(|error| format!("failed to inspect release archive binary: {error}"))?;
+        if !metadata.file_type().is_file() {
+            return Err("release archive ocm entry is not a regular file".to_string());
+        }
+
+        let mut source_file = File::open(source)
+            .map_err(|error| format!("failed to open release binary: {error}"))?;
+        let (staged, mut staged_file) = Self::create(parent)?;
+        io::copy(&mut source_file, &mut staged_file).map_err(|error| {
+            format!(
+                "failed to stage the updated ocm binary in {}: {error}",
+                parent.display()
+            )
+        })?;
+        staged_file
+            .sync_all()
+            .map_err(|error| format!("failed to sync staged ocm binary: {error}"))?;
+        drop(staged_file);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = fs::metadata(&staged.path)
+                .map_err(|error| error.to_string())?
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&staged.path, permissions).map_err(|error| error.to_string())?;
+        }
+
+        Ok(staged)
+    }
+
+    fn create(parent: &Path) -> Result<(Self, File), String> {
+        let unique = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+        for attempt in 0..100 {
+            let path = parent.join(format!(
+                ".ocm-update-{}-{unique}-{attempt}",
+                std::process::id()
+            ));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => return Ok((Self { path }, file)),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(format!(
+                        "failed to create staged ocm binary in {}: {error}",
+                        parent.display()
+                    ));
+                }
+            }
+        }
+        Err(format!(
+            "failed to allocate a unique staged ocm binary in {}",
+            parent.display()
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for StagedBinary {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 impl Cli {
@@ -164,6 +280,7 @@ impl Cli {
                     release.tag_name
                 )
             })?;
+        let expected_sha256 = github_asset_sha256(asset)?;
 
         let parent = binary_path.parent().ok_or_else(|| {
             format!(
@@ -173,54 +290,24 @@ impl Cli {
         })?;
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
 
-        let temp_root =
-            std::env::temp_dir().join(format!("ocm-self-update-{}", std::process::id()));
-        if temp_root.exists() {
-            let _ = fs::remove_dir_all(&temp_root);
-        }
-        fs::create_dir_all(&temp_root).map_err(|error| error.to_string())?;
-
-        let archive_path = temp_root.join(&asset.name);
+        let temp_root = SelfUpdateTempDir::create()?;
+        let archive_path = temp_root.path().join(&asset.name);
         download_to_file(&asset.browser_download_url, &archive_path)?;
-        let extract_dir = temp_root.join("extract");
+        verify_file_sha256(&archive_path, expected_sha256)
+            .map_err(|error| format!("failed to verify release asset {}: {error}", asset.name))?;
+        let extract_dir = temp_root.path().join("extract");
         extract_tar_gz(&archive_path, &extract_dir)?;
 
         let extracted_binary = extract_dir.join("ocm");
-        if !extracted_binary.exists() {
-            return Err("release archive did not contain an executable ocm binary".to_string());
-        }
+        let staged_binary = StagedBinary::copy_from(&extracted_binary, parent)?;
+        validate_staged_binary(staged_binary.path(), &target_version)?;
 
-        let staged_binary = parent.join(format!(
-            ".ocm-update-{}-{}",
-            std::process::id(),
-            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
-        ));
-        fs::copy(&extracted_binary, &staged_binary).map_err(|error| {
-            format!(
-                "failed to stage the updated ocm binary in {}: {error}",
-                parent.display()
-            )
-        })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            let mut permissions = fs::metadata(&staged_binary)
-                .map_err(|error| error.to_string())?
-                .permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&staged_binary, permissions).map_err(|error| error.to_string())?;
-        }
-
-        fs::rename(&staged_binary, &binary_path).map_err(|error| {
-            let _ = fs::remove_file(&staged_binary);
+        fs::rename(staged_binary.path(), &binary_path).map_err(|error| {
             format!(
                 "failed to replace {}: {error}. If this path is managed elsewhere, reinstall ocm or use your package manager instead.",
                 binary_path.display()
             )
         })?;
-
-        let _ = fs::remove_dir_all(&temp_root);
 
         Ok(SelfUpdateSummary {
             mode: SelfUpdateMode::Update,
@@ -281,11 +368,63 @@ impl Cli {
 
         let response = ureq::get(&url)
             .header("User-Agent", &format!("ocm/{}", env!("CARGO_PKG_VERSION")))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
             .call()
             .map_err(|error| format!("failed to query ocm releases: {error}"))?;
         serde_json::from_reader(response.into_body().into_reader())
             .map_err(|error| format!("failed to parse ocm release metadata: {error}"))
     }
+}
+
+fn github_asset_sha256(asset: &GitHubReleaseAsset) -> Result<&str, String> {
+    let digest = asset
+        .digest
+        .as_deref()
+        .ok_or_else(|| format!("release asset {} does not include a digest", asset.name))?;
+    let Some((algorithm, value)) = digest.split_once(':') else {
+        return Err(format!(
+            "release asset {} has an invalid digest: {digest}",
+            asset.name
+        ));
+    };
+    if algorithm != "sha256" {
+        return Err(format!(
+            "release asset {} uses unsupported digest algorithm: {algorithm}",
+            asset.name
+        ));
+    }
+    Ok(value)
+}
+
+fn validate_staged_binary(path: &Path, target_version: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect staged ocm binary: {error}"))?;
+    if !metadata.file_type().is_file() {
+        return Err("staged ocm binary is not a regular file".to_string());
+    }
+
+    let output = Command::new(path)
+        .arg("--version")
+        .env_clear()
+        .output()
+        .map_err(|error| format!("failed to execute staged ocm binary: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "staged ocm binary failed its version check with status {}",
+            output.status
+        ));
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|_| "staged ocm binary returned a non-UTF-8 version".to_string())?;
+    let reported = stdout.strip_suffix('\n').unwrap_or(&stdout);
+    let reported = reported.strip_suffix('\r').unwrap_or(reported);
+    if reported != target_version {
+        return Err(format!(
+            "staged ocm binary reported version {reported:?}; expected {target_version:?}"
+        ));
+    }
+    Ok(())
 }
 
 fn normalize_release_tag(version: &str) -> String {
@@ -324,7 +463,7 @@ fn should_treat_target_as_current(
 #[cfg(test)]
 mod tests {
     use super::{
-        display_version_from_tag, normalize_release_tag, parse_release_version,
+        SelfUpdateTempDir, display_version_from_tag, normalize_release_tag, parse_release_version,
         should_treat_target_as_current,
     };
 
@@ -367,5 +506,14 @@ mod tests {
         assert!(!should_treat_target_as_current("1.0.0-beta.2", "1.0.0-beta.10", false).unwrap());
         assert!(should_treat_target_as_current("1.0.0+old", "1.0.0+new", false).unwrap());
         assert!(!should_treat_target_as_current("1.0.0+old", "1.0.0+new", true).unwrap());
+    }
+
+    #[test]
+    fn self_update_temp_dirs_clean_up_on_drop() {
+        let temp = SelfUpdateTempDir::create().unwrap();
+        let path = temp.path().to_path_buf();
+        std::fs::write(path.join("partial-download"), b"partial").unwrap();
+        drop(temp);
+        assert!(!path.exists());
     }
 }

@@ -3,11 +3,12 @@ mod support;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use tar::Builder;
+use ocm::infra::download::file_sha256;
+use tar::{Builder, EntryType};
 
 use crate::support::{
     TestDir, TestHttpServer, ocm_env, path_string, run_ocm, run_ocm_binary, stderr, stdout,
@@ -47,6 +48,36 @@ fn write_release_archive(path: &Path, shell_script: &str) {
     builder.finish().unwrap();
 }
 
+fn write_release_symlink_archive(path: &Path, shell_script: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+
+    let file = fs::File::create(path).unwrap();
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut builder = Builder::new(encoder);
+
+    let mut link_header = tar::Header::new_gnu();
+    link_header.set_entry_type(EntryType::Symlink);
+    link_header.set_size(0);
+    link_header.set_mode(0o755);
+    link_header.set_link_name("payload").unwrap();
+    link_header.set_cksum();
+    builder
+        .append_data(&mut link_header, "ocm", std::io::empty())
+        .unwrap();
+
+    let script_bytes = shell_script.as_bytes();
+    let mut script_header = tar::Header::new_gnu();
+    script_header.set_size(script_bytes.len() as u64);
+    script_header.set_mode(0o755);
+    script_header.set_cksum();
+    builder
+        .append_data(&mut script_header, "payload", script_bytes)
+        .unwrap();
+    builder.finish().unwrap();
+}
+
 fn release_env(root: &TestDir, release_url: &str) -> BTreeMap<String, String> {
     let mut env = ocm_env(root);
     env.insert(
@@ -54,6 +85,45 @@ fn release_env(root: &TestDir, release_url: &str) -> BTreeMap<String, String> {
         release_url.to_string(),
     );
     env
+}
+
+fn copied_ocm(root: &TestDir) -> std::path::PathBuf {
+    let copied_binary = root.child("bin/ocm");
+    fs::create_dir_all(copied_binary.parent().unwrap()).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_ocm"), &copied_binary).unwrap();
+    copied_binary
+}
+
+fn run_self_update_from_archive(
+    root: &TestDir,
+    cwd: &Path,
+    copied_binary: &Path,
+    target_version: &str,
+    archive_path: &Path,
+    digest: Option<&str>,
+) -> Output {
+    let asset_name = current_release_asset_name();
+    let asset = TestHttpServer::serve_bytes(
+        "/download.tar.gz",
+        "application/gzip",
+        &fs::read(archive_path).unwrap(),
+    );
+    let digest_field = digest
+        .map(|value| format!(",\"digest\":\"sha256:{value}\""))
+        .unwrap_or_default();
+    let metadata = format!(
+        "{{\"tag_name\":\"v{target_version}\",\"assets\":[{{\"name\":\"{asset_name}\",\"browser_download_url\":\"{}\"{digest_field}}}]}}",
+        asset.url()
+    );
+    let release =
+        TestHttpServer::serve_bytes("/release.json", "application/json", metadata.as_bytes());
+    let env = release_env(root, &release.url());
+    run_ocm_binary(
+        copied_binary,
+        cwd,
+        &env,
+        &["self", "update", "--version", target_version, "--raw"],
+    )
 }
 
 #[test]
@@ -109,9 +179,7 @@ fn self_update_replaces_a_copied_binary_in_place() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
 
-    let copied_binary = root.child("bin/ocm");
-    fs::create_dir_all(copied_binary.parent().unwrap()).unwrap();
-    fs::copy(env!("CARGO_BIN_EXE_ocm"), &copied_binary).unwrap();
+    let copied_binary = copied_ocm(&root);
 
     let target_version = "9.9.9";
     let asset_name = current_release_asset_name();
@@ -122,24 +190,14 @@ fn self_update_replaces_a_copied_binary_in_place() {
             "#!/usr/bin/env bash\nif [[ \"$1\" == \"--version\" ]]; then\n  printf '{target_version}\\n'\nelse\n  printf 'updated ocm\\n'\nfi\n"
         ),
     );
-    let asset = TestHttpServer::serve_bytes(
-        "/download.tar.gz",
-        "application/gzip",
-        &fs::read(&archive_path).unwrap(),
-    );
-    let metadata = format!(
-        "{{\"tag_name\":\"v{target_version}\",\"assets\":[{{\"name\":\"{asset_name}\",\"browser_download_url\":\"{}\"}}]}}",
-        asset.url()
-    );
-    let release =
-        TestHttpServer::serve_bytes("/release.json", "application/json", metadata.as_bytes());
-
-    let env = release_env(&root, &release.url());
-    let output = run_ocm_binary(
-        &copied_binary,
+    let digest = file_sha256(&archive_path).unwrap();
+    let output = run_self_update_from_archive(
+        &root,
         &cwd,
-        &env,
-        &["self", "update", "--version", target_version, "--raw"],
+        &copied_binary,
+        target_version,
+        &archive_path,
+        Some(&digest),
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
@@ -154,4 +212,137 @@ fn self_update_replaces_a_copied_binary_in_place() {
         .unwrap();
     assert!(updated.status.success());
     assert_eq!(String::from_utf8(updated.stdout).unwrap(), "9.9.9\n");
+}
+
+#[test]
+fn self_update_rejects_an_unsigned_release_asset() {
+    let root = TestDir::new("self-update-unsigned");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let copied_binary = copied_ocm(&root);
+    let original = fs::read(&copied_binary).unwrap();
+
+    let archive_path = root.child(current_release_asset_name());
+    write_release_archive(
+        &archive_path,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '9.9.9\\n'; fi\n",
+    );
+    let output =
+        run_self_update_from_archive(&root, &cwd, &copied_binary, "9.9.9", &archive_path, None);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("does not include a digest"));
+    assert_eq!(fs::read(&copied_binary).unwrap(), original);
+}
+
+#[test]
+fn self_update_rejects_a_tampered_release_asset() {
+    let root = TestDir::new("self-update-tampered");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let copied_binary = copied_ocm(&root);
+    let original = fs::read(&copied_binary).unwrap();
+
+    let archive_path = root.child(current_release_asset_name());
+    write_release_archive(
+        &archive_path,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '9.9.9\\n'; fi\n",
+    );
+    let output = run_self_update_from_archive(
+        &root,
+        &cwd,
+        &copied_binary,
+        "9.9.9",
+        &archive_path,
+        Some(&"0".repeat(64)),
+    );
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("sha256 mismatch"));
+    assert_eq!(fs::read(&copied_binary).unwrap(), original);
+}
+
+#[test]
+fn self_update_rejects_a_non_regular_archive_binary() {
+    let root = TestDir::new("self-update-symlink");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let copied_binary = copied_ocm(&root);
+    let original = fs::read(&copied_binary).unwrap();
+
+    let archive_path = root.child(current_release_asset_name());
+    write_release_symlink_archive(
+        &archive_path,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '9.9.9\\n'; fi\n",
+    );
+    let digest = file_sha256(&archive_path).unwrap();
+    let output = run_self_update_from_archive(
+        &root,
+        &cwd,
+        &copied_binary,
+        "9.9.9",
+        &archive_path,
+        Some(&digest),
+    );
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("ocm entry is not a regular file"));
+    assert_eq!(fs::read(&copied_binary).unwrap(), original);
+}
+
+#[test]
+fn self_update_rejects_an_empty_archive_binary() {
+    let root = TestDir::new("self-update-empty");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let copied_binary = copied_ocm(&root);
+    let original = fs::read(&copied_binary).unwrap();
+
+    let archive_path = root.child(current_release_asset_name());
+    write_release_archive(&archive_path, "");
+    let digest = file_sha256(&archive_path).unwrap();
+    let output = run_self_update_from_archive(
+        &root,
+        &cwd,
+        &copied_binary,
+        "9.9.9",
+        &archive_path,
+        Some(&digest),
+    );
+
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("staged ocm binary reported version \"\""),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(fs::read(&copied_binary).unwrap(), original);
+}
+
+#[test]
+fn self_update_rejects_a_binary_reporting_the_wrong_version() {
+    let root = TestDir::new("self-update-wrong-version");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let copied_binary = copied_ocm(&root);
+    let original = fs::read(&copied_binary).unwrap();
+
+    let archive_path = root.child(current_release_asset_name());
+    write_release_archive(
+        &archive_path,
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '8.8.8\\n'; fi\n",
+    );
+    let digest = file_sha256(&archive_path).unwrap();
+    let output = run_self_update_from_archive(
+        &root,
+        &cwd,
+        &copied_binary,
+        "9.9.9",
+        &archive_path,
+        Some(&digest),
+    );
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("reported version \"8.8.8\"; expected \"9.9.9\""));
+    assert_eq!(fs::read(&copied_binary).unwrap(), original);
 }
