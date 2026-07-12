@@ -20,3 +20,4 @@ All notable changes to OCM are documented here.
 - Accept the standard human-output flags for `runtime releases` and document `runtime build-local` in the command map.
 - Keep plain-home migration path rewrites scoped to the imported OpenClaw state and reject overlapping source and target roots before mutation.
 - Fail migration planning on corrupt environment registries and only auto-bind executable OpenClaw commands from `PATH`.
+- Report launcher and environment rollback failures alongside the original migration error instead of hiding partial cleanup.

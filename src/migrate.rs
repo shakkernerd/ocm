@@ -159,8 +159,12 @@ fn migrate_plain_openclaw_home_inner(
     ) {
         Ok((created, created_launcher)) => (created, created_launcher),
         Err(error) => {
-            let _ = service.remove(&created_name, true);
-            return Err(error);
+            let rollback = service.remove(&created_name, true).map(|_| ());
+            return Err(with_rollback_error(
+                error,
+                "removing the partially imported environment",
+                rollback,
+            ));
         }
     };
 
@@ -182,9 +186,23 @@ fn rollback_migrated_launcher(
     launcher_name: Option<&str>,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) {
+) -> Result<(), String> {
     if let Some(name) = launcher_name {
-        let _ = LauncherService::new(env, cwd).remove(name);
+        LauncherService::new(env, cwd).remove(name)?;
+    }
+    Ok(())
+}
+
+fn with_rollback_error(
+    primary_error: String,
+    operation: &str,
+    rollback: Result<(), String>,
+) -> String {
+    match rollback {
+        Ok(()) => primary_error,
+        Err(rollback_error) => {
+            format!("{primary_error}\nrollback error while {operation}: {rollback_error}")
+        }
     }
 }
 
@@ -227,8 +245,12 @@ fn complete_migration_import(
     match EnvironmentService::new(env, cwd).set_launcher(&created.name, &launcher.name) {
         Ok(meta) => Ok((meta, created_launcher)),
         Err(error) => {
-            rollback_migrated_launcher(created_launcher.as_deref(), env, cwd);
-            Err(error)
+            let rollback = rollback_migrated_launcher(created_launcher.as_deref(), env, cwd);
+            Err(with_rollback_error(
+                error,
+                "removing the migrated launcher",
+                rollback,
+            ))
         }
     }
 }
@@ -340,7 +362,7 @@ mod tests {
 
     use super::{
         MigrateHomeOptions, default_migration_source_home, inspect_migration_source,
-        migrate_plain_openclaw_home, plan_migration,
+        migrate_plain_openclaw_home, plan_migration, with_rollback_error,
     };
 
     fn install_fake_openclaw_on_path(root: &Path, env: &mut BTreeMap<String, String>) {
@@ -399,6 +421,39 @@ mod tests {
         assert!(summary.workspace_exists);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rollback_errors_preserve_the_primary_failure_and_append_each_cleanup_failure() {
+        let error = with_rollback_error(
+            "failed to update imported environment".to_string(),
+            "removing the migrated launcher",
+            Err("launcher registry is read-only".to_string()),
+        );
+        let error = with_rollback_error(
+            error,
+            "removing the partially imported environment",
+            Err("environment root is busy".to_string()),
+        );
+
+        assert_eq!(
+            error,
+            "failed to update imported environment\n\
+             rollback error while removing the migrated launcher: launcher registry is read-only\n\
+             rollback error while removing the partially imported environment: environment root is busy"
+        );
+    }
+
+    #[test]
+    fn successful_rollback_keeps_the_primary_failure_unchanged() {
+        assert_eq!(
+            with_rollback_error(
+                "migration failed".to_string(),
+                "removing partial state",
+                Ok(())
+            ),
+            "migration failed"
+        );
     }
 
     #[test]
