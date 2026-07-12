@@ -256,6 +256,7 @@ impl<'a> EnvironmentService<'a> {
     }
 
     pub fn touch(&self, name: &str) -> Result<EnvMeta, String> {
+        let _lock = self.lock_operation(name)?;
         let mut meta = get_environment(name, self.env, self.cwd)?;
         meta.last_used_at = Some(now_utc());
         save_environment(meta, self.env, self.cwd)
@@ -336,6 +337,7 @@ impl<'a> EnvironmentService<'a> {
         let candidates = self.prune_candidates(older_than_days)?;
         let mut removed = Vec::with_capacity(candidates.len());
         for meta in candidates {
+            let _lock = self.lock_operation(&meta.name)?;
             removed.push(remove_environment(&meta.name, false, self.env, self.cwd)?);
         }
         if !removed.is_empty() {
