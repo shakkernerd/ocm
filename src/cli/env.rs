@@ -21,7 +21,6 @@ use crate::infra::process::{run_direct, run_shell};
 use crate::infra::shell::{
     build_openclaw_dev_source_env, build_openclaw_env, render_use_script, resolve_shell_name,
 };
-use crate::openclaw_repo::remove_openclaw_worktree;
 use crate::store::{
     clear_skip_bootstrap_for_openclaw_onboarding, derive_env_paths, summarize_env, validate_name,
 };
@@ -169,6 +168,15 @@ impl Cli {
 
         summary.processes_terminated = self.terminate_env_processes(&env_meta)?;
 
+        self.environment_service().remove(name, force)?;
+        summary.removed = true;
+        summary.worktree_removed = env_meta
+            .dev
+            .as_ref()
+            .is_some_and(|dev| !Path::new(&dev.worktree_root).exists());
+
+        // Snapshots are the recovery path if destructive cleanup fails, so
+        // remove them only after the environment and worktree are gone.
         for snapshot_id in &snapshot_ids {
             self.environment_service()
                 .remove_snapshot(RemoveEnvSnapshotOptions {
@@ -177,14 +185,6 @@ impl Cli {
                 })?;
         }
         summary.snapshots_removed = snapshot_ids.len();
-
-        if let Some(dev) = env_meta.dev.as_ref() {
-            remove_openclaw_worktree(Path::new(&dev.repo_root), Path::new(&dev.worktree_root))?;
-            summary.worktree_removed = !Path::new(&dev.worktree_root).exists();
-        }
-
-        self.environment_service().remove(name, force)?;
-        summary.removed = true;
 
         if json_flag {
             self.print_json(&summary)?;
@@ -295,6 +295,11 @@ impl Cli {
                 "env create",
             )?
         };
+        let gateway_port_source = if gateway_port.is_some() {
+            "metadata"
+        } else {
+            "computed"
+        };
         let meta = self
             .environment_service()
             .create(CreateEnvironmentOptions {
@@ -309,17 +314,15 @@ impl Cli {
                 protected: protect,
             })?;
 
+        let meta = self
+            .environment_service()
+            .apply_effective_gateway_port(meta)?;
         if json_flag {
             self.print_json(&summarize_env(&meta))?;
             return Ok(0);
         }
 
-        let (gateway_port, gateway_port_source) = self
-            .environment_service()
-            .resolve_effective_gateway_port(&meta)?;
-        let mut display_meta = meta.clone();
-        display_meta.gateway_port = Some(gateway_port);
-        let summary = summarize_env(&display_meta);
+        let summary = summarize_env(&meta);
         self.stdout_lines(render::env::env_created(
             &summary,
             Some(gateway_port_source),
@@ -522,7 +525,9 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = self.environment_service().get(name)?;
+        let meta = self
+            .environment_service()
+            .apply_effective_gateway_port(self.environment_service().get(name)?)?;
         let summary = summarize_env(&meta);
         if json_flag {
             self.print_json(&summary)?;
@@ -835,12 +840,6 @@ impl Cli {
             blockers.push("env is protected; re-run with --force to destroy it".to_string());
         }
         let mut steps = Vec::new();
-        if !snapshots.is_empty() {
-            steps.push(EnvDestroyStepSummary {
-                kind: "snapshots".to_string(),
-                description: format!("remove {} env snapshot(s)", snapshots.len()),
-            });
-        }
         if service.installed || service.loaded || service.running {
             steps.push(EnvDestroyStepSummary {
                 kind: "service".to_string(),
@@ -863,6 +862,12 @@ impl Cli {
             kind: "env".to_string(),
             description: "remove env root and metadata".to_string(),
         });
+        if !snapshots.is_empty() {
+            steps.push(EnvDestroyStepSummary {
+                kind: "snapshots".to_string(),
+                description: format!("remove {} env snapshot(s)", snapshots.len()),
+            });
+        }
 
         Ok(EnvDestroySummary {
             env_name: env_meta.name,

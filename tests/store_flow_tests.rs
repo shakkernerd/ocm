@@ -1,6 +1,7 @@
 mod support;
 
 use std::fs;
+use std::process::{Command, Stdio};
 
 use ocm::env::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
@@ -64,6 +65,44 @@ fn environment_store_round_trip_covers_create_read_list_and_remove() {
     let registry_raw = fs::read_to_string(registry_path).unwrap();
     assert!(!registry_raw.contains("\"name\": \"alpha\""));
     assert!(!std::path::Path::new(&removed.root).exists());
+}
+
+#[test]
+fn concurrent_environment_creates_preserve_every_registry_entry() {
+    let root = TestDir::new("store-env-concurrent-create");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let mut children = (0..8)
+        .map(|index| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_ocm"));
+            command
+                .current_dir(&cwd)
+                .args(["env", "create", &format!("env-{index}"), "--json"])
+                .env_clear()
+                .envs(&env)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command.spawn().unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let mut ports = std::collections::BTreeSet::new();
+    for child in children.drain(..) {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        ports.insert(value["gatewayPort"].as_u64().unwrap());
+    }
+
+    let envs = list_environments(&env, &cwd).unwrap();
+    assert_eq!(envs.len(), 8);
+    assert_eq!(ports.len(), 8);
 }
 
 #[test]
@@ -317,7 +356,7 @@ fn clone_environment_skips_busy_ports_when_assigning_a_new_identity() {
 }
 
 #[test]
-fn clone_environment_assigns_a_new_port_when_the_source_only_had_a_computed_port() {
+fn clone_environment_assigns_a_new_port_when_the_source_port_was_auto_assigned() {
     let root = TestDir::new("store-env-clone-computed-port");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -396,7 +435,8 @@ fn clone_environment_skips_the_global_openclaw_port_family() {
         &cwd,
     )
     .unwrap();
-    assert_eq!(source.gateway_port, None);
+    assert!(source.gateway_port.unwrap() >= 18_900);
+    assert!(source.gateway_port_auto_assigned);
     assert!(cloned.gateway_port.unwrap() >= 19_011);
 }
 
@@ -626,8 +666,8 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
             name: "source".to_string(),
             root: None,
             gateway_port: Some(19789),
-            service_enabled: false,
-            service_running: false,
+            service_enabled: true,
+            service_running: true,
             default_runtime: Some("stable".to_string()),
             default_launcher: Some("shell".to_string()),
             dev: None,
@@ -681,6 +721,9 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
     assert_eq!(imported_meta.default_launcher.as_deref(), Some("shell"));
     assert!(imported_meta.protected);
     assert!(imported_meta.last_used_at.is_none());
+    assert!(!imported_meta.service_enabled);
+    assert!(!imported_meta.service_running);
+    assert_ne!(imported_meta.gateway_port, Some(19_789));
     assert_eq!(
         fs::read_to_string(
             root.child("workspace/imports/target-root/.openclaw/workspace/notes.txt")
@@ -702,7 +745,7 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
         .unwrap()
         .join(".openclaw/workspace");
     assert_eq!(actual_workspace, expected_workspace);
-    assert_eq!(imported_config["gateway"]["port"].as_u64(), Some(19789));
+    assert_ne!(imported_config["gateway"]["port"].as_u64(), Some(19_789));
 }
 
 #[test]

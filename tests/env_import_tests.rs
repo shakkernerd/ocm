@@ -59,7 +59,10 @@ fn env_import_restores_an_archive_with_a_new_name_and_root() {
     assert!(show.status.success(), "{}", stderr(&show));
     let show_output = stdout(&show);
     assert!(show_output.contains("\"name\": \"target\""));
-    assert!(show_output.contains("\"gatewayPort\": 19789"));
+    let show_json: Value = serde_json::from_str(&show_output).unwrap();
+    assert_ne!(show_json["gatewayPort"].as_u64(), Some(19_789));
+    assert_eq!(show_json["serviceEnabled"], false);
+    assert_eq!(show_json["serviceRunning"], false);
     assert!(show_output.contains("\"protected\": true"));
 
     assert_eq!(
@@ -163,7 +166,7 @@ fn env_import_rewrites_openclaw_config_for_the_new_root() {
         .unwrap()
         .join(".openclaw/workspace");
     assert_eq!(actual_workspace, expected_workspace);
-    assert_eq!(config["gateway"]["port"].as_u64(), Some(19789));
+    assert_ne!(config["gateway"]["port"].as_u64(), Some(19_789));
 }
 
 #[test]

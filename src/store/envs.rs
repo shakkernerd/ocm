@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -11,6 +11,7 @@ use crate::infra::archive::{
     ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive_with_options,
 };
 use crate::openclaw_repo::remove_openclaw_worktree;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use super::common::{copy_dir_recursive, ensure_dir, path_exists, read_json, write_json};
@@ -59,7 +60,7 @@ fn load_env_registry(env: &BTreeMap<String, String>, cwd: &Path) -> Result<EnvRe
 }
 
 fn write_env_registry(
-    mut registry: EnvRegistry,
+    registry: &mut EnvRegistry,
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<(), String> {
@@ -71,15 +72,65 @@ fn write_env_registry(
     write_json(&path, &registry)
 }
 
-fn environment_exists(
-    name: &str,
+struct EnvRegistryLock {
+    file: File,
+}
+
+impl Drop for EnvRegistryLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+fn lock_env_registry(
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) -> Result<bool, String> {
-    Ok(load_env_registry(env, cwd)?
-        .envs
-        .iter()
-        .any(|meta| meta.name == name))
+) -> Result<EnvRegistryLock, String> {
+    // Keep load/allocate/write under one cross-process lock. Locking only the
+    // final rename loses concurrent entries and can assign duplicate ports.
+    let registry_path = env_registry_path(env, cwd)?;
+    let parent = registry_path
+        .parent()
+        .ok_or_else(|| "environment registry has no parent directory".to_string())?;
+    ensure_dir(parent)?;
+    let lock_path = registry_path.with_extension("lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| {
+            format!(
+                "failed to open environment registry lock {}: {error}",
+                display_path(&lock_path)
+            )
+        })?;
+    file.lock_exclusive().map_err(|error| {
+        format!(
+            "failed to lock environment registry {}: {error}",
+            display_path(&lock_path)
+        )
+    })?;
+    Ok(EnvRegistryLock { file })
+}
+
+fn normalize_environment(mut meta: EnvMeta) -> Result<EnvMeta, String> {
+    meta.name = validate_name(&meta.name, "Environment name")?;
+    meta.kind = "ocm-env".to_string();
+    meta.root = display_path(&clean_path(Path::new(&meta.root)));
+    meta.updated_at = now_utc();
+    Ok(meta)
+}
+
+fn upsert_environment(registry: &mut EnvRegistry, meta: EnvMeta) -> Result<EnvMeta, String> {
+    let meta = normalize_environment(meta)?;
+    registry.envs.retain(|entry| entry.name != meta.name);
+    registry.envs.push(meta.clone());
+    Ok(meta)
+}
+
+fn find_environment(registry: &EnvRegistry, name: &str) -> Option<EnvMeta> {
+    registry.envs.iter().find(|meta| meta.name == name).cloned()
 }
 
 pub fn list_environments(
@@ -107,16 +158,10 @@ pub fn save_environment(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
-    let safe_name = validate_name(&meta.name, "Environment name")?;
-    meta.name = safe_name;
-    meta.kind = "ocm-env".to_string();
-    meta.root = display_path(&clean_path(Path::new(&meta.root)));
-    meta.updated_at = now_utc();
-
+    let _lock = lock_env_registry(env, cwd)?;
     let mut registry = load_env_registry(env, cwd)?;
-    registry.envs.retain(|entry| entry.name != meta.name);
-    registry.envs.push(meta.clone());
-    write_env_registry(registry, env, cwd)?;
+    meta = upsert_environment(&mut registry, meta)?;
+    write_env_registry(&mut registry, env, cwd)?;
 
     Ok(meta)
 }
@@ -127,7 +172,9 @@ pub fn create_environment(
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
     let name = validate_name(&options.name, "Environment name")?;
-    if environment_exists(&name, env, cwd)? {
+    let _lock = lock_env_registry(env, cwd)?;
+    let mut registry = load_env_registry(env, cwd)?;
+    if find_environment(&registry, &name).is_some() {
         return Err(format!("environment \"{name}\" already exists"));
     }
 
@@ -152,12 +199,21 @@ pub fn create_environment(
     ensure_dir(&paths.state_dir)?;
     ensure_dir(&paths.workspace_dir)?;
 
+    let gateway_port_auto_assigned = options.gateway_port.is_none();
+    let gateway_port = options.gateway_port.or_else(|| {
+        Some(choose_available_gateway_port(
+            DEFAULT_GATEWAY_PORT,
+            &registry.envs,
+            env,
+        ))
+    });
     let created_at = now_utc();
     let meta = EnvMeta {
         kind: "ocm-env".to_string(),
         name,
         root: display_path(&paths.root),
-        gateway_port: options.gateway_port,
+        gateway_port,
+        gateway_port_auto_assigned,
         service_enabled: options.service_enabled,
         service_running: options.service_running,
         default_runtime: options.default_runtime,
@@ -168,7 +224,9 @@ pub fn create_environment(
         updated_at: created_at,
         last_used_at: None,
     };
-    save_environment(meta, env, cwd)
+    let meta = upsert_environment(&mut registry, meta)?;
+    write_env_registry(&mut registry, env, cwd)?;
+    Ok(meta)
 }
 
 pub fn clone_environment(
@@ -176,9 +234,13 @@ pub fn clone_environment(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
-    let source = get_environment(&options.source_name, env, cwd)?;
+    let source_name = validate_name(&options.source_name, "Environment name")?;
     let name = validate_name(&options.name, "Environment name")?;
-    if environment_exists(&name, env, cwd)? {
+    let _lock = lock_env_registry(env, cwd)?;
+    let mut registry = load_env_registry(env, cwd)?;
+    let source = find_environment(&registry, &source_name)
+        .ok_or_else(|| format!("environment \"{source_name}\" does not exist"))?;
+    if find_environment(&registry, &name).is_some() {
         return Err(format!("environment \"{name}\" already exists"));
     }
 
@@ -208,7 +270,7 @@ pub fn clone_environment(
     let result = (|| {
         copy_dir_recursive(&source_paths.root, &target_paths.root)?;
         let created_at = now_utc();
-        let gateway_port = choose_cloned_gateway_port(&source, env, cwd)?;
+        let gateway_port = choose_cloned_gateway_port(&source, &registry.envs, env);
         rewrite_openclaw_config_for_target(
             &target_paths,
             Some(&source_paths.root),
@@ -221,8 +283,9 @@ pub fn clone_environment(
             name,
             root: display_path(&target_paths.root),
             gateway_port: Some(gateway_port),
-            service_enabled: source.service_enabled,
-            service_running: source.service_running,
+            gateway_port_auto_assigned: false,
+            service_enabled: false,
+            service_running: false,
             default_runtime: source.default_runtime,
             default_launcher: source.default_launcher,
             dev: None,
@@ -231,7 +294,9 @@ pub fn clone_environment(
             updated_at: created_at,
             last_used_at: None,
         };
-        save_environment(meta, env, cwd)
+        let meta = upsert_environment(&mut registry, meta)?;
+        write_env_registry(&mut registry, env, cwd)?;
+        Ok(meta)
     })();
 
     if result.is_err() {
@@ -243,18 +308,17 @@ pub fn clone_environment(
 
 fn choose_cloned_gateway_port(
     source: &EnvMeta,
+    envs: &[EnvMeta],
     env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<u32, String> {
-    let envs = list_environments(env, cwd)?;
-    let effective_ports = resolve_effective_gateway_ports(&envs, env);
+) -> u32 {
+    let effective_ports = resolve_effective_gateway_ports(envs, env);
     let preferred = effective_ports
         .get(&source.name)
         .copied()
         .or_else(|| resolve_env_gateway_port(source))
         .unwrap_or(DEFAULT_GATEWAY_PORT);
 
-    Ok(choose_available_gateway_port(preferred, &envs, env))
+    choose_available_gateway_port(preferred, envs, env)
 }
 
 pub fn export_environment(
@@ -291,6 +355,7 @@ pub fn export_environment(
             name: meta.name.clone(),
             source_root: Some(meta.root.clone()),
             gateway_port: meta.gateway_port,
+            gateway_port_auto_assigned: meta.gateway_port_auto_assigned,
             service_enabled: meta.service_enabled,
             service_running: meta.service_running,
             default_runtime: meta.default_runtime.clone(),
@@ -355,7 +420,9 @@ pub fn import_environment(
         } else {
             validate_name(&source_name, "Environment name")?
         };
-        if environment_exists(&name, env, cwd)? {
+        let _lock = lock_env_registry(env, cwd)?;
+        let mut registry = load_env_registry(env, cwd)?;
+        if find_environment(&registry, &name).is_some() {
             return Err(format!("environment \"{name}\" already exists"));
         }
 
@@ -380,11 +447,18 @@ pub fn import_environment(
             return Err("archive is missing root/".to_string());
         }
         let imported = (|| {
+            let preferred_gateway_port = extracted
+                .metadata
+                .env
+                .gateway_port
+                .unwrap_or(DEFAULT_GATEWAY_PORT);
+            let gateway_port =
+                choose_available_gateway_port(preferred_gateway_port, &registry.envs, env);
             copy_dir_recursive(&extracted.root_dir, &target_paths.root)?;
             rewrite_openclaw_config_for_target(
                 &target_paths,
                 extracted.metadata.env.source_root.as_deref().map(Path::new),
-                extracted.metadata.env.gateway_port,
+                Some(gateway_port),
             )?;
             clear_nonportable_runtime_state(&target_paths)?;
 
@@ -393,9 +467,10 @@ pub fn import_environment(
                 kind: "ocm-env".to_string(),
                 name: name.clone(),
                 root: display_path(&target_paths.root),
-                gateway_port: extracted.metadata.env.gateway_port,
-                service_enabled: extracted.metadata.env.service_enabled,
-                service_running: extracted.metadata.env.service_running,
+                gateway_port: Some(gateway_port),
+                gateway_port_auto_assigned: false,
+                service_enabled: false,
+                service_running: false,
                 default_runtime: extracted.metadata.env.default_runtime.clone(),
                 default_launcher: extracted.metadata.env.default_launcher.clone(),
                 dev: None,
@@ -404,7 +479,9 @@ pub fn import_environment(
                 updated_at: created_at,
                 last_used_at: None,
             };
-            save_environment(meta, env, cwd)
+            let meta = upsert_environment(&mut registry, meta)?;
+            write_env_registry(&mut registry, env, cwd)?;
+            Ok(meta)
         })();
 
         match imported {
@@ -434,7 +511,11 @@ pub fn remove_environment(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
-    let meta = get_environment(name, env, cwd)?;
+    let safe_name = validate_name(name, "Environment name")?;
+    let _lock = lock_env_registry(env, cwd)?;
+    let mut registry = load_env_registry(env, cwd)?;
+    let meta = find_environment(&registry, &safe_name)
+        .ok_or_else(|| format!("environment \"{safe_name}\" does not exist"))?;
     if meta.protected && !force {
         return Err(format!(
             "environment \"{}\" is protected; re-run with --force",
@@ -443,19 +524,17 @@ pub fn remove_environment(
     }
 
     let paths = derive_env_paths(Path::new(&meta.root));
-    let root_exists = path_exists(&paths.root);
-
-    if root_exists {
-        fs::remove_dir_all(&paths.root).map_err(|error| error.to_string())?;
-    }
 
     if let Some(dev) = meta.dev.as_ref() {
         remove_openclaw_worktree(Path::new(&dev.repo_root), Path::new(&dev.worktree_root))?;
     }
 
-    let mut registry = load_env_registry(env, cwd)?;
+    if path_exists(&paths.root) {
+        fs::remove_dir_all(&paths.root).map_err(|error| error.to_string())?;
+    }
+
     registry.envs.retain(|entry| entry.name != meta.name);
-    write_env_registry(registry, env, cwd)?;
+    write_env_registry(&mut registry, env, cwd)?;
 
     Ok(meta)
 }

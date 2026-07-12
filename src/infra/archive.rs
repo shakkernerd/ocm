@@ -21,6 +21,8 @@ pub struct ArchivedEnvMeta {
     #[serde(default)]
     pub source_root: Option<String>,
     pub gateway_port: Option<u32>,
+    #[serde(default)]
+    pub gateway_port_auto_assigned: bool,
     #[serde(default = "default_service_enabled")]
     pub service_enabled: bool,
     #[serde(default = "default_service_running")]
@@ -309,6 +311,7 @@ mod tests {
                 name: "demo".to_string(),
                 source_root: Some(source_root.display().to_string()),
                 gateway_port: Some(19789),
+                gateway_port_auto_assigned: false,
                 service_enabled: true,
                 service_running: true,
                 default_runtime: Some("stable".to_string()),
