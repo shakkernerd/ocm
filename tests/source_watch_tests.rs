@@ -233,7 +233,7 @@ fn source_watch_override_takes_precedence_for_resolve_and_run() {
 }
 
 #[test]
-fn source_watch_override_with_a_live_reused_pid_is_removed_without_its_lease() {
+fn stale_source_watch_without_a_lock_is_cleaned_under_a_new_lock() {
     let root = TestDir::new("source-watch-stale-pid");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -241,8 +241,8 @@ fn source_watch_override_with_a_live_reused_pid_is_removed_without_its_lease() {
     let env = ocm_env(&root);
     let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
     let override_path = root.child("ocm-home/source-watch/demo.json");
+    let lock_path = root.child("ocm-home/source-watch/demo.lock");
     fs::create_dir_all(override_path.parent().unwrap()).unwrap();
-    fs::write(root.child("ocm-home/source-watch/demo.lock"), "stale\n").unwrap();
     fs::write(
         &override_path,
         json!({
@@ -267,6 +267,7 @@ fn source_watch_override_with_a_live_reused_pid_is_removed_without_its_lease() {
     assert_eq!(resolved["bindingKind"], "runtime");
     assert_eq!(resolved["binaryPath"], path_string(&runtime_path));
     assert!(!override_path.exists());
+    assert!(lock_path.exists());
 }
 
 #[test]

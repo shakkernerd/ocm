@@ -288,17 +288,12 @@ impl<'a> EnvironmentService<'a> {
         let env_name = validate_name(env_name, "Environment name")?;
         let path = source_watch_override_path(&env_name, self.env, self.cwd)?;
         let lock_path = path.with_extension("lock");
-        if let Ok(meta) = read_json::<SourceWatchOverride>(&path)
-            && !is_leased_source_watch(&meta)
-            && is_valid_source_watch_metadata(&meta, &env_name)
-            && is_legacy_source_watch_process(&meta)
-        {
-            return Ok(Some(meta));
+        if let Some(parent) = lock_path.parent() {
+            ensure_dir(parent)?;
         }
-        if !lock_path.exists() {
-            remove_file_if_present(&path)?;
-            return Ok(None);
-        }
+        // Open/create before inspecting metadata so first-watch lease creation cannot
+        // interleave between a missing-lock check and stale override cleanup.
+        let lock_file = open_source_watch_lock(&lock_path)?;
 
         #[cfg(windows)]
         if let Some(_lease_event) = open_windows_source_watch_event(&lock_path)? {
@@ -330,19 +325,25 @@ impl<'a> EnvironmentService<'a> {
             ));
         }
 
-        let lock_file = open_source_watch_lock(&lock_path)?;
         match FileExt::try_lock_shared(&lock_file) {
             Ok(()) => {
                 // Shared readers prove no watcher owns the exclusive lease. They may clean the
                 // same stale metadata concurrently without impersonating an active watcher.
-                remove_file_if_present(&path)?;
+                let active_legacy = read_json::<SourceWatchOverride>(&path).ok().filter(|meta| {
+                    !is_leased_source_watch(meta)
+                        && is_valid_source_watch_metadata(meta, &env_name)
+                        && is_legacy_source_watch_process(meta)
+                });
+                if active_legacy.is_none() {
+                    remove_file_if_present(&path)?;
+                }
                 FileExt::unlock(&lock_file).map_err(|error| {
                     format!(
                         "failed unlocking stale source watch lock {}: {error}",
                         display_path(&lock_path)
                     )
                 })?;
-                Ok(None)
+                Ok(active_legacy)
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 let lock_lease_id = fs::read_to_string(&lock_path)
