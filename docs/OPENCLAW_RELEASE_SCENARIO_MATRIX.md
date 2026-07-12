@@ -23,6 +23,8 @@ failed.
 - Use the detached worktree's `openclaw.mjs` only for the S02 direct boot smoke.
 - Do not use `pnpm openclaw` as the main release-validation path.
 - Use the local built OCM binary, usually `<ocm>/target/debug/ocm`.
+- Use one run-specific `OCM_HOME` for the package runtime, envs, snapshots, and
+  supervisor state. Invoke the explicit local OCM binary for every command.
 - Use a run id in every worktree, runtime, env, report, and cleanup name.
 - Copy existing user state, preferably `~/.ocm/envs/Violet`, into the run root
   before testing. Never mutate the real env.
@@ -35,8 +37,9 @@ failed.
   only for failures, blocked scenarios, or release-risk notes.
 - Redact credentials, private endpoints, user identifiers, and secret-bearing
   command output from the report.
-- Clean up only temp envs, services, LaunchAgents, fixtures, and worktrees owned
-  by the current run id. Inspect worktree status before removal.
+- Clean up only temp envs, services, LaunchAgents, runtimes, fixtures, and
+  worktrees owned by the current run id. Destroy dependent envs before removing
+  the run runtime, and inspect worktree status before removal.
 
 ## OCM Usage Primer For Test Agents
 
@@ -175,7 +178,10 @@ Pass evidence:
 
 What to test:
 
-- Empty `HOME`, `OCM_HOME`, and OpenClaw state.
+- Empty isolated `HOME` and OpenClaw state.
+- Run-specific `OCM_HOME` contains only the verified package runtime before the
+  fresh env is created; it contains no prior env, snapshot, or supervisor
+  state.
 - `ocm start <env> --runtime <run-runtime>` creates a usable env.
 - First run writes only expected minimum config/state.
 - `openclaw --version`, `openclaw doctor`, `plugins list --json`, gateway
@@ -606,6 +612,8 @@ What to test:
 
 - Temp OCM homes, copied envs, generated fixtures, worktrees, and services are
   removed when no longer needed.
+- Run-owned envs are destroyed before the run-owned package runtime is removed
+  with `ocm runtime remove`.
 - Every cleanup target carries the current run id or another explicit ownership
   marker.
 - Worktree status is inspected before removal; unclean or unowned worktrees are

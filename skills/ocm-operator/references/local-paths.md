@@ -71,15 +71,19 @@ ocm env destroy plugins-dev-test --yes
 set -euo pipefail
 
 source_repo=/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build
+ocm_repo=/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm
+ocm_bin="${ocm_repo}/target/debug/ocm"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 run_root="/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/release-validation/${run_id}"
 worktree="${run_root}/openclaw"
 runtime="openclaw-${run_id}"
+export OCM_HOME="${run_root}/ocm-home"
 
 test "$(git -C "$source_repo" rev-parse --show-toplevel)" = "$source_repo"
+test -x "$ocm_bin"
 git -C "$source_repo" fetch origin main --prune
 openclaw_sha="$(git -C "$source_repo" rev-parse origin/main)"
-mkdir -p "$run_root"
+mkdir -p "$run_root" "$OCM_HOME"
 git -C "$source_repo" worktree add --detach "$worktree" "$openclaw_sha"
 test "$(git -C "$worktree" rev-parse HEAD)" = "$openclaw_sha"
 test -z "$(git -C "$worktree" status --porcelain)"
@@ -89,18 +93,20 @@ pnpm install
 pnpm check
 pnpm build
 
-cd /Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm
-ocm runtime build-local "$runtime" --repo "$worktree" --force
-ocm runtime verify "$runtime"
-ocm runtime show "$runtime"
-node "$HOME/.ocm/runtimes/$runtime/files/node_modules/openclaw/openclaw.mjs" --version
+cd "$ocm_repo"
+"$ocm_bin" runtime build-local "$runtime" --repo "$worktree" --force
+"$ocm_bin" runtime verify "$runtime"
+"$ocm_bin" runtime show "$runtime"
+runtime_bin="$("$ocm_bin" runtime which "$runtime" --raw)"
+"$runtime_bin" --version
 
 test "$(git -C "$worktree" rev-parse HEAD)" = "$openclaw_sha"
 ```
 
 Keep `run_id`, `run_root`, `worktree`, `runtime`, env names, and the report
 together. Cleanup must target only those names and must inspect worktree status
-before removal.
+before removal. Destroy dependent envs before running `"$ocm_bin" runtime
+remove "$runtime"`.
 
 ## Release Validation Cheatsheet
 

@@ -73,9 +73,10 @@ If repo-level AGENTS instructions are present, read and follow them first.
 14. Before reporting, verify the detached worktree still points at the recorded
     commit and the runtime identity matches the run. Redact credentials,
     private endpoints, user identifiers, and secret-bearing command output.
-15. Clean up only resources carrying the current run id. Inspect worktree
-    status before removal and do not force-remove an unclean or unowned
-    worktree.
+15. Destroy run-owned envs, then run
+    `ocm runtime remove <run-runtime>`. Clean up only resources carrying the
+    current run id. Inspect worktree status before removal and do not
+    force-remove an unclean or unowned worktree.
 
 ## Non-Negotiables
 
@@ -89,6 +90,8 @@ If repo-level AGENTS instructions are present, read and follow them first.
   account.
 - Do not include credentials or raw secret-bearing config in the report.
 - Do not leave temporary services or LaunchAgents running.
+- Do not leave the per-run package runtime installed after its envs are
+  destroyed.
 - Do not clean up resources that are not owned by the current run id.
 - Do not mark a scenario passed unless postconditions were checked.
 - Do not rely on reasoning alone for release readiness; run real command flows.
