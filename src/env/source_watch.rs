@@ -12,6 +12,8 @@ use std::os::windows::io::AsRawHandle;
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use super::EnvironmentService;
@@ -46,6 +48,17 @@ pub(crate) struct SourceWatchLease {
     env_name: String,
     lease_id: String,
     lock_file: File,
+    #[cfg(windows)]
+    lease_event: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(windows)]
+impl Drop for SourceWatchLease {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.lease_event);
+        }
+    }
 }
 
 impl SourceWatchLease {
@@ -81,7 +94,7 @@ impl SourceWatchLease {
         let duplicated = unsafe {
             DuplicateHandle(
                 GetCurrentProcess(),
-                self.lock_file.as_raw_handle() as HANDLE,
+                self.lease_event,
                 child.as_raw_handle() as HANDLE,
                 &mut child_handle,
                 0,
@@ -150,14 +163,24 @@ impl<'a> EnvironmentService<'a> {
                     display_path(&lock_path)
                 )
             })?;
+        #[cfg(windows)]
+        let lease_event = acquire_windows_source_watch_event(&lock_path, &env_name)?;
         match FileExt::try_lock_exclusive(&lock_file) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                #[cfg(windows)]
+                unsafe {
+                    windows_sys::Win32::Foundation::CloseHandle(lease_event);
+                }
                 return Err(format!(
                     "source watch for env \"{env_name}\" is already active or starting"
                 ));
             }
             Err(error) => {
+                #[cfg(windows)]
+                unsafe {
+                    windows_sys::Win32::Foundation::CloseHandle(lease_event);
+                }
                 return Err(format!(
                     "failed locking source watch for env \"{env_name}\": {error}"
                 ));
@@ -186,6 +209,8 @@ impl<'a> EnvironmentService<'a> {
             env_name,
             lease_id,
             lock_file,
+            #[cfg(windows)]
+            lease_event,
         })
     }
 
@@ -288,6 +313,28 @@ impl<'a> EnvironmentService<'a> {
             return Ok(None);
         }
 
+        #[cfg(windows)]
+        if let Some(_lease_event) = open_windows_source_watch_event(&lock_path)? {
+            let lock_lease_id = fs::read_to_string(&lock_path)
+                .map_err(|error| {
+                    format!(
+                        "failed reading active source watch lock {}: {error}",
+                        display_path(&lock_path)
+                    )
+                })?
+                .trim()
+                .to_string();
+            let meta = read_json::<SourceWatchOverride>(&path).map_err(|error| {
+                format!(
+                    "failed reading active source watch override {}: {error}",
+                    display_path(&path)
+                )
+            })?;
+            return Ok((source_watch_matches_lease(&meta, &lock_lease_id)
+                && is_valid_source_watch_structure(&meta, &env_name))
+            .then_some(meta));
+        }
+
         let lock_file = open_source_watch_lock(&lock_path)?;
         match FileExt::try_lock_exclusive(&lock_file) {
             Ok(()) => {
@@ -358,6 +405,84 @@ fn is_valid_source_watch_structure(meta: &SourceWatchOverride, env_name: &str) -
         && meta.watch_pid > 0
         && Path::new(&meta.repo_root).join("openclaw.mjs").is_file()
         && Path::new(&meta.repo_root).join("extensions").is_dir()
+}
+
+#[cfg(windows)]
+struct WindowsSourceWatchEvent {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(windows)]
+impl Drop for WindowsSourceWatchEvent {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.handle);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn acquire_windows_source_watch_event(
+    lock_path: &Path,
+    env_name: &str,
+) -> Result<windows_sys::Win32::Foundation::HANDLE, String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
+    use windows_sys::Win32::System::Threading::CreateEventW;
+
+    let event_name = windows_source_watch_event_name(lock_path);
+    let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, event_name.as_ptr()) };
+    if event.is_null() {
+        return Err(format!(
+            "failed creating source watch lease for env \"{env_name}\": {}",
+            io::Error::last_os_error()
+        ));
+    }
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        unsafe {
+            CloseHandle(event);
+        }
+        return Err(format!(
+            "source watch for env \"{env_name}\" is already active or starting"
+        ));
+    }
+    Ok(event)
+}
+
+#[cfg(windows)]
+fn open_windows_source_watch_event(
+    lock_path: &Path,
+) -> Result<Option<WindowsSourceWatchEvent>, String> {
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, GetLastError};
+    use windows_sys::Win32::System::Threading::{OpenEventW, SYNCHRONIZATION_SYNCHRONIZE};
+
+    let event_name = windows_source_watch_event_name(lock_path);
+    let event = unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, 0, event_name.as_ptr()) };
+    if !event.is_null() {
+        return Ok(Some(WindowsSourceWatchEvent { handle: event }));
+    }
+    let error = unsafe { GetLastError() };
+    if error == ERROR_FILE_NOT_FOUND {
+        Ok(None)
+    } else {
+        Err(format!(
+            "failed checking source watch lease {}: {}",
+            display_path(lock_path),
+            io::Error::from_raw_os_error(error as i32)
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn windows_source_watch_event_name(lock_path: &Path) -> Vec<u16> {
+    let digest = Sha256::digest(display_path(lock_path).as_bytes());
+    let suffix = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("Local\\OCM-source-watch-{suffix}")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 fn open_source_watch_lock(lock_path: &Path) -> Result<File, String> {
