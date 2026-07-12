@@ -348,19 +348,21 @@ fn install_stubborn_fake_dev_runners(
 fn install_orphaning_fake_dev_runners(
     root: &TestDir,
     env: &mut std::collections::BTreeMap<String, String>,
-) -> (PathBuf, PathBuf, PathBuf) {
+) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     install_fake_dev_runners(root, env);
     let started = root.child("source-watch.started");
     let descendant_pid = root.child("source-watch-descendant.pid");
     let stdin_kind = root.child("source-watch.stdin-kind");
+    let node_args = root.child("source-watch.node-args");
     let node = format!(
-        "#!/bin/sh\nif [ -t 0 ]; then printf 'tty\\n'; else printf 'pipe\\n'; fi > \"{}\"\n/bin/sleep 300 &\nprintf '%s\\n' \"$!\" > \"{}\"\nprintf 'ready\\n' > \"{}\"\nexit 23\n",
+        "#!/bin/sh\nif [ -t 0 ]; then printf 'tty\\n'; else printf 'pipe\\n'; fi > \"{}\"\nprintf '%s\\n' \"$*\" > \"{}\"\n/bin/sleep 300 &\nprintf '%s\\n' \"$!\" > \"{}\"\nprintf 'ready\\n' > \"{}\"\nexit 23\n",
         path_string(&stdin_kind),
+        path_string(&node_args),
         path_string(&descendant_pid),
         path_string(&started),
     );
     write_executable_script(&root.child("fake-dev-bin/node"), &node);
-    (started, descendant_pid, stdin_kind)
+    (started, descendant_pid, stdin_kind, node_args)
 }
 
 fn wait_for_path(path: &Path, timeout: Duration) -> bool {
@@ -1584,7 +1586,7 @@ fn dev_watch_stops_descendants_when_the_wrapper_exits_first() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let mut env = ocm_env(&root);
-    let (started, descendant_pid_path, stdin_kind) =
+    let (started, descendant_pid_path, stdin_kind, node_args) =
         install_orphaning_fake_dev_runners(&root, &mut env);
 
     let watch = run_ocm(
@@ -1607,7 +1609,13 @@ fn dev_watch_stops_descendants_when_the_wrapper_exits_first() {
         .unwrap();
 
     assert_eq!(watch.status.code(), Some(23), "{}", stderr(&watch));
-    assert_eq!(fs::read_to_string(stdin_kind).unwrap().trim(), "tty");
+    assert_eq!(fs::read_to_string(stdin_kind).unwrap().trim(), "pipe");
+    let node_args = fs::read_to_string(node_args).unwrap();
+    assert!(node_args.contains("--input-type=module"), "{node_args}");
+    assert!(
+        node_args.contains("Object.defineProperty(process.stdin"),
+        "{node_args}"
+    );
     assert!(
         wait_for_process_exit(descendant_pid, Duration::from_secs(3)),
         "source watch descendant {descendant_pid} survived wrapper exit"

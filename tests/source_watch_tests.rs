@@ -251,6 +251,31 @@ fn source_watch_override_with_a_live_reused_pid_is_removed_without_its_lease() {
 }
 
 #[test]
+fn held_source_watch_lease_without_metadata_blocks_runtime_fallback() {
+    let root = TestDir::new("source-watch-starting");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    create_runtime_backed_env(&root, &cwd, &env);
+    let _source_watch = lock_source_watch_with_id(&root, "starting-lease");
+
+    let resolve = run_ocm(
+        &cwd,
+        &env,
+        &["env", "resolve", "demo", "--json", "--", "status"],
+    );
+
+    assert!(!resolve.status.success());
+    assert!(
+        stderr(&resolve).contains(
+            "source watch for env \"demo\" is active or starting, but its metadata is unavailable"
+        ),
+        "{}",
+        stderr(&resolve)
+    );
+}
+
+#[test]
 fn leased_source_watch_remains_active_after_its_wrapper_pid_exits() {
     let root = TestDir::new("source-watch-descendant-lease");
     let cwd = root.child("workspace");

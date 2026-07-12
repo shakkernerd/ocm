@@ -292,17 +292,8 @@ impl<'a> EnvironmentService<'a> {
         let env_name = validate_name(env_name, "Environment name")?;
         let path = source_watch_override_path(&env_name, self.env, self.cwd)?;
         let lock_path = path.with_extension("lock");
-        if !path.exists() {
-            return Ok(None);
-        }
-        let meta = match read_json::<SourceWatchOverride>(&path) {
-            Ok(meta) => meta,
-            Err(_) => {
-                remove_file_if_present(&path)?;
-                return Ok(None);
-            }
-        };
-        if !is_leased_source_watch(&meta)
+        if let Ok(meta) = read_json::<SourceWatchOverride>(&path)
+            && !is_leased_source_watch(&meta)
             && is_valid_source_watch_metadata(&meta, &env_name)
             && is_legacy_source_watch_process(&meta)
         {
@@ -326,13 +317,17 @@ impl<'a> EnvironmentService<'a> {
                 .to_string();
             let meta = read_json::<SourceWatchOverride>(&path).map_err(|error| {
                 format!(
-                    "failed reading active source watch override {}: {error}",
-                    display_path(&path)
+                    "source watch for env \"{env_name}\" is active or starting, but its metadata is unavailable: {error}"
                 )
             })?;
-            return Ok((source_watch_matches_lease(&meta, &lock_lease_id)
-                && is_valid_source_watch_structure(&meta, &env_name))
-            .then_some(meta));
+            if source_watch_matches_lease(&meta, &lock_lease_id)
+                && is_valid_source_watch_structure(&meta, &env_name)
+            {
+                return Ok(Some(meta));
+            }
+            return Err(format!(
+                "source watch for env \"{env_name}\" is active or starting, but its metadata does not match the active lease"
+            ));
         }
 
         let lock_file = open_source_watch_lock(&lock_path)?;
@@ -359,8 +354,7 @@ impl<'a> EnvironmentService<'a> {
                     .to_string();
                 let meta = read_json::<SourceWatchOverride>(&path).map_err(|error| {
                     format!(
-                        "failed reading active source watch override {}: {error}",
-                        display_path(&path)
+                        "source watch for env \"{env_name}\" is active or starting, but its metadata is unavailable: {error}"
                     )
                 })?;
                 let metadata_valid = source_watch_matches_lease(&meta, &lock_lease_id)
@@ -368,7 +362,9 @@ impl<'a> EnvironmentService<'a> {
                 if metadata_valid {
                     Ok(Some(meta))
                 } else {
-                    Ok(None)
+                    Err(format!(
+                        "source watch for env \"{env_name}\" is active or starting, but its metadata does not match the active lease"
+                    ))
                 }
             }
             Err(error) => Err(format!(

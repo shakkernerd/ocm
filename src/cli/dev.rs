@@ -10,8 +10,6 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-#[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(windows)]
 use std::os::windows::{io::AsRawHandle, process::CommandExt as _};
 
@@ -38,6 +36,13 @@ use crate::store::{
 
 const DEV_PREFERENCES_KIND: &str = "ocm-dev-preferences";
 const SOURCE_WATCH_TREE_ACTIVE_ERROR: &str = "source watch process tree is still active";
+#[cfg(unix)]
+const SOURCE_WATCH_NODE_STDIN_SHIM: &str = r#"import path from "node:path";
+import { pathToFileURL } from "node:url";
+const script = path.resolve("scripts/watch-node.mjs");
+process.argv = [process.execPath, script, ...process.argv.slice(1)];
+Object.defineProperty(process.stdin, "isTTY", { value: true });
+await import(pathToFileURL(script).href);"#;
 
 type SourceWatchResult<T> = Result<T, SourceWatchError>;
 
@@ -741,8 +746,23 @@ impl Cli {
         .map_err(|error| format!("failed to install dev watch signal handler: {error}"))?;
 
         let mut command = Command::new("node");
+        #[cfg(unix)]
+        if unsafe { libc::isatty(libc::STDIN_FILENO) } != 1 {
+            // watch-node detaches its runner solely from stdin.isTTY. Override that decision
+            // while preserving the real noninteractive stdin and EOF inherited by the runner.
+            command.args([
+                "--input-type=module",
+                "--eval",
+                SOURCE_WATCH_NODE_STDIN_SHIM,
+            ]);
+            command.args(&args[1..]);
+        } else {
+            command.args(&args);
+        }
+        #[cfg(not(unix))]
+        command.args(&args);
         command
-            .args(&args)
+            .stdin(Stdio::inherit())
             .env_clear()
             .envs(build_openclaw_dev_source_env(meta, &self.env, repo_root))
             .current_dir(repo_root);
@@ -990,47 +1010,7 @@ fn wait_for_source_watch_child(
     }
 }
 
-#[cfg(unix)]
-fn open_source_watch_pty() -> Result<(File, File), String> {
-    let mut master_fd = -1;
-    let mut slave_fd = -1;
-    if unsafe {
-        libc::openpty(
-            &mut master_fd,
-            &mut slave_fd,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    } != 0
-    {
-        return Err(format!(
-            "failed creating source watch terminal: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    let slave = unsafe { File::from_raw_fd(slave_fd) };
-    for file in [&master, &slave] {
-        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
-        if flags == -1
-            || unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) }
-                == -1
-        {
-            return Err(format!(
-                "failed configuring source watch terminal: {}",
-                io::Error::last_os_error()
-            ));
-        }
-    }
-    Ok((master, slave))
-}
-
 struct SourceWatchProcessGuard {
-    #[cfg(unix)]
-    stdin_pty_master: Option<File>,
-    #[cfg(unix)]
-    stdin_pty_slave: Option<File>,
     #[cfg(windows)]
     job: windows_sys::Win32::Foundation::HANDLE,
 }
@@ -1075,44 +1055,16 @@ impl SourceWatchProcessGuard {
         }
         #[cfg(not(windows))]
         {
-            #[cfg(unix)]
-            {
-                let (stdin_pty_master, stdin_pty_slave) =
-                    if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 {
-                        (None, None)
-                    } else {
-                        // watch-node detaches its runner when stdin is not a TTY. Keep an inert
-                        // PTY open so every runner remains in OCM's owned process group.
-                        let (master, slave) = open_source_watch_pty()?;
-                        (Some(master), Some(slave))
-                    };
-                return Ok(Self {
-                    stdin_pty_master,
-                    stdin_pty_slave,
-                });
-            }
-            #[cfg(not(unix))]
             Ok(Self {})
         }
     }
 
     fn configure_command(&mut self, command: &mut Command) -> Result<(), String> {
-        #[cfg(unix)]
-        {
-            if let Some(slave) = self.stdin_pty_slave.take() {
-                command.stdin(Stdio::from(slave));
-            } else {
-                command.stdin(Stdio::inherit());
-            }
-            let _ = &self.stdin_pty_master;
-        }
         #[cfg(windows)]
         {
-            command
-                .stdin(Stdio::inherit())
-                .creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
+            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
         }
-        #[cfg(not(any(unix, windows)))]
+        #[cfg(not(windows))]
         let _ = command;
         Ok(())
     }
