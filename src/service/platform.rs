@@ -422,6 +422,21 @@ fn ensure_service_definition_dir(path: &Path) -> Result<(), String> {
     let existed = path.exists();
     fs::create_dir_all(path).map_err(|error| error.to_string())?;
     if existed {
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(path)
+                .map_err(|error| error.to_string())?
+                .permissions()
+                .mode();
+            let writable_by_others = mode & 0o022 != 0;
+            let sticky = mode & 0o1000 != 0;
+            if writable_by_others && !sticky {
+                return Err(format!(
+                    "service definition directory {} is group/world-writable; remove those write permissions before installing the service",
+                    display_path(path)
+                ));
+            }
+        }
         return Ok(());
     }
     set_mode(path, SERVICE_DIR_MODE)
@@ -966,6 +981,43 @@ mod tests {
                 & 0o777,
             0o700
         );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_definition_rejects_a_writable_existing_parent() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ocm-platform-writable-parent-{unique}"));
+        let definition_parent = root.join("home/.config/systemd/user");
+        fs::create_dir_all(&definition_parent).unwrap();
+        fs::set_permissions(&definition_parent, fs::Permissions::from_mode(0o775)).unwrap();
+        let env = BTreeMap::from([
+            ("HOME".to_string(), display_path(&root.join("home"))),
+            ("OCM_HOME".to_string(), display_path(&root.join("store"))),
+            (
+                "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+                "systemd-user".to_string(),
+            ),
+        ]);
+        let definition = ManagedServiceDefinition {
+            label: OCM_SERVICE_LABEL.to_string(),
+            description: "test".to_string(),
+            definition_path: definition_parent.join("test.service"),
+            program_arguments: vec!["/bin/true".to_string()],
+            working_directory: root.join("store"),
+            stdout_path: root.join("logs/stdout.log"),
+            stderr_path: root.join("logs/stderr.log"),
+            environment: BTreeMap::new(),
+        };
+
+        let error = write_managed_service_definition(&definition, &env).unwrap_err();
+        assert!(error.contains("group/world-writable"));
+        assert!(!definition.definition_path.exists());
 
         fs::remove_dir_all(&root).unwrap();
     }
