@@ -104,13 +104,37 @@ pub(crate) fn rewrite_openclaw_config_for_target(
     source_root: Option<&Path>,
     gateway_port: Option<u32>,
 ) -> Result<(), String> {
+    rewrite_openclaw_config_with_root_mapping(
+        target_paths,
+        source_root.map(|source_root| (source_root, target_paths.root.as_path())),
+        gateway_port,
+    )
+}
+
+pub(crate) fn rewrite_openclaw_config_for_migration(
+    target_paths: &EnvPaths,
+    source_state_root: &Path,
+    gateway_port: Option<u32>,
+) -> Result<(), String> {
+    rewrite_openclaw_config_with_root_mapping(
+        target_paths,
+        Some((source_state_root, target_paths.state_dir.as_path())),
+        gateway_port,
+    )
+}
+
+fn rewrite_openclaw_config_with_root_mapping(
+    target_paths: &EnvPaths,
+    root_mapping: Option<(&Path, &Path)>,
+    gateway_port: Option<u32>,
+) -> Result<(), String> {
     let Some(mut value) = read_config_value(&target_paths.config_path)? else {
         return Ok(());
     };
 
     let mut changed = false;
-    if let Some(source_root) = source_root {
-        changed |= rewrite_env_root_paths(&mut value, source_root, &target_paths.root);
+    if let Some((source_root, replacement_root)) = root_mapping {
+        changed |= rewrite_env_root_paths(&mut value, source_root, replacement_root);
     }
     changed |= rewrite_workspace_field_if_env_scoped(
         &mut value,
