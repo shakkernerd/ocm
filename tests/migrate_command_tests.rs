@@ -729,6 +729,56 @@ fn migrate_preserves_history_and_logs_from_plain_openclaw_home() {
     assert_imported_plain_openclaw_home(&imported_state, &source_home);
 }
 
+#[cfg(unix)]
+#[test]
+fn migrate_materializes_a_config_symlink_without_rewriting_its_target() {
+    let root = TestDir::new("migrate-config-symlink");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let external_config = root.child("external/openclaw.json");
+    let source_config = source_home.join("openclaw.json");
+    let external_raw = fs::read_to_string(&source_config).unwrap();
+    fs::create_dir_all(external_config.parent().unwrap()).unwrap();
+    fs::write(&external_config, &external_raw).unwrap();
+    fs::remove_file(&source_config).unwrap();
+    std::os::unix::fs::symlink(&external_config, &source_config).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_openclaw_on_path(&root, &mut env);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(fs::read_to_string(&external_config).unwrap(), external_raw);
+    let imported_config = root.child("ocm-home/envs/mira/.openclaw/openclaw.json");
+    assert!(
+        fs::symlink_metadata(&imported_config)
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    let imported_raw = fs::read_to_string(&imported_config).unwrap();
+    assert!(
+        imported_raw.contains(
+            &root
+                .child("ocm-home/envs/mira/.openclaw/workspace")
+                .display()
+                .to_string()
+        )
+    );
+    assert!(!imported_raw.contains(&source_home.display().to_string()));
+}
+
 #[test]
 fn adopt_import_preserves_history_and_logs_from_plain_openclaw_home() {
     let root = TestDir::new("adopt-import");
