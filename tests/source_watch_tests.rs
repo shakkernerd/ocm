@@ -85,6 +85,24 @@ fn create_runtime_backed_env(
     runtime_path
 }
 
+fn write_active_source_watch_override(root: &TestDir, source_repo: &Path) {
+    let path = root.child("ocm-home/source-watch/demo.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        json!({
+            "kind": "ocm-source-watch-override",
+            "envName": "demo",
+            "repoRoot": path_string(source_repo),
+            "watchPid": std::process::id(),
+            "token": "test-source-watch",
+            "startedAt": "2026-06-17T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
 struct SourceWatchFixture {
     lock_file: File,
 }
@@ -95,10 +113,8 @@ impl Drop for SourceWatchFixture {
     }
 }
 
-fn write_active_source_watch_override(root: &TestDir, source_repo: &Path) -> SourceWatchFixture {
-    let path = root.child("ocm-home/source-watch/demo.json");
+fn lock_source_watch(root: &TestDir) -> SourceWatchFixture {
     let lock_path = root.child("ocm-home/source-watch/demo.lock");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
     let lock_file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -106,19 +122,6 @@ fn write_active_source_watch_override(root: &TestDir, source_repo: &Path) -> Sou
         .open(lock_path)
         .unwrap();
     FileExt::lock_exclusive(&lock_file).unwrap();
-    fs::write(
-        path,
-        json!({
-            "kind": "ocm-source-watch-override",
-            "envName": "demo",
-            "repoRoot": path_string(source_repo),
-            "watchPid": std::process::id(),
-            "token": "<redacted>",
-            "startedAt": "2026-06-17T00:00:00Z"
-        })
-        .to_string(),
-    )
-    .unwrap();
     SourceWatchFixture { lock_file }
 }
 
@@ -131,7 +134,8 @@ fn source_watch_override_takes_precedence_for_resolve_and_run() {
     let mut env = ocm_env(&root);
     let node_log = install_fake_node(&root, &mut env);
     let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
-    let _source_watch = write_active_source_watch_override(&root, &source_repo);
+    let _source_watch = lock_source_watch(&root);
+    write_active_source_watch_override(&root, &source_repo);
 
     let entry = source_repo.join("openclaw.mjs");
     let resolve = run_ocm(
@@ -233,7 +237,8 @@ fn source_watch_override_flows_to_env_exec_and_status_surfaces() {
     install_fake_service_manager(&root, &mut env);
     let node_log = install_fake_node(&root, &mut env);
     create_runtime_backed_env(&root, &cwd, &env);
-    let _source_watch = write_active_source_watch_override(&root, &source_repo);
+    let _source_watch = lock_source_watch(&root);
+    write_active_source_watch_override(&root, &source_repo);
 
     let entry = source_repo.join("openclaw.mjs");
     let exec = run_ocm(
