@@ -4,6 +4,7 @@ use crate::supervisor::sync_supervisor_if_present;
 
 impl<'a> EnvironmentService<'a> {
     pub fn set_launcher(&self, name: &str, launcher_name: &str) -> Result<EnvMeta, String> {
+        let _lock = self.lock_operation(name)?;
         let mut meta = get_environment(name, self.env, self.cwd)?;
         if launcher_name.eq_ignore_ascii_case("none") {
             meta.default_launcher = None;
@@ -18,6 +19,7 @@ impl<'a> EnvironmentService<'a> {
     }
 
     pub fn set_runtime(&self, name: &str, runtime_name: &str) -> Result<EnvMeta, String> {
+        let _lock = self.lock_operation(name)?;
         let mut meta = get_environment(name, self.env, self.cwd)?;
         if runtime_name.eq_ignore_ascii_case("none") {
             meta.default_runtime = None;

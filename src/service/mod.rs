@@ -30,22 +30,31 @@ impl<'a> ServiceService<'a> {
     }
 
     pub fn install(&self, name: &str) -> Result<ServiceInstallSummary, String> {
+        let _lock = crate::env::EnvironmentService::new(self.env, self.cwd).lock_operation(name)?;
         manage::install_service(name, self.env, self.cwd)
     }
 
     pub fn start(&self, name: &str) -> Result<ServiceActionSummary, String> {
+        let _lock = crate::env::EnvironmentService::new(self.env, self.cwd).lock_operation(name)?;
         manage::start_service(name, self.env, self.cwd)
     }
 
     pub fn stop(&self, name: &str) -> Result<ServiceActionSummary, String> {
+        let _lock = crate::env::EnvironmentService::new(self.env, self.cwd).lock_operation(name)?;
         manage::stop_service(name, self.env, self.cwd)
     }
 
     pub fn restart(&self, name: &str) -> Result<ServiceActionSummary, String> {
+        let _lock = crate::env::EnvironmentService::new(self.env, self.cwd).lock_operation(name)?;
         manage::restart_service(name, self.env, self.cwd)
     }
 
     pub fn uninstall(&self, name: &str) -> Result<ServiceActionSummary, String> {
+        let _lock = crate::env::EnvironmentService::new(self.env, self.cwd).lock_operation(name)?;
+        self.uninstall_locked(name)
+    }
+
+    pub(crate) fn uninstall_locked(&self, name: &str) -> Result<ServiceActionSummary, String> {
         manage::uninstall_service(name, self.env, self.cwd)
     }
 }

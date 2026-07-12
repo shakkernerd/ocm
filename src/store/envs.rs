@@ -21,7 +21,7 @@ use super::gateway_ports::{
 };
 use super::layout::{
     clean_path, default_env_root, derive_env_paths, display_path, env_registry_path,
-    resolve_absolute_path, validate_name,
+    resolve_absolute_path, resolve_store_paths, validate_name,
 };
 use super::now_utc;
 use super::{
@@ -76,10 +76,52 @@ struct EnvRegistryLock {
     file: File,
 }
 
+pub(crate) struct EnvironmentOperationLock {
+    file: File,
+}
+
 impl Drop for EnvRegistryLock {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.file);
     }
+}
+
+impl Drop for EnvironmentOperationLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+pub(crate) fn lock_environment_operation(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvironmentOperationLock, String> {
+    let safe_name = validate_name(name, "Environment name")?;
+    let lock_dir = resolve_store_paths(env, cwd)?
+        .home
+        .join("locks")
+        .join("environments");
+    ensure_dir(&lock_dir)?;
+    let lock_path = lock_dir.join(format!("{safe_name}.lock"));
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| {
+            format!(
+                "failed to open environment operation lock {}: {error}",
+                display_path(&lock_path)
+            )
+        })?;
+    file.lock_exclusive().map_err(|error| {
+        format!(
+            "failed to lock environment operation {}: {error}",
+            display_path(&lock_path)
+        )
+    })?;
+    Ok(EnvironmentOperationLock { file })
 }
 
 fn lock_env_registry(

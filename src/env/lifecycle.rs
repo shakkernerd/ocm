@@ -5,10 +5,10 @@ use time::OffsetDateTime;
 use super::EnvironmentService;
 use crate::runtime::RuntimeService;
 use crate::store::{
-    clone_environment, create_environment, export_environment, get_environment, get_launcher,
-    get_runtime_verified, import_environment, list_environments, now_utc, remove_environment,
-    resolve_config_gateway_port, resolve_effective_gateway_ports, resolve_env_gateway_port,
-    save_environment,
+    EnvironmentOperationLock, clone_environment, create_environment, export_environment,
+    get_environment, get_launcher, get_runtime_verified, import_environment, list_environments,
+    lock_environment_operation, now_utc, remove_environment, resolve_config_gateway_port,
+    resolve_effective_gateway_ports, resolve_env_gateway_port, save_environment,
 };
 use crate::supervisor::sync_supervisor_if_present;
 
@@ -261,7 +261,12 @@ impl<'a> EnvironmentService<'a> {
         save_environment(meta, self.env, self.cwd)
     }
 
+    pub(crate) fn lock_operation(&self, name: &str) -> Result<EnvironmentOperationLock, String> {
+        lock_environment_operation(name, self.env, self.cwd)
+    }
+
     pub fn set_protected(&self, name: &str, protected: bool) -> Result<EnvMeta, String> {
+        let _lock = self.lock_operation(name)?;
         let mut meta = get_environment(name, self.env, self.cwd)?;
         meta.protected = protected;
         save_environment(meta, self.env, self.cwd)
@@ -289,6 +294,16 @@ impl<'a> EnvironmentService<'a> {
         service_enabled: Option<bool>,
         service_running: Option<bool>,
     ) -> Result<EnvMeta, String> {
+        let _lock = self.lock_operation(name)?;
+        self.set_service_policy_locked(name, service_enabled, service_running)
+    }
+
+    pub(crate) fn set_service_policy_locked(
+        &self,
+        name: &str,
+        service_enabled: Option<bool>,
+        service_running: Option<bool>,
+    ) -> Result<EnvMeta, String> {
         let mut meta = get_environment(name, self.env, self.cwd)?;
         if let Some(service_enabled) = service_enabled {
             meta.service_enabled = service_enabled;
@@ -302,6 +317,11 @@ impl<'a> EnvironmentService<'a> {
     }
 
     pub fn remove(&self, name: &str, force: bool) -> Result<EnvMeta, String> {
+        let _lock = self.lock_operation(name)?;
+        self.remove_locked(name, force)
+    }
+
+    pub(crate) fn remove_locked(&self, name: &str, force: bool) -> Result<EnvMeta, String> {
         let meta = remove_environment(name, force, self.env, self.cwd)?;
         sync_supervisor_if_present(self.env, self.cwd)?;
         Ok(meta)
