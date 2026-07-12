@@ -1126,6 +1126,54 @@ fn official_runtime_install_uses_managed_node_when_npm_is_missing() {
 }
 
 #[test]
+fn official_runtime_install_rejects_untrusted_managed_node_archive() {
+    let root = TestDir::new("runtime-install-official-managed-node-integrity");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "20.11.0");
+    let _managed_node = install_fake_managed_node_archive(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_MANAGED_NODE_ARCHIVE_SHA256".to_string(),
+        "0".repeat(64),
+    );
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(!install.status.success());
+    assert!(
+        stderr(&install).contains("runtime artifact sha256 mismatch"),
+        "{}",
+        stderr(&install)
+    );
+    let toolchain_root = root.child("ocm-home/toolchains/node");
+    let installed_toolchains = fs::read_dir(toolchain_root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("node-v"))
+        .count();
+    assert_eq!(installed_toolchains, 0);
+}
+
+#[test]
 fn official_runtime_install_uses_managed_node_when_host_node_is_too_old() {
     let root = TestDir::new("runtime-install-official-old-node");
     let cwd = root.child("workspace");
@@ -1685,6 +1733,74 @@ fn runtime_install_from_url_cleans_up_failed_install_roots_for_retry() {
 }
 
 #[test]
+fn release_backed_runtime_install_requires_sha256_before_download() {
+    let root = TestDir::new("runtime-install-manifest-integrity-required");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let artifact_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-stable",
+        "application/octet-stream",
+        b"runtime",
+    );
+    let manifest = format!(
+        "{{\"releases\":[{{\"version\":\"0.3.0\",\"channel\":\"stable\",\"url\":\"{}\"}}]}}",
+        artifact_server.url()
+    );
+    let manifest_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest.as_bytes(),
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--version",
+            "0.3.0",
+        ],
+    );
+    assert!(!install.status.success());
+    assert!(stderr(&install).contains("missing required sha256 integrity"));
+    assert!(artifact_server.requests().is_empty());
+}
+
+#[test]
+fn official_runtime_install_requires_sha512_integrity_before_download() {
+    let root = TestDir::new("runtime-install-official-integrity-required");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        b"runtime",
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\"}}}}}}}}",
+        tarball_server.url()
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(!install.status.success());
+    assert!(stderr(&install).contains("missing required sha512 integrity"));
+    assert!(tarball_server.requests().is_empty());
+}
+
+#[test]
 fn runtime_install_force_replaces_an_existing_runtime_definition() {
     let root = TestDir::new("runtime-install-force");
     let cwd = root.child("workspace");
@@ -1744,6 +1860,82 @@ fn runtime_install_force_replaces_an_existing_runtime_definition() {
         "\"binaryPath\": \"{}\"",
         path_string(&expected_binary)
     )));
+}
+
+#[test]
+fn runtime_install_force_preserves_existing_runtime_when_replacement_fails() {
+    let root = TestDir::new("runtime-install-force-rollback");
+    let cwd = root.child("workspace");
+    let source_dir = cwd.join("downloads");
+    fs::create_dir_all(&source_dir).unwrap();
+    let source_path = source_dir.join("openclaw");
+    write_executable_script(&source_path, "#!/bin/sh\nprintf 'working\\n'\n");
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--path",
+            "./downloads/openclaw",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let replacement = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-stable",
+        "application/octet-stream",
+        b"broken replacement",
+    );
+    let manifest = format!(
+        "{{\"releases\":[{{\"version\":\"0.3.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+        replacement.url(),
+        "0".repeat(64)
+    );
+    let manifest_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest.as_bytes(),
+    );
+    let failed = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--version",
+            "0.3.0",
+            "--force",
+        ],
+    );
+    assert!(!failed.status.success());
+    assert!(stderr(&failed).contains("runtime artifact sha256 mismatch"));
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    assert!(stdout(&show).contains("\"sourcePath\""));
+    let binary = runtime_install_root("stable", &env, &cwd)
+        .unwrap()
+        .join("files/openclaw");
+    assert_eq!(
+        fs::read_to_string(binary).unwrap(),
+        "#!/bin/sh\nprintf 'working\\n'\n"
+    );
+
+    let runtime_dir = root.child("ocm-home/runtimes");
+    let residues = fs::read_dir(runtime_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".stage-") || name.contains(".backup-"))
+        .collect::<Vec<_>>();
+    assert!(residues.is_empty(), "{residues:?}");
 }
 
 #[test]

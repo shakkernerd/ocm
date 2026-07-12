@@ -28,7 +28,13 @@ pub fn artifact_file_name_from_url(url: &str) -> Result<String, String> {
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("runtime URL must include a file name: {trimmed}"))?;
 
-    if segment == "." || segment == ".." {
+    if segment == "."
+        || segment == ".."
+        || segment.contains('\\')
+        || segment.contains(':')
+        || segment.contains('\0')
+        || Path::new(segment).components().count() != 1
+    {
         return Err(format!("runtime URL must include a file name: {trimmed}"));
     }
 
@@ -136,6 +142,18 @@ pub fn verify_file_sha256(path: &Path, expected: &str) -> Result<String, String>
 }
 
 pub fn verify_file_integrity(path: &Path, expected: &str) -> Result<(), String> {
+    let expected = normalize_file_integrity(expected)?;
+    let Some((algorithm, encoded)) = expected.split_once('-') else {
+        unreachable!("normalized integrity includes an algorithm");
+    };
+
+    match algorithm {
+        "sha512" => verify_file_sha512_base64(path, encoded, &expected),
+        _ => unreachable!("normalized integrity uses a supported algorithm"),
+    }
+}
+
+pub fn normalize_file_integrity(expected: &str) -> Result<String, String> {
     let expected = expected.trim();
     if expected.is_empty() {
         return Err("runtime artifact integrity is required".to_string());
@@ -149,7 +167,15 @@ pub fn verify_file_integrity(path: &Path, expected: &str) -> Result<(), String> 
     }
 
     match algorithm {
-        "sha512" => verify_file_sha512_base64(path, encoded.trim(), expected),
+        "sha512" => {
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(encoded.trim())
+                .map_err(|_| format!("runtime artifact integrity is invalid: {expected}"))?;
+            if decoded.len() != 64 {
+                return Err(format!("runtime artifact integrity is invalid: {expected}"));
+            }
+            Ok(format!("sha512-{}", encoded.trim()))
+        }
         _ => Err(format!(
             "runtime artifact integrity algorithm is unsupported: {algorithm}"
         )),
@@ -181,4 +207,32 @@ fn verify_file_sha512_base64(
         return Err("runtime artifact integrity mismatch".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::artifact_file_name_from_url;
+
+    #[test]
+    fn artifact_file_name_rejects_cross_platform_path_components() {
+        for url in [
+            "https://example.test/releases/..",
+            "https://example.test/releases/C:\\temp\\openclaw.exe",
+            "https://example.test/releases/..\\..\\openclaw.exe",
+            "https://example.test/releases/share:openclaw",
+        ] {
+            assert!(artifact_file_name_from_url(url).is_err(), "{url}");
+        }
+    }
+
+    #[test]
+    fn artifact_file_name_accepts_one_portable_component() {
+        assert_eq!(
+            artifact_file_name_from_url(
+                "https://example.test/releases/openclaw.tar.gz?download=1#asset"
+            )
+            .unwrap(),
+            "openclaw.tar.gz"
+        );
+    }
 }
