@@ -50,6 +50,11 @@ detect_target() {
       ;;
   esac
 
+  if [[ "$os" == "unknown-linux-gnu" && "$arch" == "aarch64" ]]; then
+    echo "error: unsupported platform: aarch64-unknown-linux-gnu" >&2
+    exit 1
+  fi
+
   printf '%s-%s\n' "$arch" "$os"
 }
 
