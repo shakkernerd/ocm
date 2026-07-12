@@ -118,6 +118,7 @@ pub(crate) fn lock_environment_operation(
     let lock_path = lock_dir.join(format!("{safe_name}.lock"));
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&lock_path)
@@ -150,6 +151,7 @@ fn lock_env_registry(
     let lock_path = registry_path.with_extension("lock");
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&lock_path)

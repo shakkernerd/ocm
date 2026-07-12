@@ -1,7 +1,11 @@
 mod support;
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::process::{Command, Stdio};
+use std::thread::sleep;
+use std::time::Duration;
 
+use fs2::FileExt;
 use serde_json::Value;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
@@ -95,6 +99,62 @@ fn env_cleanup_replaces_a_drifted_config_symlink_without_rewriting_its_target() 
                 .to_string()
         )
     );
+    assert!(repaired.contains("\"port\": 19790"));
+}
+
+#[test]
+fn env_cleanup_waits_for_the_environment_operation_lock() {
+    let root = TestDir::new("env-cleanup-operation-lock");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let source = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(source.status.success(), "{}", stderr(&source));
+    let target = run_ocm(&cwd, &env, &["env", "create", "target", "--port", "19790"]);
+    assert!(target.status.success(), "{}", stderr(&target));
+
+    let source_root = root.child("ocm-home/envs/source");
+    let target_config = root.child("ocm-home/envs/target/.openclaw/openclaw.json");
+    let drifted = format!(
+        "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}},\"gateway\":{{\"port\":19789}}}}\n",
+        source_root.join(".openclaw/workspace").display()
+    );
+    fs::write(&target_config, &drifted).unwrap();
+
+    let lock_path = root.child("ocm-home/locks/environments/target.lock");
+    fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    command
+        .current_dir(&cwd)
+        .args(["env", "cleanup", "target", "--yes"])
+        .env_clear()
+        .envs(&env)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    sleep(Duration::from_millis(250));
+
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "cleanup completed while another environment mutation held the operation lock"
+    );
+    assert_eq!(fs::read_to_string(&target_config).unwrap(), drifted);
+
+    FileExt::unlock(&lock).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let repaired = fs::read_to_string(target_config).unwrap();
     assert!(repaired.contains("\"port\": 19790"));
 }
 

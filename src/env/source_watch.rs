@@ -164,6 +164,7 @@ impl<'a> EnvironmentService<'a> {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&lock_path)
             .map_err(|error| {
                 format!(
@@ -530,6 +531,7 @@ fn open_source_watch_lock(lock_path: &Path) -> Result<File, String> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(lock_path)
         .map_err(|error| {
             format!(
