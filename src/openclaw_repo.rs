@@ -265,14 +265,39 @@ fn registered_worktree_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
         .args(["worktree", "list", "--porcelain", "-z"])
         .output()
         .map_err(|error| format!("failed to run git worktree list: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let detail = if !stderr.is_empty() { stderr } else { stdout };
-        return Err(format!("git worktree list failed: {detail}"));
+    if output.status.success() {
+        return parse_registered_worktree_paths(&output.stdout);
     }
 
-    parse_registered_worktree_paths(&output.stdout)
+    let fallback = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args([
+            "-c",
+            "core.quotePath=false",
+            "worktree",
+            "list",
+            "--porcelain",
+        ])
+        .output()
+        .map_err(|error| format!("failed to run compatible git worktree list: {error}"))?;
+    if fallback.status.success() {
+        return parse_legacy_registered_worktree_paths(&fallback.stdout);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() { stderr } else { stdout };
+    let fallback_stderr = String::from_utf8_lossy(&fallback.stderr).trim().to_string();
+    let fallback_stdout = String::from_utf8_lossy(&fallback.stdout).trim().to_string();
+    let fallback_detail = if !fallback_stderr.is_empty() {
+        fallback_stderr
+    } else {
+        fallback_stdout
+    };
+    Err(format!(
+        "git worktree list failed: {detail}; compatible fallback failed: {fallback_detail}"
+    ))
 }
 
 fn parse_registered_worktree_paths(output: &[u8]) -> Result<Vec<PathBuf>, String> {
@@ -280,6 +305,22 @@ fn parse_registered_worktree_paths(output: &[u8]) -> Result<Vec<PathBuf>, String
         .split(|byte| *byte == 0)
         .filter_map(|field| field.strip_prefix(b"worktree "))
         .map(|path| git_path_from_bytes(path).map(PathBuf::from))
+        .collect()
+}
+
+fn parse_legacy_registered_worktree_paths(output: &[u8]) -> Result<Vec<PathBuf>, String> {
+    output
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| line.strip_prefix(b"worktree "))
+        .map(|path| {
+            if path.starts_with(b"\"") {
+                return Err(
+                    "git worktree list returned a quoted path that requires Git 2.36 or newer"
+                        .to_string(),
+                );
+            }
+            git_path_from_bytes(path).map(PathBuf::from)
+        })
         .collect()
 }
 
@@ -402,8 +443,9 @@ fn git_path_from_bytes(path: &[u8]) -> Result<OsString, String> {
 #[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::ffi::OsStrExt;
+    use std::path::PathBuf;
 
-    use super::parse_registered_worktree_paths;
+    use super::{parse_legacy_registered_worktree_paths, parse_registered_worktree_paths};
 
     #[test]
     fn worktree_porcelain_parser_preserves_non_utf8_paths() {
@@ -414,5 +456,29 @@ mod tests {
 
         assert_eq!(paths.len(), 2);
         assert_eq!(paths[1].as_os_str().as_bytes(), b"/tmp/other\xff");
+    }
+
+    #[test]
+    fn legacy_worktree_porcelain_parser_preserves_spaces() {
+        let paths = parse_legacy_registered_worktree_paths(
+            b"worktree /tmp/openclaw checkout\nHEAD abc123\ndetached\n\n",
+        )
+        .unwrap();
+
+        assert_eq!(paths, vec![PathBuf::from("/tmp/openclaw checkout")]);
+    }
+
+    #[test]
+    fn legacy_worktree_porcelain_parser_rejects_quoted_paths() {
+        let error = parse_legacy_registered_worktree_paths(
+            br#"worktree "/tmp/openclaw\ncheckout"
+HEAD abc123
+detached
+
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("requires Git 2.36 or newer"));
     }
 }
