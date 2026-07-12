@@ -3,12 +3,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::infra::archive::{extract_tar_gz, extract_zip};
-use crate::infra::download::download_to_file;
-use crate::store::{display_path, resolve_store_paths};
+use crate::infra::download::{download_to_file, normalize_sha256, verify_file_sha256};
+use crate::store::{display_path, lock_file, resolve_store_paths};
 
 pub const OPENCLAW_MIN_NODE_VERSION: &str = "22.14.0";
 
 const INTERNAL_MANAGED_NODE_ARCHIVE_URL_ENV: &str = "OCM_INTERNAL_MANAGED_NODE_ARCHIVE_URL";
+const INTERNAL_MANAGED_NODE_ARCHIVE_SHA256_ENV: &str = "OCM_INTERNAL_MANAGED_NODE_ARCHIVE_SHA256";
 const NODE_DIST_BASE_URL: &str = "https://nodejs.org/dist";
 
 #[derive(Clone, Debug)]
@@ -26,6 +27,7 @@ pub(crate) struct ManagedNodeDistribution {
     node_relative_path: &'static str,
     npm_cli_relative_path: &'static str,
     platform_label: &'static str,
+    archive_sha256: &'static str,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -71,6 +73,18 @@ pub(crate) fn ensure_managed_node_toolchain(
 ) -> Result<ManagedNodeToolchain, String> {
     let distribution = managed_node_distribution()?;
     let root = managed_node_root(&distribution, env, cwd)?;
+    let parent = root.parent().ok_or_else(|| {
+        format!(
+            "managed Node.js root has no parent: {}",
+            display_path(&root)
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let lock_path = parent.join(format!(".{}.lock", distribution.root_dir_name));
+    let _lock = lock_file(&lock_path, "managed Node.js installation")?;
+
+    // Another OCM process may have completed the same installation while this
+    // process waited for the lock, so validate the shared root again here.
     if let Some((node_bin, npm_cli)) = verify_managed_node_toolchain(&root, &distribution) {
         return Ok(ManagedNodeToolchain { node_bin, npm_cli });
     }
@@ -83,14 +97,6 @@ pub(crate) fn ensure_managed_node_toolchain(
             )
         })?;
     }
-
-    let parent = root.parent().ok_or_else(|| {
-        format!(
-            "managed Node.js root has no parent: {}",
-            display_path(&root)
-        )
-    })?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
 
     let stage_root = parent.join(format!(
         ".node-toolchain-{}-{}",
@@ -105,6 +111,10 @@ pub(crate) fn ensure_managed_node_toolchain(
         fs::create_dir_all(&stage_root).map_err(|error| error.to_string())?;
         let archive_path = stage_root.join(&distribution.asset_name);
         download_to_file(&managed_node_archive_url(&distribution, env), &archive_path)?;
+        verify_file_sha256(
+            &archive_path,
+            &managed_node_archive_sha256(&distribution, env)?,
+        )?;
 
         let extract_root = stage_root.join("extract");
         match distribution.archive_kind {
@@ -135,9 +145,6 @@ pub(crate) fn ensure_managed_node_toolchain(
     })();
 
     let _ = fs::remove_dir_all(&stage_root);
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&root);
-    }
     result
 }
 
@@ -238,6 +245,31 @@ fn managed_node_distribution_for(
     node_relative_path: &'static str,
     npm_cli_relative_path: &'static str,
 ) -> Result<ManagedNodeDistribution, String> {
+    let archive_sha256 = match (version, suffix) {
+        ("22.14.0", "darwin-arm64") => {
+            "e9404633bc02a5162c5c573b1e2490f5fb44648345d64a958b17e325729a5e42"
+        }
+        ("22.14.0", "darwin-x64") => {
+            "6698587713ab565a94a360e091df9f6d91c8fadda6d00f0cf6526e9b40bed250"
+        }
+        ("22.14.0", "linux-arm64") => {
+            "8cf30ff7250f9463b53c18f89c6c606dfda70378215b2c905d0a9a8b08bd45e0"
+        }
+        ("22.14.0", "linux-x64") => {
+            "9d942932535988091034dc94cc5f42b6dc8784d6366df3a36c4c9ccb3996f0c2"
+        }
+        ("22.14.0", "win-arm64") => {
+            "2d71f5f9b2fffa33baa108c07d74b0d24e0c3dd8f441d567772ae0e3dd4b1a22"
+        }
+        ("22.14.0", "win-x64") => {
+            "55b639295920b219bb2acbcfa00f90393a2789095b7323f79475c9f34795f217"
+        }
+        _ => {
+            return Err(format!(
+                "unsupported managed Node.js distribution: v{version}-{suffix}"
+            ));
+        }
+    };
     let extension = match archive_kind {
         ManagedNodeArchiveKind::TarGz => "tar.gz",
         ManagedNodeArchiveKind::Zip => "zip",
@@ -251,6 +283,7 @@ fn managed_node_distribution_for(
         node_relative_path,
         npm_cli_relative_path,
         platform_label,
+        archive_sha256,
     })
 }
 
@@ -284,6 +317,28 @@ fn managed_node_archive_url(
         "{}/v{}/{}",
         NODE_DIST_BASE_URL, distribution.version, distribution.asset_name
     )
+}
+
+fn managed_node_archive_sha256(
+    distribution: &ManagedNodeDistribution,
+    env: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    if env
+        .get(INTERNAL_MANAGED_NODE_ARCHIVE_URL_ENV)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return env
+            .get(INTERNAL_MANAGED_NODE_ARCHIVE_SHA256_ENV)
+            .map(String::as_str)
+            .map(normalize_sha256)
+            .transpose()?
+            .ok_or_else(|| {
+                format!(
+                    "{INTERNAL_MANAGED_NODE_ARCHIVE_SHA256_ENV} is required when overriding the managed Node.js archive URL"
+                )
+            });
+    }
+    Ok(distribution.archive_sha256.to_string())
 }
 
 fn verify_managed_node_toolchain(

@@ -619,6 +619,10 @@ pub fn install_fake_managed_node_archive(
     version: &str,
 ) -> TestHttpServer {
     let archive = fake_managed_node_archive(version);
+    let archive_sha256 = {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(&archive))
+    };
     let server = TestHttpServer::serve_bytes(
         "/managed-node-toolchain",
         "application/octet-stream",
@@ -627,6 +631,10 @@ pub fn install_fake_managed_node_archive(
     env.insert(
         "OCM_INTERNAL_MANAGED_NODE_ARCHIVE_URL".to_string(),
         server.url(),
+    );
+    env.insert(
+        "OCM_INTERNAL_MANAGED_NODE_ARCHIVE_SHA256".to_string(),
+        archive_sha256,
     );
     server
 }
