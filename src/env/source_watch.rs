@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -62,6 +62,10 @@ impl Drop for SourceWatchLease {
 }
 
 impl SourceWatchLease {
+    pub(crate) fn begin_service_restore(&mut self) -> Result<(), String> {
+        write_source_watch_lock(&mut self.lock_file, &format!("restoring:{}", self.lease_id))
+    }
+
     #[cfg(unix)]
     pub(crate) fn configure_child(&self, command: &mut Command) {
         let lock_fd = self.lock_file.as_raw_fd();
@@ -196,15 +200,7 @@ impl<'a> EnvironmentService<'a> {
             std::process::id(),
             now_utc().unix_timestamp_nanos()
         );
-        lock_file
-            .set_len(0)
-            .and_then(|()| writeln!(lock_file, "{lease_id}"))
-            .map_err(|error| {
-                format!(
-                    "failed recording source watch lock {}: {error}",
-                    display_path(&lock_path)
-                )
-            })?;
+        write_source_watch_lock(&mut lock_file, &lease_id)?;
         Ok(SourceWatchLease {
             env_name,
             lease_id,
@@ -315,6 +311,10 @@ impl<'a> EnvironmentService<'a> {
                 })?
                 .trim()
                 .to_string();
+            if source_watch_lock_is_restoring(&lock_lease_id) {
+                remove_file_if_present(&path)?;
+                return Ok(None);
+            }
             let meta = read_json::<SourceWatchOverride>(&path).map_err(|error| {
                 format!(
                     "source watch for env \"{env_name}\" is active or starting, but its metadata is unavailable: {error}"
@@ -352,6 +352,10 @@ impl<'a> EnvironmentService<'a> {
                     })?
                     .trim()
                     .to_string();
+                if source_watch_lock_is_restoring(&lock_lease_id) {
+                    remove_file_if_present(&path)?;
+                    return Ok(None);
+                }
                 let meta = read_json::<SourceWatchOverride>(&path).map_err(|error| {
                     format!(
                         "source watch for env \"{env_name}\" is active or starting, but its metadata is unavailable: {error}"
@@ -373,6 +377,18 @@ impl<'a> EnvironmentService<'a> {
             )),
         }
     }
+}
+
+fn write_source_watch_lock(lock_file: &mut File, value: &str) -> Result<(), String> {
+    lock_file
+        .set_len(0)
+        .and_then(|()| lock_file.seek(SeekFrom::Start(0)).map(|_| ()))
+        .and_then(|()| writeln!(lock_file, "{value}"))
+        .map_err(|error| format!("failed recording source watch lock: {error}"))
+}
+
+fn source_watch_lock_is_restoring(lock_value: &str) -> bool {
+    lock_value.starts_with("restoring:")
 }
 
 fn is_leased_source_watch(meta: &SourceWatchOverride) -> bool {

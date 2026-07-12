@@ -40,7 +40,10 @@ fn install_fake_node(root: &TestDir, env: &mut BTreeMap<String, String>) -> Path
 fn create_source_repo(root: &TestDir) -> PathBuf {
     let repo = root.child("source/openclaw");
     fs::create_dir_all(repo.join("extensions/codex")).unwrap();
+    fs::create_dir_all(repo.join("scripts")).unwrap();
+    fs::write(repo.join("package.json"), r#"{"name":"openclaw"}"#).unwrap();
     fs::write(repo.join("openclaw.mjs"), "console.log('openclaw');\n").unwrap();
+    fs::write(repo.join("scripts/run-node.mjs"), "").unwrap();
     fs::write(
         repo.join("extensions/codex/openclaw.plugin.json"),
         r#"{"id":"codex"}"#,
@@ -272,6 +275,47 @@ fn held_source_watch_lease_without_metadata_blocks_runtime_fallback() {
         ),
         "{}",
         stderr(&resolve)
+    );
+}
+
+#[test]
+fn restoring_source_watch_lease_allows_runtime_fallback() {
+    let root = TestDir::new("source-watch-restoring");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let source_repo = create_source_repo(&root);
+    let env = ocm_env(&root);
+    let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
+    let _source_watch = lock_source_watch_with_id(&root, "restoring:fixture-lease");
+
+    let resolve = run_ocm(
+        &cwd,
+        &env,
+        &["env", "resolve", "demo", "--json", "--", "status"],
+    );
+
+    assert!(resolve.status.success(), "{}", stderr(&resolve));
+    let resolved: Value = serde_json::from_str(&stdout(&resolve)).unwrap();
+    assert_eq!(resolved["bindingKind"], "runtime");
+    assert_eq!(resolved["binaryPath"], path_string(&runtime_path));
+
+    let overlapping_watch = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "dev",
+            "demo",
+            "--repo",
+            &path_string(&source_repo),
+            "--watch",
+            "--force",
+        ],
+    );
+    assert!(!overlapping_watch.status.success());
+    assert!(
+        stderr(&overlapping_watch).contains("already active or starting"),
+        "{}",
+        stderr(&overlapping_watch)
     );
 }
 

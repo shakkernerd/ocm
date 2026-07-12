@@ -272,10 +272,12 @@ impl Cli {
                     stderr_profile,
                 ));
                 if let Err(stop_error) = self.stop_service_for_source_watch(&meta.name) {
-                    drop(source_watch_lease.take());
-                    return Err(
-                        self.restore_service_policy_after_failed_takeover(&meta.name, stop_error)
-                    );
+                    let lease = source_watch_lease
+                        .as_mut()
+                        .ok_or_else(|| "source watch lease is missing".to_string())?;
+                    return Err(self.restore_service_policy_after_failed_takeover(
+                        &meta.name, stop_error, lease,
+                    ));
                 }
             }
             self.stderr_lines(render_dev_run_step(
@@ -293,9 +295,12 @@ impl Cli {
                     .as_ref()
                     .ok_or_else(|| "source watch lease is missing".to_string())?,
             );
-            drop(source_watch_lease.take());
             let restore_result =
                 if watch_takes_over_service && source_watch_allows_service_restore(&watch_result) {
+                    source_watch_lease
+                        .as_mut()
+                        .ok_or_else(|| "source watch lease is missing".to_string())?
+                        .begin_service_restore()?;
                     self.stderr_lines(render_dev_run_step(
                         "Restore",
                         format!("Starting background service for {}", meta.name),
@@ -311,6 +316,7 @@ impl Cli {
                 } else {
                     Ok(())
                 };
+            drop(source_watch_lease.take());
             return combine_watch_and_restore_results(watch_result, restore_result, &meta.name);
         }
 
@@ -398,10 +404,11 @@ impl Cli {
                 stderr_profile,
             ));
             if let Err(stop_error) = self.stop_service_for_source_watch(&meta.name) {
-                drop(source_watch_lease.take());
-                return Err(
-                    self.restore_service_policy_after_failed_takeover(&meta.name, stop_error)
-                );
+                let lease = source_watch_lease
+                    .as_mut()
+                    .ok_or_else(|| "source watch lease is missing".to_string())?;
+                return Err(self
+                    .restore_service_policy_after_failed_takeover(&meta.name, stop_error, lease));
             }
         }
 
@@ -423,10 +430,13 @@ impl Cli {
                 .as_ref()
                 .ok_or_else(|| "source watch lease is missing".to_string())?,
         );
-        drop(source_watch_lease.take());
 
         let restore_result =
             if restore_service && source_watch_allows_service_restore(&watch_result) {
+                source_watch_lease
+                    .as_mut()
+                    .ok_or_else(|| "source watch lease is missing".to_string())?
+                    .begin_service_restore()?;
                 self.stderr_lines(render_dev_run_step(
                     "Restore",
                     format!("Starting background service for {}", meta.name),
@@ -443,6 +453,7 @@ impl Cli {
             } else {
                 Ok(())
             };
+        drop(source_watch_lease.take());
 
         combine_watch_and_restore_results(watch_result, restore_result, &meta.name)
     }
@@ -462,7 +473,13 @@ impl Cli {
         &self,
         env_name: &str,
         stop_error: String,
+        source_watch_lease: &mut SourceWatchLease,
     ) -> String {
+        if let Err(restore_state_error) = source_watch_lease.begin_service_restore() {
+            return format!(
+                "{stop_error}; also failed preparing background service restoration: {restore_state_error}"
+            );
+        }
         match self.service_service().start(env_name) {
             Ok(_) => format!(
                 "{stop_error}; restored the background service policy and did not start source watch"
