@@ -10,6 +10,12 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 #[cfg(windows)]
 use std::os::windows::{io::AsRawHandle, process::CommandExt as _};
 
@@ -37,11 +43,20 @@ use crate::store::{
 const DEV_PREFERENCES_KIND: &str = "ocm-dev-preferences";
 const SOURCE_WATCH_TREE_ACTIVE_ERROR: &str = "source watch process tree is still active";
 #[cfg(unix)]
-const SOURCE_WATCH_NODE_STDIN_SHIM: &str = r#"import path from "node:path";
+const SOURCE_WATCH_NODE_SHIM: &str = r#"import fs from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
+const startFd = Number(process.env.OCM_SOURCE_WATCH_START_FD);
+delete process.env.OCM_SOURCE_WATCH_START_FD;
+if (Number.isInteger(startFd) && fs.readSync(startFd, Buffer.alloc(1), 0, 1, null) !== 1) {
+  process.exit(1);
+}
 const script = path.resolve("scripts/watch-node.mjs");
 process.argv = [process.execPath, script, ...process.argv.slice(1)];
-Object.defineProperty(process.stdin, "isTTY", { value: true });
+if (process.env.OCM_SOURCE_WATCH_FORCE_TTY === "1") {
+  delete process.env.OCM_SOURCE_WATCH_FORCE_TTY;
+  Object.defineProperty(process.stdin, "isTTY", { value: true });
+}
 await import(pathToFileURL(script).href);"#;
 
 type SourceWatchResult<T> = Result<T, SourceWatchError>;
@@ -800,18 +815,12 @@ impl Cli {
 
         let mut command = Command::new("node");
         #[cfg(unix)]
-        if unsafe { libc::isatty(libc::STDIN_FILENO) } != 1 {
-            // watch-node detaches its runner solely from stdin.isTTY. Override that decision
-            // while preserving the real noninteractive stdin and EOF inherited by the runner.
-            command.args([
-                "--input-type=module",
-                "--eval",
-                SOURCE_WATCH_NODE_STDIN_SHIM,
-            ]);
+        {
+            command.args(["--input-type=module", "--eval", SOURCE_WATCH_NODE_SHIM]);
             command.args(&args[1..]);
-        } else {
-            command.args(&args);
         }
+        #[cfg(unix)]
+        let source_watch_force_tty = unsafe { libc::isatty(libc::STDIN_FILENO) } != 1;
         #[cfg(windows)]
         // watch-node never detaches runners on win32; the Job Object owns the full tree.
         command.args(&args);
@@ -822,6 +831,12 @@ impl Cli {
             .env_clear()
             .envs(build_openclaw_dev_source_env(meta, &self.env, repo_root))
             .current_dir(repo_root);
+        #[cfg(unix)]
+        if source_watch_force_tty {
+            // watch-node detaches its runner solely from stdin.isTTY. Override that decision
+            // while preserving the real noninteractive stdin and EOF inherited by the runner.
+            command.env("OCM_SOURCE_WATCH_FORCE_TTY", "1");
+        }
         _source_watch_lease.configure_child(&mut command);
 
         let mut log_files = if tee_to_env_logs {
@@ -935,6 +950,14 @@ impl Cli {
                     error.message,
                 )),
             };
+        let status_result = match (status_result, process_guard.restore_terminal()) {
+            (result, Ok(())) => result,
+            (Ok(_), Err(error)) => Err(SourceWatchError::from(error)),
+            (Err(error), Err(restore_error)) => Err(SourceWatchError {
+                message: format!("{}; {restore_error}", error.message),
+                cleanup_verified: error.cleanup_verified,
+            }),
+        };
         let tee_result = if !source_watch_allows_service_restore(&status_result) {
             drop(tee_threads);
             Ok(())
@@ -950,8 +973,13 @@ impl Cli {
         };
 
         let status = combine_source_watch_cleanup_results(status_result, tee_result, clear_result)?;
+        let mut status_code = status.code();
+        #[cfg(unix)]
+        if status_code.is_none() {
+            status_code = status.signal().map(|signal| 128 + signal);
+        }
         Ok(source_watch_exit_code(
-            status.code(),
+            status_code,
             stop_requested.load(Ordering::SeqCst),
         ))
     }
@@ -1067,12 +1095,46 @@ fn wait_for_source_watch_child(
 }
 
 struct SourceWatchProcessGuard {
+    #[cfg(unix)]
+    terminal: Option<SourceWatchTerminalGuard>,
     #[cfg(windows)]
     job: windows_sys::Win32::Foundation::HANDLE,
 }
 
+#[cfg(unix)]
+struct SourceWatchTerminalGuard {
+    original_process_group: libc::pid_t,
+    startup_reader: UnixStream,
+    startup_writer: UnixStream,
+    foreground_assigned: AtomicBool,
+}
+
 impl SourceWatchProcessGuard {
     fn new() -> Result<Self, String> {
+        #[cfg(unix)]
+        {
+            let terminal = if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 {
+                let original_process_group = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
+                if original_process_group == -1 {
+                    return Err(format!(
+                        "failed reading source watch terminal ownership: {}",
+                        io::Error::last_os_error()
+                    ));
+                }
+                let (startup_reader, startup_writer) = UnixStream::pair().map_err(|error| {
+                    format!("failed creating source watch startup gate: {error}")
+                })?;
+                Some(SourceWatchTerminalGuard {
+                    original_process_group,
+                    startup_reader,
+                    startup_writer,
+                    foreground_assigned: AtomicBool::new(false),
+                })
+            } else {
+                None
+            };
+            return Ok(Self { terminal });
+        }
         #[cfg(windows)]
         {
             use windows_sys::Win32::System::JobObjects::{
@@ -1109,18 +1171,35 @@ impl SourceWatchProcessGuard {
             }
             return Ok(Self { job });
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(unix, windows)))]
         {
             Ok(Self {})
         }
     }
 
     fn configure_command(&mut self, command: &mut Command) -> Result<(), String> {
+        #[cfg(unix)]
+        if let Some(terminal) = &self.terminal {
+            let startup_fd = terminal.startup_reader.as_raw_fd();
+            command.env("OCM_SOURCE_WATCH_START_FD", startup_fd.to_string());
+            unsafe {
+                command.pre_exec(move || {
+                    let flags = libc::fcntl(startup_fd, libc::F_GETFD);
+                    if flags == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    if libc::fcntl(startup_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
         #[cfg(windows)]
         {
             command.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(unix, windows)))]
         let _ = command;
         Ok(())
     }
@@ -1141,16 +1220,36 @@ impl SourceWatchProcessGuard {
                 ));
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
+        if let Some(terminal) = &self.terminal {
+            set_terminal_foreground_process_group(child.id() as libc::pid_t)?;
+            terminal.foreground_assigned.store(true, Ordering::SeqCst);
+        }
+        #[cfg(not(any(unix, windows)))]
         let _ = child;
         Ok(())
     }
 
-    fn start_child(&self, child: &std::process::Child) -> Result<(), String> {
+    fn start_child(&self, _child: &std::process::Child) -> Result<(), String> {
+        #[cfg(unix)]
+        if let Some(terminal) = &self.terminal {
+            let mut writer = &terminal.startup_writer;
+            writer
+                .write_all(&[1])
+                .map_err(|error| format!("failed releasing source watch startup gate: {error}"))?;
+        }
         #[cfg(windows)]
-        resume_windows_process(child.id())?;
-        #[cfg(not(windows))]
-        let _ = child;
+        resume_windows_process(_child.id())?;
+        Ok(())
+    }
+
+    fn restore_terminal(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        if let Some(terminal) = &self.terminal
+            && terminal.foreground_assigned.swap(false, Ordering::SeqCst)
+        {
+            set_terminal_foreground_process_group(terminal.original_process_group)?;
+        }
         Ok(())
     }
 
@@ -1217,6 +1316,13 @@ impl SourceWatchProcessGuard {
     }
 }
 
+#[cfg(unix)]
+impl Drop for SourceWatchProcessGuard {
+    fn drop(&mut self) {
+        let _ = self.restore_terminal();
+    }
+}
+
 #[cfg(windows)]
 impl Drop for SourceWatchProcessGuard {
     fn drop(&mut self) {
@@ -1224,6 +1330,40 @@ impl Drop for SourceWatchProcessGuard {
             windows_sys::Win32::Foundation::CloseHandle(self.job);
         }
     }
+}
+
+#[cfg(unix)]
+fn set_terminal_foreground_process_group(process_group: libc::pid_t) -> Result<(), String> {
+    let mut previous_mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    let mut blocked_mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    unsafe {
+        libc::sigemptyset(&mut blocked_mask);
+        libc::sigaddset(&mut blocked_mask, libc::SIGTTOU);
+    }
+    let mask_result =
+        unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &blocked_mask, &mut previous_mask) };
+    if mask_result != 0 {
+        return Err(format!(
+            "failed blocking terminal ownership signal: {}",
+            io::Error::from_raw_os_error(mask_result)
+        ));
+    }
+    let terminal_result = unsafe { libc::tcsetpgrp(libc::STDIN_FILENO, process_group) };
+    let terminal_error = (terminal_result == -1).then(io::Error::last_os_error);
+    let restore_mask_result =
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &previous_mask, std::ptr::null_mut()) };
+    if restore_mask_result != 0 {
+        return Err(format!(
+            "failed restoring terminal ownership signal mask: {}",
+            io::Error::from_raw_os_error(restore_mask_result)
+        ));
+    }
+    if let Some(error) = terminal_error {
+        return Err(format!(
+            "failed assigning source watch terminal ownership: {error}"
+        ));
+    }
+    Ok(())
 }
 
 fn stop_source_watch_child(

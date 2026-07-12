@@ -1,6 +1,14 @@
 mod support;
 
 use std::fs;
+#[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -363,6 +371,75 @@ fn install_orphaning_fake_dev_runners(
     );
     write_executable_script(&root.child("fake-dev-bin/node"), &node);
     (started, descendant_pid, stdin_kind, node_args)
+}
+
+#[cfg(unix)]
+fn install_interactive_fake_dev_runners(
+    root: &TestDir,
+    env: &mut std::collections::BTreeMap<String, String>,
+) -> (PathBuf, PathBuf) {
+    install_fake_dev_runners(root, env);
+    let started = root.child("source-watch.started");
+    let received = root.child("source-watch.received");
+    let node = format!(
+        "#!/bin/sh\nprintf 'ready\\n' > \"{}\"\nIFS= read -r line\nprintf '%s\\n' \"$line\" > \"{}\"\n",
+        path_string(&started),
+        path_string(&received),
+    );
+    write_executable_script(&root.child("fake-dev-bin/node"), &node);
+    (started, received)
+}
+
+#[cfg(unix)]
+fn spawn_ocm_with_controlling_pty(
+    cwd: &Path,
+    env: &std::collections::BTreeMap<String, String>,
+    args: &[&str],
+) -> (std::process::Child, File) {
+    let mut master_fd = -1;
+    let mut slave_fd = -1;
+    let opened = unsafe {
+        libc::openpty(
+            &mut master_fd,
+            &mut slave_fd,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        opened,
+        0,
+        "failed opening test PTY: {}",
+        std::io::Error::last_os_error()
+    );
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    command
+        .current_dir(cwd)
+        .args(args)
+        .env_clear()
+        .envs(env)
+        .stdin(Stdio::from(slave))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpgrp()) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    (command.spawn().unwrap(), master)
 }
 
 fn wait_for_path(path: &Path, timeout: Duration) -> bool {
@@ -1621,6 +1698,42 @@ fn dev_watch_stops_descendants_when_the_wrapper_exits_first() {
     assert!(
         wait_for_process_exit(descendant_pid, Duration::from_secs(3)),
         "source watch descendant {descendant_pid} survived wrapper exit"
+    );
+    assert!(!source_watch_override_path(&root, "demo").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_watch_gives_interactive_child_terminal_foreground_ownership() {
+    let root = TestDir::new("dev-command-watch-interactive-terminal");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    let (started, received) = install_interactive_fake_dev_runners(&root, &mut env);
+
+    let repo_path = path_string(&repo);
+    let (mut watch, mut terminal) = spawn_ocm_with_controlling_pty(
+        &cwd,
+        &env,
+        &["dev", "demo", "--repo", &repo_path, "--watch"],
+    );
+    assert!(
+        wait_for_path(&started, Duration::from_secs(30)),
+        "source watch did not reach its interactive stdin read"
+    );
+    terminal.write_all(b"terminal-input\n").unwrap();
+    assert!(
+        wait_for_path(&received, Duration::from_secs(10)),
+        "source watch was suspended while reading inherited terminal stdin"
+    );
+
+    drop(terminal);
+    let status = watch.wait().unwrap();
+    assert!(status.success(), "source watch exited with {status}");
+    assert_eq!(
+        fs::read_to_string(received).unwrap().trim(),
+        "terminal-input"
     );
     assert!(!source_watch_override_path(&root, "demo").exists());
 }
