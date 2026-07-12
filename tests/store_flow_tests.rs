@@ -1,6 +1,7 @@
 mod support;
 
 use std::fs;
+use std::process::{Command, Stdio};
 
 use ocm::env::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions,
@@ -64,6 +65,45 @@ fn environment_store_round_trip_covers_create_read_list_and_remove() {
     let registry_raw = fs::read_to_string(registry_path).unwrap();
     assert!(!registry_raw.contains("\"name\": \"alpha\""));
     assert!(!std::path::Path::new(&removed.root).exists());
+}
+
+#[test]
+fn concurrent_environment_creates_preserve_every_registry_entry() {
+    let root = TestDir::new("store-env-concurrent-create");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let mut children = (0..8)
+        .map(|index| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_ocm"));
+            command
+                .current_dir(&cwd)
+                .args(["env", "create", &format!("env-{index}")])
+                .env_clear()
+                .envs(&env)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command.spawn().unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    for child in children.drain(..) {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let envs = list_environments(&env, &cwd).unwrap();
+    assert_eq!(envs.len(), 8);
+    let ports = envs
+        .iter()
+        .map(|meta| meta.gateway_port.unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(ports.len(), 8);
 }
 
 #[test]
