@@ -754,7 +754,11 @@ fn service_stop_preserves_the_daemon_when_launchctl_cannot_confirm_state() {
     );
     assert!(managed_service_definition_path(&env, &cwd, "ocm").exists());
     let calls = fs::read_to_string(log_path).unwrap();
-    assert_eq!(calls.lines().next(), Some("print gui/501/ai.openclaw.ocm"));
+    assert!(
+        calls.lines().next().is_some_and(
+            |line| line.starts_with("print gui/") && line.ends_with("/ai.openclaw.ocm")
+        )
+    );
 }
 
 #[test]
