@@ -171,7 +171,13 @@ esac
     );
 
     let output = Command::new(script("publish-release.sh"))
-        .args(["--repo", "example/ocm", "--tag", "v1.2.3", "--asset-dir"])
+        .args([
+            "--repo",
+            "example/ocm",
+            "--tag",
+            "v1.2.3+build-1",
+            "--asset-dir",
+        ])
         .arg(&asset_dir)
         .env("PATH", path)
         .env("TEST_GH_STATE", &state_dir)
@@ -195,6 +201,107 @@ esac
         fs::read_to_string(state_dir.join("draft")).unwrap(),
         "false\n"
     );
+}
+
+#[test]
+fn verify_release_tag_requires_a_verified_annotated_tag_matching_the_package() {
+    let root = TestDir::new("verify-release-tag");
+    let fake_bin = root.child("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let expected_commit_output = Command::new("git")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(expected_commit_output.status.success());
+    let expected_commit = String::from_utf8(expected_commit_output.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    let tag_object = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    write_executable_script(
+        &fake_bin.join("gh"),
+        &format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"/git/ref/tags/"*) printf 'tag\t{tag_object}\n' ;;
+  *"/git/tags/"*) printf '%s\tcommit\t{expected_commit}\t%s\n' "${{TEST_TAG:-v0.2.25}}" "${{TEST_TAG_VERIFIED:-true}}" ;;
+  *"/git/ref/heads/main"*) printf '{expected_commit}\n' ;;
+  *"/compare/"*) printf '%s\n' "${{TEST_COMPARE_STATUS:-identical}}" ;;
+  "api repos/example/ocm --jq .default_branch") printf 'main\n' ;;
+  *) exit 1 ;;
+esac
+"#
+        ),
+    );
+    let path = format!(
+        "{}:{}",
+        path_string(&fake_bin),
+        std::env::var("PATH").unwrap()
+    );
+
+    let verified = Command::new(script("verify-release-tag.sh"))
+        .args([
+            "--repo",
+            "example/ocm",
+            "--tag",
+            "v0.2.25",
+            "--commit",
+            &expected_commit,
+        ])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(verified.status.success(), "{}", stderr(&verified));
+
+    let unsigned = Command::new(script("verify-release-tag.sh"))
+        .args([
+            "--repo",
+            "example/ocm",
+            "--tag",
+            "v0.2.25",
+            "--commit",
+            &expected_commit,
+        ])
+        .env("PATH", &path)
+        .env("TEST_TAG_VERIFIED", "false")
+        .output()
+        .unwrap();
+    assert_eq!(unsigned.status.code(), Some(1));
+    assert!(stderr(&unsigned).contains("did not verify the signature"));
+
+    let mismatched = Command::new(script("verify-release-tag.sh"))
+        .args([
+            "--repo",
+            "example/ocm",
+            "--tag",
+            "v0.2.26",
+            "--commit",
+            &expected_commit,
+        ])
+        .env("PATH", &path)
+        .env("TEST_TAG", "v0.2.26")
+        .output()
+        .unwrap();
+    assert_eq!(mismatched.status.code(), Some(1));
+    assert!(stderr(&mismatched).contains("does not match package version"));
+
+    let unreviewed = Command::new(script("verify-release-tag.sh"))
+        .args([
+            "--repo",
+            "example/ocm",
+            "--tag",
+            "v0.2.25",
+            "--commit",
+            &expected_commit,
+        ])
+        .env("PATH", path)
+        .env("TEST_COMPARE_STATUS", "diverged")
+        .output()
+        .unwrap();
+    assert_eq!(unreviewed.status.code(), Some(1));
+    assert!(stderr(&unreviewed).contains("is not on the protected main branch"));
 }
 
 #[test]
@@ -302,6 +409,9 @@ fn workflows_pin_actions_lock_dependencies_and_gate_the_msrv() {
     assert!(ci.contains("cargo test --locked"));
     assert!(ci.contains("cargo install --locked"));
     assert!(release.contains("cargo build --locked --release"));
+    assert!(release.contains("scripts/verify-release-tag.sh"));
     assert!(release.contains("scripts/publish-release.sh"));
     assert!(release.contains("cp ./install.sh ./dist/install.sh"));
+    assert!(release.contains("group: release-${{ inputs.tag }}"));
+    assert!(!release.contains("github.ref_name"));
 }

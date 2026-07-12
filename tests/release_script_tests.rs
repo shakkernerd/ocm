@@ -207,7 +207,7 @@ fn init_release_repo(label: &str) -> ReleaseRepo {
     write_executable_script(
         &git_wrapper,
         &format!(
-            "#!/usr/bin/env bash\nset -euo pipefail\nreal_git=\"{}\"\nif [[ \"${{1:-}}\" == \"-c\" && \"${{2:-}}\" == \"tag.gpgSign=true\" && \"${{3:-}}\" == \"tag\" ]]; then\n  shift 2\n  \"$real_git\" \"$@\"\n  touch \".git/test-signed-${{3}}\"\n  exit 0\nfi\nif [[ \"${{1:-}}\" == \"cat-file\" && \"${{2:-}}\" == \"-p\" ]]; then\n  \"$real_git\" \"$@\"\n  if [[ -n \"${{3:-}}\" && -f \".git/test-signed-${{3}}\" ]]; then\n    printf '%s\\n' '-----BEGIN SSH SIGNATURE-----' 'test-signature' '-----END SSH SIGNATURE-----'\n  fi\n  exit 0\nfi\nif [[ \"${{1:-}}\" == \"verify-tag\" ]]; then\n  [[ -n \"${{2:-}}\" && -f \".git/test-signed-${{2}}\" ]]\n  exit\nfi\nexec \"$real_git\" \"$@\"\n",
+            "#!/usr/bin/env bash\nset -euo pipefail\nreal_git=\"{}\"\nif [[ \"${{1:-}}\" == \"-c\" && \"${{2:-}}\" == \"tag.gpgSign=true\" && \"${{3:-}}\" == \"tag\" ]]; then\n  shift 2\n  \"$real_git\" \"$@\"\n  touch \".git/test-signed-${{3}}\"\n  exit 0\nfi\nif [[ \"${{1:-}}\" == \"cat-file\" && \"${{2:-}}\" == \"-p\" ]]; then\n  \"$real_git\" \"$@\"\n  if [[ -n \"${{3:-}}\" && -f \".git/test-signed-${{3}}\" ]]; then\n    printf '%s\\n' '-----BEGIN SSH SIGNATURE-----' 'test-signature' '-----END SSH SIGNATURE-----'\n  fi\n  exit 0\nfi\nif [[ \"${{1:-}}\" == \"verify-tag\" ]]; then\n  [[ -n \"${{2:-}}\" && -f \".git/test-signed-${{2}}\" ]]\n  exit\nfi\nif [[ \"${{1:-}}\" == \"push\" && -f .git/test-push-fails-after-success ]]; then\n  \"$real_git\" \"$@\"\n  exit 1\nfi\nif [[ \"${{1:-}}\" == \"push\" && -f .git/test-probe-fails-after-push ]]; then\n  touch .git/test-remote-probes-fail\n  exit 1\nfi\nif [[ \"${{1:-}}\" == \"ls-remote\" && -f .git/test-remote-probes-fail ]]; then\n  exit 1\nfi\nexec \"$real_git\" \"$@\"\n",
             real_git
         ),
     );
@@ -422,6 +422,89 @@ fn release_script_rolls_back_when_atomic_push_is_rejected() {
             .unwrap()
             .contains("version = \"0.2.8\"")
     );
+}
+
+#[test]
+fn release_script_keeps_local_state_when_push_succeeds_but_reports_failure() {
+    let repo = init_release_repo("release-script-ambiguous-push");
+    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
+    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
+    fs::write(repo.repo.join(".git/test-push-fails-after-success"), "").unwrap();
+
+    let output = repo.run_release("0.2.8");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("push reported failure"));
+    let head_sha = repo.git_stdout(&["rev-parse", "HEAD"]);
+    assert_eq!(
+        repo.git_stdout(&["log", "-1", "--pretty=%s"]).trim(),
+        "chore: bump version to 0.2.8"
+    );
+    assert_eq!(repo.remote_tag_commit("v0.2.8"), head_sha.trim());
+    assert!(
+        repo.remote_ls_remote("refs/heads/main")
+            .contains(head_sha.trim())
+    );
+}
+
+#[test]
+fn release_script_keeps_local_state_when_remote_push_state_is_unknown() {
+    let repo = init_release_repo("release-script-unknown-push-state");
+    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
+    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
+    fs::write(repo.repo.join(".git/test-probe-fails-after-push"), "").unwrap();
+
+    let output = repo.run_release("0.2.8");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("remote state could not be determined"));
+    assert_eq!(
+        repo.git_stdout(&["log", "-1", "--pretty=%s"]).trim(),
+        "chore: bump version to 0.2.8"
+    );
+    assert!(
+        repo.git_output(&["show-ref", "--verify", "refs/tags/v0.2.8"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn release_script_rejects_a_different_remote_tag_object() {
+    let repo = init_release_repo("release-script-remote-tag-mismatch");
+    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
+    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
+    assert!(
+        repo.git_output(&["add", "Cargo.toml", "Cargo.lock"])
+            .status
+            .success()
+    );
+    assert!(
+        repo.git_output(&["commit", "-m", "chore: bump version to 0.2.8"])
+            .status
+            .success()
+    );
+    assert!(
+        repo.git_output(&["tag", "-a", "v0.2.8", "-m", "v0.2.8"])
+            .status
+            .success()
+    );
+    repo.mark_tag_signed("v0.2.8");
+    assert!(repo.git_output(&["push", "fake", "main"]).status.success());
+    let head_sha = repo.git_stdout(&["rev-parse", "HEAD"]);
+    let remote_tag = Command::new(&repo.git)
+        .args([
+            "--git-dir",
+            &path_string(&repo.remote),
+            "update-ref",
+            "refs/tags/v0.2.8",
+            head_sha.trim(),
+        ])
+        .output()
+        .unwrap();
+    assert!(remote_tag.status.success(), "{}", stderr(&remote_tag));
+
+    let output = repo.run_release("0.2.8");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("differs from the verified local signed tag"));
 }
 
 #[test]

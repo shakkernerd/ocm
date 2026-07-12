@@ -1,19 +1,52 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Signed release tag to publish
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify:
+    name: Verify release tag
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.verify.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify signed tag and package version
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          verified_commit="$(
+            ./scripts/verify-release-tag.sh \
+              --repo "$RELEASE_REPO" \
+              --tag "$RELEASE_TAG"
+          )"
+          printf 'commit=%s\n' "$verified_commit" >>"$GITHUB_OUTPUT"
+
   build:
     name: Build ${{ matrix.target }}
+    needs: verify
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -28,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
@@ -53,14 +86,17 @@ jobs:
 
   publish:
     name: Publish complete release
-    needs: build
+    needs:
+      - verify
+      - build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ needs.verify.outputs.commit }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Download release archives
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -73,8 +109,16 @@ jobs:
       - name: Publish verified release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
+          RELEASE_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
+          ./scripts/verify-release-tag.sh \
+            --repo "$RELEASE_REPO" \
+            --tag "$RELEASE_TAG" \
+            --commit "$RELEASE_COMMIT" \
+            >/dev/null
           ./scripts/publish-release.sh \
-            --repo "${{ github.repository }}" \
-            --tag "${{ github.ref_name }}" \
+            --repo "$RELEASE_REPO" \
+            --tag "$RELEASE_TAG" \
             --asset-dir ./dist

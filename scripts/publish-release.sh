@@ -78,7 +78,9 @@ if [[ "$actual_assets" != "$expected_assets" ]]; then
 fi
 
 release_flags=(--draft=false)
-if [[ "${tag#v}" == *-* ]]; then
+version_without_build="${tag#v}"
+version_without_build="${version_without_build%%+*}"
+if [[ "$version_without_build" == *-* ]]; then
   release_flags+=(--prerelease --latest=false)
 else
   release_flags+=(--latest)

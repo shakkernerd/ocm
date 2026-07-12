@@ -22,4 +22,4 @@ All notable changes to OCM are documented here.
 - Fail migration planning on corrupt environment registries and only auto-bind executable OpenClaw commands from `PATH`.
 - Report launcher and environment rollback failures alongside the original migration error instead of hiding partial cleanup.
 - Make release preparation rollback-safe, verify signed annotated tags on every resume path, and publish branch and tag refs atomically.
-- Build locked release artifacts before creating a public GitHub release, require the complete supported target matrix, publish a versioned checksum-verifying installer, pin CI actions, and test the declared Rust 1.88 minimum.
+- Build locked release artifacts only from a GitHub-verified tag matching the package version, require the complete supported target matrix before publication, publish a versioned checksum-verifying installer, pin CI actions, and test the declared Rust 1.88 minimum.

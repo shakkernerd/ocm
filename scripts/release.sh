@@ -55,6 +55,10 @@ remote_tag_commit() {
   '
 }
 
+remote_tag_object() {
+  git ls-remote "$remote" "refs/tags/${tag}" | awk 'NR == 1 { print $1 }'
+}
+
 tag_has_signature() {
   git cat-file -p "$1" | grep -Eq -- '-----BEGIN (PGP|SSH) SIGNATURE-----'
 }
@@ -208,6 +212,7 @@ fi
 
 local_tag_commit_sha="$(ref_commit "$tag")"
 remote_tag_commit_sha="$(remote_tag_commit)"
+remote_tag_object_sha="$(remote_tag_object)"
 remote_main_sha="$(remote_ref_commit "refs/heads/main")"
 
 if [[ -n "$local_tag_commit_sha" && "$local_tag_commit_sha" != "$head_sha" ]]; then
@@ -341,21 +346,54 @@ if ! git verify-tag "$tag" >/dev/null 2>&1; then
   echo "error: release tag ${tag} does not have a valid configured signature" >&2
   exit 1
 fi
+local_tag_object_sha="$(git rev-parse "${tag}^{tag}")"
 
 remote_main_sha="$(remote_ref_commit "refs/heads/main")"
 remote_tag_commit_sha="$(remote_tag_commit)"
+remote_tag_object_sha="$(remote_tag_object)"
+if [[ -n "$remote_tag_object_sha" && "$remote_tag_object_sha" != "$local_tag_object_sha" ]]; then
+  echo "error: remote tag ${tag} differs from the verified local signed tag; preserve both refs and resolve the release state manually" >&2
+  exit 1
+fi
 
 push_targets=()
 if [[ "$remote_main_sha" != "$head_sha" ]]; then
   push_targets+=("main")
 fi
-if [[ "$remote_tag_commit_sha" != "$head_sha" ]]; then
+if [[ -z "$remote_tag_object_sha" ]]; then
   push_targets+=("$tag")
 fi
 
 if [[ "${#push_targets[@]}" -gt 0 ]]; then
-  run_step "Atomically pushing ${push_targets[*]} to ${remote}" \
-    git push --atomic "$remote" "${push_targets[@]}"
+  push_started_at="$SECONDS"
+  log_step "Atomically pushing ${push_targets[*]} to ${remote}"
+  if git push --atomic "$remote" "${push_targets[@]}"; then
+    log_step "done: Atomically pushing ${push_targets[*]} to ${remote} ($((SECONDS - push_started_at))s)"
+  else
+    if ! pushed_main_sha="$(remote_ref_commit "refs/heads/main")" ||
+      ! pushed_tag_sha="$(remote_tag_commit)" ||
+      ! pushed_tag_object_sha="$(remote_tag_object)"; then
+      transaction_complete=1
+      trap - EXIT
+      echo "error: push failed and remote state could not be determined; preserving the local release commit and tag for recovery" >&2
+      exit 1
+    fi
+    if [[ "$pushed_main_sha" == "$head_sha" &&
+      "$pushed_tag_sha" == "$head_sha" &&
+      "$pushed_tag_object_sha" == "$local_tag_object_sha" ]]; then
+      log_step "push reported failure, but ${remote} has both release refs at ${head_sha:0:7}"
+    elif [[ "$pushed_main_sha" != "$remote_main_sha" ||
+      "$pushed_tag_sha" != "$remote_tag_commit_sha" ||
+      "$pushed_tag_object_sha" != "$remote_tag_object_sha" ]]; then
+      transaction_complete=1
+      trap - EXIT
+      echo "error: push failed after remote release state changed; preserving the local release commit and tag for recovery" >&2
+      exit 1
+    else
+      echo "error: atomic release push failed; remote refs were unchanged" >&2
+      exit 1
+    fi
+  fi
 else
   log_skip "main and ${tag} are already pushed to ${remote}"
 fi
@@ -367,6 +405,6 @@ cat <<EOF
 Release prep complete for ${tag}.
 
 Next:
-  1. The release workflow will build every archive from ${tag}
-  2. It will publish the GitHub release only after all archives and SHA256SUMS are uploaded
+  1. Run: gh workflow run release.yml --ref main -f tag=${tag}
+  2. The workflow will verify ${tag}, build every archive, and publish only after all assets and SHA256SUMS are uploaded
 EOF
