@@ -37,6 +37,65 @@ enum ServiceSupervisorPolicy {
     EnsureRunning,
 }
 
+#[derive(Clone, Copy)]
+enum ServiceUpdate {
+    Install,
+    Start,
+    Stop,
+    Restart,
+    Uninstall,
+}
+
+impl ServiceUpdate {
+    fn settings(
+        self,
+    ) -> (
+        &'static str,
+        Option<bool>,
+        Option<bool>,
+        bool,
+        ServiceSupervisorPolicy,
+    ) {
+        match self {
+            Self::Install => (
+                "install",
+                Some(true),
+                Some(false),
+                true,
+                ServiceSupervisorPolicy::EnsureRunning,
+            ),
+            Self::Start => (
+                "start",
+                Some(true),
+                Some(true),
+                true,
+                ServiceSupervisorPolicy::EnsureRunning,
+            ),
+            Self::Stop => (
+                "stop",
+                Some(true),
+                Some(false),
+                false,
+                ServiceSupervisorPolicy::LeaveAsIs,
+            ),
+            Self::Restart => (
+                "restart",
+                Some(true),
+                Some(true),
+                false,
+                ServiceSupervisorPolicy::EnsureRunning,
+            ),
+            Self::Uninstall => (
+                "uninstall",
+                Some(false),
+                Some(false),
+                false,
+                ServiceSupervisorPolicy::LeaveAsIs,
+            ),
+        }
+    }
+}
+
 struct RestartActionStatus {
     summary: ServiceSummary,
     warnings: Vec<String>,
@@ -48,16 +107,7 @@ pub fn install_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceInstallSummary, String> {
-    update_service(
-        name,
-        "install",
-        Some(true),
-        Some(false),
-        true,
-        ServiceSupervisorPolicy::EnsureRunning,
-        env,
-        cwd,
-    )
+    update_service(name, ServiceUpdate::Install, env, cwd)
 }
 
 pub fn start_service(
@@ -65,16 +115,7 @@ pub fn start_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
-    update_service(
-        name,
-        "start",
-        Some(true),
-        Some(true),
-        true,
-        ServiceSupervisorPolicy::EnsureRunning,
-        env,
-        cwd,
-    )
+    update_service(name, ServiceUpdate::Start, env, cwd)
 }
 
 pub fn stop_service(
@@ -82,16 +123,7 @@ pub fn stop_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
-    update_service(
-        name,
-        "stop",
-        Some(true),
-        Some(false),
-        false,
-        ServiceSupervisorPolicy::LeaveAsIs,
-        env,
-        cwd,
-    )
+    update_service(name, ServiceUpdate::Stop, env, cwd)
 }
 
 pub fn restart_service(
@@ -103,30 +135,12 @@ pub fn restart_service(
     let env_service = EnvironmentService::new(env, cwd);
     let meta = env_service.get(name)?;
     if !(meta.service_enabled && meta.service_running) {
-        return update_service(
-            name,
-            "restart",
-            Some(true),
-            Some(true),
-            false,
-            ServiceSupervisorPolicy::EnsureRunning,
-            env,
-            cwd,
-        );
+        return update_service(name, ServiceUpdate::Restart, env, cwd);
     }
 
     let before = super::inspect::service_status_fast(name, env, cwd)?;
     if !before.ocm_service_running {
-        return update_service(
-            name,
-            "restart",
-            Some(true),
-            Some(true),
-            false,
-            ServiceSupervisorPolicy::EnsureRunning,
-            env,
-            cwd,
-        );
+        return update_service(name, ServiceUpdate::Restart, env, cwd);
     }
 
     let supervisor = SupervisorService::new(env, cwd);
@@ -180,16 +194,7 @@ pub fn uninstall_service(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
-    update_service(
-        name,
-        "uninstall",
-        Some(false),
-        Some(false),
-        false,
-        ServiceSupervisorPolicy::LeaveAsIs,
-        env,
-        cwd,
-    )
+    update_service(name, ServiceUpdate::Uninstall, env, cwd)
 }
 
 fn ensure_gateway_binding(
@@ -213,14 +218,12 @@ fn ensure_supervisor_running(env: &BTreeMap<String, String>, cwd: &Path) -> Resu
 
 fn update_service(
     name: &str,
-    action: &str,
-    service_enabled: Option<bool>,
-    service_running: Option<bool>,
-    require_binding: bool,
-    supervisor_policy: ServiceSupervisorPolicy,
+    update: ServiceUpdate,
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
+    let (action, service_enabled, service_running, require_binding, supervisor_policy) =
+        update.settings();
     if require_binding {
         ensure_gateway_binding(name, env, cwd)?;
     }

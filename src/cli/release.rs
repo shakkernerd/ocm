@@ -104,12 +104,12 @@ impl Cli {
             version.as_deref(),
             channel.as_deref(),
         )?;
-        if let Some(name) = args.first() {
-            if name != runtime_name.as_str() {
-                return Err(format!(
-                    "release install uses the canonical runtime name \"{runtime_name}\" for this selector"
-                ));
-            }
+        if let Some(name) = args.first()
+            && name != runtime_name.as_str()
+        {
+            return Err(format!(
+                "release install uses the canonical runtime name \"{runtime_name}\" for this selector"
+            ));
         }
         if let Some(code) = self.ensure_official_release_host_ready(Some(profile), json_flag)? {
             return Ok(code);

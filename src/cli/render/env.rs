@@ -727,13 +727,13 @@ fn env_doctor_next_steps(doctor: &EnvDoctorSummary, command_example: &str) -> Ve
 
     if doctor.runtime_status == "missing" || doctor.runtime_status == "broken" {
         let mut rows = Vec::new();
-        if let Some(runtime_name) = doctor.resolved_name.as_deref() {
-            if doctor.resolved_kind.as_deref() == Some("runtime") {
-                rows.push(KeyValueRow::accent(
-                    "Check runtime",
-                    format!("{command_example} runtime verify {runtime_name}"),
-                ));
-            }
+        if let Some(runtime_name) = doctor.resolved_name.as_deref()
+            && doctor.resolved_kind.as_deref() == Some("runtime")
+        {
+            rows.push(KeyValueRow::accent(
+                "Check runtime",
+                format!("{command_example} runtime verify {runtime_name}"),
+            ));
         }
         rows.push(KeyValueRow::warning(
             "Cleanup",

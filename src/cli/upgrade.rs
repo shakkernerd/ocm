@@ -393,14 +393,13 @@ impl Cli {
             let _ = self.environment_service().remove(&cloned.name, true);
             return Err(error);
         }
-        if cloned.protected {
-            if let Err(error) = self
+        if cloned.protected
+            && let Err(error) = self
                 .environment_service()
                 .set_protected(&cloned.name, false)
-            {
-                let _ = self.environment_service().remove(&cloned.name, true);
-                return Err(error);
-            }
+        {
+            let _ = self.environment_service().remove(&cloned.name, true);
+            return Err(error);
         }
 
         let mut checks = vec![UpgradeSimulationCheck::passed(
@@ -427,7 +426,7 @@ impl Cli {
             );
             return self.finish_simulation_summary(summary, options);
         }
-        checks.push(self.run_update_plan_check(&cloned.name, &target));
+        checks.push(self.run_update_plan_check(&cloned.name, target));
 
         match self.apply_simulation_target(&cloned.name, target, prepared_runtime) {
             Ok((kind, name, note)) => {

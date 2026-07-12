@@ -300,7 +300,7 @@ impl<'a> EnvironmentService<'a> {
     ) -> Result<GatewayProcessSpec, String> {
         let env = self.apply_effective_gateway_port(self.get(name)?)?;
         if let Some(source) = self.active_source_watch_override(&env.name)? {
-            return Ok(source_watch_gateway_process_spec(&env, self.env, source)?);
+            return source_watch_gateway_process_spec(&env, self.env, source);
         }
         resolve_gateway_process_spec(&env, self.env, self.cwd, bootstrap_managed_node)
     }
@@ -326,19 +326,20 @@ impl<'a> EnvironmentService<'a> {
             return Err("env run accepts only one of --runtime or --launcher".to_string());
         }
 
-        if !has_runtime_override && !has_launcher_override {
-            if let Some(source) = self.active_source_watch_override(&env.name)? {
-                let program_args = source_watch_openclaw_program_args(&source, &args);
-                let run_dir = PathBuf::from(&source.repo_root);
-                return Ok(ResolvedExecution::SourceWatch {
-                    env,
-                    source,
-                    forwarded_args: args,
-                    program: "node".to_string(),
-                    program_args,
-                    run_dir,
-                });
-            }
+        if !has_runtime_override
+            && !has_launcher_override
+            && let Some(source) = self.active_source_watch_override(&env.name)?
+        {
+            let program_args = source_watch_openclaw_program_args(&source, &args);
+            let run_dir = PathBuf::from(&source.repo_root);
+            return Ok(ResolvedExecution::SourceWatch {
+                env,
+                source,
+                forwarded_args: args,
+                program: "node".to_string(),
+                program_args,
+                run_dir,
+            });
         }
 
         match resolve_execution_binding(&env, runtime_override, launcher_override)? {

@@ -312,22 +312,22 @@ fn cleanup_actions(
 ) -> Vec<PlannedCleanupAction> {
     let mut actions = Vec::new();
 
-    if doctor.runtime_status == "missing" {
-        if let Some(runtime_name) = env.default_runtime.as_deref() {
-            actions.push(PlannedCleanupAction {
-                kind: "clear-missing-runtime",
-                description: format!("clear missing runtime binding \"{runtime_name}\""),
-            });
-        }
+    if doctor.runtime_status == "missing"
+        && let Some(runtime_name) = env.default_runtime.as_deref()
+    {
+        actions.push(PlannedCleanupAction {
+            kind: "clear-missing-runtime",
+            description: format!("clear missing runtime binding \"{runtime_name}\""),
+        });
     }
 
-    if doctor.launcher_status == "missing" {
-        if let Some(launcher_name) = env.default_launcher.as_deref() {
-            actions.push(PlannedCleanupAction {
-                kind: "clear-missing-launcher",
-                description: format!("clear missing launcher binding \"{launcher_name}\""),
-            });
-        }
+    if doctor.launcher_status == "missing"
+        && let Some(launcher_name) = env.default_launcher.as_deref()
+    {
+        actions.push(PlannedCleanupAction {
+            kind: "clear-missing-launcher",
+            description: format!("clear missing launcher binding \"{launcher_name}\""),
+        });
     }
 
     if doctor.config_status == "drifted"

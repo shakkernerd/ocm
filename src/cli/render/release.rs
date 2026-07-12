@@ -106,10 +106,10 @@ fn release_list_raw(releases: &[OpenClawReleaseCatalogEntry]) -> Vec<String> {
             bits.push(format!("channel={channel}"));
         }
         bits.push(format!("installAs={}", release_install_name(release)));
-        if let Some(published_at) = release.release.published_at {
-            if let Ok(published_at) = format_rfc3339(published_at) {
-                bits.push(format!("publishedAt={published_at}"));
-            }
+        if let Some(published_at) = release.release.published_at
+            && let Ok(published_at) = format_rfc3339(published_at)
+        {
+            bits.push(format!("publishedAt={published_at}"));
         }
         if let Some(shasum) = release.release.shasum.as_deref() {
             bits.push(format!("shasum={shasum}"));
