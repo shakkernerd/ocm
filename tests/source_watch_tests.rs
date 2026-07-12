@@ -3,6 +3,9 @@ mod support;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use serde_json::{Value, json};
@@ -115,6 +118,7 @@ impl Drop for SourceWatchFixture {
 
 fn lock_source_watch(root: &TestDir) -> SourceWatchFixture {
     let lock_path = root.child("ocm-home/source-watch/demo.lock");
+    fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
     let lock_file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -123,6 +127,17 @@ fn lock_source_watch(root: &TestDir) -> SourceWatchFixture {
         .unwrap();
     FileExt::lock_exclusive(&lock_file).unwrap();
     SourceWatchFixture { lock_file }
+}
+
+fn wait_for_path(path: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    path.exists()
 }
 
 #[test]
@@ -224,6 +239,93 @@ fn source_watch_override_with_a_live_reused_pid_is_removed_without_its_lease() {
     let resolved: Value = serde_json::from_str(&stdout(&resolve)).unwrap();
     assert_eq!(resolved["bindingKind"], "runtime");
     assert_eq!(resolved["binaryPath"], path_string(&runtime_path));
+    assert!(!override_path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn live_legacy_source_watch_remains_active_until_its_process_exits() {
+    let root = TestDir::new("source-watch-live-legacy");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let source_repo = create_source_repo(&root);
+    fs::create_dir_all(source_repo.join("scripts")).unwrap();
+    fs::write(
+        source_repo.join("scripts/watch-node.mjs"),
+        "// legacy watch\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+    let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
+
+    let legacy_bin = root.child("legacy-bin/node");
+    let started = root.child("legacy-watch.started");
+    let release = root.child("legacy-watch.release");
+    write_executable_script(
+        &legacy_bin,
+        &format!(
+            "#!/bin/sh\nprintf 'ready\\n' > \"{}\"\nwhile [ ! -f \"{}\" ]; do /bin/sleep 0.05; done\n",
+            path_string(&started),
+            path_string(&release)
+        ),
+    );
+    let mut legacy_watch = Command::new(&legacy_bin);
+    legacy_watch
+        .args([
+            "scripts/watch-node.mjs",
+            "gateway",
+            "run",
+            "--port",
+            "21901",
+        ])
+        .current_dir(&source_repo)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut legacy_watch = legacy_watch.spawn().unwrap();
+    assert!(
+        wait_for_path(&started, Duration::from_secs(10)),
+        "legacy source watch did not start"
+    );
+
+    let override_path = root.child("ocm-home/source-watch/demo.json");
+    fs::create_dir_all(override_path.parent().unwrap()).unwrap();
+    fs::write(
+        &override_path,
+        json!({
+            "kind": "ocm-source-watch-override",
+            "envName": "demo",
+            "repoRoot": path_string(&source_repo),
+            "watchPid": legacy_watch.id(),
+            "token": "<redacted>",
+            "startedAt": "2026-06-17T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let active = run_ocm(
+        &cwd,
+        &env,
+        &["env", "resolve", "demo", "--json", "--", "status"],
+    );
+    assert!(active.status.success(), "{}", stderr(&active));
+    let active: Value = serde_json::from_str(&stdout(&active)).unwrap();
+    assert_eq!(active["bindingKind"], "source-watch");
+    assert!(override_path.exists());
+
+    fs::write(&release, "release\n").unwrap();
+    assert!(legacy_watch.wait().unwrap().success());
+
+    let stale = run_ocm(
+        &cwd,
+        &env,
+        &["env", "resolve", "demo", "--json", "--", "status"],
+    );
+    assert!(stale.status.success(), "{}", stderr(&stale));
+    let stale: Value = serde_json::from_str(&stdout(&stale)).unwrap();
+    assert_eq!(stale["bindingKind"], "runtime");
+    assert_eq!(stale["binaryPath"], path_string(&runtime_path));
     assert!(!override_path.exists());
 }
 

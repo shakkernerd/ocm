@@ -234,7 +234,7 @@ impl Cli {
                     ),
                     stderr_profile,
                 ));
-                self.stop_service_for_source_watch(&meta.name)?;
+                self.stop_service_for_source_watch(&meta.name, meta.service_running)?;
             }
             self.stderr_lines(render_dev_run_step(
                 "Watch",
@@ -352,7 +352,7 @@ impl Cli {
                 ),
                 stderr_profile,
             ));
-            self.stop_service_for_source_watch(&meta.name)?;
+            self.stop_service_for_source_watch(&meta.name, meta.service_running)?;
         }
 
         self.stderr_lines(render_dev_run_step(
@@ -389,7 +389,11 @@ impl Cli {
         combine_watch_and_restore_results(watch_result, restore_result, &meta.name)
     }
 
-    fn stop_service_for_source_watch(&self, env_name: &str) -> Result<(), String> {
+    fn stop_service_for_source_watch(
+        &self,
+        env_name: &str,
+        restore_running_policy: bool,
+    ) -> Result<(), String> {
         let stop_result = self.service_service().stop(env_name);
         let stop_error = match stop_result {
             Ok(summary) if !summary.running => return Ok(()),
@@ -397,6 +401,9 @@ impl Cli {
             Err(error) => format!("failed stopping background service for {env_name}: {error}"),
         };
 
+        if !restore_running_policy {
+            return Err(stop_error);
+        }
         match self.service_service().start(env_name) {
             Ok(_) => Err(format!(
                 "{stop_error}; restored the background service policy and did not start source watch"
@@ -722,33 +729,33 @@ impl Cli {
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
-        let source_watch = match self.environment_service().create_source_watch_override(
-            CreateSourceWatchOverrideOptions {
-                env_name: meta.name.clone(),
-                repo_root: repo_root.to_path_buf(),
-                watch_pid: child.id(),
-            },
-        ) {
+        let source_watch = match self
+            .environment_service()
+            .create_source_watch_override_with_lease(
+                CreateSourceWatchOverrideOptions {
+                    env_name: meta.name.clone(),
+                    repo_root: repo_root.to_path_buf(),
+                    watch_pid: child.id(),
+                },
+                _source_watch_lease,
+            ) {
             Ok(source_watch) => source_watch,
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = stop_source_watch_child(&mut child);
                 return Err(error);
             }
         };
         let mut tee_threads = Vec::new();
         if let Some(log_files) = log_files.take() {
             let Some(stdout) = child.stdout.take() else {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = stop_source_watch_child(&mut child);
                 let _ = self
                     .environment_service()
                     .clear_source_watch_override(&meta.name, &source_watch.token);
                 return Err("failed to capture source watch stdout".to_string());
             };
             let Some(stderr) = child.stderr.take() else {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = stop_source_watch_child(&mut child);
                 let _ = self
                     .environment_service()
                     .clear_source_watch_override(&meta.name, &source_watch.token);
@@ -770,8 +777,7 @@ impl Cli {
 
         let status_result =
             wait_for_source_watch_child(&mut child, &stop_requested).map_err(|error| {
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = stop_source_watch_child(&mut child);
                 error
             });
         let tee_result = wait_for_tee_threads(tee_threads);
@@ -881,15 +887,46 @@ fn wait_for_source_watch_child(
             return Ok(status);
         }
         if stop_requested.load(Ordering::SeqCst) {
-            child
-                .kill()
-                .map_err(|error| format!("failed stopping source watch: {error}"))?;
-            return child
-                .wait()
-                .map_err(|error| format!("failed waiting for stopped source watch: {error}"));
+            return stop_source_watch_child(child);
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn stop_source_watch_child(
+    child: &mut std::process::Child,
+) -> Result<std::process::ExitStatus, String> {
+    #[cfg(unix)]
+    {
+        let pid = child.id().to_string();
+        // OpenClaw's watch-node handler forwards TERM to its detached gateway
+        // process group; allow its shutdown grace before forcing the wrapper down.
+        let signal = Command::new("kill")
+            .args(["-TERM", &pid])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if signal.as_ref().is_ok_and(|status| status.success()) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(7);
+            while std::time::Instant::now() < deadline {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|error| format!("failed waiting for source watch shutdown: {error}"))?
+                {
+                    return Ok(status);
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+
+    child
+        .kill()
+        .map_err(|error| format!("failed stopping source watch: {error}"))?;
+    child
+        .wait()
+        .map_err(|error| format!("failed waiting for stopped source watch: {error}"))
 }
 
 fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<String> {

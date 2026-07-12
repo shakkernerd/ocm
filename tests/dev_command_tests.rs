@@ -1348,8 +1348,12 @@ fn dev_watch_rejects_overlap_and_reclaims_the_released_lock() {
         .stderr(Stdio::piped());
     let first = first.spawn().unwrap();
     let did_start = wait_for_path(&started, Duration::from_secs(30));
+    let override_path = source_watch_override_path(&root, "demo");
+    let did_write_override = wait_for_path(&override_path, Duration::from_secs(30));
+    let override_before_overlap = fs::read_to_string(&override_path).unwrap_or_default();
 
     let overlap = run_ocm(&cwd, &env, &["dev", "demo", "--watch"]);
+    let override_after_overlap = fs::read_to_string(&override_path).unwrap_or_default();
     fs::write(&release, "release\n").unwrap();
     let first_output = first.wait_with_output().unwrap();
 
@@ -1357,6 +1361,10 @@ fn dev_watch_rejects_overlap_and_reclaims_the_released_lock() {
         did_start,
         "first source watch did not start: {}",
         stderr(&first_output)
+    );
+    assert!(
+        did_write_override,
+        "first source watch did not publish its override"
     );
     assert!(
         !overlap.status.success(),
@@ -1367,6 +1375,7 @@ fn dev_watch_rejects_overlap_and_reclaims_the_released_lock() {
         "{}",
         stderr(&overlap)
     );
+    assert_eq!(override_after_overlap, override_before_overlap);
     assert!(first_output.status.success(), "{}", stderr(&first_output));
     assert!(source_watch_lock_path(&root, "demo").exists());
     assert!(!source_watch_override_path(&root, "demo").exists());
