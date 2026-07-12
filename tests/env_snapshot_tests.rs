@@ -368,6 +368,72 @@ fn env_snapshot_restore_rewrites_openclaw_config_for_the_current_root() {
     assert_eq!(config["gateway"]["port"].as_u64(), Some(19789));
 }
 
+#[cfg(unix)]
+#[test]
+fn env_snapshot_restore_materializes_a_config_symlink_even_without_textual_drift() {
+    let root = TestDir::new("env-snapshot-restore-config-symlink");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_root = root.child("ocm-home/envs/source");
+    let source_config = source_root.join(".openclaw/openclaw.json");
+    let external_config = root.child("external/openclaw.json");
+    let external_raw = format!(
+        "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}},\"gateway\":{{\"port\":19789}}}}\n",
+        source_root.join(".openclaw/workspace").display()
+    );
+    write_text(&external_config, &external_raw);
+    if source_config.exists() {
+        fs::remove_file(&source_config).unwrap();
+    }
+    std::os::unix::fs::symlink(&external_config, &source_config).unwrap();
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    fs::remove_file(&source_config).unwrap();
+    fs::write(&source_config, "{}\n").unwrap();
+
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "restore", "source", &snapshot_id],
+    );
+
+    assert!(restore.status.success(), "{}", stderr(&restore));
+    assert_eq!(fs::read_to_string(&external_config).unwrap(), external_raw);
+    assert!(
+        fs::symlink_metadata(&source_config)
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    let restored: Value =
+        serde_json::from_str(&fs::read_to_string(&source_config).unwrap()).unwrap();
+    assert_eq!(
+        restored["agents"]["defaults"]["workspace"].as_str(),
+        Some(
+            source_root
+                .join(".openclaw/workspace")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert_eq!(restored["gateway"]["port"].as_u64(), Some(19789));
+}
+
 #[test]
 fn env_snapshot_restore_repairs_foreign_runtime_state_in_the_restored_snapshot() {
     let root = TestDir::new("env-snapshot-restore-runtime-repair");
