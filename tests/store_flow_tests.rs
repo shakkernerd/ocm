@@ -79,7 +79,7 @@ fn concurrent_environment_creates_preserve_every_registry_entry() {
             let mut command = Command::new(env!("CARGO_BIN_EXE_ocm"));
             command
                 .current_dir(&cwd)
-                .args(["env", "create", &format!("env-{index}")])
+                .args(["env", "create", &format!("env-{index}"), "--json"])
                 .env_clear()
                 .envs(&env)
                 .stdout(Stdio::piped())
@@ -88,6 +88,7 @@ fn concurrent_environment_creates_preserve_every_registry_entry() {
         })
         .collect::<Vec<_>>();
 
+    let mut ports = std::collections::BTreeSet::new();
     for child in children.drain(..) {
         let output = child.wait_with_output().unwrap();
         assert!(
@@ -95,14 +96,12 @@ fn concurrent_environment_creates_preserve_every_registry_entry() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        ports.insert(value["gatewayPort"].as_u64().unwrap());
     }
 
     let envs = list_environments(&env, &cwd).unwrap();
     assert_eq!(envs.len(), 8);
-    let ports = envs
-        .iter()
-        .map(|meta| meta.gateway_port.unwrap())
-        .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(ports.len(), 8);
 }
 
@@ -436,7 +435,7 @@ fn clone_environment_skips_the_global_openclaw_port_family() {
         &cwd,
     )
     .unwrap();
-    assert!(source.gateway_port.unwrap() >= 18_900);
+    assert_eq!(source.gateway_port, None);
     assert!(cloned.gateway_port.unwrap() >= 19_011);
 }
 

@@ -199,20 +199,12 @@ pub fn create_environment(
     ensure_dir(&paths.state_dir)?;
     ensure_dir(&paths.workspace_dir)?;
 
-    let gateway_port = match options.gateway_port {
-        Some(port) => Some(port),
-        None => Some(choose_available_gateway_port(
-            DEFAULT_GATEWAY_PORT,
-            &registry.envs,
-            env,
-        )),
-    };
     let created_at = now_utc();
     let meta = EnvMeta {
         kind: "ocm-env".to_string(),
         name,
         root: display_path(&paths.root),
-        gateway_port,
+        gateway_port: options.gateway_port,
         service_enabled: options.service_enabled,
         service_running: options.service_running,
         default_runtime: options.default_runtime,
