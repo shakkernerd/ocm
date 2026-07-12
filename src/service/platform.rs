@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use crate::store::{display_path, resolve_user_home};
+use crate::store::{display_path, lock_file, resolve_user_home};
 
 pub(crate) const OCM_SERVICE_LABEL: &str = "ai.openclaw.ocm";
 const SERVICE_MANAGER_OVERRIDE: &str = "OCM_INTERNAL_SERVICE_MANAGER";
@@ -227,6 +227,8 @@ pub(crate) fn write_managed_service_definition(
         ));
     };
     ensure_service_definition_dir(parent)?;
+    let lock_path = definition.definition_path.with_extension("lock");
+    let _lock = lock_file(&lock_path, "managed service definition")?;
     validate_existing_service_owner(definition, env)?;
 
     let raw = match service_manager_kind(env) {
