@@ -366,6 +366,7 @@ mod tests {
         OpenClawRelease {
             version: "2026.3.24".to_string(),
             channel: Some("stable".to_string()),
+            channels: vec!["stable".to_string()],
             tarball_url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz".to_string(),
             shasum: Some("abc123".to_string()),
             integrity: Some("sha512-demo".to_string()),
