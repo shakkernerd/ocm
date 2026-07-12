@@ -416,8 +416,8 @@ fn is_executable_file(path: &Path) -> bool {
 }
 
 #[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    path.is_file()
+fn is_executable_file(_path: &Path) -> bool {
+    false
 }
 
 #[cfg(test)]
