@@ -61,6 +61,8 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     let cookbook = read("skills/ocm-operator/references/command-cookbook.md");
     let safety = read("skills/ocm-operator/references/safety-and-state.md");
     let paths = read("skills/ocm-operator/references/local-paths.md");
+    let release_skill = read("skills/openclaw-release-validation/SKILL.md");
+    let matrix = read("docs/OPENCLAW_RELEASE_SCENARIO_MATRIX.md");
 
     assert!(usage.contains("ocm logs mira --stream error"));
     assert!(!usage.contains("ocm logs mira --stderr"));
@@ -70,4 +72,10 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     assert!(paths.contains("set -euo pipefail"));
     assert!(paths.contains("status --porcelain"));
     assert!(paths.contains("rev-parse HEAD"));
+    assert!(paths.contains("ocm_bin="));
+    assert!(paths.contains("export OCM_HOME="));
+    assert!(paths.contains("runtime which"));
+    assert!(!paths.contains("$HOME/.ocm/runtimes"));
+    assert!(release_skill.contains("ocm runtime remove"));
+    assert!(matrix.contains("run-owned package runtime is removed"));
 }
