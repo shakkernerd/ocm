@@ -6,6 +6,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
+use std::thread::sleep;
+use std::time::Duration;
 
 use ocm::env::EnvironmentService;
 use ocm::store::{now_utc, supervisor_runtime_path};
@@ -16,6 +18,9 @@ use crate::support::{
     TestDir, install_fake_launchctl, install_fake_systemd_tools, managed_service_definition_path,
     ocm_env, path_string, run_ocm, stderr, write_executable_script,
 };
+
+const COPIED_BINARY_BUSY_ATTEMPTS: usize = 5;
+const COPIED_BINARY_BUSY_RETRY_MS: u64 = 20;
 
 fn launchd_env(root: &TestDir) -> BTreeMap<String, String> {
     let mut env = ocm_env(root);
@@ -72,16 +77,36 @@ fn copy_executable_fixture(source: &Path, destination: &Path) {
 
 fn copy_test_ocm_binary(destination: &Path) {
     copy_executable_fixture(Path::new(env!("CARGO_BIN_EXE_ocm")), destination);
-    let identity = Command::new(destination)
-        .args(["__daemon", "identity"])
-        .env_clear()
-        .output()
-        .unwrap();
+    let identity = retry_executable_busy(|| {
+        Command::new(destination)
+            .args(["__daemon", "identity"])
+            .env_clear()
+            .output()
+    })
+    .unwrap();
     assert!(identity.status.success());
     assert_eq!(
         String::from_utf8_lossy(&identity.stdout).trim(),
         "ocm-service-supervisor"
     );
+}
+
+fn retry_executable_busy<T>(
+    mut operation: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    for attempt in 0..COPIED_BINARY_BUSY_ATTEMPTS {
+        match operation() {
+            Ok(output) => return Ok(output),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && attempt + 1 < COPIED_BINARY_BUSY_ATTEMPTS =>
+            {
+                sleep(Duration::from_millis(COPIED_BINARY_BUSY_RETRY_MS));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("busy retry loop always returns on its final attempt")
 }
 
 fn prepend_path(env: &mut BTreeMap<String, String>, dir: &Path) {
@@ -113,6 +138,40 @@ fn daemon_identity_does_not_initialize_a_store() {
         "ocm-service-supervisor"
     );
     assert!(!cwd.join(".ocm").exists());
+}
+
+#[test]
+fn copied_binary_spawn_retries_executable_file_busy() {
+    let attempts = std::cell::Cell::new(0);
+
+    let result = retry_executable_busy(|| {
+        let attempt = attempts.get();
+        attempts.set(attempt + 1);
+        if attempt == 0 {
+            Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(result.is_ok());
+    assert_eq!(attempts.get(), 2);
+}
+
+#[test]
+fn copied_binary_spawn_does_not_retry_other_errors() {
+    let attempts = std::cell::Cell::new(0);
+
+    let result: std::io::Result<()> = retry_executable_busy(|| {
+        attempts.set(attempts.get() + 1);
+        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+    });
+
+    assert_eq!(
+        result.unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(attempts.get(), 1);
 }
 
 #[test]
