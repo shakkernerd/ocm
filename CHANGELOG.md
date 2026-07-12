@@ -14,3 +14,4 @@ All notable changes to OCM are documented here.
 - Reject non-UTF-8 process input cleanly, require version flags to stand alone, and terminate quietly when a pipeline closes its output.
 - Prevent Fish activation injection through crafted paths and clear stale OpenClaw controls when switching environments.
 - Keep tables within narrow terminal widths by truncating headers or falling back to compact rows.
+- Verify self-update release digests and staged binary versions before replacement, compare releases with SemVer precedence, clean temporary artifacts on failure, and reject Linux ARM64 until release assets are published.
