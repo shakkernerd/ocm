@@ -139,6 +139,22 @@ fn lock_source_watch_with_id(root: &TestDir, lease_id: &str) -> SourceWatchFixtu
     SourceWatchFixture { lock_file }
 }
 
+fn share_source_watch_lock_with_id(root: &TestDir, lease_id: &str) -> SourceWatchFixture {
+    let lock_path = root.child("ocm-home/source-watch/demo.lock");
+    fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+    let mut lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(lock_path)
+        .unwrap();
+    FileExt::lock_shared(&lock_file).unwrap();
+    lock_file.set_len(0).unwrap();
+    use std::io::Write;
+    writeln!(lock_file, "{lease_id}").unwrap();
+    SourceWatchFixture { lock_file }
+}
+
 fn wait_for_path(path: &Path, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -246,6 +262,44 @@ fn source_watch_override_with_a_live_reused_pid_is_removed_without_its_lease() {
         &env,
         &["env", "resolve", "demo", "--json", "--", "status"],
     );
+    assert!(resolve.status.success(), "{}", stderr(&resolve));
+    let resolved: Value = serde_json::from_str(&stdout(&resolve)).unwrap();
+    assert_eq!(resolved["bindingKind"], "runtime");
+    assert_eq!(resolved["binaryPath"], path_string(&runtime_path));
+    assert!(!override_path.exists());
+}
+
+#[test]
+fn concurrent_stale_lock_readers_do_not_revive_source_watch_metadata() {
+    let root = TestDir::new("source-watch-stale-reader");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let source_repo = create_source_repo(&root);
+    let env = ocm_env(&root);
+    let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
+    let lease_id = "stale-reader";
+    let _stale_reader = share_source_watch_lock_with_id(&root, lease_id);
+    let override_path = root.child("ocm-home/source-watch/demo.json");
+    fs::write(
+        &override_path,
+        json!({
+            "kind": "ocm-source-watch-override",
+            "envName": "demo",
+            "repoRoot": path_string(&source_repo),
+            "watchPid": std::process::id(),
+            "token": format!("lease:{lease_id}:{}", "<redacted>"),
+            "startedAt": "2026-06-17T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let resolve = run_ocm(
+        &cwd,
+        &env,
+        &["env", "resolve", "demo", "--json", "--", "status"],
+    );
+
     assert!(resolve.status.success(), "{}", stderr(&resolve));
     let resolved: Value = serde_json::from_str(&stdout(&resolve)).unwrap();
     assert_eq!(resolved["bindingKind"], "runtime");

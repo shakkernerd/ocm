@@ -295,27 +295,35 @@ impl Cli {
                     .as_ref()
                     .ok_or_else(|| "source watch lease is missing".to_string())?,
             );
-            let restore_result =
-                if watch_takes_over_service && source_watch_allows_service_restore(&watch_result) {
-                    source_watch_lease
-                        .as_mut()
-                        .ok_or_else(|| "source watch lease is missing".to_string())?
-                        .begin_service_restore()?;
-                    self.stderr_lines(render_dev_run_step(
-                        "Restore",
-                        format!("Starting background service for {}", meta.name),
-                        stderr_profile,
-                    ));
-                    self.service_service().start(&meta.name).map(|_| {
-                        self.stdout_lines(render_dev_service_restored(
-                            &meta,
-                            &self.command_example(),
-                            self.dev_stdout_profile(),
+            let restore_result = if watch_takes_over_service
+                && source_watch_allows_service_restore(&watch_result)
+            {
+                let restore_state_result = source_watch_lease
+                    .as_mut()
+                    .ok_or_else(|| "source watch lease is missing".to_string())?
+                    .begin_service_restore();
+                match restore_state_result {
+                    Ok(()) => {
+                        self.stderr_lines(render_dev_run_step(
+                            "Restore",
+                            format!("Starting background service for {}", meta.name),
+                            stderr_profile,
                         ));
-                    })
-                } else {
-                    Ok(())
-                };
+                        self.service_service().start(&meta.name).map(|_| {
+                            self.stdout_lines(render_dev_service_restored(
+                                &meta,
+                                &self.command_example(),
+                                self.dev_stdout_profile(),
+                            ));
+                        })
+                    }
+                    Err(error) => Err(format!(
+                        "failed preparing background service restoration: {error}; the service remains stopped to preserve source-watch exclusivity"
+                    )),
+                }
+            } else {
+                Ok(())
+            };
             drop(source_watch_lease.take());
             return combine_watch_and_restore_results(watch_result, restore_result, &meta.name);
         }
@@ -431,28 +439,36 @@ impl Cli {
                 .ok_or_else(|| "source watch lease is missing".to_string())?,
         );
 
-        let restore_result =
-            if restore_service && source_watch_allows_service_restore(&watch_result) {
-                source_watch_lease
-                    .as_mut()
-                    .ok_or_else(|| "source watch lease is missing".to_string())?
-                    .begin_service_restore()?;
-                self.stderr_lines(render_dev_run_step(
-                    "Restore",
-                    format!("Starting background service for {}", meta.name),
-                    stderr_profile,
-                ));
-                self.service_service().start(&meta.name).map(|_| {
-                    self.stdout_lines(render_source_watch_service_restored(
-                        &meta,
-                        &repo_root,
-                        &self.command_example(),
-                        self.dev_stdout_profile(),
+        let restore_result = if restore_service
+            && source_watch_allows_service_restore(&watch_result)
+        {
+            let restore_state_result = source_watch_lease
+                .as_mut()
+                .ok_or_else(|| "source watch lease is missing".to_string())?
+                .begin_service_restore();
+            match restore_state_result {
+                Ok(()) => {
+                    self.stderr_lines(render_dev_run_step(
+                        "Restore",
+                        format!("Starting background service for {}", meta.name),
+                        stderr_profile,
                     ));
-                })
-            } else {
-                Ok(())
-            };
+                    self.service_service().start(&meta.name).map(|_| {
+                        self.stdout_lines(render_source_watch_service_restored(
+                            &meta,
+                            &repo_root,
+                            &self.command_example(),
+                            self.dev_stdout_profile(),
+                        ));
+                    })
+                }
+                Err(error) => Err(format!(
+                    "failed preparing background service restoration: {error}; the service remains stopped to preserve source-watch exclusivity"
+                )),
+            }
+        } else {
+            Ok(())
+        };
         drop(source_watch_lease.take());
 
         combine_watch_and_restore_results(watch_result, restore_result, &meta.name)
@@ -796,7 +812,10 @@ impl Cli {
         } else {
             command.args(&args);
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        // watch-node never detaches runners on win32; the Job Object owns the full tree.
+        command.args(&args);
+        #[cfg(not(any(unix, windows)))]
         command.args(&args);
         command
             .stdin(Stdio::inherit())

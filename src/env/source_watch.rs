@@ -331,8 +331,10 @@ impl<'a> EnvironmentService<'a> {
         }
 
         let lock_file = open_source_watch_lock(&lock_path)?;
-        match FileExt::try_lock_exclusive(&lock_file) {
+        match FileExt::try_lock_shared(&lock_file) {
             Ok(()) => {
+                // Shared readers prove no watcher owns the exclusive lease. They may clean the
+                // same stale metadata concurrently without impersonating an active watcher.
                 remove_file_if_present(&path)?;
                 FileExt::unlock(&lock_file).map_err(|error| {
                     format!(
