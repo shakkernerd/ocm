@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::env::EnvMeta;
 
-use super::common::{ensure_dir, path_exists};
+use super::common::{ensure_dir, path_exists, write_file_replacing_path};
 use super::layout::{EnvPaths, clean_path, derive_env_paths, display_path};
 
 #[derive(Clone, Debug)]
@@ -128,6 +128,9 @@ fn rewrite_openclaw_config_with_root_mapping(
     root_mapping: Option<(&Path, &Path)>,
     gateway_port: Option<u32>,
 ) -> Result<(), String> {
+    let config_is_symlink = fs::symlink_metadata(&target_paths.config_path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false);
     let Some(mut value) = read_config_value(&target_paths.config_path)? else {
         return Ok(());
     };
@@ -145,7 +148,7 @@ fn rewrite_openclaw_config_with_root_mapping(
         changed |= rewrite_gateway_port(&mut value, gateway_port);
     }
 
-    if !changed {
+    if !changed && !config_is_symlink {
         return Ok(());
     }
 
@@ -325,8 +328,10 @@ fn audit_openclaw_config_value(
 }
 
 fn read_config_value(config_path: &Path) -> Result<Option<Value>, String> {
-    if !path_exists(config_path) {
-        return Ok(None);
+    match fs::symlink_metadata(config_path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
     }
 
     let raw = fs::read_to_string(config_path).map_err(|error| error.to_string())?;
@@ -351,7 +356,7 @@ fn ensure_object_field<'a>(
 fn write_config_value(config_path: &Path, value: &Value) -> Result<(), String> {
     let mut rewritten = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
     rewritten.push('\n');
-    fs::write(config_path, rewritten).map_err(|error| error.to_string())
+    write_file_replacing_path(config_path, rewritten.as_bytes())
 }
 
 fn collect_foreign_env_roots(
