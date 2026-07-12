@@ -248,6 +248,7 @@ pub(crate) fn write_managed_service_definition(
             &definition.stdout_path,
             &definition.stderr_path,
             &definition.environment,
+            systemd_supports_append_output(env),
         )?,
         ServiceManagerKind::Unsupported => {
             return Err(unsupported_service_manager_message().to_string());
@@ -358,6 +359,7 @@ fn build_systemd_unit(
     stdout_path: &Path,
     stderr_path: &Path,
     environment: &BTreeMap<String, String>,
+    append_output: bool,
 ) -> Result<String, String> {
     validate_systemd_value("Description", description)?;
     validate_systemd_value("WorkingDirectory", &display_path(working_directory))?;
@@ -399,9 +401,37 @@ fn build_systemd_unit(
         systemd_quote(&display_path(working_directory)),
         exec_start,
         environment_block,
-        systemd_quote(&format!("append:{}", display_path(stdout_path))),
-        systemd_quote(&format!("append:{}", display_path(stderr_path))),
+        systemd_quote(&systemd_output_target(stdout_path, append_output)),
+        systemd_quote(&systemd_output_target(stderr_path, append_output)),
     ))
+}
+
+fn systemd_supports_append_output(env: &BTreeMap<String, String>) -> bool {
+    let systemctl = env
+        .get(SYSTEMCTL_BIN_OVERRIDE)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("systemctl");
+    Command::new(systemctl)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| systemd_version_supports_append(&output.stdout))
+}
+
+fn systemd_version_supports_append(stdout: &[u8]) -> bool {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|version| version.parse::<u32>().ok())
+        .is_some_and(|version| version >= 240)
+}
+
+fn systemd_output_target(path: &Path, append: bool) -> String {
+    let mode = if append { "append" } else { "file" };
+    format!("{mode}:{}", display_path(path))
 }
 
 fn plist_escape(value: &str) -> String {
@@ -671,7 +701,8 @@ mod tests {
     use super::{
         ManagedServiceDefinition, ManagedServiceIdentity, OCM_SERVICE_LABEL, ServiceManagerKind,
         gui_domain, managed_service_identity, managed_service_label, service_backend_support_error,
-        service_definition_dir, service_manager_kind, write_managed_service_definition,
+        service_definition_dir, service_manager_kind, systemd_version_supports_append,
+        write_managed_service_definition,
     };
 
     #[test]
@@ -682,6 +713,13 @@ mod tests {
             "systemd-user".to_string(),
         );
         assert_eq!(service_manager_kind(&env), ServiceManagerKind::SystemdUser);
+    }
+
+    #[test]
+    fn systemd_append_output_requires_version_240() {
+        assert!(!systemd_version_supports_append(b"systemd 239\n"));
+        assert!(systemd_version_supports_append(b"systemd 240 (240.1)\n"));
+        assert!(!systemd_version_supports_append(b""));
     }
 
     #[test]
@@ -894,6 +932,10 @@ mod tests {
             "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
             "systemd-user".to_string(),
         );
+        env.insert(
+            "OCM_INTERNAL_SYSTEMCTL_BIN".to_string(),
+            "/definitely/missing/systemctl".to_string(),
+        );
 
         let definition = ManagedServiceDefinition {
             label: OCM_SERVICE_LABEL.to_string(),
@@ -919,8 +961,8 @@ mod tests {
         assert!(unit.contains("ExecStart=/bin/sh -lc"));
         assert!(unit.contains("WorkingDirectory=/tmp/work"));
         assert!(unit.contains("Environment=\"OPENCLAW_HOME=/tmp/demo\""));
-        assert!(unit.contains("StandardOutput=append:"));
-        assert!(unit.contains("StandardError=append:"));
+        assert!(unit.contains("StandardOutput=file:"));
+        assert!(unit.contains("StandardError=file:"));
 
         fs::remove_dir_all(&root).unwrap();
     }
