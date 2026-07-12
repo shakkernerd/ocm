@@ -1,16 +1,16 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
 
 use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService};
 use crate::launcher::{AddLauncherOptions, LauncherService};
 use crate::store::{
-    clean_path, copy_dir_recursive, default_env_root, derive_env_paths, display_path,
-    list_environments, prepare_migrated_runtime_state, resolve_absolute_path, resolve_user_home,
-    rewrite_openclaw_config_for_migration, validate_name,
+    copy_dir_recursive, default_env_root, derive_env_paths, display_path, list_environments,
+    prepare_migrated_runtime_state, resolve_user_home, rewrite_openclaw_config_for_migration,
+    validate_name,
 };
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -86,11 +86,7 @@ pub fn plan_migration(
     cwd: &Path,
 ) -> Result<MigrationPlanSummary, String> {
     let env_name = validate_name(env_name, "Environment name")?;
-    let target_root = if let Some(root) = explicit_root {
-        resolve_absolute_path(root, env, cwd)?
-    } else {
-        default_env_root(&env_name, env, cwd)?
-    };
+    let target_root = resolve_migration_target_root(explicit_root, &env_name, env, cwd)?;
 
     let env_exists = list_environments(env, cwd)?
         .iter()
@@ -127,11 +123,7 @@ fn migrate_plain_openclaw_home_inner(
             display_path(&source_home)
         ));
     }
-    let target_root = if let Some(root) = options.root.as_deref() {
-        resolve_absolute_path(root, env, cwd)?
-    } else {
-        default_env_root(&env_name, env, cwd)?
-    };
+    let target_root = resolve_migration_target_root(options.root.as_deref(), &env_name, env, cwd)?;
     let target_root_string = target_root
         .to_str()
         .ok_or_else(|| {
@@ -286,6 +278,74 @@ fn reject_overlapping_migration_paths(
     Ok(())
 }
 
+fn resolve_migration_target_root(
+    explicit_root: Option<&str>,
+    env_name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let unresolved = if let Some(input) = explicit_root {
+        let input = input.trim();
+        if input.is_empty() {
+            return Err("path is required".to_string());
+        }
+        match input {
+            "~" => resolve_user_home(env),
+            _ if input.starts_with("~/") || input.starts_with("~\\") => {
+                resolve_user_home(env).join(&input[2..])
+            }
+            _ => {
+                let path = Path::new(input);
+                if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    cwd.join(path)
+                }
+            }
+        }
+    } else {
+        default_env_root(env_name, env, cwd)?
+    };
+
+    normalize_migration_target_path(&unresolved)
+}
+
+fn normalize_migration_target_path(path: &Path) -> Result<PathBuf, String> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR)),
+            Component::CurDir => {}
+            Component::ParentDir => match fs::symlink_metadata(&normalized) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    normalized = fs::canonicalize(&normalized).map_err(|error| {
+                        format!(
+                            "failed to resolve migration path {}: {error}",
+                            display_path(path)
+                        )
+                    })?;
+                    normalized.pop();
+                }
+                Ok(_) => {
+                    normalized.pop();
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    normalized.pop();
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "failed to resolve migration path {}: {error}",
+                        display_path(path)
+                    ));
+                }
+            },
+            Component::Normal(name) => normalized.push(name),
+        }
+    }
+    Ok(normalized)
+}
+
 #[cfg(unix)]
 fn reject_filesystem_aliases(source_home: &Path, targets: &[&Path]) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
@@ -390,30 +450,33 @@ fn reject_filesystem_aliases(_source_home: &Path, _targets: &[&Path]) -> Result<
 }
 
 fn canonicalize_path_allow_missing(path: &Path) -> Result<PathBuf, String> {
-    let path = clean_path(path);
-    let path = path.as_path();
     let mut existing = path;
     let mut missing = Vec::<OsString>::new();
-    while !existing.exists() {
-        let name = existing
-            .file_name()
-            .ok_or_else(|| format!("failed to resolve migration path: {}", display_path(path)))?;
-        missing.push(name.to_os_string());
-        existing = existing
-            .parent()
-            .ok_or_else(|| format!("failed to resolve migration path: {}", display_path(path)))?;
+    loop {
+        match fs::canonicalize(existing) {
+            Ok(mut resolved) => {
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = existing.file_name().ok_or_else(|| {
+                    format!("failed to resolve migration path: {}", display_path(path))
+                })?;
+                missing.push(name.to_os_string());
+                existing = existing.parent().ok_or_else(|| {
+                    format!("failed to resolve migration path: {}", display_path(path))
+                })?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to resolve migration path {}: {error}",
+                    display_path(path)
+                ));
+            }
+        };
     }
-
-    let mut resolved = fs::canonicalize(existing).map_err(|error| {
-        format!(
-            "failed to resolve migration path {}: {error}",
-            display_path(path)
-        )
-    })?;
-    for component in missing.iter().rev() {
-        resolved.push(component);
-    }
-    Ok(resolved)
 }
 
 fn preflight_migrated_launcher(
@@ -486,9 +549,21 @@ fn resolve_executable_on_path(command: &str, env: &BTreeMap<String, String>) -> 
         });
 
     for dir in std::env::split_paths(path_value) {
-        let exact = dir.join(command);
-        if exact.is_file() {
-            return Some(display_path(&exact));
+        if let Some(extension) = Path::new(command)
+            .extension()
+            .and_then(|value| value.to_str())
+        {
+            if extensions.iter().any(|candidate| {
+                candidate
+                    .trim_start_matches('.')
+                    .eq_ignore_ascii_case(extension)
+            }) {
+                let exact = dir.join(command);
+                if exact.is_file() {
+                    return Some(display_path(&exact));
+                }
+            }
+            continue;
         }
         for extension in &extensions {
             let candidate = dir.join(format!("{command}{extension}"));

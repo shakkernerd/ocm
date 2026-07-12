@@ -569,6 +569,39 @@ fn migrate_rejects_a_target_with_state_symlinked_to_the_source() {
 
 #[cfg(unix)]
 #[test]
+fn migrate_resolves_parent_components_after_following_symlinks() {
+    let root = TestDir::new("migrate-overlap-symlink-parent");
+    let cwd = root.child("workspace");
+    let real_root = root.child("real");
+    let source_home = real_root.join(".openclaw");
+    let linked_child = real_root.join("child");
+    let target_root = root.child("linked-child/../.openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&linked_child).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    std::os::unix::fs::symlink(&linked_child, root.child("linked-child")).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("migration source and target must not overlap"));
+    assert!(source_home.join("workspace/notes.txt").exists());
+    assert!(!root.child("ocm-home/envs.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn migrate_does_not_bind_a_non_executable_openclaw_file_from_path() {
     let root = TestDir::new("migrate-non-executable-openclaw");
     let cwd = root.child("workspace");
