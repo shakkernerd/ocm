@@ -268,7 +268,8 @@ fn audit_openclaw_config_value(
     }
 
     let mut repair_gateway_port = false;
-    if let Some(expected_port) = meta.gateway_port
+    if !meta.gateway_port_auto_assigned
+        && let Some(expected_port) = meta.gateway_port
         && let Some(actual_port) = read_gateway_port(value)
         && actual_port != expected_port
     {
@@ -602,6 +603,7 @@ mod tests {
             name: name.to_string(),
             root: root.to_string(),
             gateway_port,
+            gateway_port_auto_assigned: false,
             service_enabled: true,
             service_running: true,
             default_runtime: None,
@@ -653,5 +655,18 @@ mod tests {
         assert!(audit.issues.iter().any(|issue| issue.contains(
             "OpenClaw config contains 2 env-scoped path(s) outside the current env root"
         )));
+    }
+
+    #[test]
+    fn audit_allows_config_to_override_an_auto_assigned_port() {
+        let mut current = meta("target", "/tmp/ocm/envs/target", Some(19790));
+        current.gateway_port_auto_assigned = true;
+        let paths = derive_env_paths(Path::new(&current.root));
+        let value = json!({"gateway": {"port": 19789}});
+
+        let audit = audit_openclaw_config_value(&current, &[], &paths, &value);
+
+        assert_eq!(audit.status, "ok");
+        assert!(!audit.repair_gateway_port);
     }
 }

@@ -435,7 +435,8 @@ fn clone_environment_skips_the_global_openclaw_port_family() {
         &cwd,
     )
     .unwrap();
-    assert_eq!(source.gateway_port, None);
+    assert!(source.gateway_port.unwrap() >= 18_900);
+    assert!(source.gateway_port_auto_assigned);
     assert!(cloned.gateway_port.unwrap() >= 19_011);
 }
 

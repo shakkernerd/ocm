@@ -476,6 +476,7 @@ mod tests {
             name: name.to_string(),
             root: root.to_string(),
             gateway_port: None,
+            gateway_port_auto_assigned: false,
             service_enabled: true,
             service_running: true,
             default_runtime: None,

@@ -70,6 +70,32 @@ fn env_create_and_show_json_report_the_same_effective_gateway_port() {
 }
 
 #[test]
+fn env_show_and_list_prefer_a_later_config_gateway_port() {
+    let root = TestDir::new("env-config-json-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    fs::write(
+        root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
+        "{\"gateway\":{\"port\":18888}}",
+    )
+    .unwrap();
+
+    let shown = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(shown.status.success(), "{}", stderr(&shown));
+    let shown: Value = serde_json::from_str(&stdout(&shown)).unwrap();
+    assert_eq!(shown["gatewayPort"], 18_888);
+
+    let listed = run_ocm(&cwd, &env, &["env", "list", "--json"]);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    let listed: Value = serde_json::from_str(&stdout(&listed)).unwrap();
+    assert_eq!(listed[0]["gatewayPort"], 18_888);
+}
+
+#[test]
 fn env_clone_prints_the_effective_gateway_port_for_the_cloned_env() {
     let root = TestDir::new("env-clone-output-port");
     let cwd = root.child("workspace");

@@ -199,12 +199,21 @@ pub fn create_environment(
     ensure_dir(&paths.state_dir)?;
     ensure_dir(&paths.workspace_dir)?;
 
+    let gateway_port_auto_assigned = options.gateway_port.is_none();
+    let gateway_port = options.gateway_port.or_else(|| {
+        Some(choose_available_gateway_port(
+            DEFAULT_GATEWAY_PORT,
+            &registry.envs,
+            env,
+        ))
+    });
     let created_at = now_utc();
     let meta = EnvMeta {
         kind: "ocm-env".to_string(),
         name,
         root: display_path(&paths.root),
-        gateway_port: options.gateway_port,
+        gateway_port,
+        gateway_port_auto_assigned,
         service_enabled: options.service_enabled,
         service_running: options.service_running,
         default_runtime: options.default_runtime,
@@ -274,6 +283,7 @@ pub fn clone_environment(
             name,
             root: display_path(&target_paths.root),
             gateway_port: Some(gateway_port),
+            gateway_port_auto_assigned: false,
             service_enabled: false,
             service_running: false,
             default_runtime: source.default_runtime,
@@ -345,6 +355,7 @@ pub fn export_environment(
             name: meta.name.clone(),
             source_root: Some(meta.root.clone()),
             gateway_port: meta.gateway_port,
+            gateway_port_auto_assigned: meta.gateway_port_auto_assigned,
             service_enabled: meta.service_enabled,
             service_running: meta.service_running,
             default_runtime: meta.default_runtime.clone(),
@@ -457,6 +468,7 @@ pub fn import_environment(
                 name: name.clone(),
                 root: display_path(&target_paths.root),
                 gateway_port: Some(gateway_port),
+                gateway_port_auto_assigned: false,
                 service_enabled: false,
                 service_running: false,
                 default_runtime: extracted.metadata.env.default_runtime.clone(),

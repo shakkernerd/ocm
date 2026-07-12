@@ -13,9 +13,14 @@ pub(crate) const DEFAULT_GATEWAY_PORT: u32 = 18_789;
 const OPENCLAW_PORT_FAMILY_END_OFFSET: u32 = 110;
 
 pub(crate) fn resolve_env_gateway_port(meta: &EnvMeta) -> Option<u32> {
-    meta.gateway_port.or_else(|| {
-        read_gateway_port_from_config(&derive_env_paths(Path::new(&meta.root)).config_path)
-    })
+    meta.gateway_port
+        .filter(|_| !meta.gateway_port_auto_assigned)
+        .or_else(|| resolve_config_gateway_port(meta))
+        .or(meta.gateway_port)
+}
+
+pub(crate) fn resolve_config_gateway_port(meta: &EnvMeta) -> Option<u32> {
+    read_gateway_port_from_config(&derive_env_paths(Path::new(&meta.root)).config_path)
 }
 
 pub(crate) fn resolve_effective_gateway_ports(
