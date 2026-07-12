@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -6,7 +6,6 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use crate::env::EnvironmentService;
@@ -14,6 +13,8 @@ use crate::store::{derive_env_paths, display_path, supervisor_logs_dir};
 
 const FOLLOW_POLL_INTERVAL_MS: u64 = 250;
 const TAIL_READ_CHUNK_SIZE: usize = 8 * 1024;
+const RETIRED_FILE_LIMIT: usize = 4;
+const RETIRED_FILE_QUIET_POLLS: u8 = 4;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -216,7 +217,18 @@ impl<'a> LogService<'a> {
                 name
             ));
         }
-        if !snapshots.is_empty() {
+        if merge_streams {
+            // Give the trailing record one poll to receive continuation lines,
+            // then perform one global sort and tail decision for the startup batch.
+            sleep(Duration::from_millis(FOLLOW_POLL_INTERVAL_MS));
+            let bytes = collect_merged_follow_startup(&mut cursors, snapshots, tail_lines)?;
+            if !bytes.is_empty() {
+                writer
+                    .write_all(&bytes)
+                    .map_err(|error| error.to_string())?;
+                writer.flush().map_err(|error| error.to_string())?;
+            }
+        } else if !snapshots.is_empty() {
             write_follow_snapshots(writer, snapshots, tail_lines, merge_streams)?;
         }
 
@@ -234,21 +246,23 @@ impl<'a> LogService<'a> {
                         writer
                             .write_all(&snapshot.bytes)
                             .map_err(|error| error.to_string())?;
-                        wrote = !snapshot.bytes.is_empty();
+                        wrote |= !snapshot.bytes.is_empty();
                     }
                     continue;
                 }
-                let Some(update) = cursor.read_update()? else {
-                    continue;
-                };
+                let update = cursor.read_update()?;
                 if merge_streams {
-                    records.extend(cursor.collect_complete_records(update));
-                } else {
+                    if let Some(update) = update {
+                        records.extend(cursor.collect_complete_records(update));
+                    } else {
+                        records.extend(cursor.collect_quiet_records());
+                    }
+                } else if let Some(update) = update {
                     let bytes = cursor.single_stream_bytes(update);
                     writer
                         .write_all(&bytes)
                         .map_err(|error| error.to_string())?;
-                    wrote = !bytes.is_empty();
+                    wrote |= !bytes.is_empty();
                 }
             }
 
@@ -272,12 +286,15 @@ struct FollowCursor {
     target: LogTarget,
     offset: u64,
     identity: Option<FileIdentity>,
+    modified: Option<std::time::SystemTime>,
     initialized: bool,
     pending: Vec<u8>,
-    prefix_hasher: Sha256,
     file: Option<File>,
+    retired_files: VecDeque<RetiredFile>,
     single_line_open: bool,
     single_separator_pending: bool,
+    #[cfg(test)]
+    read_metrics: FollowReadMetrics,
 }
 
 impl FollowCursor {
@@ -286,12 +303,15 @@ impl FollowCursor {
             target,
             offset: 0,
             identity: None,
+            modified: None,
             initialized: false,
             pending: Vec::new(),
-            prefix_hasher: Sha256::new(),
             file: None,
+            retired_files: VecDeque::new(),
             single_line_open: false,
             single_separator_pending: false,
+            #[cfg(test)]
+            read_metrics: FollowReadMetrics::default(),
         }
     }
 
@@ -304,31 +324,27 @@ impl FollowCursor {
         tail_lines: Option<usize>,
         hold_partial_record: bool,
     ) -> Result<Option<LogSnapshot>, String> {
-        let mut attempts = 0;
-        let (file, mut bytes, offset, prefix_hasher) = loop {
-            let Some((mut file, _metadata)) = open_log(&self.target.path)? else {
-                return Ok(None);
-            };
-            let (bytes, offset) = read_log_snapshot_from(&mut file, tail_lines)?;
-            if let Some(prefix_hasher) = hash_file_prefix(&mut file, offset)? {
-                break (file, bytes, offset, prefix_hasher);
-            }
-            attempts += 1;
-            if attempts == 2 {
-                return Err("log changed repeatedly while taking its snapshot".to_string());
-            }
+        let Some((mut file, metadata)) = open_log(&self.target.path)? else {
+            return Ok(None);
         };
-        let final_metadata = file.metadata().map_err(|error| error.to_string())?;
+        let (mut bytes, offset, _bytes_read) = read_log_snapshot_from(&mut file, tail_lines)?;
+        #[cfg(test)]
+        {
+            self.read_metrics.snapshot_bytes += _bytes_read;
+        }
         self.offset = offset;
-        self.identity = Some(file_identity(&file, &final_metadata)?);
+        self.identity = Some(file_identity(&file, &metadata)?);
+        self.modified = modified_time(&metadata);
         self.initialized = true;
-        self.prefix_hasher = prefix_hasher;
         self.file = Some(file);
         self.single_line_open = bytes.last().is_some_and(|byte| *byte != b'\n');
-        if hold_partial_record && !bytes.ends_with(b"\n") {
-            // A merged stream cannot publish a partial record without risking
-            // another stream interleaving inside it. Single-stream follow stays immediate.
-            let partial_start = trailing_partial_record_start(&bytes);
+        let trailing_timestamp = last_timestamp_start(&bytes);
+        let should_hold_trailing =
+            hold_partial_record && (!bytes.ends_with(b"\n") || trailing_timestamp.is_some());
+        if should_hold_trailing {
+            // Hold the trailing record for one poll so continuation lines can arrive
+            // before another stream is merged. Single-stream follow stays immediate.
+            let partial_start = trailing_timestamp.unwrap_or(0);
             self.pending.extend_from_slice(&bytes[partial_start..]);
             bytes.truncate(partial_start);
         }
@@ -337,58 +353,63 @@ impl FollowCursor {
 
     fn read_update(&mut self) -> Result<Option<FollowUpdate>, String> {
         let Some((mut path_file, metadata)) = open_log(&self.target.path)? else {
-            if self.identity.is_some() {
-                let old = self.read_current_file_to_end()?;
-                return Ok(old.into_update());
+            let mut segments = self.drain_retired_files()?;
+            if self.file.is_some() {
+                self.retire_current_file();
+                let mut current_segments = self.drain_newest_retired_file()?;
+                current_segments.extend(segments);
+                segments = current_segments;
             }
-            return Ok(None);
+            return Ok(FollowUpdate::from_segments(segments));
         };
         let identity = file_identity(&path_file, &metadata)?;
+        let reattached = self.file.is_none() && self.reattach_retired_source(&identity);
+        let mut segments = self.drain_retired_files()?;
         let Some(seen_identity) = self.identity.as_ref() else {
-            let (bytes, offset) = read_file_range(&mut path_file, 0, metadata.len())?;
-            let mut prefix_hasher = Sha256::new();
-            prefix_hasher.update(&bytes);
-            self.adopt_file(path_file, offset, prefix_hasher)?;
-            return Ok((!bytes.is_empty()).then_some(FollowUpdate::append(bytes)));
+            let (bytes, offset) = self.read_range(&mut path_file, 0, metadata.len())?;
+            self.adopt_file(path_file, offset, &metadata)?;
+            if !bytes.is_empty() {
+                segments.push(FollowSegment::append(bytes));
+            }
+            return Ok(FollowUpdate::from_segments(segments));
         };
 
-        if seen_identity != &identity {
-            // The retained handle still addresses the renamed file, so drain it
-            // before adopting the replacement at the original pathname.
-            let old = self.read_current_file_to_end()?;
-            let (new_bytes, offset) = read_file_range(&mut path_file, 0, metadata.len())?;
-            let mut prefix_hasher = Sha256::new();
-            prefix_hasher.update(&new_bytes);
-            self.adopt_file(path_file, offset, prefix_hasher)?;
-            return Ok(Some(FollowUpdate::replace(old, new_bytes)));
+        if seen_identity != &identity || (self.file.is_none() && !reattached) {
+            // Keep the renamed handle for a bounded quiet window so delayed writer
+            // handoff cannot drop the last records during rename-create rotation.
+            if self.file.is_some() {
+                self.retire_current_file();
+                let mut current_segments = self.drain_newest_retired_file()?;
+                current_segments.extend(segments);
+                segments = current_segments;
+            }
+            self.seal_retired_sources();
+            let (new_bytes, offset) = self.read_range(&mut path_file, 0, metadata.len())?;
+            self.adopt_file(path_file, offset, &metadata)?;
+            segments.push(FollowSegment::reset(new_bytes));
+            return Ok(FollowUpdate::from_segments(segments));
         }
 
-        let verified_hasher = if metadata.len() < self.offset {
-            None
-        } else {
-            hash_file_prefix(&mut path_file, self.offset)?
-        };
-        let content_changed_before_cursor = verified_hasher
-            .as_ref()
-            .is_none_or(|hasher| !hashers_match(hasher, &self.prefix_hasher));
-        let reset = metadata.len() < self.offset || content_changed_before_cursor;
+        // A same-size in-place change cannot be distinguished from a touch without
+        // rescanning the file. Replaying is the bounded choice for this rare transition.
+        let reset = metadata.len() < self.offset
+            || (metadata.len() == self.offset && modified_time(&metadata) != self.modified);
         let start = if reset { 0 } else { self.offset };
-        let (bytes, offset) = read_file_range(&mut path_file, start, metadata.len())?;
-        let mut prefix_hasher = if reset {
-            Sha256::new()
-        } else {
-            verified_hasher.expect("unchanged prefix has a verified digest")
-        };
-        prefix_hasher.update(&bytes);
-        self.adopt_file(path_file, offset, prefix_hasher)?;
+        let (bytes, offset) = self.read_range(&mut path_file, start, metadata.len())?;
+        self.adopt_file(path_file, offset, &metadata)?;
 
         if bytes.is_empty() && !reset {
-            return Ok(None);
-        }
-        if reset {
-            Ok(Some(FollowUpdate::reset(bytes)))
+            Ok(FollowUpdate::from_segments(segments))
         } else {
-            Ok(Some(FollowUpdate::append(bytes)))
+            let current = if reset {
+                FollowSegment::reset(bytes)
+            } else {
+                FollowSegment::append(bytes)
+            };
+            let mut ordered = Vec::with_capacity(segments.len() + 1);
+            ordered.push(current);
+            ordered.extend(segments);
+            Ok(FollowUpdate::from_segments(ordered))
         }
     }
 
@@ -399,9 +420,17 @@ impl FollowCursor {
                 records.extend(log_records(std::mem::take(&mut self.pending)));
             }
             self.pending.extend_from_slice(&segment.bytes);
-            records.extend(self.take_complete_records());
+            records.extend(self.take_preceding_records());
         }
         records
+    }
+
+    fn collect_quiet_records(&mut self) -> Vec<TimedLogRecord> {
+        if !self.pending.is_empty() && !self.has_shared_retired_source() {
+            log_records(std::mem::take(&mut self.pending))
+        } else {
+            Vec::new()
+        }
     }
 
     fn single_stream_bytes(&mut self, update: FollowUpdate) -> Vec<u8> {
@@ -429,12 +458,8 @@ impl FollowCursor {
         self.single_line_open = !bytes.ends_with(b"\n");
     }
 
-    fn take_complete_records(&mut self) -> Vec<TimedLogRecord> {
-        let complete_len = if self.pending.ends_with(b"\n") {
-            self.pending.len()
-        } else {
-            trailing_partial_record_start(&self.pending)
-        };
+    fn take_preceding_records(&mut self) -> Vec<TimedLogRecord> {
+        let complete_len = last_timestamp_start(&self.pending).unwrap_or(0);
         if complete_len > 0 {
             let complete = self.pending.drain(..complete_len).collect::<Vec<_>>();
             log_records(complete)
@@ -443,60 +468,186 @@ impl FollowCursor {
         }
     }
 
-    fn read_current_file_to_end(&mut self) -> Result<FileDrain, String> {
-        let Some(file) = &mut self.file else {
-            return Ok(FileDrain {
-                bytes: Vec::new(),
-                reset: false,
-            });
-        };
-        let end = file.metadata().map_err(|error| error.to_string())?.len();
-        let verified_hasher = if end < self.offset {
-            None
-        } else {
-            hash_file_prefix(file, self.offset)?
-        };
-        let reset = verified_hasher
-            .as_ref()
-            .is_none_or(|hasher| !hashers_match(hasher, &self.prefix_hasher));
-        let start = if reset { 0 } else { self.offset };
-        let (bytes, offset) = read_file_range(file, start, end)?;
-        let mut prefix_hasher = if reset {
-            Sha256::new()
-        } else {
-            verified_hasher.expect("unchanged prefix has a verified digest")
-        };
-        prefix_hasher.update(&bytes);
+    fn adopt_file(
+        &mut self,
+        file: File,
+        offset: u64,
+        observed_metadata: &fs::Metadata,
+    ) -> Result<(), String> {
         self.offset = offset;
-        self.prefix_hasher = prefix_hasher;
-        Ok(FileDrain { bytes, reset })
-    }
-
-    fn adopt_file(&mut self, file: File, offset: u64, prefix_hasher: Sha256) -> Result<(), String> {
-        let metadata = file.metadata().map_err(|error| error.to_string())?;
-        self.offset = offset;
-        self.identity = Some(file_identity(&file, &metadata)?);
-        self.prefix_hasher = prefix_hasher;
+        self.identity = Some(file_identity(&file, observed_metadata)?);
+        self.modified = modified_time(observed_metadata);
         self.file = Some(file);
         Ok(())
     }
-}
 
-struct FileDrain {
-    bytes: Vec<u8>,
-    reset: bool,
-}
+    fn retire_current_file(&mut self) {
+        let Some(identity) = self.identity.clone() else {
+            return;
+        };
+        let Some(file) = self.file.take() else {
+            return;
+        };
+        if self.retired_files.len() == RETIRED_FILE_LIMIT {
+            self.retired_files.pop_front();
+        }
+        self.retired_files.push_back(RetiredFile {
+            file,
+            identity,
+            offset: self.offset,
+            modified: self.modified,
+            quiet_polls: 0,
+            shares_pending: true,
+        });
+    }
 
-impl FileDrain {
-    fn into_update(self) -> Option<FollowUpdate> {
-        if self.reset {
-            Some(FollowUpdate::reset(self.bytes))
-        } else if self.bytes.is_empty() {
-            None
-        } else {
-            Some(FollowUpdate::append(self.bytes))
+    fn drain_retired_files(&mut self) -> Result<Vec<FollowSegment>, String> {
+        let mut segments = Vec::new();
+        let mut pending_source = VecDeque::new();
+        let mut independent_sources = VecDeque::new();
+        while let Some(retired) = self.retired_files.pop_front() {
+            if retired.shares_pending {
+                pending_source.push_back(retired);
+            } else {
+                independent_sources.push_back(retired);
+            }
+        }
+        pending_source.extend(independent_sources);
+        let mut retained = VecDeque::with_capacity(pending_source.len());
+        while let Some(mut retired) = pending_source.pop_front() {
+            let (file_segments, keep, _bytes_read) = drain_retired_file(&mut retired)?;
+            #[cfg(test)]
+            {
+                self.read_metrics.range_bytes += _bytes_read;
+            }
+            segments.extend(file_segments);
+            if keep {
+                retained.push_back(retired);
+            }
+        }
+        self.retired_files = retained;
+        Ok(segments)
+    }
+
+    fn reattach_retired_source(&mut self, identity: &FileIdentity) -> bool {
+        let Some(index) = self
+            .retired_files
+            .iter()
+            .rposition(|retired| retired.shares_pending && &retired.identity == identity)
+        else {
+            return false;
+        };
+        let retired = self
+            .retired_files
+            .remove(index)
+            .expect("retired source index remains valid");
+        self.offset = retired.offset;
+        self.modified = retired.modified;
+        self.identity = Some(identity.clone());
+        true
+    }
+
+    fn has_shared_retired_source(&self) -> bool {
+        self.retired_files
+            .iter()
+            .any(|retired| retired.shares_pending)
+    }
+
+    fn seal_retired_sources(&mut self) {
+        for retired in &mut self.retired_files {
+            retired.shares_pending = false;
         }
     }
+
+    fn drain_newest_retired_file(&mut self) -> Result<Vec<FollowSegment>, String> {
+        let Some(mut retired) = self.retired_files.pop_back() else {
+            return Ok(Vec::new());
+        };
+        let (segments, keep, _bytes_read) = drain_retired_file(&mut retired)?;
+        #[cfg(test)]
+        {
+            self.read_metrics.range_bytes += _bytes_read;
+        }
+        if keep {
+            self.retired_files.push_back(retired);
+        }
+        Ok(segments)
+    }
+
+    fn read_range(
+        &mut self,
+        file: &mut File,
+        start: u64,
+        end: u64,
+    ) -> Result<(Vec<u8>, u64), String> {
+        let (bytes, offset) = read_file_range(file, start, end)?;
+        #[cfg(test)]
+        {
+            self.read_metrics.range_bytes += bytes.len() as u64;
+        }
+        Ok((bytes, offset))
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct FollowReadMetrics {
+    snapshot_bytes: u64,
+    range_bytes: u64,
+}
+
+struct RetiredFile {
+    file: File,
+    identity: FileIdentity,
+    offset: u64,
+    modified: Option<std::time::SystemTime>,
+    quiet_polls: u8,
+    shares_pending: bool,
+}
+
+fn drain_retired_file(
+    retired: &mut RetiredFile,
+) -> Result<(Vec<FollowSegment>, bool, u64), String> {
+    let metadata = retired.file.metadata().map_err(|error| error.to_string())?;
+    let end = metadata.len();
+    let reset = end < retired.offset
+        || (end == retired.offset && modified_time(&metadata) != retired.modified);
+    let start = if reset { 0 } else { retired.offset };
+    let (bytes, offset) = read_file_range(&mut retired.file, start, end)?;
+    let bytes_read = bytes.len() as u64;
+    retired.offset = offset;
+    retired.modified = modified_time(&metadata);
+    let segments = if !bytes.is_empty() {
+        retired.quiet_polls = 0;
+        if retired.shares_pending {
+            vec![if reset {
+                FollowSegment::reset(bytes)
+            } else {
+                FollowSegment::append(bytes)
+            }]
+        } else {
+            vec![
+                FollowSegment::reset(bytes),
+                FollowSegment::reset(Vec::new()),
+            ]
+        }
+    } else if reset {
+        retired.quiet_polls = 0;
+        if retired.shares_pending {
+            retired.shares_pending = false;
+            vec![FollowSegment::reset(Vec::new())]
+        } else {
+            Vec::new()
+        }
+    } else {
+        retired.quiet_polls += 1;
+        Vec::new()
+    };
+    Ok((
+        segments,
+        retired.quiet_polls < RETIRED_FILE_QUIET_POLLS,
+        bytes_read,
+    ))
 }
 
 struct FollowUpdate {
@@ -509,37 +660,31 @@ struct FollowSegment {
 }
 
 impl FollowUpdate {
+    fn from_segments(segments: Vec<FollowSegment>) -> Option<Self> {
+        (!segments.is_empty()).then_some(Self { segments })
+    }
+
+    #[cfg(test)]
+    fn reset(bytes: Vec<u8>) -> Self {
+        Self {
+            segments: vec![FollowSegment::reset(bytes)],
+        }
+    }
+}
+
+impl FollowSegment {
     fn append(bytes: Vec<u8>) -> Self {
         Self {
-            segments: vec![FollowSegment {
-                bytes,
-                reset_before: false,
-            }],
+            bytes,
+            reset_before: false,
         }
     }
 
     fn reset(bytes: Vec<u8>) -> Self {
         Self {
-            segments: vec![FollowSegment {
-                bytes,
-                reset_before: true,
-            }],
-        }
-    }
-
-    fn replace(old: FileDrain, new_bytes: Vec<u8>) -> Self {
-        let mut segments = Vec::with_capacity(2);
-        if old.reset || !old.bytes.is_empty() {
-            segments.push(FollowSegment {
-                bytes: old.bytes,
-                reset_before: old.reset,
-            });
-        }
-        segments.push(FollowSegment {
-            bytes: new_bytes,
+            bytes,
             reset_before: true,
-        });
-        Self { segments }
+        }
     }
 }
 
@@ -608,30 +753,6 @@ fn open_log(path: &Path) -> Result<Option<(File, fs::Metadata)>, String> {
     Ok(Some((file, metadata)))
 }
 
-fn hash_file_prefix(file: &mut File, end: u64) -> Result<Option<Sha256>, String> {
-    file.seek(SeekFrom::Start(0))
-        .map_err(|error| error.to_string())?;
-    let mut hasher = Sha256::new();
-    let mut remaining = end;
-    let mut buffer = [0_u8; 64 * 1024];
-    while remaining > 0 {
-        let read_len = remaining.min(buffer.len() as u64) as usize;
-        let count = file
-            .read(&mut buffer[..read_len])
-            .map_err(|error| error.to_string())?;
-        if count == 0 {
-            return Ok(None);
-        }
-        hasher.update(&buffer[..count]);
-        remaining -= count as u64;
-    }
-    Ok(Some(hasher))
-}
-
-fn hashers_match(left: &Sha256, right: &Sha256) -> bool {
-    left.clone().finalize() == right.clone().finalize()
-}
-
 fn read_file_range(file: &mut File, start: u64, end: u64) -> Result<(Vec<u8>, u64), String> {
     file.seek(SeekFrom::Start(start))
         .map_err(|error| error.to_string())?;
@@ -650,6 +771,10 @@ fn modified_at(path: &Path) -> Option<std::time::SystemTime> {
     fs::metadata(path).ok()?.modified().ok()
 }
 
+fn modified_time(metadata: &fs::Metadata) -> Option<std::time::SystemTime> {
+    metadata.modified().ok()
+}
+
 fn normalize_stream(stream: &str) -> Result<&str, String> {
     match stream {
         "stdout" | "stderr" | "all" => Ok(stream),
@@ -660,14 +785,14 @@ fn normalize_stream(stream: &str) -> Result<&str, String> {
 fn read_log_text(path: &Path, tail_lines: Option<usize>) -> Result<String, String> {
     let (mut file, _) =
         open_log(path)?.ok_or_else(|| format!("log does not exist: {}", display_path(path)))?;
-    let (bytes, _) = read_log_snapshot_from(&mut file, tail_lines)?;
+    let (bytes, _, _) = read_log_snapshot_from(&mut file, tail_lines)?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn read_log_snapshot_from(
     file: &mut File,
     tail_lines: Option<usize>,
-) -> Result<(Vec<u8>, u64), String> {
+) -> Result<(Vec<u8>, u64, u64), String> {
     match tail_lines {
         Some(limit) => read_log_tail_snapshot(file, limit),
         None => {
@@ -679,26 +804,28 @@ fn read_log_snapshot_from(
                 .take(snapshot_offset)
                 .read_to_end(&mut bytes)
                 .map_err(|error| error.to_string())?;
-            Ok((
-                bytes,
-                file.stream_position().map_err(|error| error.to_string())?,
-            ))
+            let offset = file.stream_position().map_err(|error| error.to_string())?;
+            Ok((bytes, offset, offset))
         }
     }
 }
 
-fn read_log_tail_snapshot(file: &mut File, tail_lines: usize) -> Result<(Vec<u8>, u64), String> {
+fn read_log_tail_snapshot(
+    file: &mut File,
+    tail_lines: usize,
+) -> Result<(Vec<u8>, u64, u64), String> {
     if tail_lines == 0 {
         let offset = file
             .seek(SeekFrom::End(0))
             .map_err(|error| error.to_string())?;
-        return Ok((Vec::new(), offset));
+        return Ok((Vec::new(), offset, 0));
     }
 
     let mut position = file
         .seek(SeekFrom::End(0))
         .map_err(|error| error.to_string())?;
     let snapshot_offset = position;
+    let mut bytes_read = 0_u64;
     let mut chunks = Vec::new();
     let mut newline_count = 0_usize;
 
@@ -712,6 +839,7 @@ fn read_log_tail_snapshot(file: &mut File, tail_lines: usize) -> Result<(Vec<u8>
         file.read_exact(&mut chunk)
             .map_err(|error| error.to_string())?;
         newline_count += chunk.iter().filter(|byte| **byte == b'\n').count();
+        bytes_read += chunk.len() as u64;
         chunks.push(chunk);
     }
 
@@ -719,7 +847,7 @@ fn read_log_tail_snapshot(file: &mut File, tail_lines: usize) -> Result<(Vec<u8>
     for mut chunk in chunks.into_iter().rev() {
         bytes.append(&mut chunk);
     }
-    Ok((tail_bytes(&bytes, tail_lines), snapshot_offset))
+    Ok((tail_bytes(&bytes, tail_lines), snapshot_offset, bytes_read))
 }
 
 fn tail_bytes(bytes: &[u8], tail_lines: usize) -> Vec<u8> {
@@ -781,11 +909,40 @@ fn write_follow_snapshots<W: Write>(
     Ok(())
 }
 
+fn collect_merged_follow_startup(
+    cursors: &mut [FollowCursor],
+    snapshots: Vec<LogSnapshot>,
+    tail_lines: Option<usize>,
+) -> Result<Vec<u8>, String> {
+    let mut records = snapshots
+        .into_iter()
+        .flat_map(|snapshot| log_records(snapshot.bytes))
+        .collect::<Vec<_>>();
+    for cursor in cursors {
+        if !cursor.is_initialized() {
+            if let Some(snapshot) = cursor.snapshot(tail_lines, true)? {
+                records.extend(log_records(snapshot.bytes));
+            }
+        }
+        if cursor.is_initialized() {
+            if let Some(update) = cursor.read_update()? {
+                records.extend(cursor.collect_complete_records(update));
+            }
+            records.extend(cursor.collect_quiet_records());
+        }
+    }
+    Ok(merge_log_records_with_tail(records, tail_lines))
+}
+
 fn merge_log_snapshots(snapshots: Vec<LogSnapshot>, tail_lines: Option<usize>) -> Vec<u8> {
     let records = snapshots
         .into_iter()
         .flat_map(|snapshot| log_records(snapshot.bytes))
         .collect::<Vec<_>>();
+    merge_log_records_with_tail(records, tail_lines)
+}
+
+fn merge_log_records_with_tail(records: Vec<TimedLogRecord>, tail_lines: Option<usize>) -> Vec<u8> {
     let mut output = merge_log_records(records);
     if let Some(limit) = tail_lines {
         output = tail_bytes(&output, limit);
@@ -818,7 +975,7 @@ fn log_records(bytes: Vec<u8>) -> Vec<TimedLogRecord> {
     records
 }
 
-fn trailing_partial_record_start(bytes: &[u8]) -> usize {
+fn last_timestamp_start(bytes: &[u8]) -> Option<usize> {
     let mut offset = 0;
     let mut last_timestamp_start = None;
     for line in bytes.split_inclusive(|byte| *byte == b'\n') {
@@ -827,7 +984,7 @@ fn trailing_partial_record_start(bytes: &[u8]) -> usize {
         }
         offset += line.len();
     }
-    last_timestamp_start.unwrap_or(0)
+    last_timestamp_start
 }
 
 fn merge_log_records(mut records: Vec<TimedLogRecord>) -> Vec<u8> {
@@ -899,7 +1056,7 @@ mod tests {
     use crate::store::ensure_dir;
     use std::collections::BTreeMap;
     use std::fs::{self, OpenOptions};
-    use std::io::Write;
+    use std::io::{Seek, Write};
     use std::path::{Path, PathBuf};
     use std::thread::sleep;
     use std::time::Duration;
@@ -914,6 +1071,15 @@ mod tests {
 
     fn update_has_reset(update: &FollowUpdate) -> bool {
         update.segments.iter().any(|segment| segment.reset_before)
+    }
+
+    fn collect_after_quiet(
+        cursor: &mut FollowCursor,
+        update: FollowUpdate,
+    ) -> Vec<super::TimedLogRecord> {
+        let mut records = cursor.collect_complete_records(update);
+        records.extend(cursor.collect_quiet_records());
+        records
     }
 
     #[test]
@@ -1078,7 +1244,7 @@ mod tests {
 
         append(&path, b"\x82\xac\n");
         let update = cursor.read_update().unwrap().unwrap();
-        let merged = super::merge_log_records(cursor.collect_complete_records(update));
+        let merged = super::merge_log_records(collect_after_quiet(&mut cursor, update));
         assert_eq!(merged, "2026-04-20T00:13:45Z info split €\n".as_bytes());
         assert_eq!(cursor.offset, fs::metadata(&path).unwrap().len());
 
@@ -1102,7 +1268,7 @@ mod tests {
 
         append(&path, b" completed\n");
         let update = cursor.read_update().unwrap().unwrap();
-        let merged = super::merge_log_records(cursor.collect_complete_records(update));
+        let merged = super::merge_log_records(collect_after_quiet(&mut cursor, update));
         assert_eq!(
             merged,
             concat!(
@@ -1111,6 +1277,83 @@ mod tests {
             )
             .as_bytes()
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn merged_follow_waits_one_quiet_poll_for_continuation_lines() {
+        let root = test_root("cursor-multiline-grace");
+        let path = root.join("gateway.log");
+        fs::write(&path, b"initial\n").unwrap();
+        let mut cursor = FollowCursor::new(log_target(path.clone()));
+        cursor.snapshot(None, true).unwrap().unwrap();
+
+        append(&path, b"2026-04-20T00:13:45Z error request failed\n");
+        let update = cursor.read_update().unwrap().unwrap();
+        assert!(cursor.collect_complete_records(update).is_empty());
+
+        append(&path, b"    at delayed frame\n");
+        let update = cursor.read_update().unwrap().unwrap();
+        assert!(cursor.collect_complete_records(update).is_empty());
+        let merged = super::merge_log_records(cursor.collect_quiet_records());
+        assert_eq!(
+            merged,
+            b"2026-04-20T00:13:45Z error request failed\n    at delayed frame\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn merged_follow_flushes_an_unterminated_record_after_one_quiet_poll() {
+        let root = test_root("cursor-unterminated-grace");
+        let path = root.join("gateway.log");
+        fs::write(&path, b"2026-04-20T00:13:45Z final record").unwrap();
+        let mut cursor = FollowCursor::new(log_target(path.clone()));
+        let snapshot = cursor.snapshot(None, true).unwrap().unwrap();
+        assert!(snapshot.bytes.is_empty());
+
+        let merged = super::merge_log_records(cursor.collect_quiet_records());
+        assert_eq!(merged, b"2026-04-20T00:13:45Z final record\n");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn merged_follow_startup_globally_orders_and_tails_held_records() {
+        let root = test_root("cursor-startup-order");
+        let stdout_path = root.join("stdout.log");
+        let stderr_path = root.join("stderr.log");
+        fs::write(&stdout_path, b"2026-04-20T00:13:20Z stdout later\n").unwrap();
+        fs::write(&stderr_path, b"2026-04-20T00:13:10Z stderr earlier\n").unwrap();
+
+        let mut cursors = vec![
+            FollowCursor::new(log_target(stdout_path.clone())),
+            FollowCursor::new(log_target(stderr_path.clone())),
+        ];
+        let snapshots = cursors
+            .iter_mut()
+            .map(|cursor| cursor.snapshot(None, true).unwrap().unwrap())
+            .collect::<Vec<_>>();
+        let merged = super::collect_merged_follow_startup(&mut cursors, snapshots, None).unwrap();
+        assert_eq!(
+            merged,
+            b"2026-04-20T00:13:10Z stderr earlier\n\
+              2026-04-20T00:13:20Z stdout later\n"
+        );
+
+        let mut cursors = vec![
+            FollowCursor::new(log_target(stdout_path.clone())),
+            FollowCursor::new(log_target(stderr_path.clone())),
+        ];
+        let snapshots = cursors
+            .iter_mut()
+            .map(|cursor| cursor.snapshot(Some(1), true).unwrap().unwrap())
+            .collect::<Vec<_>>();
+        let tailed =
+            super::collect_merged_follow_startup(&mut cursors, snapshots, Some(1)).unwrap();
+        assert_eq!(tailed, b"2026-04-20T00:13:20Z stdout later\n");
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1129,7 +1372,7 @@ mod tests {
 
         append(&path, b" completed\n");
         let update = cursor.read_update().unwrap().unwrap();
-        let merged = super::merge_log_records(cursor.collect_complete_records(update));
+        let merged = super::merge_log_records(collect_after_quiet(&mut cursor, update));
         assert_eq!(merged, b"frame one\nframe two completed\n");
 
         let _ = fs::remove_dir_all(root);
@@ -1159,7 +1402,7 @@ mod tests {
 
         append(&path, b"\x82\xac\n");
         let update = cursor.read_update().unwrap().unwrap();
-        let merged = super::merge_log_records(cursor.collect_complete_records(update));
+        let merged = super::merge_log_records(collect_after_quiet(&mut cursor, update));
         assert_eq!(
             merged,
             concat!("2026-04-20T00:13:45Z error failed\n", "    split €\n").as_bytes()
@@ -1198,7 +1441,7 @@ mod tests {
         fs::write(&path, b"2026-04-20T00:13:46Z info new file\n").unwrap();
         let update = cursor.read_update().unwrap().unwrap();
         assert!(update_has_reset(&update));
-        let merged = super::merge_log_records(cursor.collect_complete_records(update));
+        let merged = super::merge_log_records(collect_after_quiet(&mut cursor, update));
         assert_eq!(merged, b"old partial\n2026-04-20T00:13:46Z info new file\n");
 
         let _ = fs::remove_dir_all(root);
@@ -1223,7 +1466,7 @@ mod tests {
             b"2026-04-20T00:13:45Z info old final\n\
               2026-04-20T00:13:46Z info new first\n"
         );
-        let merged = super::merge_log_records(cursor.collect_complete_records(update));
+        let merged = super::merge_log_records(collect_after_quiet(&mut cursor, update));
         assert_eq!(
             merged,
             b"2026-04-20T00:13:45Z info old final\n\
@@ -1248,12 +1491,178 @@ mod tests {
         append(&rotated_path, b"2026-04-20T00:13:45Z info late old write\n");
         fs::write(&path, b"2026-04-20T00:13:46Z info new first\n").unwrap();
         let update = cursor.read_update().unwrap().unwrap();
-        let merged = super::merge_log_records(cursor.collect_complete_records(update));
+        let merged = super::merge_log_records(collect_after_quiet(&mut cursor, update));
         assert_eq!(
             merged,
             b"2026-04-20T00:13:45Z info late old write\n\
               2026-04-20T00:13:46Z info new first\n"
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn follow_cursor_reattaches_a_source_that_returns_after_a_missing_gap() {
+        let root = test_root("cursor-missing-reattach");
+        let path = root.join("gateway.log");
+        let rotated_path = root.join("gateway.log.1");
+        fs::write(&path, b"initial\n").unwrap();
+        let mut cursor = FollowCursor::new(log_target(path.clone()));
+        cursor.snapshot(None, false).unwrap().unwrap();
+
+        fs::rename(&path, &rotated_path).unwrap();
+        assert!(cursor.read_update().unwrap().is_none());
+        append(&rotated_path, b"late write\n");
+        fs::rename(&rotated_path, &path).unwrap();
+
+        let update = cursor.read_update().unwrap().unwrap();
+        assert_eq!(update_bytes(&update), b"late write\n");
+        assert!(cursor.retired_files.is_empty());
+        assert!(cursor.read_update().unwrap().is_none());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn follow_cursor_drains_late_writes_after_the_replacement_appears() {
+        let root = test_root("cursor-post-replacement-drain");
+        let path = root.join("gateway.log");
+        let rotated_path = root.join("gateway.log.1");
+        fs::write(&path, b"initial\n").unwrap();
+        let mut cursor = FollowCursor::new(log_target(path.clone()));
+        cursor.snapshot(None, false).unwrap().unwrap();
+
+        fs::rename(&path, &rotated_path).unwrap();
+        fs::write(&path, b"new first\n").unwrap();
+        let update = cursor.read_update().unwrap().unwrap();
+        assert_eq!(update_bytes(&update), b"new first\n");
+        assert_eq!(cursor.retired_files.len(), 1);
+
+        append(&rotated_path, b"late old write\n");
+        let update = cursor.read_update().unwrap().unwrap();
+        assert_eq!(update_bytes(&update), b"late old write\n");
+
+        for _ in 0..super::RETIRED_FILE_QUIET_POLLS {
+            assert!(cursor.read_update().unwrap().is_none());
+        }
+        assert!(cursor.retired_files.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn late_retired_writes_preserve_single_and_merged_source_boundaries() {
+        let root = test_root("cursor-retired-boundaries");
+        let single_path = root.join("single.log");
+        let single_rotated = root.join("single.log.1");
+        fs::write(&single_path, b"initial\n").unwrap();
+        let mut single = FollowCursor::new(log_target(single_path.clone()));
+        single.snapshot(None, false).unwrap().unwrap();
+
+        fs::rename(&single_path, &single_rotated).unwrap();
+        fs::write(&single_path, b"new partial").unwrap();
+        let update = single.read_update().unwrap().unwrap();
+        assert_eq!(single.single_stream_bytes(update), b"new partial");
+
+        append(&single_path, b" continued\n");
+        append(&single_rotated, b"old late\n");
+        let update = single.read_update().unwrap().unwrap();
+        assert_eq!(
+            single.single_stream_bytes(update),
+            b" continued\nold late\n"
+        );
+
+        let merged_path = root.join("merged.log");
+        let merged_rotated = root.join("merged.log.1");
+        fs::write(&merged_path, b"initial\n").unwrap();
+        let mut merged = FollowCursor::new(log_target(merged_path.clone()));
+        merged.snapshot(None, true).unwrap().unwrap();
+
+        fs::rename(&merged_path, &merged_rotated).unwrap();
+        fs::write(&merged_path, b"2026-04-20T00:13:46Z new partial").unwrap();
+        let update = merged.read_update().unwrap().unwrap();
+        assert!(merged.collect_complete_records(update).is_empty());
+
+        append(&merged_path, b" continued\n");
+        append(&merged_rotated, b"2026-04-20T00:13:45Z old late\n");
+        let update = merged.read_update().unwrap().unwrap();
+        let records = merged.collect_complete_records(update);
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            super::merge_log_records(records),
+            b"2026-04-20T00:13:45Z old late\n\
+              2026-04-20T00:13:46Z new partial continued\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn independent_empty_resets_do_not_split_the_current_source() {
+        let root = test_root("cursor-empty-retired-reset");
+        let path = root.join("gateway.log");
+        let rotated_path = root.join("gateway.log.1");
+        fs::write(&path, b"initial\n").unwrap();
+        let mut cursor = FollowCursor::new(log_target(path.clone()));
+        cursor.snapshot(None, true).unwrap().unwrap();
+
+        fs::rename(&path, &rotated_path).unwrap();
+        fs::write(&path, b"2026-04-20T00:13:46Z new partial").unwrap();
+        let update = cursor.read_update().unwrap().unwrap();
+        assert!(cursor.collect_complete_records(update).is_empty());
+
+        fs::write(&rotated_path, b"").unwrap();
+        append(&path, b" continued");
+        let update = cursor.read_update().unwrap().unwrap();
+        assert!(cursor.collect_complete_records(update).is_empty());
+
+        append(&path, b" to completion\n");
+        let update = cursor.read_update().unwrap().unwrap();
+        let merged = super::merge_log_records(collect_after_quiet(&mut cursor, update));
+        assert_eq!(
+            merged,
+            b"2026-04-20T00:13:46Z new partial continued to completion\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn follow_cursor_expires_a_handle_while_the_path_is_missing() {
+        let root = test_root("cursor-missing-expiry");
+        let path = root.join("gateway.log");
+        fs::write(&path, b"initial\n").unwrap();
+        let mut cursor = FollowCursor::new(log_target(path.clone()));
+        cursor.snapshot(None, false).unwrap().unwrap();
+
+        fs::remove_file(&path).unwrap();
+        for _ in 0..super::RETIRED_FILE_QUIET_POLLS {
+            assert!(cursor.read_update().unwrap().is_none());
+            assert!(cursor.retired_files.len() <= super::RETIRED_FILE_LIMIT);
+        }
+        assert!(cursor.file.is_none());
+        assert!(cursor.retired_files.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn follow_cursor_caps_retired_file_state() {
+        let root = test_root("cursor-retired-cap");
+        let mut cursor = FollowCursor::new(log_target(root.join("gateway.log")));
+
+        for index in 0..(super::RETIRED_FILE_LIMIT + 2) {
+            let path = root.join(format!("gateway.log.{index}"));
+            fs::write(&path, b"log\n").unwrap();
+            let file = fs::File::open(path).unwrap();
+            let metadata = file.metadata().unwrap();
+            cursor.identity = Some(super::file_identity(&file, &metadata).unwrap());
+            cursor.file = Some(file);
+            cursor.offset = 4;
+            cursor.retire_current_file();
+        }
+
+        assert_eq!(cursor.retired_files.len(), super::RETIRED_FILE_LIMIT);
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1273,7 +1682,14 @@ mod tests {
         fs::write(&rotated_path, b"2026-04-20T00:13:46Z info rewritten\n").unwrap();
         let update = cursor.read_update().unwrap().unwrap();
         assert!(update_has_reset(&update));
-        let merged = super::merge_log_records(cursor.collect_complete_records(update));
+        let mut records = cursor.collect_complete_records(update);
+        for _ in 1..super::RETIRED_FILE_QUIET_POLLS {
+            assert!(cursor.read_update().unwrap().is_none());
+            assert!(cursor.collect_quiet_records().is_empty());
+        }
+        assert!(cursor.read_update().unwrap().is_none());
+        records.extend(cursor.collect_quiet_records());
+        let merged = super::merge_log_records(records);
         assert_eq!(
             merged,
             b"2026-04-20T00:13:45Z info old partial\n\
@@ -1331,10 +1747,11 @@ mod tests {
 
         fs::rename(&path, &rotated_path).unwrap();
         assert!(cursor.read_update().unwrap().is_none());
+        assert!(cursor.collect_quiet_records().is_empty());
         append(&rotated_path, b" recovered\n");
         fs::write(&path, b"2026-04-20T00:13:46Z info new file\n").unwrap();
         let update = cursor.read_update().unwrap().unwrap();
-        let merged = super::merge_log_records(cursor.collect_complete_records(update));
+        let merged = super::merge_log_records(collect_after_quiet(&mut cursor, update));
         assert_eq!(
             merged,
             b"2026-04-20T00:13:45Z error final failure recovered\n\
@@ -1385,7 +1802,56 @@ mod tests {
     }
 
     #[test]
-    fn follow_cursor_hashes_the_consumed_prefix_for_same_file_rewrites() {
+    fn follow_cursor_tail_snapshot_reads_only_the_tail_window() {
+        let root = test_root("cursor-tail-read-budget");
+        let path = root.join("gateway.log");
+        let content = "line\n".repeat(500_000);
+        fs::write(&path, &content).unwrap();
+
+        let mut cursor = FollowCursor::new(log_target(path.clone()));
+        let snapshot = cursor.snapshot(Some(10), false).unwrap().unwrap();
+        assert_eq!(snapshot.bytes, b"line\n".repeat(10));
+        assert!(cursor.read_metrics.snapshot_bytes <= super::TAIL_READ_CHUNK_SIZE as u64);
+        assert!(cursor.read_metrics.snapshot_bytes < content.len() as u64);
+
+        let mut full_cursor = FollowCursor::new(log_target(path.clone()));
+        full_cursor.snapshot(None, false).unwrap().unwrap();
+        assert_eq!(
+            full_cursor.read_metrics.snapshot_bytes,
+            content.len() as u64
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn follow_cursor_reads_only_new_bytes_for_unchanged_or_growing_files() {
+        let root = test_root("cursor-steady-state-reads");
+        let path = root.join("gateway.log");
+        fs::write(&path, vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        let mut cursor = FollowCursor::new(log_target(path.clone()));
+        cursor.snapshot(None, false).unwrap().unwrap();
+        cursor.read_metrics = Default::default();
+
+        assert!(cursor.read_update().unwrap().is_none());
+        assert_eq!(cursor.read_metrics.snapshot_bytes, 0);
+        assert_eq!(cursor.read_metrics.range_bytes, 0);
+
+        append(&path, b"appended\n");
+        let update = cursor.read_update().unwrap().unwrap();
+        assert_eq!(update_bytes(&update), b"appended\n");
+        assert_eq!(cursor.read_metrics.snapshot_bytes, 0);
+        assert_eq!(cursor.read_metrics.range_bytes, b"appended\n".len() as u64);
+
+        assert!(cursor.read_update().unwrap().is_none());
+        assert_eq!(cursor.read_metrics.snapshot_bytes, 0);
+        assert_eq!(cursor.read_metrics.range_bytes, b"appended\n".len() as u64);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn follow_cursor_resets_after_a_same_size_rewrite() {
         let root = test_root("cursor-rewrite");
         let path = root.join("gateway.log");
         let mut original = b"old-prefix\n".to_vec();
@@ -1394,15 +1860,34 @@ mod tests {
         let mut cursor = FollowCursor::new(log_target(path.clone()));
         cursor.snapshot(None, false).unwrap().unwrap();
 
-        fs::write(&path, &original).unwrap();
-        assert!(cursor.read_update().unwrap().is_none());
-
         let mut rewritten = b"new-prefix\n".to_vec();
         rewritten.extend(std::iter::repeat_n(b'x', 64));
-        fs::write(&path, &rewritten).unwrap();
+        let previous = cursor.modified;
+        rewrite_with_new_modified_time(&path, &rewritten, previous);
         let update = cursor.read_update().unwrap().unwrap();
         assert!(update_has_reset(&update));
         assert_eq!(update_bytes(&update), rewritten);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn follow_cursor_checkpoints_metadata_from_before_the_read() {
+        let root = test_root("cursor-metadata-race");
+        let path = root.join("gateway.log");
+        fs::write(&path, b"old record\n").unwrap();
+        let (mut file, metadata) = super::open_log(&path).unwrap().unwrap();
+        let previous = metadata.modified().ok();
+
+        rewrite_with_new_modified_time(&path, b"new record\n", previous);
+        let mut cursor = FollowCursor::new(log_target(path.clone()));
+        let offset = metadata.len();
+        file.seek(std::io::SeekFrom::Start(offset)).unwrap();
+        cursor.adopt_file(file, offset, &metadata).unwrap();
+
+        let update = cursor.read_update().unwrap().unwrap();
+        assert!(update_has_reset(&update));
+        assert_eq!(update_bytes(&update), b"new record\n");
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1474,5 +1959,20 @@ mod tests {
             .unwrap()
             .write_all(bytes)
             .unwrap();
+    }
+
+    fn rewrite_with_new_modified_time(
+        path: &Path,
+        bytes: &[u8],
+        previous: Option<std::time::SystemTime>,
+    ) {
+        for _ in 0..200 {
+            fs::write(path, bytes).unwrap();
+            if fs::metadata(path).unwrap().modified().ok() != previous {
+                return;
+            }
+            sleep(Duration::from_millis(10));
+        }
+        panic!("filesystem modification time did not advance");
     }
 }
