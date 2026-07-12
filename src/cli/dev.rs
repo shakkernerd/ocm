@@ -1303,17 +1303,27 @@ impl SourceWatchProcessGuard {
     #[cfg(unix)]
     fn suspend_with_child(&self, child_pid: u32) -> Result<(), String> {
         self.restore_terminal()?;
-        if unsafe { libc::kill(libc::getpid(), libc::SIGSTOP) } == -1 {
-            return Err(format!(
-                "failed suspending OCM with source watch: {}",
-                io::Error::last_os_error()
-            ));
-        }
-        if let Some(terminal) = &self.terminal {
+        loop {
+            if unsafe { libc::kill(libc::getpid(), libc::SIGSTOP) } == -1 {
+                return Err(format!(
+                    "failed suspending OCM with source watch: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+            let Some(terminal) = &self.terminal else {
+                break;
+            };
             let foreground_process_group = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
+            if foreground_process_group == -1 {
+                return Err(format!(
+                    "failed reading resumed source watch terminal ownership: {}",
+                    io::Error::last_os_error()
+                ));
+            }
             if foreground_process_group == terminal.parent_process_group {
                 set_terminal_foreground_process_group(child_pid as libc::pid_t)?;
                 terminal.foreground_assigned.store(true, Ordering::SeqCst);
+                break;
             }
         }
         signal_unix_process_group(child_pid, libc::SIGCONT)?;

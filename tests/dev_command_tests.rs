@@ -1775,6 +1775,130 @@ fn dev_watch_gives_interactive_child_terminal_foreground_ownership() {
     assert!(!source_watch_override_path(&root, "demo").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn dev_watch_background_resume_waits_for_foreground_ownership() {
+    let root = TestDir::new("dev-command-watch-background-resume");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    let (started, received) = install_interactive_fake_dev_runners(&root, &mut env);
+    let override_path = source_watch_override_path(&root, "demo");
+    let script = r#"
+import fcntl
+import os
+import pty
+import signal
+import subprocess
+import termios
+import time
+
+def wait_path(path, label):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if os.path.exists(path):
+            return
+        time.sleep(0.025)
+    raise RuntimeError(f"timed out waiting for {label}")
+
+def wait_stopped(pid, label):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        waited, status = os.waitpid(pid, os.WNOHANG | os.WUNTRACED)
+        if waited == pid:
+            if os.WIFSTOPPED(status):
+                return
+            raise RuntimeError(f"OCM exited while waiting for {label}: status={status}")
+        time.sleep(0.025)
+    raise RuntimeError(f"timed out waiting for {label}")
+
+master, slave = pty.openpty()
+process = None
+succeeded = False
+try:
+    os.setsid()
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    shell_group = os.getpgrp()
+    os.tcsetpgrp(slave, shell_group)
+    process = subprocess.Popen(
+        [
+            os.environ["OCM_TEST_BINARY"],
+            "dev",
+            "demo",
+            "--repo",
+            os.environ["OCM_TEST_REPO"],
+            "--watch",
+        ],
+        cwd=os.environ["OCM_TEST_CWD"],
+        stdin=slave,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        preexec_fn=os.setpgrp,
+    )
+    wait_path(os.environ["OCM_TEST_STARTED"], "watcher startup")
+    wait_stopped(process.pid, "initial background stop")
+
+    os.killpg(process.pid, signal.SIGCONT)
+    wait_stopped(process.pid, "background resume stop")
+    if not os.path.exists(os.environ["OCM_TEST_OVERRIDE"]):
+        raise RuntimeError("background resume dropped the active watch lease")
+
+    os.tcsetpgrp(slave, process.pid)
+    os.killpg(process.pid, signal.SIGCONT)
+    os.write(master, b"terminal-input\n")
+    wait_path(os.environ["OCM_TEST_RECEIVED"], "foreground input")
+    time.sleep(0.2)
+    os.close(master)
+    master = -1
+    os.close(slave)
+    slave = -1
+    exit_code = process.wait(timeout=10)
+    if exit_code != 0:
+        error = process.stderr.read().decode(errors="replace")
+        raise RuntimeError(f"OCM exited with {exit_code}: {error}")
+    succeeded = True
+finally:
+    if not succeeded and process is not None:
+        for process_group in (process.pid,):
+            try:
+                os.killpg(process_group, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    if master >= 0:
+        os.close(master)
+    if slave >= 0:
+        os.close(slave)
+"#;
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .env_clear()
+        .envs(&env)
+        .env("OCM_TEST_BINARY", env!("CARGO_BIN_EXE_ocm"))
+        .env("OCM_TEST_REPO", path_string(&repo))
+        .env("OCM_TEST_CWD", path_string(&cwd))
+        .env("OCM_TEST_STARTED", path_string(&started))
+        .env("OCM_TEST_RECEIVED", path_string(&received))
+        .env("OCM_TEST_OVERRIDE", path_string(&override_path))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "python PTY scenario failed with {}:\nstdout={}\nstderr={}",
+        output.status,
+        stdout(&output),
+        stderr(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(received).unwrap().trim(),
+        "terminal-input"
+    );
+    assert!(!override_path.exists());
+}
+
 #[test]
 fn dev_watch_aborts_and_restores_policy_when_service_stop_times_out() {
     let root = TestDir::new("dev-command-watch-stop-timeout");
