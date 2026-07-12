@@ -37,14 +37,12 @@ if [[ $# -ne 1 ]]; then
 fi
 
 new_version="$1"
-if [[ ! "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "error: version must look like 1.2.3 or 1.2.3-beta.1" >&2
-  exit 1
-fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 cd "$repo_root"
+
+"${script_dir}/validate-version.sh" "$new_version"
 
 current_version="$(perl -ne 'print "$1\n" if /^version = "([^"]+)"$/' Cargo.toml | head -n1)"
 if [[ -z "$current_version" ]]; then
@@ -61,6 +59,21 @@ export OCM_NEW_VERSION="$new_version"
 
 log_step "Updating Cargo.toml and Cargo.lock from ${current_version} to ${new_version}"
 
+backup_dir="$(mktemp -d)"
+cp Cargo.toml "${backup_dir}/Cargo.toml"
+cp Cargo.lock "${backup_dir}/Cargo.lock"
+committed=0
+rollback() {
+  local status=$?
+  if [[ "$committed" -ne 1 ]]; then
+    cp "${backup_dir}/Cargo.toml" Cargo.toml
+    cp "${backup_dir}/Cargo.lock" Cargo.lock
+  fi
+  rm -rf "$backup_dir"
+  exit "$status"
+}
+trap rollback EXIT
+
 perl -0pi -e 's/^(version = ")[^"]+(")/$1.$ENV{OCM_NEW_VERSION}.$2/me' Cargo.toml
 
 perl -0pi -e 's/(\[\[package\]\]\nname = "ocm"\nversion = ")[^"]+(")/$1.$ENV{OCM_NEW_VERSION}.$2/se' Cargo.lock
@@ -74,5 +87,9 @@ if [[ "$updated_toml_version" != "$new_version" || "$updated_lock_version" != "$
 fi
 
 run_step "Verifying the version bump with cargo check --locked" cargo check --locked --quiet
+
+committed=1
+rm -rf "$backup_dir"
+trap - EXIT
 
 echo "Updated ocm version: ${current_version} -> ${new_version}"

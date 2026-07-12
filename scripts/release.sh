@@ -55,6 +55,10 @@ remote_tag_commit() {
   '
 }
 
+remote_tag_object() {
+  git ls-remote "$remote" "refs/tags/${tag}" | awk 'NR == 1 { print $1 }'
+}
+
 tag_has_signature() {
   git cat-file -p "$1" | grep -Eq -- '-----BEGIN (PGP|SSH) SIGNATURE-----'
 }
@@ -139,14 +143,11 @@ if [[ -z "$version" ]]; then
   exit 1
 fi
 
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "error: version must look like 1.2.3 or 1.2.3-beta.1" >&2
-  exit 1
-fi
-
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 cd "$repo_root"
+
+"${script_dir}/validate-version.sh" "$version"
 
 branch="$(git symbolic-ref --quiet --short HEAD || true)"
 if [[ "$branch" != "main" ]]; then
@@ -161,8 +162,34 @@ fi
 
 tag="v${version}"
 release_commit_message="chore: bump version to ${version}"
+starting_head="$(git rev-parse HEAD)"
+starting_index_tree="$(git write-tree)"
 current_version="$(package_version)"
 current_lock_version="$(lockfile_version)"
+created_release_commit=0
+created_local_tag=0
+transaction_complete=0
+restore_version_files=0
+
+rollback_release_prep() {
+  local status=$?
+  if [[ "$status" -eq 0 || "$transaction_complete" -eq 1 ]]; then
+    return
+  fi
+
+  log_step "Rolling back local release preparation"
+  if [[ "$created_local_tag" -eq 1 ]]; then
+    git tag -d "$tag" >/dev/null 2>&1 || true
+  fi
+  if [[ "$created_release_commit" -eq 1 && "$(git rev-parse HEAD)" == "$head_sha" ]]; then
+    git reset --mixed "$starting_head" >/dev/null
+  fi
+  if [[ "$restore_version_files" -eq 1 ]]; then
+    git restore --source="$starting_head" --worktree -- Cargo.toml Cargo.lock
+  fi
+  git read-tree "$starting_index_tree"
+}
+trap rollback_release_prep EXIT
 
 if [[ -z "$current_version" || -z "$current_lock_version" ]]; then
   echo "error: could not read the ocm version from Cargo.toml and Cargo.lock" >&2
@@ -185,6 +212,7 @@ fi
 
 local_tag_commit_sha="$(ref_commit "$tag")"
 remote_tag_commit_sha="$(remote_tag_commit)"
+remote_tag_object_sha="$(remote_tag_object)"
 remote_main_sha="$(remote_ref_commit "refs/heads/main")"
 
 if [[ -n "$local_tag_commit_sha" && "$local_tag_commit_sha" != "$head_sha" ]]; then
@@ -197,7 +225,6 @@ if [[ -n "$remote_tag_commit_sha" && "$remote_tag_commit_sha" != "$head_sha" ]];
   exit 1
 fi
 
-release_state="fresh"
 need_update_version=0
 need_checks=0
 need_commit=0
@@ -214,7 +241,6 @@ if [[ "$current_version" == "$version" ]]; then
       echo "error: version files are dirty for ${version}, but a release commit or tag already exists; clean up the release state before retrying" >&2
       exit 1
     fi
-    release_state="resume-version-files"
     need_checks=1
     need_commit=1
     log_resume_state "version files already updated to ${version}"
@@ -225,7 +251,6 @@ if [[ "$current_version" == "$version" ]]; then
       exit 1
     fi
 
-    release_state="resume-release-commit"
     log_resume_state "release commit already exists at ${head_sha:0:7}"
     if [[ -n "$local_tag_commit_sha" ]]; then
       log_resume_state "local tag ${tag} already exists"
@@ -246,7 +271,6 @@ else
     echo "error: release tag ${tag} already exists, but version files are still on ${current_version}" >&2
     exit 1
   fi
-  release_state="fresh"
   need_update_version=1
   need_checks=1
   need_commit=1
@@ -264,6 +288,7 @@ else
 fi
 
 if [[ "$need_update_version" -eq 1 ]]; then
+  restore_version_files=1
   run_step "Updating version files to ${version}" "${script_dir}/update-version.sh" "$version"
 else
   log_skip "version files are already set to ${version}"
@@ -284,6 +309,7 @@ if [[ "$need_commit" -eq 1 ]]; then
   fi
   run_step "Creating release commit" git commit -m "$release_commit_message"
   head_sha="$(git rev-parse HEAD)"
+  created_release_commit=1
 else
   log_skip "release commit already exists"
 fi
@@ -307,35 +333,78 @@ if [[ -z "$local_tag_commit_sha" ]]; then
   fi
   log_step "done: Creating signed tag ${tag}"
   local_tag_commit_sha="$(ref_commit "$tag")"
+  created_local_tag=1
 else
   log_skip "local tag ${tag} already exists"
 fi
 
+if [[ "$(git cat-file -t "$tag" 2>/dev/null || true)" != "tag" ]]; then
+  echo "error: release tag ${tag} must be an annotated tag" >&2
+  exit 1
+fi
+if ! git verify-tag "$tag" >/dev/null 2>&1; then
+  echo "error: release tag ${tag} does not have a valid configured signature" >&2
+  exit 1
+fi
+local_tag_object_sha="$(git rev-parse "${tag}^{tag}")"
+
 remote_main_sha="$(remote_ref_commit "refs/heads/main")"
 remote_tag_commit_sha="$(remote_tag_commit)"
+remote_tag_object_sha="$(remote_tag_object)"
+if [[ -n "$remote_tag_object_sha" && "$remote_tag_object_sha" != "$local_tag_object_sha" ]]; then
+  echo "error: remote tag ${tag} differs from the verified local signed tag; preserve both refs and resolve the release state manually" >&2
+  exit 1
+fi
 
 push_targets=()
 if [[ "$remote_main_sha" != "$head_sha" ]]; then
   push_targets+=("main")
 fi
-if [[ "$remote_tag_commit_sha" != "$head_sha" ]]; then
+if [[ -z "$remote_tag_object_sha" ]]; then
   push_targets+=("$tag")
 fi
 
 if [[ "${#push_targets[@]}" -gt 0 ]]; then
-  run_step "Pushing ${push_targets[*]} to ${remote}" git push "$remote" "${push_targets[@]}"
+  push_started_at="$SECONDS"
+  log_step "Atomically pushing ${push_targets[*]} to ${remote}"
+  if git push --atomic "$remote" "${push_targets[@]}"; then
+    log_step "done: Atomically pushing ${push_targets[*]} to ${remote} ($((SECONDS - push_started_at))s)"
+  else
+    if ! pushed_main_sha="$(remote_ref_commit "refs/heads/main")" ||
+      ! pushed_tag_sha="$(remote_tag_commit)" ||
+      ! pushed_tag_object_sha="$(remote_tag_object)"; then
+      transaction_complete=1
+      trap - EXIT
+      echo "error: push failed and remote state could not be determined; preserving the local release commit and tag for recovery" >&2
+      exit 1
+    fi
+    if [[ "$pushed_main_sha" == "$head_sha" &&
+      "$pushed_tag_sha" == "$head_sha" &&
+      "$pushed_tag_object_sha" == "$local_tag_object_sha" ]]; then
+      log_step "push reported failure, but ${remote} has both release refs at ${head_sha:0:7}"
+    elif [[ "$pushed_main_sha" != "$remote_main_sha" ||
+      "$pushed_tag_sha" != "$remote_tag_commit_sha" ||
+      "$pushed_tag_object_sha" != "$remote_tag_object_sha" ]]; then
+      transaction_complete=1
+      trap - EXIT
+      echo "error: push failed after remote release state changed; preserving the local release commit and tag for recovery" >&2
+      exit 1
+    else
+      echo "error: atomic release push failed; remote refs were unchanged" >&2
+      exit 1
+    fi
+  fi
 else
   log_skip "main and ${tag} are already pushed to ${remote}"
 fi
+
+transaction_complete=1
+trap - EXIT
 
 cat <<EOF
 Release prep complete for ${tag}.
 
 Next:
-  1. Open GitHub Releases
-  2. Create or publish the release ${tag} from the existing tag
-  3. The release workflow will build and upload the tarballs
-
-Optional GitHub CLI:
-  gh release create ${tag} --title ${tag} --generate-notes
+  1. Run: gh api --method POST 'repos/{owner}/{repo}/dispatches' -f event_type=release -F 'client_payload[tag]=${tag}'
+  2. The workflow will verify ${tag}, build every archive, and publish only after all assets and SHA256SUMS are uploaded
 EOF
