@@ -2,6 +2,8 @@ mod support;
 
 use std::fs;
 
+use serde_json::Value;
+
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
 fn extract_port(output: &str, label: &str) -> u32 {
@@ -47,6 +49,50 @@ fn env_create_prints_the_effective_gateway_port_for_fresh_envs() {
     assert!(output.contains("open: ocm @demo -- tui"));
     assert!(output.contains("onboard: ocm @demo -- onboard"));
     assert!(output.contains("run: ocm @demo -- status"));
+}
+
+#[test]
+fn env_create_and_show_json_report_the_same_effective_gateway_port() {
+    let root = TestDir::new("env-create-json-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--json"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let created: Value = serde_json::from_str(&stdout(&created)).unwrap();
+    let created_port = created["gatewayPort"].as_u64().unwrap();
+
+    let shown = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(shown.status.success(), "{}", stderr(&shown));
+    let shown: Value = serde_json::from_str(&stdout(&shown)).unwrap();
+    assert_eq!(shown["gatewayPort"].as_u64(), Some(created_port));
+}
+
+#[test]
+fn env_show_and_list_prefer_a_later_config_gateway_port() {
+    let root = TestDir::new("env-config-json-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    fs::write(
+        root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
+        "{\"gateway\":{\"port\":18888}}",
+    )
+    .unwrap();
+
+    let shown = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(shown.status.success(), "{}", stderr(&shown));
+    let shown: Value = serde_json::from_str(&stdout(&shown)).unwrap();
+    assert_eq!(shown["gatewayPort"], 18_888);
+
+    let listed = run_ocm(&cwd, &env, &["env", "list", "--json"]);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    let listed: Value = serde_json::from_str(&stdout(&listed)).unwrap();
+    assert_eq!(listed[0]["gatewayPort"], 18_888);
 }
 
 #[test]

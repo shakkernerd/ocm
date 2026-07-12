@@ -7,7 +7,8 @@ use crate::runtime::RuntimeService;
 use crate::store::{
     clone_environment, create_environment, export_environment, get_environment, get_launcher,
     get_runtime_verified, import_environment, list_environments, now_utc, remove_environment,
-    resolve_effective_gateway_ports, resolve_env_gateway_port, save_environment,
+    resolve_config_gateway_port, resolve_effective_gateway_ports, resolve_env_gateway_port,
+    save_environment,
 };
 use crate::supervisor::sync_supervisor_if_present;
 
@@ -17,6 +18,10 @@ pub fn default_service_enabled() -> bool {
 
 pub fn default_service_running() -> bool {
     true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,6 +38,8 @@ pub struct EnvMeta {
     pub name: String,
     pub root: String,
     pub gateway_port: Option<u32>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub gateway_port_auto_assigned: bool,
     #[serde(default = "default_service_enabled")]
     pub service_enabled: bool,
     #[serde(default = "default_service_running")]
@@ -179,7 +186,9 @@ impl<'a> EnvironmentService<'a> {
     }
 
     pub fn apply_effective_gateway_port(&self, mut meta: EnvMeta) -> Result<EnvMeta, String> {
-        meta.gateway_port = Some(self.resolve_effective_gateway_port(&meta)?.0);
+        let (gateway_port, source) = self.resolve_effective_gateway_port(&meta)?;
+        meta.gateway_port = Some(gateway_port);
+        meta.gateway_port_auto_assigned = source == "computed";
         Ok(meta)
     }
 
@@ -191,9 +200,11 @@ impl<'a> EnvironmentService<'a> {
 
         envs.into_iter()
             .map(|mut meta| {
-                if meta.gateway_port.is_none() {
-                    meta.gateway_port = resolve_env_gateway_port(&meta)
-                        .or_else(|| effective_ports.get(&meta.name).copied());
+                if let Some(port) = resolve_env_gateway_port(&meta) {
+                    meta.gateway_port = Some(port);
+                } else if let Some(port) = effective_ports.get(&meta.name).copied() {
+                    meta.gateway_port = Some(port);
+                    meta.gateway_port_auto_assigned = true;
                 }
                 Ok(meta)
             })
@@ -317,12 +328,19 @@ impl<'a> EnvironmentService<'a> {
         &self,
         target: &EnvMeta,
     ) -> Result<(u32, &'static str), String> {
-        if let Some(port) = target.gateway_port {
+        if let Some(port) = target
+            .gateway_port
+            .filter(|_| !target.gateway_port_auto_assigned)
+        {
             return Ok((port, "metadata"));
         }
 
-        if let Some(port) = resolve_env_gateway_port(target) {
+        if let Some(port) = resolve_config_gateway_port(target) {
             return Ok((port, "config"));
+        }
+
+        if let Some(port) = target.gateway_port {
+            return Ok((port, "computed"));
         }
 
         let effective_ports =
