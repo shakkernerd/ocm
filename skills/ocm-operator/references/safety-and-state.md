@@ -38,7 +38,7 @@ import` on that copy. Verify the expected fixture exists before mutation.
 Pattern:
 
 ```sh
-ocm env clone Violet <test-env>
+ocm env clone <existing-env> <test-env>
 ocm upgrade <test-env> --runtime <runtime>
 ocm @<test-env> -- doctor --fix
 ocm env destroy <test-env> --yes

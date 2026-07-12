@@ -79,8 +79,8 @@ ocm help upgrade
 
 ## Safety Rules
 
-- Treat important user envs such as `Violet` and `Shaks` as durable state.
-  Clone first for testing unless the user explicitly asks to mutate them.
+- Treat important existing user envs as durable state. Clone first for testing
+  unless the user explicitly asks to mutate them.
 - Clones retain durable auth and settings. Treat them as secret-bearing, keep
   services stopped by default, and require explicit authorization before
   provider, channel, webhook, browser, or other external calls.

@@ -106,4 +106,10 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     assert!(matrix.contains("\"$OCM_BIN\" upgrade simulate"));
     assert!(!matrix.contains("`ocm "));
     assert!(matrix.contains("run-owned package runtime is removed"));
+    assert!(
+        [&paths, &release_skill, &release_paths, &matrix]
+            .iter()
+            .all(|document| !document.contains("/Users/")),
+        "release-validation docs must not publish machine-local home paths"
+    );
 }

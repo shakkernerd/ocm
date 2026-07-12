@@ -21,7 +21,7 @@ Before running tests, read:
 - `references/release-validation-paths.md`
 - `../../docs/OPENCLAW_RELEASE_SCENARIO_MATRIX.md`
 - the current validation report if one exists under
-  `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/`
+  `/path/to/release-validation/`
 
 If repo-level AGENTS instructions are present, read and follow them first.
 

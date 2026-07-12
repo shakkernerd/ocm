@@ -1,17 +1,17 @@
 # Release Validation Paths
 
-Default paths for this machine:
+Configure these path roles for the validation host:
 
-- OCM repo: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm`
+- OCM repo: `/path/to/ocm`
 - OpenClaw source repo and clone-time read-only object cache:
-  `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`
-- Per-run root: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/release-validation/<run-id>`
+  `/path/to/openclaw-source-cache`
+- Per-run root: `/path/to/release-validation/<run-id>`
 - Per-run Git metadata: `<run-root>/repo`
 - Dissociate that per-run clone so it owns every object needed by the recorded
   commit.
 - Detached OpenClaw worktree: `<run-root>/openclaw`
-- Do not use active OpenClaw repo: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/openclaw`
-- Existing user source env: `/Users/shakker/.ocm/envs/Violet`
+- Do not use active OpenClaw repo: `/path/to/active-openclaw`
+- Existing user source env: `~/.ocm/envs/<existing-env>`
 - Report pattern: `<run-root>/ocm-openclaw-release-validation-<run-id>.md`
 
 Preferred binaries:

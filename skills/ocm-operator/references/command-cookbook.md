@@ -152,7 +152,7 @@ stopped until credentials are replaced with mocks or dedicated test accounts,
 or the user explicitly authorizes real external access.
 
 ```sh
-ocm env clone Violet <test-env>
+ocm env clone <existing-env> <test-env>
 ocm start <test-env> --no-service
 ocm service status <test-env>
 ocm logs <test-env> --tail 100

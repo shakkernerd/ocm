@@ -11,17 +11,17 @@ failed.
 
 ## Operating Rules
 
-- Set `OCM_BIN=/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm/target/debug/ocm`,
+- Set `OCM_BIN=/path/to/ocm/target/debug/ocm`,
   verify it is executable, and use `"$OCM_BIN"` for every OCM command.
 - Read the `origin` URL from the OpenClaw source repo at
-  `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`,
+  `/path/to/openclaw-source-cache`,
   but do not fetch into or mutate that shared checkout. Create per-run Git
   metadata from the remote, optionally using the source repo as a clone-time
   read-only object cache and dissociating the clone from it. Resolve one
   immutable `origin/main` commit and create a unique detached worktree for the
   run.
-- Do not use `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/openclaw`
-  or `../openclaw`; that is an active working repo.
+- Do not use `/path/to/active-openclaw` or `../openclaw`; that is an active
+  working repo.
 - In the detached worktree, run `pnpm install --frozen-lockfile`,
   `pnpm check`, and `pnpm build`, then require `git status --porcelain` to
   remain empty.
@@ -34,8 +34,8 @@ failed.
 - Use one run-specific `OCM_HOME` for the package runtime, envs, snapshots, and
   supervisor state. Invoke the explicit local OCM binary for every command.
 - Use a run id in every worktree, runtime, env, report, and cleanup name.
-- Copy existing user state, preferably `~/.ocm/envs/Violet`, into the run root
-  before testing. Never mutate the real env.
+- Copy an existing user env from `~/.ocm/envs/<existing-env>` into the run
+  root before testing. Never mutate the real env.
 - Treat copied and cloned state as secret-bearing. Keep services stopped and
   make no external requests by default. Use mocks, credential-free fresh envs,
   or dedicated test accounts unless the run explicitly authorizes real access.
@@ -229,8 +229,8 @@ Run for:
 
 Pass evidence:
 
-- Simulation passes, original copied env is not mutated, real `Violet` is not
-  touched, expected simulation steps are recorded, and no unauthorized
+- Simulation passes, original copied env is not mutated, the real source env
+  is not touched, expected simulation steps are recorded, and no unauthorized
   external request is made.
 
 ### S06 - Upgrade Dry Run And Rollback Safety
@@ -635,8 +635,8 @@ What to test:
   retained and reported instead of force-removed.
 - The detached worktree still points at the recorded OpenClaw commit before it
   is removed.
-- Real `Violet` was not mutated.
-- `temp/test-build` has no unintended worktree changes.
+- The real source env was not mutated.
+- The source cache repo has no unintended worktree changes.
 
 Run for:
 
