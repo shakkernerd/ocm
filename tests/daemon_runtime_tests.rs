@@ -595,6 +595,64 @@ fn child_restart_request_rebuilds_missing_or_stale_state() {
 }
 
 #[test]
+fn child_restart_recovery_preserves_unrelated_child_specs() {
+    let _guard = daemon_runtime_test_lock();
+    let root = TestDir::new("restart-recovery-preserves-siblings");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_systemd_tools(&root, &mut env);
+    let state_path = root.child("ocm-home/supervisor/state.json");
+
+    for name in ["rescue", "main"] {
+        let launcher = run_ocm(
+            &cwd,
+            &env,
+            &["launcher", "add", name, "--command", "openclaw"],
+        );
+        assert!(launcher.status.success(), "{}", stderr(&launcher));
+        let created = run_ocm(&cwd, &env, &["env", "create", name, "--launcher", name]);
+        assert!(created.status.success(), "{}", stderr(&created));
+        set_service_enabled(&cwd, &env, name, true);
+    }
+
+    SupervisorService::new(&env, &cwd).sync().unwrap();
+
+    let mut restart_env = env.clone();
+    restart_env.insert(
+        "NODE_OPTIONS".to_string(),
+        "--max-old-space-size=2048".to_string(),
+    );
+    SupervisorService::new(&restart_env, &cwd)
+        .recover_child_restart("rescue")
+        .unwrap();
+
+    let state = read_persisted_service_state(&state_path);
+    let children = state["children"].as_array().unwrap();
+    let rescue = children
+        .iter()
+        .find(|child| child["envName"] == "rescue")
+        .unwrap();
+    let main = children
+        .iter()
+        .find(|child| child["envName"] == "main")
+        .unwrap();
+
+    assert_eq!(
+        rescue["processEnv"]["NODE_OPTIONS"],
+        "--max-old-space-size=2048"
+    );
+    assert!(main["processEnv"]["NODE_OPTIONS"].is_null());
+    assert!(
+        state["restartRequests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|request| request["envName"] == "rescue")
+    );
+}
+
+#[test]
 fn daemon_run_reloads_children_after_binding_changes() {
     let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-reconcile");

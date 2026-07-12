@@ -334,6 +334,16 @@ impl<'a> SupervisorService<'a> {
         self.activate_daemon("install")
     }
 
+    pub fn recover_child_restart(&self, name: &str) -> Result<SupervisorDaemonSummary, String> {
+        // Reissue only the target request; a full sync could reload unrelated children.
+        let _ = self.request_child_restart(name)?;
+        let status = self.daemon_status()?;
+        if status.running {
+            return Ok(status);
+        }
+        self.activate_daemon("install")
+    }
+
     pub fn request_child_restart(&self, name: &str) -> Result<String, String> {
         let state_path = supervisor_state_path(self.env, self.cwd)?;
         let mut state = self.build_state()?;
