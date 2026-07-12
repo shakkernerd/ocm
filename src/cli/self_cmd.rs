@@ -85,7 +85,14 @@ impl SelfUpdateTempDir {
                 "ocm-self-update-{}-{unique}-{attempt}",
                 std::process::id()
             ));
-            match fs::create_dir(&path) {
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+
+                builder.mode(0o700);
+            }
+            match builder.create(&path) {
                 Ok(()) => return Ok(Self { path }),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => {
@@ -157,7 +164,15 @@ impl StagedBinary {
                 ".ocm-update-{}-{unique}-{attempt}",
                 std::process::id()
             ));
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+
+                options.mode(0o700);
+            }
+            match options.open(&path) {
                 Ok(file) => return Ok((Self { path }, file)),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => {
@@ -520,6 +535,15 @@ mod tests {
     fn self_update_temp_dirs_clean_up_on_drop() {
         let temp = SelfUpdateTempDir::create().unwrap();
         let path = temp.path().to_path_buf();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
         std::fs::write(path.join("partial-download"), b"partial").unwrap();
         drop(temp);
         assert!(!path.exists());
