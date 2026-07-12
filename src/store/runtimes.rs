@@ -581,7 +581,7 @@ fn install_runtime_at_path(
         ));
     }
 
-    let result = (|| {
+    (|| {
         ensure_dir(&target.install_files)?;
         let binary_path = target.install_files.join(file_name);
         match (source.path.as_deref(), source.url.as_deref()) {
@@ -607,9 +607,7 @@ fn install_runtime_at_path(
         let meta =
             build_installed_runtime_meta(&target, &binary_path, &source, &release, description);
         publish_runtime(target, meta)
-    })();
-
-    result
+    })()
 }
 
 fn prepare_runtime_install_target(
@@ -674,7 +672,7 @@ fn install_runtime_from_openclaw_package(
             display_path(&target.install_root)
         ));
     }
-    let result = (|| {
+    (|| {
         ensure_dir(&target.install_files)?;
         let tarball_url = source.url.as_deref().ok_or_else(|| {
             "official OpenClaw runtime install requires a tarball URL".to_string()
@@ -694,9 +692,7 @@ fn install_runtime_from_openclaw_package(
         );
         let _ = fs::remove_file(&archive_path);
         publish_runtime(target, meta?)
-    })();
-
-    result
+    })()
 }
 
 fn stage_runtime_from_openclaw_package_archive(
@@ -763,14 +759,14 @@ fn publish_runtime(target: RuntimeInstallTarget, meta: RuntimeMeta) -> Result<Ru
         })?;
     }
     if had_meta && let Err(error) = fs::rename(&target.final_meta_path, &backup_meta) {
-        if had_root {
-            if let Err(rollback_error) = fs::rename(&backup_root, &target.final_install_root) {
-                return Err(format!(
-                    "failed to preserve runtime \"{}\" metadata before replacement: {error}; failed to restore its install root from {}: {rollback_error}",
-                    target.name,
-                    display_path(&backup_root)
-                ));
-            }
+        if had_root
+            && let Err(rollback_error) = fs::rename(&backup_root, &target.final_install_root)
+        {
+            return Err(format!(
+                "failed to preserve runtime \"{}\" metadata before replacement: {error}; failed to restore its install root from {}: {rollback_error}",
+                target.name,
+                display_path(&backup_root)
+            ));
         }
         return Err(format!(
             "failed to preserve runtime \"{}\" metadata before replacement: {error}",
@@ -1266,10 +1262,10 @@ pub fn runtime_integrity_issue(
         ));
     }
 
-    if is_official_openclaw_package_runtime(meta, env) || is_openclaw_package_runtime(meta) {
-        if let Some(package_root) = openclaw_package_root_from_binary(binary_path) {
-            return openclaw_package_runtime_dependency_layout_issue(&package_root);
-        }
+    if (is_official_openclaw_package_runtime(meta, env) || is_openclaw_package_runtime(meta))
+        && let Some(package_root) = openclaw_package_root_from_binary(binary_path)
+    {
+        return openclaw_package_runtime_dependency_layout_issue(&package_root);
     }
 
     None
