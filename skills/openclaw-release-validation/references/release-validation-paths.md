@@ -16,16 +16,16 @@ Preferred binaries:
 
 - OCM: `<ocm repo>/target/debug/ocm`
 - Package-shaped OpenClaw runtime: an OCM runtime named with `<run-id>`, built
-  from `<run-root>/openclaw` with `ocm runtime build-local`
+  from `<run-root>/openclaw` with `"$OCM_BIN" runtime build-local`
 - Direct OpenClaw executable: `<run-root>/openclaw/openclaw.mjs`, only for the
   S02 source-artifact boot smoke check
 
 Existing-user fixture modes:
 
-- Durable-state clone: `ocm env clone`; keeps auth/settings but intentionally
-  clears sessions, logs, and backups.
+- Durable-state clone: `"$OCM_BIN" env clone`; keeps auth/settings but
+  intentionally clears sessions, logs, and backups.
 - Session-preserving fixture: copy the source `.openclaw` directory under
-  `<run-root>`, then import that copy with `ocm adopt import`.
+  `<run-root>`, then import that copy with `"$OCM_BIN" adopt import`.
 
 Both modes are secret-bearing until credentials are removed or replaced. Keep
 their services stopped and use mocks or dedicated test accounts for external
