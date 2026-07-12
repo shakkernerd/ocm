@@ -713,7 +713,10 @@ mod tests {
     fn test_cli() -> Cli {
         let mut env = BTreeMap::new();
         env.insert(INTERNAL_COLOR_MODE_ENV.to_string(), "never".to_string());
-        Cli::new(env, PathBuf::from("/tmp"))
+        Cli {
+            env,
+            cwd: PathBuf::from("/tmp"),
+        }
     }
 
     #[test]

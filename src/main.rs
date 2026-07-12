@@ -37,5 +37,5 @@ fn run() -> Result<i32, String> {
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(Cli::new(env_map, cwd).run(args))
+    Ok(Cli { env: env_map, cwd }.run(args))
 }

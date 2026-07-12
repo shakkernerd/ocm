@@ -20,7 +20,6 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -36,6 +35,17 @@ use crate::supervisor::SupervisorService;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const INTERNAL_COLOR_MODE_ENV: &str = "OCM_INTERNAL_COLOR_MODE";
+
+#[derive(Default)]
+struct OutputErrors {
+    stdout: Option<io::Error>,
+    stderr: Option<io::Error>,
+}
+
+thread_local! {
+    // CLI rendering is synchronous; retain write errors until the dispatcher can choose an exit code.
+    static OUTPUT_ERRORS: RefCell<OutputErrors> = RefCell::new(OutputErrors::default());
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ColorMode {
@@ -74,18 +84,9 @@ impl ColorMode {
 pub struct Cli {
     pub env: BTreeMap<String, String>,
     pub cwd: PathBuf,
-    output_error: Rc<RefCell<Option<io::Error>>>,
 }
 
 impl Cli {
-    pub fn new(env: BTreeMap<String, String>, cwd: PathBuf) -> Self {
-        Self {
-            env,
-            cwd,
-            output_error: Rc::new(RefCell::new(None)),
-        }
-    }
-
     fn with_color_mode(&self, mode: ColorMode) -> Self {
         let mut env = self.env.clone();
         env.insert(
@@ -95,7 +96,6 @@ impl Cli {
         Self {
             env,
             cwd: self.cwd.clone(),
-            output_error: Rc::clone(&self.output_error),
         }
     }
 
@@ -128,12 +128,12 @@ impl Cli {
     }
 
     fn stdout_line(&self, line: impl AsRef<str>) {
-        if self.output_error.borrow().is_some() {
+        if Self::output_failed() {
             return;
         }
         let stdout = io::stdout();
         let mut handle = stdout.lock();
-        self.record_output_result(writeln!(handle, "{}", line.as_ref()));
+        Self::record_stdout_result(writeln!(handle, "{}", line.as_ref()));
     }
 
     fn stdout_lines<I, S>(&self, lines: I)
@@ -147,12 +147,12 @@ impl Cli {
     }
 
     fn stderr_line(&self, line: impl AsRef<str>) {
-        if self.output_error.borrow().is_some() {
+        if Self::output_failed() {
             return;
         }
         let stderr = io::stderr();
         let mut handle = stderr.lock();
-        self.record_output_result(writeln!(handle, "{}", line.as_ref()));
+        Self::record_stderr_result(writeln!(handle, "{}", line.as_ref()));
     }
 
     fn stderr_lines<I, S>(&self, lines: I)
@@ -166,50 +166,81 @@ impl Cli {
     }
 
     fn print_json<T: Serialize>(&self, value: &T) -> Result<(), String> {
-        if self.output_error.borrow().is_some() {
+        if Self::output_failed() {
             return Ok(());
         }
         let stdout = io::stdout();
         let mut handle = stdout.lock();
         if let Err(error) = serde_json::to_writer_pretty(&mut handle, value) {
             if let Some(kind) = error.io_error_kind() {
-                self.record_output_error(io::Error::from(kind));
+                Self::record_stdout_error(io::Error::from(kind));
                 return Ok(());
             }
             return Err(error.to_string());
         }
-        self.record_output_result(writeln!(handle));
+        Self::record_stdout_result(writeln!(handle));
         Ok(())
     }
 
     fn stdout_text(&self, text: &str) -> Result<(), String> {
-        if self.output_error.borrow().is_some() {
+        if Self::output_failed() {
             return Ok(());
         }
         let stdout = io::stdout();
         let mut handle = stdout.lock();
-        self.record_output_result(handle.write_all(text.as_bytes()));
+        Self::record_stdout_result(handle.write_all(text.as_bytes()));
         Ok(())
     }
 
-    fn record_output_result(&self, result: io::Result<()>) {
+    fn record_stdout_result(result: io::Result<()>) {
         if let Err(error) = result {
-            self.record_output_error(error);
+            Self::record_stdout_error(error);
         }
     }
 
-    fn record_output_error(&self, error: io::Error) {
-        let mut output_error = self.output_error.borrow_mut();
-        if output_error.is_none() {
-            *output_error = Some(error);
+    fn record_stderr_result(result: io::Result<()>) {
+        if let Err(error) = result {
+            OUTPUT_ERRORS.with(|errors| {
+                let mut errors = errors.borrow_mut();
+                if errors.stderr.is_none() {
+                    errors.stderr = Some(error);
+                }
+            });
         }
     }
 
-    fn finish_output(&self, code: i32) -> i32 {
-        match self.output_error.borrow_mut().take() {
+    fn record_stdout_error(error: io::Error) {
+        OUTPUT_ERRORS.with(|errors| {
+            let mut errors = errors.borrow_mut();
+            if errors.stdout.is_none() {
+                errors.stdout = Some(error);
+            }
+        });
+    }
+
+    fn output_failed() -> bool {
+        OUTPUT_ERRORS.with(|errors| {
+            let errors = errors.borrow();
+            errors.stdout.is_some() || errors.stderr.is_some()
+        })
+    }
+
+    fn reset_output_errors() {
+        OUTPUT_ERRORS.with(|errors| {
+            *errors.borrow_mut() = OutputErrors::default();
+        });
+    }
+
+    fn finish_output(code: i32) -> i32 {
+        let errors = OUTPUT_ERRORS.with(|errors| std::mem::take(&mut *errors.borrow_mut()));
+        if code != 0 {
+            return code;
+        }
+        match errors.stdout {
             Some(error) if error.kind() == io::ErrorKind::BrokenPipe => 0,
             Some(_) => 1,
-            None => code,
+            None if errors.stderr.is_some() => 1,
+            None => 0,
         }
     }
 
@@ -478,9 +509,9 @@ impl Cli {
     }
 
     pub fn run(&self, args: Vec<String>) -> i32 {
-        self.output_error.borrow_mut().take();
+        Self::reset_output_errors();
         let code = self.run_inner(args);
-        self.finish_output(code)
+        Self::finish_output(code)
     }
 
     fn run_inner(&self, args: Vec<String>) -> i32 {

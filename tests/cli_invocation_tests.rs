@@ -157,3 +157,19 @@ fn closed_stdout_terminates_quietly() {
     assert!(output.status.success());
     assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
 }
+
+#[cfg(unix)]
+#[test]
+fn closed_stderr_preserves_command_failure() {
+    let (reader, writer) = UnixStream::pair().unwrap();
+    drop(reader);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ocm"))
+        .args(["--version", "extra"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(OwnedFd::from(writer)))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+}
