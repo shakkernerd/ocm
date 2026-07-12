@@ -41,13 +41,13 @@ Use `ocm` when you want:
 Install the latest release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh | bash
+curl -fsSL https://github.com/shakkernerd/ocm/releases/latest/download/install.sh | bash
 ```
 
 Install a specific release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh | bash -s -- --version v<ocm-version>
+curl -fsSL https://github.com/shakkernerd/ocm/releases/download/v<ocm-version>/install.sh | bash -s -- --version v<ocm-version>
 ```
 
 Update an existing install:
@@ -60,8 +60,10 @@ ocm self update --check
 Install from source:
 
 ```bash
-cargo install --path .
+cargo install --locked --path .
 ```
+
+Source installs require Rust 1.88 or newer. Release installers verify the selected archive against the published `SHA256SUMS` before extraction.
 
 Inside this repo, use the development wrapper:
 

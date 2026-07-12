@@ -1,12 +1,12 @@
 name: Release
 
 on:
-  release:
-    types:
-      - published
+  push:
+    tags:
+      - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,22 +26,55 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.event.release.tag_name }}
-      - uses: dtolnay/rust-toolchain@stable
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
+          toolchain: 1.88.0
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
       - name: Build release binary
-        run: cargo build --release --target "${{ matrix.target }}"
+        run: cargo build --locked --release --target "${{ matrix.target }}"
       - name: Package release archive
         run: |
           ./scripts/package-release.sh \
             --target "${{ matrix.target }}" \
             --binary "./target/${{ matrix.target }}/release/ocm" \
             --output-dir ./dist
-      - name: Upload release archive
-        uses: softprops/action-gh-release@v2
+      - name: Stage release archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          files: ./dist/*.tar.gz
+          name: release-${{ matrix.target }}
+          path: ./dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish complete release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - name: Download release archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          path: ./dist
+          merge-multiple: true
+      - name: Stage versioned installer
+        run: cp ./install.sh ./dist/install.sh
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/publish-release.sh \
+            --repo "${{ github.repository }}" \
+            --tag "${{ github.ref_name }}" \
+            --asset-dir ./dist

@@ -61,6 +61,13 @@ cp LICENSE "${tmp_dir}/LICENSE"
 cp README.md "${tmp_dir}/README.md"
 
 archive_path="${output_dir}/ocm-${target}.tar.gz"
-tar -czf "$archive_path" -C "$tmp_dir" ocm LICENSE README.md
+tmp_archive="$(mktemp "${output_dir}/.ocm-${target}.XXXXXX")"
+cleanup_archive() {
+  rm -f "$tmp_archive"
+}
+trap 'cleanup_archive; cleanup' EXIT
+
+tar -czf "$tmp_archive" -C "$tmp_dir" ocm LICENSE README.md
+mv -f "$tmp_archive" "$archive_path"
 
 echo "$archive_path"
