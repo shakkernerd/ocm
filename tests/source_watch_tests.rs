@@ -465,7 +465,12 @@ fn live_legacy_source_watch_remains_active_until_its_process_exits() {
     let env = ocm_env(&root);
     let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
 
-    let legacy_bin = root.child("legacy-bin/node");
+    let long_legacy_dir = (0..10).fold(root.child("legacy-bin"), |path, index| {
+        path.join(format!(
+            "segment-{index:02}-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ))
+    });
+    let legacy_bin = long_legacy_dir.join("node");
     let started = root.child("legacy-watch.started");
     let release = root.child("legacy-watch.release");
     write_executable_script(

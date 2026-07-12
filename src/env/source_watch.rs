@@ -548,16 +548,28 @@ fn is_process_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn process_command_line(pid: u32) -> Option<String> {
     let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "command="])
+        .args(["-ww", "-p", &pid.to_string(), "-o", "command="])
         .output()
         .ok()?;
     output
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn process_command_line(pid: u32) -> Option<String> {
+    let command = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let command = command
+        .split(|byte| *byte == 0)
+        .filter(|argument| !argument.is_empty())
+        .map(String::from_utf8_lossy)
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!command.is_empty()).then_some(command)
 }
 
 #[cfg(target_os = "linux")]
