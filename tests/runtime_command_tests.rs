@@ -3,6 +3,7 @@ mod support;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
@@ -792,6 +793,73 @@ fn runtime_install_reuses_a_matching_official_runtime() {
     let second = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
     assert!(second.status.success(), "{}", stderr(&second));
     assert!(stdout(&second).contains("Using installed runtime stable"));
+}
+
+#[test]
+fn concurrent_official_runtime_installs_reuse_the_published_runtime() {
+    let root = TestDir::new("runtime-install-official-concurrent-reuse");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let tarball = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable');\n");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+    let slow_npm = root.child("slow-npm");
+    write_executable_script(
+        &slow_npm,
+        &format!(
+            "#!/bin/sh\n/bin/sleep 1\nexec '{}' \"$@\"\n",
+            root.child("fake-node-bin/npm").display()
+        ),
+    );
+    env.insert(
+        "OCM_INTERNAL_NPM_BIN".to_string(),
+        slow_npm.display().to_string(),
+    );
+
+    let mut children = (0..2)
+        .map(|_| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_ocm"));
+            command
+                .current_dir(&cwd)
+                .args(["runtime", "install", "--channel", "stable"])
+                .env_clear()
+                .envs(&env)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command.spawn().unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let mut installed = 0;
+    let mut reused = 0;
+    for child in children.drain(..) {
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let output = stdout(&output);
+        installed += usize::from(output.contains("Installed runtime stable"));
+        reused += usize::from(output.contains("Using installed runtime stable"));
+    }
+
+    assert_eq!(installed, 1);
+    assert_eq!(reused, 1);
 }
 
 #[test]

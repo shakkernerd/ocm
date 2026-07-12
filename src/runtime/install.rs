@@ -223,7 +223,7 @@ impl<'a> RuntimeService<'a> {
                 .as_ref()
                 .and_then(|meta| meta.description.clone())
         });
-        let meta = install_runtime_from_selected_official_openclaw_release(
+        let install = install_runtime_from_selected_official_openclaw_release(
             runtime_name.clone(),
             options.force || existing_meta.is_some(),
             releases_url,
@@ -246,13 +246,15 @@ impl<'a> RuntimeService<'a> {
                 cwd: self.cwd,
             },
         )?;
-        let action = if existing_meta.is_some() {
+        let action = if install.reused {
+            OfficialRuntimePrepareAction::Reused
+        } else if existing_meta.is_some() {
             OfficialRuntimePrepareAction::Updated
         } else {
             OfficialRuntimePrepareAction::Installed
         };
         self.refresh_supervisor_if_present()?;
-        Ok((meta, action))
+        Ok((install.meta, action))
     }
 
     pub fn install(&self, options: InstallRuntimeOptions) -> Result<RuntimeMeta, String> {
