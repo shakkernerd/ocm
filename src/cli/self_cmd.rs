@@ -325,27 +325,7 @@ impl Cli {
     }
 
     fn current_release_asset_name(&self) -> Result<String, String> {
-        let os = match std::env::consts::OS {
-            "macos" => "apple-darwin",
-            "linux" => "unknown-linux-gnu",
-            other => {
-                return Err(format!(
-                    "ocm self update is not supported on this operating system yet: {other}"
-                ));
-            }
-        };
-
-        let arch = match std::env::consts::ARCH {
-            "x86_64" => "x86_64",
-            "aarch64" => "aarch64",
-            other => {
-                return Err(format!(
-                    "ocm self update is not supported on this architecture yet: {other}"
-                ));
-            }
-        };
-
-        Ok(format!("ocm-{arch}-{os}.tar.gz"))
+        release_asset_name(std::env::consts::OS, std::env::consts::ARCH)
     }
 
     fn fetch_self_release(&self, version: Option<&str>) -> Result<GitHubRelease, String> {
@@ -375,6 +355,34 @@ impl Cli {
         serde_json::from_reader(response.into_body().into_reader())
             .map_err(|error| format!("failed to parse ocm release metadata: {error}"))
     }
+}
+
+fn release_asset_name(os: &str, arch: &str) -> Result<String, String> {
+    let os_target = match os {
+        "macos" => "apple-darwin",
+        "linux" => "unknown-linux-gnu",
+        other => {
+            return Err(format!(
+                "ocm self update is not supported on this operating system yet: {other}"
+            ));
+        }
+    };
+    let arch_target = match arch {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        other => {
+            return Err(format!(
+                "ocm self update is not supported on this architecture yet: {other}"
+            ));
+        }
+    };
+    let target = format!("{arch_target}-{os_target}");
+    if target == "aarch64-unknown-linux-gnu" {
+        return Err(format!(
+            "ocm self update is not supported on this platform yet: {target}"
+        ));
+    }
+    Ok(format!("ocm-{target}.tar.gz"))
 }
 
 fn github_asset_sha256(asset: &GitHubReleaseAsset) -> Result<&str, String> {
@@ -464,7 +472,7 @@ fn should_treat_target_as_current(
 mod tests {
     use super::{
         SelfUpdateTempDir, display_version_from_tag, normalize_release_tag, parse_release_version,
-        should_treat_target_as_current,
+        release_asset_name, should_treat_target_as_current,
     };
 
     #[test]
@@ -515,5 +523,26 @@ mod tests {
         std::fs::write(path.join("partial-download"), b"partial").unwrap();
         drop(temp);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn self_update_targets_match_the_release_matrix() {
+        let workflow = include_str!("../../.github/workflows/release.yml");
+        for (os, arch, target) in [
+            ("linux", "x86_64", "x86_64-unknown-linux-gnu"),
+            ("macos", "x86_64", "x86_64-apple-darwin"),
+            ("macos", "aarch64", "aarch64-apple-darwin"),
+        ] {
+            assert_eq!(
+                release_asset_name(os, arch).unwrap(),
+                format!("ocm-{target}.tar.gz")
+            );
+            assert!(workflow.contains(&format!("target: {target}")));
+        }
+        assert_eq!(
+            release_asset_name("linux", "aarch64").unwrap_err(),
+            "ocm self update is not supported on this platform yet: aarch64-unknown-linux-gnu"
+        );
+        assert!(!workflow.contains("target: aarch64-unknown-linux-gnu"));
     }
 }
