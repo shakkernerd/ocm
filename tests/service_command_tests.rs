@@ -6,7 +6,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
-use std::thread::sleep;
+use std::sync::{Arc, Barrier};
+use std::thread::{self, sleep};
 use std::time::Duration;
 
 use ocm::env::EnvironmentService;
@@ -254,6 +255,15 @@ fn service_install_enables_the_env_and_installs_the_ocm_service() {
         "missing {}",
         path_string(&service_path)
     );
+    #[cfg(unix)]
+    assert_eq!(
+        fs::metadata(service_path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
 }
 
 #[test]
@@ -444,6 +454,7 @@ fn service_stop_keeps_the_env_installed_but_stopped() {
     let env_body = json_output(&env_show);
     assert_eq!(env_body["serviceEnabled"], true);
     assert_eq!(env_body["serviceRunning"], false);
+    assert!(!managed_service_definition_path(&env, &cwd, "ocm").exists());
 }
 
 #[test]
@@ -485,6 +496,265 @@ fn service_uninstall_disables_the_env_service() {
     let env_body = json_output(&env_show);
     assert_eq!(env_body["serviceEnabled"], false);
     assert_eq!(env_body["serviceRunning"], false);
+    assert!(!managed_service_definition_path(&env, &cwd, "ocm").exists());
+}
+
+#[test]
+fn systemd_service_uninstall_is_idempotent_after_stop_removed_the_unit() {
+    let root = TestDir::new("service-systemd-stop-uninstall");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = systemd_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    let started = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(started.status.success(), "{}", stderr(&started));
+    let stopped = run_ocm(&cwd, &env, &["service", "stop", "demo"]);
+    assert!(stopped.status.success(), "{}", stderr(&stopped));
+    assert!(!managed_service_definition_path(&env, &cwd, "ocm").exists());
+
+    write_executable_script(
+        &root.child("fake-bin/systemctl"),
+        "#!/bin/sh\nprintf 'unexpected systemctl call: %s\\n' \"$*\" >&2\nexit 1\n",
+    );
+    let uninstalled = run_ocm(&cwd, &env, &["service", "uninstall", "demo"]);
+    assert!(uninstalled.status.success(), "{}", stderr(&uninstalled));
+}
+
+#[test]
+fn service_stop_keeps_the_daemon_while_a_sibling_env_is_running() {
+    let root = TestDir::new("service-stop-running-sibling");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = launchd_env(&root);
+    setup_launcher_env(&cwd, &env);
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "prod", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    for name in ["demo", "prod"] {
+        let started = run_ocm(&cwd, &env, &["service", "start", name]);
+        assert!(started.status.success(), "{}", stderr(&started));
+    }
+
+    let stopped = run_ocm(&cwd, &env, &["service", "stop", "demo", "--json"]);
+    assert!(stopped.status.success(), "{}", stderr(&stopped));
+    assert!(managed_service_definition_path(&env, &cwd, "ocm").exists());
+}
+
+#[test]
+fn service_start_rejects_a_daemon_owned_by_another_store() {
+    let root = TestDir::new("service-start-other-store-owner");
+    let first_cwd = root.child("first-workspace");
+    fs::create_dir_all(&first_cwd).unwrap();
+    let first_env = launchd_env(&root);
+    setup_launcher_env(&first_cwd, &first_env);
+    let first_started = run_ocm(&first_cwd, &first_env, &["service", "start", "demo"]);
+    assert!(first_started.status.success(), "{}", stderr(&first_started));
+
+    let second_cwd = root.child("second-workspace");
+    fs::create_dir_all(&second_cwd).unwrap();
+    let mut second_env = first_env.clone();
+    second_env.insert(
+        "OCM_HOME".to_string(),
+        path_string(&root.child("second-ocm-home")),
+    );
+    setup_launcher_env(&second_cwd, &second_env);
+
+    let second_started = run_ocm(&second_cwd, &second_env, &["service", "start", "demo"]);
+    assert!(!second_started.status.success());
+    assert!(
+        stderr(&second_started).contains("already bound to a different OCM_HOME"),
+        "{}",
+        stderr(&second_started)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_initial_service_start_releases_the_daemon_owner() {
+    let root = TestDir::new("service-start-initial-policy-failure");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = launchd_env(&root);
+    setup_launcher_env(&cwd, &env);
+
+    let ocm_home = Path::new(env.get("OCM_HOME").unwrap());
+    let registry_lock = ocm_home.join("envs.lock");
+    let mut permissions = fs::metadata(&registry_lock).unwrap().permissions();
+    permissions.set_mode(0o400);
+    fs::set_permissions(&registry_lock, permissions).unwrap();
+
+    let started = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+
+    let mut permissions = fs::metadata(&registry_lock).unwrap().permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(&registry_lock, permissions).unwrap();
+    assert!(!started.status.success());
+    assert!(
+        stderr(&started).contains("failed to open environment registry lock"),
+        "{}",
+        stderr(&started)
+    );
+    assert!(!managed_service_definition_path(&env, &cwd, "ocm").exists());
+    assert!(!root.child("launchctl-print.txt").exists());
+
+    let second_cwd = root.child("second-workspace");
+    fs::create_dir_all(&second_cwd).unwrap();
+    let mut second_env = env.clone();
+    second_env.insert(
+        "OCM_HOME".to_string(),
+        path_string(&root.child("second-ocm-home")),
+    );
+    setup_launcher_env(&second_cwd, &second_env);
+    let second_started = run_ocm(&second_cwd, &second_env, &["service", "start", "demo"]);
+    assert!(
+        second_started.status.success(),
+        "{}",
+        stderr(&second_started)
+    );
+}
+
+#[test]
+fn concurrent_service_starts_allow_only_one_store_owner() {
+    let root = TestDir::new("service-start-concurrent-store-owners");
+    let first_cwd = root.child("first-workspace");
+    let second_cwd = root.child("second-workspace");
+    fs::create_dir_all(&first_cwd).unwrap();
+    fs::create_dir_all(&second_cwd).unwrap();
+
+    let first_env = launchd_env(&root);
+    setup_launcher_env(&first_cwd, &first_env);
+    let mut second_env = first_env.clone();
+    second_env.insert(
+        "OCM_HOME".to_string(),
+        path_string(&root.child("second-ocm-home")),
+    );
+    setup_launcher_env(&second_cwd, &second_env);
+
+    let barrier = Arc::new(Barrier::new(3));
+    let first_barrier = Arc::clone(&barrier);
+    let first = thread::spawn(move || {
+        first_barrier.wait();
+        run_ocm(&first_cwd, &first_env, &["service", "start", "demo"])
+    });
+    let second_barrier = Arc::clone(&barrier);
+    let second = thread::spawn(move || {
+        second_barrier.wait();
+        run_ocm(&second_cwd, &second_env, &["service", "start", "demo"])
+    });
+    barrier.wait();
+
+    let outputs = [first.join().unwrap(), second.join().unwrap()];
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|output| output.status.success())
+            .count(),
+        1
+    );
+    let rejected = outputs
+        .iter()
+        .find(|output| !output.status.success())
+        .unwrap();
+    assert!(
+        stderr(rejected).contains("already bound to a different OCM_HOME"),
+        "{}",
+        stderr(rejected)
+    );
+}
+
+#[test]
+fn service_stop_does_not_remove_a_daemon_owned_by_another_store() {
+    let root = TestDir::new("service-stop-other-store-owner");
+    let first_cwd = root.child("first-workspace");
+    fs::create_dir_all(&first_cwd).unwrap();
+    let first_env = launchd_env(&root);
+    setup_launcher_env(&first_cwd, &first_env);
+    let first_started = run_ocm(&first_cwd, &first_env, &["service", "start", "demo"]);
+    assert!(first_started.status.success(), "{}", stderr(&first_started));
+
+    let second_cwd = root.child("second-workspace");
+    fs::create_dir_all(&second_cwd).unwrap();
+    let mut second_env = first_env.clone();
+    second_env.insert(
+        "OCM_HOME".to_string(),
+        path_string(&root.child("second-ocm-home")),
+    );
+    setup_launcher_env(&second_cwd, &second_env);
+
+    let stopped = run_ocm(&second_cwd, &second_env, &["service", "stop", "demo"]);
+    assert!(!stopped.status.success());
+    assert!(
+        stderr(&stopped).contains("already bound to a different OCM_HOME"),
+        "{}",
+        stderr(&stopped)
+    );
+    assert!(managed_service_definition_path(&first_env, &first_cwd, "ocm").exists());
+}
+
+#[test]
+fn service_stop_preserves_the_daemon_when_launchctl_cannot_unload_it() {
+    let root = TestDir::new("service-stop-launchctl-unload-failure");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = launchd_env(&root);
+    setup_launcher_env(&cwd, &env);
+    let started = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(started.status.success(), "{}", stderr(&started));
+
+    let log_path = root.child("launchctl.log");
+    let print_path = root.child("launchctl-print.txt");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  print)\n    /bin/cat \"{}\"\n    ;;\n  bootout|unload)\n    printf 'forced unload failure\\n' >&2\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
+        path_string(&log_path),
+        path_string(&print_path),
+    );
+    write_executable_script(&root.child("fake-bin/launchctl"), &script);
+
+    let stopped = run_ocm(&cwd, &env, &["service", "stop", "demo"]);
+    assert!(!stopped.status.success());
+    assert!(
+        stderr(&stopped).contains("launchctl failed to unload"),
+        "{}",
+        stderr(&stopped)
+    );
+    assert!(managed_service_definition_path(&env, &cwd, "ocm").exists());
+    let shown = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert_eq!(json_output(&shown)["serviceRunning"], true);
+}
+
+#[test]
+fn service_stop_preserves_the_daemon_when_launchctl_cannot_confirm_state() {
+    let root = TestDir::new("service-stop-launchctl-print-failure");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = launchd_env(&root);
+    setup_launcher_env(&cwd, &env);
+    let started = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(started.status.success(), "{}", stderr(&started));
+
+    let log_path = root.child("launchctl.log");
+    fs::write(&log_path, "").unwrap();
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"print\" ]; then\n  printf 'Operation not permitted\\n' >&2\n  exit 1\nfi\nprintf 'unexpected mutation\\n' >&2\nexit 1\n",
+        path_string(&log_path),
+    );
+    write_executable_script(&root.child("fake-bin/launchctl"), &script);
+
+    let stopped = run_ocm(&cwd, &env, &["service", "stop", "demo"]);
+    assert!(!stopped.status.success());
+    assert!(
+        stderr(&stopped).contains("launchctl print failed"),
+        "{}",
+        stderr(&stopped)
+    );
+    assert!(managed_service_definition_path(&env, &cwd, "ocm").exists());
+    let calls = fs::read_to_string(log_path).unwrap();
+    assert_eq!(calls.lines().next(), Some("print gui/501/ai.openclaw.ocm"));
 }
 
 #[test]
