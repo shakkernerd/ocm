@@ -369,6 +369,31 @@ fn release_script_resumes_after_local_tag_creation() {
 }
 
 #[test]
+fn release_script_fetches_the_existing_remote_tag_object() {
+    let repo = init_release_repo("release-script-resume-remote-tag");
+    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
+    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
+
+    let add = repo.git_output(&["add", "Cargo.toml", "Cargo.lock"]);
+    assert!(add.status.success(), "{}", stderr(&add));
+    let commit = repo.git_output(&["commit", "-m", "chore: bump version to 0.2.8"]);
+    assert!(commit.status.success(), "{}", stderr(&commit));
+    let tag = repo.git_output(&["tag", "-a", "v0.2.8", "-m", "v0.2.8"]);
+    assert!(tag.status.success(), "{}", stderr(&tag));
+    repo.mark_tag_signed("v0.2.8");
+    let tag_object = repo.git_stdout(&["rev-parse", "v0.2.8^{tag}"]);
+    let push = repo.git_output(&["push", "fake", "v0.2.8"]);
+    assert!(push.status.success(), "{}", stderr(&push));
+    let delete = repo.git_output(&["tag", "-d", "v0.2.8"]);
+    assert!(delete.status.success(), "{}", stderr(&delete));
+
+    let output = repo.run_release("0.2.8");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("Fetching existing tag v0.2.8 from fake"));
+    assert_eq!(repo.git_stdout(&["rev-parse", "v0.2.8^{tag}"]), tag_object);
+}
+
+#[test]
 fn release_script_rejects_unsigned_existing_tag() {
     let repo = init_release_repo("release-script-rejects-unsigned-tag");
     replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");

@@ -417,4 +417,6 @@ fn workflows_pin_actions_lock_dependencies_and_gate_the_msrv() {
     assert!(release.contains("group: release-${{ github.event.client_payload.tag }}"));
     assert!(!release.contains("workflow_dispatch:"));
     assert!(!release.contains("github.ref_name"));
+    assert!(release.contains("os: macos-15-intel"));
+    assert!(!release.contains("os: macos-13"));
 }
