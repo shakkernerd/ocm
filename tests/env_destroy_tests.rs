@@ -5,8 +5,9 @@ use std::fs;
 #[cfg(unix)]
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 #[cfg(unix)]
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 #[cfg(unix)]
 use std::thread::sleep;
 #[cfg(unix)]
