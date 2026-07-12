@@ -749,6 +749,10 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
         &cwd,
     )
     .unwrap();
+    let mut source = get_environment("source", &env, &cwd).unwrap();
+    source.default_launcher = None;
+    ocm::store::save_environment(source, &env, &cwd).unwrap();
+    remove_launcher("shell", &env, &cwd).unwrap();
 
     let imported = import_environment(
         ImportEnvironmentOptions {

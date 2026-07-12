@@ -166,17 +166,20 @@ fn normalize_environment(mut meta: EnvMeta) -> Result<EnvMeta, String> {
     Ok(meta)
 }
 
-fn upsert_environment(
-    registry: &mut EnvRegistry,
-    meta: EnvMeta,
+fn canonicalize_launcher_binding(
+    mut meta: EnvMeta,
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
-    let mut meta = normalize_environment(meta)?;
     if let Some(launcher_name) = meta.default_launcher.as_deref() {
         let launcher = super::launchers::get_launcher(launcher_name, env, cwd)?;
         meta.default_launcher = Some(launcher.name);
     }
+    Ok(meta)
+}
+
+fn upsert_environment(registry: &mut EnvRegistry, meta: EnvMeta) -> Result<EnvMeta, String> {
+    let meta = normalize_environment(meta)?;
     registry.envs.retain(|entry| entry.name != meta.name);
     registry.envs.push(meta.clone());
     Ok(meta)
@@ -213,7 +216,21 @@ pub fn save_environment(
 ) -> Result<EnvMeta, String> {
     let _lock = lock_env_registry(env, cwd)?;
     let mut registry = load_env_registry(env, cwd)?;
-    meta = upsert_environment(&mut registry, meta, env, cwd)?;
+    meta = upsert_environment(&mut registry, meta)?;
+    write_env_registry(&mut registry, env, cwd)?;
+
+    Ok(meta)
+}
+
+pub(crate) fn save_environment_with_validated_launcher(
+    mut meta: EnvMeta,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
+    let _lock = lock_env_registry(env, cwd)?;
+    let mut registry = load_env_registry(env, cwd)?;
+    meta = canonicalize_launcher_binding(meta, env, cwd)?;
+    meta = upsert_environment(&mut registry, meta)?;
     write_env_registry(&mut registry, env, cwd)?;
 
     Ok(meta)
@@ -283,7 +300,7 @@ pub fn create_environment(
         updated_at: created_at,
         last_used_at: None,
     };
-    let meta = upsert_environment(&mut registry, meta, env, cwd)?;
+    let meta = upsert_environment(&mut registry, meta)?;
     write_env_registry(&mut registry, env, cwd)?;
     Ok(meta)
 }
@@ -353,7 +370,7 @@ pub fn clone_environment(
             updated_at: created_at,
             last_used_at: None,
         };
-        let meta = upsert_environment(&mut registry, meta, env, cwd)?;
+        let meta = upsert_environment(&mut registry, meta)?;
         write_env_registry(&mut registry, env, cwd)?;
         Ok(meta)
     })();
@@ -538,7 +555,7 @@ pub fn import_environment(
                 updated_at: created_at,
                 last_used_at: None,
             };
-            let meta = upsert_environment(&mut registry, meta, env, cwd)?;
+            let meta = upsert_environment(&mut registry, meta)?;
             write_env_registry(&mut registry, env, cwd)?;
             Ok(meta)
         })();
