@@ -1,7 +1,7 @@
-use std::cmp::Ordering;
 use std::fs;
 use std::path::PathBuf;
 
+use semver::Version;
 use serde::Serialize;
 
 use crate::infra::archive::extract_tar_gz;
@@ -116,7 +116,7 @@ impl Cli {
         let binary_path = self.current_binary_path()?;
         let asset_name = self.current_release_asset_name()?;
         let release = self.fetch_self_release(version)?;
-        let target_version = display_version_from_tag(&release.tag_name);
+        let target_version = display_version_from_tag(&release.tag_name)?;
 
         Ok(SelfUpdateSummary {
             mode: SelfUpdateMode::Check,
@@ -124,7 +124,7 @@ impl Cli {
                 &current_version,
                 &target_version,
                 version.is_some(),
-            ) {
+            )? {
                 SelfUpdateStatus::UpToDate
             } else {
                 SelfUpdateStatus::UpdateAvailable
@@ -141,9 +141,9 @@ impl Cli {
         let binary_path = self.current_binary_path()?;
         let asset_name = self.current_release_asset_name()?;
         let release = self.fetch_self_release(version)?;
-        let target_version = display_version_from_tag(&release.tag_name);
+        let target_version = display_version_from_tag(&release.tag_name)?;
 
-        if should_treat_target_as_current(&current_version, &target_version, version.is_some()) {
+        if should_treat_target_as_current(&current_version, &target_version, version.is_some())? {
             return Ok(SelfUpdateSummary {
                 mode: SelfUpdateMode::Update,
                 status: SelfUpdateStatus::UpToDate,
@@ -297,61 +297,34 @@ fn normalize_release_tag(version: &str) -> String {
     }
 }
 
-fn display_version_from_tag(tag: &str) -> String {
-    tag.trim().trim_start_matches('v').to_string()
+fn display_version_from_tag(tag: &str) -> Result<String, String> {
+    parse_release_version(tag).map(|version| version.to_string())
 }
 
-fn compare_semver_like(left: &str, right: &str) -> Ordering {
-    let left = left.trim().trim_start_matches('v');
-    let right = right.trim().trim_start_matches('v');
-
-    let (left_core, left_pre) = split_semver_like(left);
-    let (right_core, right_pre) = split_semver_like(right);
-
-    for index in 0..left_core.len().max(right_core.len()) {
-        let left_part = *left_core.get(index).unwrap_or(&0);
-        let right_part = *right_core.get(index).unwrap_or(&0);
-        match left_part.cmp(&right_part) {
-            Ordering::Equal => {}
-            other => return other,
-        }
-    }
-
-    match (left_pre, right_pre) {
-        (None, None) => Ordering::Equal,
-        (None, Some(_)) => Ordering::Greater,
-        (Some(_), None) => Ordering::Less,
-        (Some(left), Some(right)) => left.cmp(right),
-    }
+fn parse_release_version(value: &str) -> Result<Version, String> {
+    let normalized = value.trim().strip_prefix('v').unwrap_or(value.trim());
+    Version::parse(normalized)
+        .map_err(|error| format!("invalid ocm release version \"{value}\": {error}"))
 }
 
 fn should_treat_target_as_current(
     current_version: &str,
     target_version: &str,
     explicit_version: bool,
-) -> bool {
-    target_version == current_version
-        || (!explicit_version
-            && compare_semver_like(current_version, target_version) != Ordering::Less)
-}
-
-fn split_semver_like(value: &str) -> (Vec<u64>, Option<&str>) {
-    let (core, pre) = value
-        .split_once('-')
-        .map_or((value, None), |(core, pre)| (core, Some(pre)));
-    let core = core
-        .split('.')
-        .map(|part| part.parse::<u64>().unwrap_or(0))
-        .collect::<Vec<_>>();
-    (core, pre)
+) -> Result<bool, String> {
+    let current = parse_release_version(current_version)?;
+    let target = parse_release_version(target_version)?;
+    Ok(if explicit_version {
+        current.to_string() == target.to_string()
+    } else {
+        current.cmp_precedence(&target).is_ge()
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Ordering;
-
     use super::{
-        compare_semver_like, display_version_from_tag, normalize_release_tag,
+        display_version_from_tag, normalize_release_tag, parse_release_version,
         should_treat_target_as_current,
     };
 
@@ -363,21 +336,36 @@ mod tests {
 
     #[test]
     fn display_version_from_tag_strips_the_v_prefix() {
-        assert_eq!(display_version_from_tag("v0.2.1"), "0.2.1");
-        assert_eq!(display_version_from_tag("0.2.1"), "0.2.1");
+        assert_eq!(display_version_from_tag("v0.2.1").unwrap(), "0.2.1");
+        assert_eq!(display_version_from_tag("0.2.1").unwrap(), "0.2.1");
     }
 
     #[test]
-    fn compare_semver_like_orders_versions_safely() {
-        assert_eq!(compare_semver_like("0.2.1", "0.2.0"), Ordering::Greater);
-        assert_eq!(compare_semver_like("0.2.1", "0.2.1"), Ordering::Equal);
-        assert_eq!(compare_semver_like("0.2.1-beta.1", "0.2.1"), Ordering::Less);
+    fn release_versions_follow_semver_precedence() {
+        assert!(
+            parse_release_version("1.0.0-beta.2").unwrap()
+                < parse_release_version("1.0.0-beta.10").unwrap()
+        );
+        assert!(
+            parse_release_version("1.0.0-alpha.1").unwrap()
+                < parse_release_version("1.0.0-beta.1").unwrap()
+        );
+        assert_eq!(
+            parse_release_version("1.0.0+build.1")
+                .unwrap()
+                .cmp_precedence(&parse_release_version("1.0.0+build.2").unwrap()),
+            std::cmp::Ordering::Equal
+        );
+        assert!(parse_release_version("1.0.beta").is_err());
     }
 
     #[test]
     fn should_treat_target_as_current_only_skips_implicit_downgrades() {
-        assert!(should_treat_target_as_current("0.2.1", "0.2.0", false));
-        assert!(!should_treat_target_as_current("0.2.1", "0.2.0", true));
-        assert!(should_treat_target_as_current("0.2.1", "0.2.1", true));
+        assert!(should_treat_target_as_current("0.2.1", "0.2.0", false).unwrap());
+        assert!(!should_treat_target_as_current("0.2.1", "0.2.0", true).unwrap());
+        assert!(should_treat_target_as_current("0.2.1", "0.2.1", true).unwrap());
+        assert!(!should_treat_target_as_current("1.0.0-beta.2", "1.0.0-beta.10", false).unwrap());
+        assert!(should_treat_target_as_current("1.0.0+old", "1.0.0+new", false).unwrap());
+        assert!(!should_treat_target_as_current("1.0.0+old", "1.0.0+new", true).unwrap());
     }
 }
