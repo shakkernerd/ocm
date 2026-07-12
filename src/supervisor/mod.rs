@@ -20,7 +20,9 @@ use crate::env::EnvironmentService;
 use crate::service::inspect::inspect_job;
 use crate::service::platform::{
     ManagedServiceDefinition, ServiceManagerKind, activate_managed_service,
-    managed_service_identity, service_manager_kind, write_managed_service_definition,
+    deactivate_managed_service, ensure_service_definition_dir, managed_service_identity,
+    register_managed_service, service_manager_kind, validate_managed_service_owner,
+    write_managed_service_definition,
 };
 use crate::store::{
     display_path, ensure_dir, ensure_store, list_environments, lock_file, now_utc,
@@ -323,16 +325,76 @@ impl<'a> SupervisorService<'a> {
     }
 
     pub fn install_daemon(&self) -> Result<SupervisorDaemonSummary, String> {
+        let _lifecycle_lock = self.lock_daemon_lifecycle()?;
         self.refresh_daemon("install")
     }
 
     pub fn ensure_daemon_running(&self) -> Result<SupervisorDaemonSummary, String> {
+        let _lifecycle_lock = self.lock_daemon_lifecycle()?;
+        self.ensure_daemon_running_locked()
+    }
+
+    pub(crate) fn ensure_daemon_running_locked(&self) -> Result<SupervisorDaemonSummary, String> {
+        let definition = self.supervisor_daemon_definition()?;
+        validate_managed_service_owner(&definition, self.env)?;
         let _ = self.sync()?;
         let status = self.daemon_status()?;
         if status.running {
             return Ok(status);
         }
         self.activate_daemon("install")
+    }
+
+    pub(crate) fn validate_daemon_owner_locked(&self) -> Result<(), String> {
+        let definition = self.supervisor_daemon_definition()?;
+        validate_managed_service_owner(&definition, self.env)
+    }
+
+    pub(crate) fn restore_daemon_state_locked(
+        &self,
+        before: &SupervisorDaemonSummary,
+    ) -> Result<(), String> {
+        if before.running {
+            self.ensure_daemon_running_locked()?;
+            return Ok(());
+        }
+        let definition = self.supervisor_daemon_definition()?;
+        deactivate_managed_service(&definition, self.env)?;
+        if before.installed {
+            write_managed_service_definition(&definition, self.env)?;
+            if before.loaded {
+                register_managed_service(&definition.label, &definition.definition_path, self.env)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn uninstall_daemon_locked(&self) -> Result<SupervisorDaemonSummary, String> {
+        let definition = self.supervisor_daemon_definition()?;
+        deactivate_managed_service(&definition, self.env)?;
+        self.daemon_summary("uninstall")
+    }
+
+    pub(crate) fn lock_daemon_lifecycle(&self) -> Result<crate::store::ExclusiveFileLock, String> {
+        let identity = managed_service_identity(self.env, self.cwd)?;
+        let definition_dir = identity.definition_path.parent().ok_or_else(|| {
+            format!(
+                "failed to resolve managed service directory for {}",
+                display_path(&identity.definition_path)
+            )
+        })?;
+        // Prepare and validate the manager-owned directory before placing the
+        // lifecycle lock in it; lock_file's generic parent creation has no
+        // service-directory permission contract.
+        ensure_service_definition_dir(definition_dir)?;
+        let lock_path = identity.definition_path.with_extension("lifecycle.lock");
+        lock_file(&lock_path, "managed service lifecycle")
+    }
+
+    pub(crate) fn has_desired_running_services(&self) -> Result<bool, String> {
+        Ok(list_environments(self.env, self.cwd)?
+            .iter()
+            .any(|meta| meta.service_enabled && meta.service_running))
     }
 
     pub fn recover_child_restart(&self, name: &str) -> Result<SupervisorDaemonSummary, String> {

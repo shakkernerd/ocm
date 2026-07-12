@@ -207,12 +207,14 @@ fn ensure_gateway_binding(
         .map(|_| ())
 }
 
-fn ensure_supervisor_running(env: &BTreeMap<String, String>, cwd: &Path) -> Result<(), String> {
+fn ensure_supervisor_running_locked(
+    supervisor: &SupervisorService<'_>,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
     if let Some(error) = service_backend_support_error(env) {
         return Err(error);
     }
-    let supervisor = SupervisorService::new(env, cwd);
-    supervisor.ensure_daemon_running()?;
+    supervisor.ensure_daemon_running_locked()?;
     Ok(())
 }
 
@@ -227,23 +229,62 @@ fn update_service(
     if require_binding {
         ensure_gateway_binding(name, env, cwd)?;
     }
+    let supervisor = SupervisorService::new(env, cwd);
+    // Service policy and the shared daemon are one lifecycle decision. Holding
+    // this lock prevents another store or command from racing ownership/teardown.
+    let _lifecycle_lock = supervisor.lock_daemon_lifecycle()?;
+    supervisor.validate_daemon_owner_locked()?;
+    let daemon_before = supervisor.daemon_status()?;
     if let ServiceSupervisorPolicy::EnsureRunning = supervisor_policy {
-        ensure_supervisor_running(env, cwd)?;
+        if let Err(error) = ensure_supervisor_running_locked(&supervisor, env) {
+            return match supervisor.restore_daemon_state_locked(&daemon_before) {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(format!(
+                    "{error}; failed to restore the previous daemon state: {rollback_error}"
+                )),
+            };
+        }
     }
-    let change = set_environment_service_policy(name, service_enabled, service_running, env, cwd)?;
-    if let Err(error) = sync_supervisor_if_present(env, cwd) {
-        let rollback = restore_environment_service_policy(&change, env, cwd).and_then(|restored| {
-            if restored {
-                sync_supervisor_if_present(env, cwd).map(|_| ())
-            } else {
-                Ok(())
+    let change =
+        match set_environment_service_policy(name, service_enabled, service_running, env, cwd) {
+            Ok(change) => change,
+            Err(error) => {
+                return match supervisor.restore_daemon_state_locked(&daemon_before) {
+                    Ok(()) => Err(error),
+                    Err(rollback_error) => Err(format!(
+                        "{error}; failed to restore the previous daemon state: {rollback_error}"
+                    )),
+                };
             }
-        });
-        return match rollback {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(format!(
-                "{error}; failed to restore the previous service policy: {rollback_error}"
-            )),
+        };
+    let update_result = sync_supervisor_if_present(env, cwd).and_then(|_| {
+        if matches!(update, ServiceUpdate::Stop | ServiceUpdate::Uninstall)
+            && !supervisor.has_desired_running_services()?
+        {
+            supervisor.uninstall_daemon_locked()?;
+        }
+        Ok(())
+    });
+    if let Err(error) = update_result {
+        let mut rollback_errors = Vec::new();
+        match restore_environment_service_policy(&change, env, cwd) {
+            Ok(restored) => {
+                if restored && let Err(rollback_error) = sync_supervisor_if_present(env, cwd) {
+                    rollback_errors.push(rollback_error);
+                }
+            }
+            Err(rollback_error) => rollback_errors.push(rollback_error),
+        }
+        if let Err(rollback_error) = supervisor.restore_daemon_state_locked(&daemon_before) {
+            rollback_errors.push(rollback_error);
+        }
+        return if rollback_errors.is_empty() {
+            Err(error)
+        } else {
+            Err(format!(
+                "{error}; failed to restore the previous service state: {}",
+                rollback_errors.join("; ")
+            ))
         };
     }
     let (summary, warnings) = wait_for_action_summary(name, action, env, cwd)?;

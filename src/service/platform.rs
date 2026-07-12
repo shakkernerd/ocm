@@ -229,7 +229,7 @@ pub(crate) fn write_managed_service_definition(
     ensure_service_definition_dir(parent)?;
     let lock_path = definition.definition_path.with_extension("lock");
     let _lock = lock_file(&lock_path, "managed service definition")?;
-    validate_existing_service_owner(definition, env)?;
+    validate_managed_service_owner(definition, env)?;
 
     let raw = match service_manager_kind(env) {
         ServiceManagerKind::Launchd => build_launch_agent_plist(
@@ -257,7 +257,7 @@ pub(crate) fn write_managed_service_definition(
     write_private_service_file(&definition.definition_path, raw.as_bytes())
 }
 
-fn validate_existing_service_owner(
+pub(crate) fn validate_managed_service_owner(
     definition: &ManagedServiceDefinition,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
@@ -296,6 +296,126 @@ fn validate_existing_service_owner(
     ))
 }
 
+pub(crate) fn deactivate_managed_service(
+    definition: &ManagedServiceDefinition,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let definition_path = &definition.definition_path;
+    let lock_path = definition_path.with_extension("lock");
+    let _lock = lock_file(&lock_path, "managed service definition")?;
+    validate_managed_service_owner(definition, env)?;
+    if !definition_path.exists() {
+        // A completed teardown removes the ownership marker. Repeated stop or
+        // uninstall calls must not probe or mutate an unowned manager unit.
+        return Ok(());
+    }
+    match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => {
+            let domain = gui_domain(env)?;
+            deactivate_launchd_service(&definition.label, definition_path, &domain, env)?;
+        }
+        ServiceManagerKind::SystemdUser => {
+            let stop = run_systemctl(env, ["--user", "stop", definition.label.as_str()])?;
+            if !stop.status.success() {
+                return Err(format!(
+                    "systemctl --user stop failed: {}",
+                    systemctl_detail(&stop)
+                ));
+            }
+            let disable = run_systemctl(env, ["--user", "disable", definition.label.as_str()])?;
+            if !disable.status.success() {
+                return Err(format!(
+                    "systemctl --user disable failed: {}",
+                    systemctl_detail(&disable)
+                ));
+            }
+        }
+        ServiceManagerKind::Unsupported => {}
+    }
+
+    match fs::remove_file(definition_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "failed to remove managed service definition {}: {error}",
+                display_path(definition_path)
+            ));
+        }
+    }
+
+    if service_manager_kind(env) == ServiceManagerKind::SystemdUser {
+        let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
+        if !reload.status.success() {
+            return Err(format!(
+                "systemctl --user daemon-reload failed: {}",
+                systemctl_detail(&reload)
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn deactivate_launchd_service(
+    label: &str,
+    definition_path: &Path,
+    domain: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let target = format!("{domain}/{label}");
+    if !launchd_job_is_loaded(&target, env)? {
+        return Ok(());
+    }
+
+    let definition_path = display_path(definition_path);
+    let mut failures = Vec::new();
+    let output = run_launchctl(env, ["bootout", target.as_str()])?;
+    if !launchd_job_is_loaded(&target, env)? {
+        return Ok(());
+    }
+    failures.push(launchctl_detail(&output));
+    let output = run_launchctl(env, ["bootout", domain, definition_path.as_str()])?;
+    if !launchd_job_is_loaded(&target, env)? {
+        return Ok(());
+    }
+    failures.push(launchctl_detail(&output));
+    let output = run_launchctl(env, ["unload", definition_path.as_str()])?;
+    if !launchd_job_is_loaded(&target, env)? {
+        return Ok(());
+    }
+    failures.push(launchctl_detail(&output));
+
+    let details = failures
+        .into_iter()
+        .filter(|detail| !detail.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(if details.is_empty() {
+        format!("launchctl failed to unload {target}")
+    } else {
+        format!("launchctl failed to unload {target}: {details}")
+    })
+}
+
+fn launchd_job_is_loaded(target: &str, env: &BTreeMap<String, String>) -> Result<bool, String> {
+    let output = run_launchctl(env, ["print", target])?;
+    if output.status.success() {
+        return Ok(true);
+    }
+    let detail = launchctl_detail(&output);
+    if detail
+        .to_ascii_lowercase()
+        .contains("could not find service")
+    {
+        return Ok(false);
+    }
+    Err(if detail.is_empty() {
+        format!("launchctl print failed for {target}")
+    } else {
+        format!("launchctl print failed for {target}: {detail}")
+    })
+}
+
 pub(crate) fn activate_managed_service(
     label: &str,
     definition_path: &Path,
@@ -304,6 +424,18 @@ pub(crate) fn activate_managed_service(
     match service_manager_kind(env) {
         ServiceManagerKind::Launchd => activate_launchd_service(label, definition_path, env),
         ServiceManagerKind::SystemdUser => activate_systemd_user_service(label, env),
+        ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
+    }
+}
+
+pub(crate) fn register_managed_service(
+    label: &str,
+    definition_path: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => activate_launchd_service(label, definition_path, env),
+        ServiceManagerKind::SystemdUser => register_systemd_user_service(label, env),
         ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
     }
 }
@@ -463,7 +595,7 @@ fn ensure_private_dir(path: &Path) -> Result<(), String> {
     set_mode(path, SERVICE_DIR_MODE)
 }
 
-fn ensure_service_definition_dir(path: &Path) -> Result<(), String> {
+pub(crate) fn ensure_service_definition_dir(path: &Path) -> Result<(), String> {
     let existed = path.exists();
     fs::create_dir_all(path).map_err(|error| error.to_string())?;
     if existed {
@@ -569,21 +701,7 @@ fn activate_systemd_user_service(
     label: &str,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
-    if !reload.status.success() {
-        return Err(format!(
-            "systemctl --user daemon-reload failed: {}",
-            systemctl_detail(&reload)
-        ));
-    }
-
-    let enable = run_systemctl(env, ["--user", "enable", label])?;
-    if !enable.status.success() {
-        return Err(format!(
-            "systemctl --user enable failed: {}",
-            systemctl_detail(&enable)
-        ));
-    }
+    register_systemd_user_service(label, env)?;
 
     let restart = run_systemctl(env, ["--user", "restart", label])?;
     if restart.status.success() {
@@ -599,6 +717,28 @@ fn activate_systemd_user_service(
         ));
     }
 
+    Ok(())
+}
+
+fn register_systemd_user_service(
+    label: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
+    if !reload.status.success() {
+        return Err(format!(
+            "systemctl --user daemon-reload failed: {}",
+            systemctl_detail(&reload)
+        ));
+    }
+
+    let enable = run_systemctl(env, ["--user", "enable", label])?;
+    if !enable.status.success() {
+        return Err(format!(
+            "systemctl --user enable failed: {}",
+            systemctl_detail(&enable)
+        ));
+    }
     Ok(())
 }
 
@@ -715,9 +855,9 @@ mod tests {
 
     use super::{
         ManagedServiceDefinition, ManagedServiceIdentity, OCM_SERVICE_LABEL, ServiceManagerKind,
-        gui_domain, managed_service_identity, managed_service_label, service_backend_support_error,
-        service_definition_dir, service_manager_kind, systemd_output_mode_for_version,
-        write_managed_service_definition,
+        gui_domain, managed_service_identity, managed_service_label, register_managed_service,
+        service_backend_support_error, service_definition_dir, service_manager_kind,
+        systemd_output_mode_for_version, write_managed_service_definition,
     };
 
     #[test]
@@ -752,6 +892,46 @@ mod tests {
             systemd_output_mode_for_version(None),
             super::SystemdOutputMode::Journal
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registering_systemd_service_does_not_start_it() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ocm-platform-register-systemd-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        let systemctl = root.join("systemctl");
+        let log = root.join("systemctl.log");
+        fs::write(
+            &systemctl,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n",
+                display_path(&log)
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&systemctl, fs::Permissions::from_mode(0o755)).unwrap();
+        let env = BTreeMap::from([
+            (
+                "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+                "systemd-user".to_string(),
+            ),
+            (
+                "OCM_INTERNAL_SYSTEMCTL_BIN".to_string(),
+                display_path(&systemctl),
+            ),
+        ]);
+
+        register_managed_service("ai.openclaw.ocm", Path::new("/unused"), &env).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&log).unwrap(),
+            "--user daemon-reload\n--user enable ai.openclaw.ocm\n"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
