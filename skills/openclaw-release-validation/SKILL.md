@@ -27,8 +27,9 @@ If repo-level AGENTS instructions are present, read and follow them first.
 
 ## Workflow
 
-1. Confirm paths, permissions, OCM binary, OpenClaw source repo, and report
-   root.
+1. Confirm paths, permissions, OpenClaw source repo, and report root. Set
+   `OCM_BIN=<ocm-repo>/target/debug/ocm`, verify it is executable, and invoke
+   that absolute binary for every OCM command in the run.
 2. Create a unique run id. Derive the worktree, runtime, env, report, and
    cleanup names from that id so concurrent validations cannot share mutable
    resources.
@@ -36,22 +37,22 @@ If repo-level AGENTS instructions are present, read and follow them first.
    commit, and create a clean detached worktree for that commit. Record the
    commit before building.
 4. Build the primary validation target with
-   `ocm runtime build-local <run-runtime> --repo <run-worktree> --force`, then
-   run `ocm runtime verify <run-runtime>`. This package-shaped runtime is the
-   target for the matrix. Direct `<run-worktree>/openclaw.mjs` execution is
-   limited to the S02 source-artifact boot smoke check.
+   `"$OCM_BIN" runtime build-local <run-runtime> --repo <run-worktree>
+   --force`, then run `"$OCM_BIN" runtime verify <run-runtime>`. This
+   package-shaped runtime is the target for the matrix. Direct
+   `<run-worktree>/openclaw.mjs` execution is limited to the S02
+   source-artifact boot smoke check.
 5. Review OCM command usage for the touched scenario using `README.md`,
-   `docs/USAGE.md`, and targeted help:
-   `ocm help start`, `ocm help service`, `ocm help logs`, `ocm help upgrade`,
-   and `ocm help env`.
+   `docs/USAGE.md`, and targeted help from the same `"$OCM_BIN"`:
+   `help start`, `help service`, `help logs`, `help upgrade`, and `help env`.
 6. Review changelogs and commits since the last release to identify changed
    surfaces and extra tests.
 7. Prepare existing-user fixtures before mutation:
-   - use `ocm env clone` only when clearing sessions, logs, and backups is
-     intended;
+   - use `"$OCM_BIN" env clone` only when clearing sessions, logs, and backups
+     is intended;
    - for S20, copy the source env's `.openclaw` directory into the run root,
-     import that copy with `ocm adopt import`, and assert the expected session
-     fixture exists before the upgrade.
+     import that copy with `"$OCM_BIN" adopt import`, and assert the expected
+     session fixture exists before the upgrade.
 8. Treat every copied or cloned user fixture as secret-bearing. Keep its
    service stopped and make no provider, channel, webhook, browser, or other
    external connection by default. Use a credential-free fresh env, mocks, or
@@ -61,8 +62,8 @@ If repo-level AGENTS instructions are present, read and follow them first.
    `docs/OPENCLAW_RELEASE_SCENARIO_MATRIX.md`.
 10. For each scenario, test both clean new-user state and copied existing-user
    state when applicable.
-11. Run OpenClaw commands through `ocm @<env> -- ...` unless the scenario
-   explicitly requires direct execution. Verify OCM env runs expose
+11. Run OpenClaw commands through `"$OCM_BIN" @<env> -- ...` unless the
+    scenario explicitly requires direct execution. Verify OCM env runs expose
    `OPENCLAW_SERVICE_REPAIR_POLICY=external` as part of normal env execution;
    do not run broad LaunchAgent/service mutation tests unless the release
    changed service behavior.
@@ -74,8 +75,8 @@ If repo-level AGENTS instructions are present, read and follow them first.
     commit and the runtime identity matches the run. Redact credentials,
     private endpoints, user identifiers, and secret-bearing command output.
 15. Destroy run-owned envs, then run
-    `ocm runtime remove <run-runtime>`. Clean up only resources carrying the
-    current run id. Inspect worktree status before removal and do not
+    `"$OCM_BIN" runtime remove <run-runtime>`. Clean up only resources carrying
+    the current run id. Inspect worktree status before removal and do not
     force-remove an unclean or unowned worktree.
 
 ## Non-Negotiables
@@ -84,7 +85,7 @@ If repo-level AGENTS instructions are present, read and follow them first.
 - Do not substitute `pnpm openclaw` or the source-tree executable for
   validation of the package-shaped runtime.
 - Do not mutate the real existing-user env; copy it into the run root first.
-- Do not assume `ocm env clone` preserves sessions, logs, or backups.
+- Do not assume `"$OCM_BIN" env clone` preserves sessions, logs, or backups.
 - Do not start a copied user's gateway or make external requests with retained
   credentials unless the run explicitly authorizes the destination and
   account.
