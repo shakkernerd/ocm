@@ -7,8 +7,8 @@ use std::process::{Command, Stdio};
 
 use crate::host::verify_official_openclaw_runtime_host;
 use crate::infra::download::{
-    artifact_file_name_from_url, download_to_file, file_sha256, normalize_sha256,
-    verify_file_integrity, verify_file_sha256,
+    artifact_file_name_from_url, download_to_file, file_sha256, normalize_file_integrity,
+    normalize_sha256, verify_file_integrity, verify_file_sha256,
 };
 use crate::managed_node::managed_runtime_install_command;
 use crate::runtime::releases::{
@@ -24,11 +24,12 @@ use crate::runtime::{
 };
 
 use super::common::{
-    copy_dir_recursive, ensure_dir, load_json_files, path_exists, read_json, write_json,
+    ExclusiveFileLock, copy_dir_recursive, ensure_dir, load_json_files, lock_file, path_exists,
+    read_json, write_json,
 };
 use super::layout::{
-    clean_path, display_path, resolve_absolute_path, runtime_install_files_dir,
-    runtime_install_root, runtime_meta_path, validate_name,
+    clean_path, display_path, resolve_absolute_path, runtime_install_root, runtime_meta_path,
+    validate_name,
 };
 use super::now_utc;
 
@@ -72,7 +73,8 @@ fn symlink_or_copy_dir(source: &Path, target: &Path) -> Result<(), String> {
     }
     #[cfg(unix)]
     {
-        match std::os::unix::fs::symlink(source, target) {
+        let link_target = relative_symlink_target(source, target).unwrap_or_else(|| source.into());
+        match std::os::unix::fs::symlink(link_target, target) {
             Ok(()) => return Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
             Err(_) => {}
@@ -80,13 +82,37 @@ fn symlink_or_copy_dir(source: &Path, target: &Path) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        match std::os::windows::fs::symlink_dir(source, target) {
+        let link_target = relative_symlink_target(source, target).unwrap_or_else(|| source.into());
+        match std::os::windows::fs::symlink_dir(link_target, target) {
             Ok(()) => return Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
             Err(_) => {}
         }
     }
     copy_dir_recursive(source, target)
+}
+
+fn relative_symlink_target(source: &Path, target: &Path) -> Option<PathBuf> {
+    let target_parent = target.parent()?;
+    let source_components = source.components().collect::<Vec<_>>();
+    let parent_components = target_parent.components().collect::<Vec<_>>();
+    let common = source_components
+        .iter()
+        .zip(&parent_components)
+        .take_while(|(left, right)| left == right)
+        .count();
+    if common == 0 {
+        return None;
+    }
+
+    let mut relative = PathBuf::new();
+    for _ in common..parent_components.len() {
+        relative.push("..");
+    }
+    for component in &source_components[common..] {
+        relative.push(component.as_os_str());
+    }
+    Some(relative)
 }
 
 fn expose_openclaw_package_runtime_dependencies(install_files: &Path) -> Result<(), String> {
@@ -252,12 +278,19 @@ impl RuntimeReleaseDetails {
     }
 }
 
-#[derive(Clone, Debug)]
 struct RuntimeInstallTarget {
     name: String,
-    meta_path: PathBuf,
+    final_meta_path: PathBuf,
+    final_install_root: PathBuf,
     install_root: PathBuf,
     install_files: PathBuf,
+    _lock: ExclusiveFileLock,
+}
+
+impl Drop for RuntimeInstallTarget {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.install_root);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -498,11 +531,15 @@ fn build_installed_runtime_meta(
     release: &RuntimeReleaseDetails,
     description: Option<String>,
 ) -> RuntimeMeta {
+    let final_binary_path = binary_path
+        .strip_prefix(&target.install_root)
+        .map(|relative| target.final_install_root.join(relative))
+        .unwrap_or_else(|_| binary_path.to_path_buf());
     let created_at = now_utc();
     RuntimeMeta {
         kind: "ocm-runtime".to_string(),
         name: target.name.clone(),
-        binary_path: display_path(binary_path),
+        binary_path: display_path(&final_binary_path),
         source_kind: RuntimeSourceKind::Installed,
         source_path: source.path.as_deref().map(display_path),
         source_url: source.url.clone(),
@@ -512,7 +549,7 @@ fn build_installed_runtime_meta(
         release_channel: release.channel.clone(),
         release_selector_kind: release.selector_kind.clone(),
         release_selector_value: release.selector_value.clone(),
-        install_root: Some(display_path(&target.install_root)),
+        install_root: Some(display_path(&target.final_install_root)),
         description,
         created_at,
         updated_at: created_at,
@@ -569,14 +606,8 @@ fn install_runtime_at_path(
 
         let meta =
             build_installed_runtime_meta(&target, &binary_path, &source, &release, description);
-        write_json(&target.meta_path, &meta)?;
-        Ok(meta)
+        publish_runtime(target, meta)
     })();
-
-    if result.is_err() {
-        let _ = fs::remove_file(&target.meta_path);
-        let _ = fs::remove_dir_all(&target.install_root);
-    }
 
     result
 }
@@ -587,21 +618,52 @@ fn prepare_runtime_install_target(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<RuntimeInstallTarget, String> {
-    let meta_path = prepare_runtime_meta_path(&name, replace_existing, env, cwd)?;
-    let install_root = runtime_install_root(&name, env, cwd)?;
-    let install_files = runtime_install_files_dir(&name, env, cwd)?;
+    let final_meta_path = runtime_meta_path(&name, env, cwd)?;
+    let final_install_root = runtime_install_root(&name, env, cwd)?;
+    let lock = lock_runtime(&name, env, cwd)?;
+    let parent = final_install_root
+        .parent()
+        .ok_or_else(|| format!("runtime install root has no parent: {name}"))?;
+    if path_exists(&final_meta_path) && !replace_existing {
+        return Err(format!("runtime \"{name}\" already exists"));
+    }
+    let install_root = parent.join(format!(
+        ".{name}.stage-{}-{}",
+        std::process::id(),
+        now_utc().unix_timestamp_nanos()
+    ));
+    let _ = fs::remove_dir_all(&install_root);
+    let install_files = install_root.join("files");
     Ok(RuntimeInstallTarget {
         name,
-        meta_path,
+        final_meta_path,
+        final_install_root,
         install_root,
         install_files,
+        _lock: lock,
     })
+}
+
+fn lock_runtime(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ExclusiveFileLock, String> {
+    let install_root = runtime_install_root(name, env, cwd)?;
+    let parent = install_root
+        .parent()
+        .ok_or_else(|| format!("runtime install root has no parent: {name}"))?;
+    ensure_dir(parent)?;
+    lock_file(
+        &parent.join(format!(".{name}.lock")),
+        "runtime installation",
+    )
 }
 
 fn install_runtime_from_openclaw_package(
     target: RuntimeInstallTarget,
     source: RuntimeSourceDetails,
-    source_integrity: Option<String>,
+    source_integrity: String,
     release: RuntimeReleaseDetails,
     description: Option<String>,
     context: InstallContext<'_>,
@@ -620,11 +682,9 @@ fn install_runtime_from_openclaw_package(
         let archive_name = artifact_file_name_from_url(tarball_url)?;
         let archive_path = target.install_files.join(&archive_name);
         download_to_file(tarball_url, &archive_path)?;
-        if let Some(source_integrity) = source_integrity.as_deref() {
-            verify_file_integrity(&archive_path, source_integrity)?;
-        }
+        verify_file_integrity(&archive_path, &source_integrity)?;
 
-        let meta = install_runtime_from_openclaw_package_archive(
+        let meta = stage_runtime_from_openclaw_package_archive(
             &target,
             &archive_path,
             source,
@@ -633,18 +693,13 @@ fn install_runtime_from_openclaw_package(
             context,
         );
         let _ = fs::remove_file(&archive_path);
-        meta
+        publish_runtime(target, meta?)
     })();
-
-    if result.is_err() {
-        let _ = fs::remove_file(&target.meta_path);
-        let _ = fs::remove_dir_all(&target.install_root);
-    }
 
     result
 }
 
-fn install_runtime_from_openclaw_package_archive(
+fn stage_runtime_from_openclaw_package_archive(
     target: &RuntimeInstallTarget,
     archive_path: &Path,
     source: RuntimeSourceDetails,
@@ -679,25 +734,89 @@ fn install_runtime_from_openclaw_package_archive(
 
     let mut source = source;
     source.sha256 = Some(binary_sha256);
-    let meta = build_installed_runtime_meta(target, &binary_path, &source, &release, description);
-    write_json(&target.meta_path, &meta)?;
-    Ok(meta)
+    Ok(build_installed_runtime_meta(
+        target,
+        &binary_path,
+        &source,
+        &release,
+        description,
+    ))
 }
 
-fn prepare_runtime_meta_path(
-    name: &str,
-    replace_existing: bool,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-) -> Result<PathBuf, String> {
-    let meta_path = runtime_meta_path(name, env, cwd)?;
-    if path_exists(&meta_path) {
-        if !replace_existing {
-            return Err(format!("runtime \"{name}\" already exists"));
-        }
-        remove_runtime(name, env, cwd)?;
+fn publish_runtime(target: RuntimeInstallTarget, meta: RuntimeMeta) -> Result<RuntimeMeta, String> {
+    let nonce = now_utc().unix_timestamp_nanos();
+    let backup_root = target
+        .final_install_root
+        .with_file_name(format!(".{}.backup-{nonce}", target.name));
+    let backup_meta = target
+        .final_meta_path
+        .with_file_name(format!(".{}.json.backup-{nonce}", target.name));
+    let had_root = path_exists(&target.final_install_root);
+    let had_meta = path_exists(&target.final_meta_path);
+
+    if had_root {
+        fs::rename(&target.final_install_root, &backup_root).map_err(|error| {
+            format!(
+                "failed to preserve runtime \"{}\" before replacement: {error}",
+                target.name
+            )
+        })?;
     }
-    Ok(meta_path)
+    if had_meta && let Err(error) = fs::rename(&target.final_meta_path, &backup_meta) {
+        if had_root {
+            if let Err(rollback_error) = fs::rename(&backup_root, &target.final_install_root) {
+                return Err(format!(
+                    "failed to preserve runtime \"{}\" metadata before replacement: {error}; failed to restore its install root from {}: {rollback_error}",
+                    target.name,
+                    display_path(&backup_root)
+                ));
+            }
+        }
+        return Err(format!(
+            "failed to preserve runtime \"{}\" metadata before replacement: {error}",
+            target.name
+        ));
+    }
+
+    let publish_result = (|| {
+        fs::rename(&target.install_root, &target.final_install_root).map_err(|error| {
+            format!(
+                "failed to publish runtime \"{}\" install root: {error}",
+                target.name
+            )
+        })?;
+        write_json(&target.final_meta_path, &meta).map_err(|error| {
+            format!(
+                "failed to publish runtime \"{}\" metadata: {error}",
+                target.name
+            )
+        })
+    })();
+
+    if let Err(error) = publish_result {
+        let _ = fs::remove_dir_all(&target.final_install_root);
+        let _ = fs::remove_file(&target.final_meta_path);
+        let mut rollback_errors = Vec::new();
+        if had_root
+            && let Err(rollback_error) = fs::rename(&backup_root, &target.final_install_root)
+        {
+            rollback_errors.push(format!("install root: {rollback_error}"));
+        }
+        if had_meta && let Err(rollback_error) = fs::rename(&backup_meta, &target.final_meta_path) {
+            rollback_errors.push(format!("metadata: {rollback_error}"));
+        }
+        if rollback_errors.is_empty() {
+            return Err(error);
+        }
+        return Err(format!(
+            "{error}; failed to restore previous runtime: {}",
+            rollback_errors.join("; ")
+        ));
+    }
+
+    let _ = fs::remove_dir_all(&backup_root);
+    let _ = fs::remove_file(&backup_meta);
+    Ok(meta)
 }
 
 pub fn list_runtimes(
@@ -741,6 +860,7 @@ pub fn add_runtime(
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
     let name = validate_name(&options.name, "Runtime name")?;
+    let _lock = lock_runtime(&name, env, cwd)?;
     let meta_path = runtime_meta_path(&name, env, cwd)?;
     if path_exists(&meta_path) {
         return Err(format!("runtime \"{name}\" already exists"));
@@ -797,7 +917,9 @@ pub fn remove_runtime(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
-    let meta = get_runtime(name, env, cwd)?;
+    let name = validate_name(name, "Runtime name")?;
+    let _lock = lock_runtime(&name, env, cwd)?;
+    let meta = get_runtime(&name, env, cwd)?;
     let path = runtime_meta_path(&meta.name, env, cwd)?;
     if let Some(install_root) = meta.install_root.as_deref() {
         let expected_root = runtime_install_root(&meta.name, env, cwd)?;
@@ -928,7 +1050,7 @@ pub(crate) fn install_runtime_from_local_openclaw_build(
         ensure_dir(&target.install_files)?;
         let description = trim_description(options.description)
             .or_else(|| Some(default_local_build_description(&version, commit.as_deref())));
-        let meta = install_runtime_from_openclaw_package_archive(
+        let meta = stage_runtime_from_openclaw_package_archive(
             &target,
             &archive_path,
             RuntimeSourceDetails {
@@ -941,12 +1063,8 @@ pub(crate) fn install_runtime_from_local_openclaw_build(
             },
             description,
             context,
-        );
-        if meta.is_err() {
-            let _ = fs::remove_file(&target.meta_path);
-            let _ = fs::remove_dir_all(&target.install_root);
-        }
-        meta
+        )?;
+        publish_runtime(target, meta)
     })();
 
     let _ = fs::remove_dir_all(&pack_dir);
@@ -959,7 +1077,6 @@ pub fn install_runtime_from_release(
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
     let name = validate_name(&options.name, "Runtime name")?;
-    let target = prepare_runtime_install_target(name, options.force, env, cwd)?;
 
     let manifest = load_release_manifest(&options.manifest_url)?;
     let release = select_release(
@@ -967,6 +1084,17 @@ pub fn install_runtime_from_release(
         options.version.as_deref(),
         options.channel.as_deref(),
     )?;
+    let source_sha256 = release
+        .sha256
+        .as_deref()
+        .ok_or_else(|| {
+            format!(
+                "runtime release \"{}\" is missing required sha256 integrity",
+                release.version
+            )
+        })
+        .and_then(normalize_sha256)?;
+    let target = prepare_runtime_install_target(name, options.force, env, cwd)?;
     let (selector_kind, selector_value) =
         match (options.version.as_deref(), options.channel.as_deref()) {
             (Some(version), None) => (
@@ -995,7 +1123,7 @@ pub fn install_runtime_from_release(
         RuntimeSourceDetails {
             url: Some(release.url),
             manifest_url: Some(options.manifest_url),
-            sha256: release.sha256,
+            sha256: Some(source_sha256),
             ..RuntimeSourceDetails::default()
         },
         release_details,
@@ -1066,10 +1194,19 @@ pub(crate) fn install_runtime_from_selected_official_openclaw_release(
     description: Option<String>,
     context: InstallContext<'_>,
 ) -> Result<RuntimeMeta, String> {
+    let source_integrity = release
+        .integrity
+        .as_deref()
+        .ok_or_else(|| {
+            format!(
+                "official OpenClaw release \"{}\" is missing required sha512 integrity",
+                release.version
+            )
+        })
+        .and_then(normalize_file_integrity)?;
     let target = prepare_runtime_install_target(name, force, context.env, context.cwd)?;
     let description = trim_description(description)
         .or_else(|| Some(format!("Official OpenClaw release {}", release.version)));
-    let source_integrity = release.integrity.clone();
     let source = RuntimeSourceDetails {
         url: Some(release.tarball_url),
         manifest_url: Some(releases_url),

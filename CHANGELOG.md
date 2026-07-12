@@ -26,3 +26,7 @@ All notable changes to OCM are documented here.
 - Preserve uncommitted dev worktrees and reject unrelated checkout collisions by requiring exact Git worktree registration before reuse or removal.
 - Make single and merged log following rotation-safe and byte-safe, preserving split or invalid UTF-8, multiline record ordering, and boundaries around unterminated records.
 - Prevent overlapping source watches, remove the unleased override mutation path, reclaim stale watch locks, preserve terminal job control, handle termination signals, and restore background-service policy when takeover cannot stop or exits with an error.
+- Verify managed Node.js archives against pinned release checksums and serialize bootstrap so concurrent processes cannot delete a valid toolchain.
+- Preserve working runtimes until replacement artifacts, dependencies, and metadata are ready; require release integrity and reject unsafe artifact names.
+- Write private service definitions, preserve existing service-directory modes, escape systemd specifiers, reject directive injection, and fail closed on unknown launchd users or cross-store service ownership.
+- Serialize supervisor restart requests, restore service policy after failed reconciliation, preserve raw warnings, and fail upgrades when a gateway restart cannot be observed.

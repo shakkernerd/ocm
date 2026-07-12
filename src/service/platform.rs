@@ -1,18 +1,22 @@
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use crate::store::{display_path, resolve_user_home};
+use crate::store::{display_path, lock_file, resolve_user_home};
 
 pub(crate) const OCM_SERVICE_LABEL: &str = "ai.openclaw.ocm";
 const SERVICE_MANAGER_OVERRIDE: &str = "OCM_INTERNAL_SERVICE_MANAGER";
 const LAUNCHCTL_BIN_OVERRIDE: &str = "OCM_INTERNAL_LAUNCHCTL_BIN";
 const SYSTEMCTL_BIN_OVERRIDE: &str = "OCM_INTERNAL_SYSTEMCTL_BIN";
-const SERVICE_DIR_MODE: u32 = 0o755;
-const SERVICE_FILE_MODE: u32 = 0o644;
+const ID_BIN_OVERRIDE: &str = "OCM_INTERNAL_ID_BIN";
+const SERVICE_DIR_MODE: u32 = 0o700;
+const SERVICE_FILE_MODE: u32 = 0o600;
 const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS: u32 = 1;
 const LAUNCH_AGENT_UMASK_DECIMAL: u32 = 0o077;
 
@@ -192,7 +196,7 @@ pub(crate) fn write_managed_service_definition(
     definition: &ManagedServiceDefinition,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    ensure_secure_dir(
+    ensure_private_dir(
         &definition
             .stdout_path
             .parent()
@@ -204,7 +208,7 @@ pub(crate) fn write_managed_service_definition(
                 )
             })?,
     )?;
-    ensure_secure_dir(
+    ensure_private_dir(
         &definition
             .stderr_path
             .parent()
@@ -222,7 +226,10 @@ pub(crate) fn write_managed_service_definition(
             display_path(&definition.definition_path)
         ));
     };
-    ensure_secure_dir(parent)?;
+    ensure_service_definition_dir(parent)?;
+    let lock_path = definition.definition_path.with_extension("lock");
+    let _lock = lock_file(&lock_path, "managed service definition")?;
+    validate_existing_service_owner(definition, env)?;
 
     let raw = match service_manager_kind(env) {
         ServiceManagerKind::Launchd => build_launch_agent_plist(
@@ -238,14 +245,55 @@ pub(crate) fn write_managed_service_definition(
             &definition.description,
             &definition.program_arguments,
             &definition.working_directory,
+            &definition.stdout_path,
+            &definition.stderr_path,
             &definition.environment,
-        ),
+            systemd_output_mode(env),
+        )?,
         ServiceManagerKind::Unsupported => {
             return Err(unsupported_service_manager_message().to_string());
         }
     };
-    fs::write(&definition.definition_path, raw).map_err(|error| error.to_string())?;
-    set_mode(&definition.definition_path, SERVICE_FILE_MODE)
+    write_private_service_file(&definition.definition_path, raw.as_bytes())
+}
+
+fn validate_existing_service_owner(
+    definition: &ManagedServiceDefinition,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    if !definition.definition_path.exists() {
+        return Ok(());
+    }
+    let Some(ocm_home) = definition.environment.get("OCM_HOME") else {
+        return Ok(());
+    };
+    let raw = fs::read_to_string(&definition.definition_path).map_err(|error| {
+        format!(
+            "failed to read existing service definition {}: {error}",
+            display_path(&definition.definition_path)
+        )
+    })?;
+    let owner_markers = match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => vec![format!(
+            "<key>OCM_HOME</key>\n      <string>{}</string>",
+            plist_escape(ocm_home)
+        )],
+        ServiceManagerKind::SystemdUser => vec![
+            format!("Environment=\"OCM_HOME={}\"", systemd_escape(ocm_home)),
+            format!(
+                "Environment=\"OCM_HOME={}\"",
+                systemd_legacy_escape(ocm_home)
+            ),
+        ],
+        ServiceManagerKind::Unsupported => return Ok(()),
+    };
+    if owner_markers.iter().any(|marker| raw.contains(marker)) {
+        return Ok(());
+    }
+    Err(format!(
+        "the managed OCM service at {} is already bound to a different OCM_HOME; stop and uninstall that service before activating this store",
+        display_path(&definition.definition_path)
+    ))
 }
 
 pub(crate) fn activate_managed_service(
@@ -308,8 +356,22 @@ fn build_systemd_unit(
     description: &str,
     program_arguments: &[String],
     working_directory: &Path,
+    stdout_path: &Path,
+    stderr_path: &Path,
     environment: &BTreeMap<String, String>,
-) -> String {
+    output_mode: SystemdOutputMode,
+) -> Result<String, String> {
+    validate_systemd_value("Description", description)?;
+    validate_systemd_value("WorkingDirectory", &display_path(working_directory))?;
+    validate_systemd_value("StandardOutput", &display_path(stdout_path))?;
+    validate_systemd_value("StandardError", &display_path(stderr_path))?;
+    for argument in program_arguments {
+        validate_systemd_value("ExecStart", argument)?;
+    }
+    for (key, value) in environment {
+        validate_systemd_environment_key(key)?;
+        validate_systemd_value("Environment value", value)?;
+    }
     let exec_start = program_arguments
         .iter()
         .map(|arg| systemd_quote(arg))
@@ -333,13 +395,58 @@ fn build_systemd_unit(
         format!("{environment_lines}\n")
     };
 
-    format!(
-        "[Unit]\nDescription={}\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory={}\nExecStart={}\n{}Restart=always\nRestartSec=1\nUMask=0077\n\n[Install]\nWantedBy=default.target\n",
+    Ok(format!(
+        "[Unit]\nDescription={}\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory={}\nExecStart={}\n{}StandardOutput={}\nStandardError={}\nRestart=always\nRestartSec=1\nUMask=0077\n\n[Install]\nWantedBy=default.target\n",
         systemd_escape(description),
         systemd_quote(&display_path(working_directory)),
         exec_start,
         environment_block,
-    )
+        systemd_quote(&systemd_output_target(stdout_path, output_mode)),
+        systemd_quote(&systemd_output_target(stderr_path, output_mode)),
+    ))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SystemdOutputMode {
+    Journal,
+    Append,
+}
+
+fn systemd_output_mode(env: &BTreeMap<String, String>) -> SystemdOutputMode {
+    let systemctl = env
+        .get(SYSTEMCTL_BIN_OVERRIDE)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("systemctl");
+    let version = Command::new(systemctl)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| systemd_version(&output.stdout));
+    systemd_output_mode_for_version(version)
+}
+
+fn systemd_version(stdout: &[u8]) -> Option<u32> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|version| version.parse::<u32>().ok())
+}
+
+fn systemd_output_mode_for_version(version: Option<u32>) -> SystemdOutputMode {
+    match version {
+        Some(240..) => SystemdOutputMode::Append,
+        _ => SystemdOutputMode::Journal,
+    }
+}
+
+fn systemd_output_target(path: &Path, mode: SystemdOutputMode) -> String {
+    match mode {
+        SystemdOutputMode::Journal => "journal".to_string(),
+        SystemdOutputMode::Append => format!("append:{}", display_path(path)),
+    }
 }
 
 fn plist_escape(value: &str) -> String {
@@ -351,9 +458,70 @@ fn plist_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn ensure_secure_dir(path: &Path) -> Result<(), String> {
+fn ensure_private_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|error| error.to_string())?;
     set_mode(path, SERVICE_DIR_MODE)
+}
+
+fn ensure_service_definition_dir(path: &Path) -> Result<(), String> {
+    let existed = path.exists();
+    fs::create_dir_all(path).map_err(|error| error.to_string())?;
+    if existed {
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(path)
+                .map_err(|error| error.to_string())?
+                .permissions()
+                .mode();
+            let writable_by_others = mode & 0o022 != 0;
+            let sticky = mode & 0o1000 != 0;
+            if writable_by_others && !sticky {
+                return Err(format!(
+                    "service definition directory {} is group/world-writable; remove those write permissions before installing the service",
+                    display_path(path)
+                ));
+            }
+        }
+        return Ok(());
+    }
+    set_mode(path, SERVICE_DIR_MODE)
+}
+
+fn write_private_service_file(path: &Path, raw: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("service definition has no parent: {}", display_path(path)))?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            format!(
+                "service definition has no file name: {}",
+                display_path(path)
+            )
+        })?;
+    let temp_path = parent.join(format!(
+        ".{file_name}.tmp-{}-{}",
+        std::process::id(),
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+    ));
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(SERVICE_FILE_MODE);
+    let mut file = options
+        .open(&temp_path)
+        .map_err(|error| error.to_string())?;
+    let result = (|| {
+        file.write_all(raw).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        set_mode(&temp_path, SERVICE_FILE_MODE)?;
+        fs::rename(&temp_path, path).map_err(|error| error.to_string())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
 }
 
 fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
@@ -377,7 +545,7 @@ fn activate_launchd_service(
     definition_path: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let domain = gui_domain();
+    let domain = gui_domain(env)?;
     let definition_path = display_path(definition_path);
     let target = format!("{domain}/{label}");
     let _ = run_launchctl(env, ["bootout", target.as_str()]);
@@ -434,20 +602,30 @@ fn activate_systemd_user_service(
     Ok(())
 }
 
-fn gui_domain() -> String {
-    Command::new("id")
+fn gui_domain(env: &BTreeMap<String, String>) -> Result<String, String> {
+    let id_bin = env
+        .get(ID_BIN_OVERRIDE)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("/usr/bin/id");
+    Command::new(id_bin)
         .arg("-u")
         .output()
-        .ok()
-        .filter(|output| output.status.success())
+        .map_err(|error| {
+            format!("failed to determine the current UID with \"{id_bin} -u\": {error}")
+        })
         .and_then(|output| {
+            if !output.status.success() {
+                return Err(format!(
+                    "\"{id_bin} -u\" failed while determining the launchd domain"
+                ));
+            }
             String::from_utf8_lossy(&output.stdout)
                 .trim()
                 .parse::<u32>()
-                .ok()
+                .map(|uid| format!("gui/{uid}"))
+                .map_err(|_| format!("\"{id_bin} -u\" returned an invalid UID"))
         })
-        .map(|uid| format!("gui/{uid}"))
-        .unwrap_or_else(|| "gui/501".to_string())
 }
 
 fn run_launchctl<const N: usize>(
@@ -499,13 +677,37 @@ fn systemd_quote(value: &str) -> String {
 }
 
 fn systemd_escape(value: &str) -> String {
+    systemd_legacy_escape(value).replace('%', "%%")
+}
+
+fn systemd_legacy_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn validate_systemd_value(label: &str, value: &str) -> Result<(), String> {
+    if value.contains(['\r', '\n']) {
+        return Err(format!("{label} cannot contain a line break"));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(format!("{label} cannot contain control characters"));
+    }
+    Ok(())
+}
+
+fn validate_systemd_environment_key(key: &str) -> Result<(), String> {
+    validate_systemd_value("Environment key", key)?;
+    if key.is_empty() || key.contains('=') {
+        return Err("Environment key must be non-empty and cannot contain '='".to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -513,8 +715,9 @@ mod tests {
 
     use super::{
         ManagedServiceDefinition, ManagedServiceIdentity, OCM_SERVICE_LABEL, ServiceManagerKind,
-        managed_service_identity, managed_service_label, service_backend_support_error,
-        service_definition_dir, service_manager_kind, write_managed_service_definition,
+        gui_domain, managed_service_identity, managed_service_label, service_backend_support_error,
+        service_definition_dir, service_manager_kind, systemd_output_mode_for_version,
+        write_managed_service_definition,
     };
 
     #[test]
@@ -525,6 +728,30 @@ mod tests {
             "systemd-user".to_string(),
         );
         assert_eq!(service_manager_kind(&env), ServiceManagerKind::SystemdUser);
+    }
+
+    #[test]
+    fn systemd_output_modes_follow_supported_versions() {
+        assert_eq!(
+            systemd_output_mode_for_version(Some(235)),
+            super::SystemdOutputMode::Journal
+        );
+        assert_eq!(
+            systemd_output_mode_for_version(Some(236)),
+            super::SystemdOutputMode::Journal
+        );
+        assert_eq!(
+            systemd_output_mode_for_version(Some(239)),
+            super::SystemdOutputMode::Journal
+        );
+        assert_eq!(
+            systemd_output_mode_for_version(Some(240)),
+            super::SystemdOutputMode::Append
+        );
+        assert_eq!(
+            systemd_output_mode_for_version(None),
+            super::SystemdOutputMode::Journal
+        );
     }
 
     #[test]
@@ -621,6 +848,16 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn launchd_domain_never_guesses_a_uid() {
+        let env = BTreeMap::from([(
+            "OCM_INTERNAL_ID_BIN".to_string(),
+            "/definitely/missing/id".to_string(),
+        )]);
+        let error = gui_domain(&env).unwrap_err();
+        assert!(error.contains("failed to determine the current UID"));
     }
 
     #[test]
@@ -727,6 +964,10 @@ mod tests {
             "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
             "systemd-user".to_string(),
         );
+        env.insert(
+            "OCM_INTERNAL_SYSTEMCTL_BIN".to_string(),
+            "/definitely/missing/systemctl".to_string(),
+        );
 
         let definition = ManagedServiceDefinition {
             label: OCM_SERVICE_LABEL.to_string(),
@@ -752,6 +993,228 @@ mod tests {
         assert!(unit.contains("ExecStart=/bin/sh -lc"));
         assert!(unit.contains("WorkingDirectory=/tmp/work"));
         assert!(unit.contains("Environment=\"OPENCLAW_HOME=/tmp/demo\""));
+        assert!(unit.contains("StandardOutput=journal"));
+        assert!(unit.contains("StandardError=journal"));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_definition_and_logs_are_private_without_widening_existing_parent() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ocm-platform-private-{unique}"));
+        let definition_parent = root.join("home/.config/systemd/user");
+        fs::create_dir_all(&definition_parent).unwrap();
+        fs::set_permissions(&definition_parent, fs::Permissions::from_mode(0o750)).unwrap();
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), display_path(&root.join("home")));
+        env.insert("OCM_HOME".to_string(), display_path(&root.join("store")));
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "systemd-user".to_string(),
+        );
+        let definition = ManagedServiceDefinition {
+            label: OCM_SERVICE_LABEL.to_string(),
+            description: "test".to_string(),
+            definition_path: definition_parent.join("test.service"),
+            program_arguments: vec!["/bin/true".to_string()],
+            working_directory: root.join("store"),
+            stdout_path: root.join("logs/stdout.log"),
+            stderr_path: root.join("logs/stderr.log"),
+            environment: BTreeMap::new(),
+        };
+
+        write_managed_service_definition(&definition, &env).unwrap();
+
+        assert_eq!(
+            fs::metadata(&definition_parent)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o750
+        );
+        assert_eq!(
+            fs::metadata(&definition.definition_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(root.join("logs"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_definition_rejects_a_writable_existing_parent() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ocm-platform-writable-parent-{unique}"));
+        let definition_parent = root.join("home/.config/systemd/user");
+        fs::create_dir_all(&definition_parent).unwrap();
+        fs::set_permissions(&definition_parent, fs::Permissions::from_mode(0o775)).unwrap();
+        let env = BTreeMap::from([
+            ("HOME".to_string(), display_path(&root.join("home"))),
+            ("OCM_HOME".to_string(), display_path(&root.join("store"))),
+            (
+                "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+                "systemd-user".to_string(),
+            ),
+        ]);
+        let definition = ManagedServiceDefinition {
+            label: OCM_SERVICE_LABEL.to_string(),
+            description: "test".to_string(),
+            definition_path: definition_parent.join("test.service"),
+            program_arguments: vec!["/bin/true".to_string()],
+            working_directory: root.join("store"),
+            stdout_path: root.join("logs/stdout.log"),
+            stderr_path: root.join("logs/stderr.log"),
+            environment: BTreeMap::new(),
+        };
+
+        let error = write_managed_service_definition(&definition, &env).unwrap_err();
+        assert!(error.contains("group/world-writable"));
+        assert!(!definition.definition_path.exists());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn systemd_definition_escapes_specifiers_and_rejects_line_breaks() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ocm-platform-systemd-escape-{unique}"));
+        fs::create_dir_all(root.join("home")).unwrap();
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), display_path(&root.join("home")));
+        env.insert("OCM_HOME".to_string(), display_path(&root.join("store")));
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "systemd-user".to_string(),
+        );
+        let mut definition = ManagedServiceDefinition {
+            label: OCM_SERVICE_LABEL.to_string(),
+            description: "OCM %p".to_string(),
+            definition_path: root.join("home/.config/systemd/user/test.service"),
+            program_arguments: vec!["/tmp/%p/ocm".to_string()],
+            working_directory: root.join("store-%p"),
+            stdout_path: root.join("logs/%p.stdout.log"),
+            stderr_path: root.join("logs/%p.stderr.log"),
+            environment: BTreeMap::from([("VALUE".to_string(), "%p".to_string())]),
+        };
+
+        write_managed_service_definition(&definition, &env).unwrap();
+        let unit = fs::read_to_string(&definition.definition_path).unwrap();
+        assert!(unit.contains("Description=OCM %%p"), "{unit}");
+        assert!(unit.contains("/tmp/%%p/ocm"), "{unit}");
+        assert!(unit.contains("VALUE=%%p"), "{unit}");
+
+        definition.description = "bad\nRestart=no".to_string();
+        let error = write_managed_service_definition(&definition, &env).unwrap_err();
+        assert!(error.contains("Description cannot contain a line break"));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn stable_service_identity_rejects_a_different_store_owner() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ocm-platform-owner-{unique}"));
+        fs::create_dir_all(root.join("home")).unwrap();
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), display_path(&root.join("home")));
+        env.insert("OCM_HOME".to_string(), display_path(&root.join("store-a")));
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "systemd-user".to_string(),
+        );
+        let definition_path = root.join("home/.config/systemd/user/ai.openclaw.ocm.service");
+        let definition = ManagedServiceDefinition {
+            label: OCM_SERVICE_LABEL.to_string(),
+            description: "store a".to_string(),
+            definition_path: definition_path.clone(),
+            program_arguments: vec!["/bin/true".to_string()],
+            working_directory: root.join("store-a"),
+            stdout_path: root.join("store-a/logs/stdout.log"),
+            stderr_path: root.join("store-a/logs/stderr.log"),
+            environment: BTreeMap::from([(
+                "OCM_HOME".to_string(),
+                display_path(&root.join("store-a")),
+            )]),
+        };
+        write_managed_service_definition(&definition, &env).unwrap();
+        let original = fs::read_to_string(&definition_path).unwrap();
+
+        let mut other = definition;
+        other.description = "store b".to_string();
+        other.working_directory = root.join("store-b");
+        other
+            .environment
+            .insert("OCM_HOME".to_string(), display_path(&root.join("store-b")));
+        let error = write_managed_service_definition(&other, &env).unwrap_err();
+        assert!(error.contains("already bound to a different OCM_HOME"));
+        assert_eq!(fs::read_to_string(&definition_path).unwrap(), original);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn stable_service_identity_accepts_legacy_systemd_percent_escaping() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ocm-platform-owner-percent-{unique}"));
+        fs::create_dir_all(root.join("home")).unwrap();
+        let store = root.join("store%1");
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), display_path(&root.join("home")));
+        env.insert("OCM_HOME".to_string(), display_path(&store));
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "systemd-user".to_string(),
+        );
+        let definition = ManagedServiceDefinition {
+            label: OCM_SERVICE_LABEL.to_string(),
+            description: "percent store".to_string(),
+            definition_path: root.join("home/.config/systemd/user/ai.openclaw.ocm.service"),
+            program_arguments: vec!["/bin/true".to_string()],
+            working_directory: store.clone(),
+            stdout_path: store.join("logs/stdout.log"),
+            stderr_path: store.join("logs/stderr.log"),
+            environment: BTreeMap::from([("OCM_HOME".to_string(), display_path(&store))]),
+        };
+
+        write_managed_service_definition(&definition, &env).unwrap();
+        let current = fs::read_to_string(&definition.definition_path).unwrap();
+        let legacy = current.replace("store%%1", "store%1");
+        fs::write(&definition.definition_path, legacy).unwrap();
+
+        write_managed_service_definition(&definition, &env).unwrap();
+        let rewritten = fs::read_to_string(&definition.definition_path).unwrap();
+        assert!(rewritten.contains("store%%1"));
 
         fs::remove_dir_all(&root).unwrap();
     }
