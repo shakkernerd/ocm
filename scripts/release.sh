@@ -405,6 +405,6 @@ cat <<EOF
 Release prep complete for ${tag}.
 
 Next:
-  1. Run: gh workflow run release.yml --ref main -f tag=${tag}
+  1. Run: gh api --method POST 'repos/{owner}/{repo}/dispatches' -f event_type=release -F 'client_payload[tag]=${tag}'
   2. The workflow will verify ${tag}, build every archive, and publish only after all assets and SHA256SUMS are uploaded
 EOF

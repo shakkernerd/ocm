@@ -1,18 +1,15 @@
 name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Signed release tag to publish
-        required: true
-        type: string
+  repository_dispatch:
+    types:
+      - release
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag }}
+  group: release-${{ github.event.client_payload.tag }}
   cancel-in-progress: false
 
 env:
@@ -35,7 +32,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.client_payload.tag }}
         run: |
           verified_commit="$(
             ./scripts/verify-release-tag.sh \
@@ -111,7 +108,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
           RELEASE_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.client_payload.tag }}
         run: |
           ./scripts/verify-release-tag.sh \
             --repo "$RELEASE_REPO" \
