@@ -741,6 +741,9 @@ impl Cli {
             .spawn()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
         if let Err(error) = process_guard.assign_and_start(&child) {
+            #[cfg(windows)]
+            return Err(stop_suspended_source_watch_after_error(&mut child, error));
+            #[cfg(not(windows))]
             return Err(stop_source_watch_after_error(
                 &mut child,
                 &process_guard,
@@ -814,10 +817,13 @@ impl Cli {
         } else {
             wait_for_tee_threads(tee_threads)
         };
-        let clear_result = self
-            .environment_service()
-            .clear_source_watch_override(&meta.name, &source_watch.token)
-            .map(|_| ());
+        let clear_result = if source_watch_allows_override_clear(&status_result) {
+            self.environment_service()
+                .clear_source_watch_override(&meta.name, &source_watch.token)
+                .map(|_| ())
+        } else {
+            Ok(())
+        };
 
         let status = combine_source_watch_cleanup_results(status_result, tee_result, clear_result)?;
         Ok(source_watch_exit_code(
@@ -1149,10 +1155,12 @@ fn stop_source_watch_child(
             }
         }
         let _ = signal_unix_process_group(child.id(), "STOP");
-        process_guard.stop_remaining(child.id())?;
-        return child
+        let _ = signal_unix_process_group(child.id(), "KILL");
+        let status = child
             .wait()
-            .map_err(|error| format!("failed waiting for stopped source watch: {error}"));
+            .map_err(|error| format!("failed waiting for stopped source watch: {error}"))?;
+        wait_for_unix_process_group_to_stop(child.id())?;
+        return Ok(status);
     }
 
     #[cfg(windows)]
@@ -1270,6 +1278,24 @@ fn stop_source_watch_after_error(
     }
 }
 
+#[cfg(windows)]
+fn stop_suspended_source_watch_after_error(
+    child: &mut std::process::Child,
+    primary_error: String,
+) -> String {
+    if let Err(error) = child.kill() {
+        return format!(
+            "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; failed terminating a suspended watcher: {error}; setup also failed: {primary_error}"
+        );
+    }
+    match child.wait() {
+        Ok(_) => primary_error,
+        Err(error) => format!(
+            "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; failed reaping a suspended watcher: {error}; setup also failed: {primary_error}"
+        ),
+    }
+}
+
 fn source_watch_exit_code(status_code: Option<i32>, stop_requested: bool) -> i32 {
     if stop_requested {
         130
@@ -1279,6 +1305,15 @@ fn source_watch_exit_code(status_code: Option<i32>, stop_requested: bool) -> i32
 }
 
 fn source_watch_allows_service_restore(watch_result: &Result<i32, String>) -> bool {
+    !matches!(
+        watch_result,
+        Err(error) if error.starts_with(SOURCE_WATCH_TREE_ACTIVE_ERROR)
+    )
+}
+
+fn source_watch_allows_override_clear(
+    watch_result: &Result<std::process::ExitStatus, String>,
+) -> bool {
     !matches!(
         watch_result,
         Err(error) if error.starts_with(SOURCE_WATCH_TREE_ACTIVE_ERROR)

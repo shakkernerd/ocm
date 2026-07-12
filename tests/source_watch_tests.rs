@@ -243,6 +243,42 @@ fn source_watch_override_with_a_live_reused_pid_is_removed_without_its_lease() {
     assert!(!override_path.exists());
 }
 
+#[test]
+fn leased_source_watch_remains_active_after_its_wrapper_pid_exits() {
+    let root = TestDir::new("source-watch-descendant-lease");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let source_repo = create_source_repo(&root);
+    let env = ocm_env(&root);
+    create_runtime_backed_env(&root, &cwd, &env);
+    let _source_watch = lock_source_watch(&root);
+    let override_path = root.child("ocm-home/source-watch/demo.json");
+    let lease_token = format!("lease-{}", "<redacted>");
+    fs::write(
+        &override_path,
+        json!({
+            "kind": "ocm-source-watch-override",
+            "envName": "demo",
+            "repoRoot": path_string(&source_repo),
+            "watchPid": u32::MAX,
+            "token": lease_token,
+            "startedAt": "2026-06-17T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let resolve = run_ocm(
+        &cwd,
+        &env,
+        &["env", "resolve", "demo", "--json", "--", "status"],
+    );
+    assert!(resolve.status.success(), "{}", stderr(&resolve));
+    let resolved: Value = serde_json::from_str(&stdout(&resolve)).unwrap();
+    assert_eq!(resolved["bindingKind"], "source-watch");
+    assert!(override_path.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn live_legacy_source_watch_remains_active_until_its_process_exits() {

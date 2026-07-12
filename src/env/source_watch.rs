@@ -259,7 +259,12 @@ impl<'a> EnvironmentService<'a> {
                 Ok(None)
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if is_valid_source_watch_metadata(&meta, &env_name) {
+                let metadata_valid = if is_leased_source_watch(&meta) {
+                    is_valid_source_watch_structure(&meta, &env_name)
+                } else {
+                    is_valid_source_watch_metadata(&meta, &env_name)
+                };
+                if metadata_valid {
                     Ok(Some(meta))
                 } else {
                     Ok(None)
@@ -278,6 +283,10 @@ fn is_leased_source_watch(meta: &SourceWatchOverride) -> bool {
 }
 
 fn is_valid_source_watch_metadata(meta: &SourceWatchOverride, env_name: &str) -> bool {
+    is_valid_source_watch_structure(meta, env_name) && is_process_alive(meta.watch_pid)
+}
+
+fn is_valid_source_watch_structure(meta: &SourceWatchOverride, env_name: &str) -> bool {
     meta.kind == SOURCE_WATCH_OVERRIDE_KIND
         && meta.env_name == env_name
         && !meta.repo_root.trim().is_empty()
@@ -285,7 +294,6 @@ fn is_valid_source_watch_metadata(meta: &SourceWatchOverride, env_name: &str) ->
         && meta.watch_pid > 0
         && Path::new(&meta.repo_root).join("openclaw.mjs").is_file()
         && Path::new(&meta.repo_root).join("extensions").is_dir()
-        && is_process_alive(meta.watch_pid)
 }
 
 fn open_source_watch_lock(lock_path: &Path) -> Result<File, String> {
