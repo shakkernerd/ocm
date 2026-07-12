@@ -112,11 +112,7 @@ pub fn list_services(
             &meta,
             env,
             cwd,
-            snapshot.planned_children.get(&meta.name),
-            snapshot.skipped_envs.get(&meta.name),
-            snapshot.runtime_children.get(&meta.name),
-            snapshot.runtime_services.get(&meta.name),
-            &snapshot.daemon,
+            &snapshot,
         )?);
     }
 
@@ -140,17 +136,7 @@ pub fn service_status_fast(
     let meta = env_service.get(name)?;
     let snapshot = load_service_snapshot(env, cwd)?;
 
-    build_service_summary(
-        &env_service,
-        &meta,
-        env,
-        cwd,
-        snapshot.planned_children.get(name),
-        snapshot.skipped_envs.get(name),
-        snapshot.runtime_children.get(name),
-        snapshot.runtime_services.get(name),
-        &snapshot.daemon,
-    )
+    build_service_summary(&env_service, &meta, env, cwd, &snapshot)
 }
 
 fn load_service_snapshot(
@@ -192,12 +178,13 @@ fn build_service_summary(
     meta: &EnvMeta,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-    planned_child: Option<&SupervisorChildSpec>,
-    skipped_reason: Option<&String>,
-    runtime_child: Option<&SupervisorRuntimeChild>,
-    runtime_service: Option<&SupervisorRuntimeService>,
-    daemon: &SupervisorDaemonSummary,
+    snapshot: &ServiceSnapshot,
 ) -> Result<ServiceSummary, String> {
+    let planned_child = snapshot.planned_children.get(&meta.name);
+    let skipped_reason = snapshot.skipped_envs.get(&meta.name);
+    let runtime_child = snapshot.runtime_children.get(&meta.name);
+    let runtime_service = snapshot.runtime_services.get(&meta.name);
+    let daemon = &snapshot.daemon;
     let (gateway_port, _) = env_service.resolve_effective_gateway_port(meta)?;
     let resolved_process = resolve_summary_process(env_service, &meta.name, planned_child);
     let resolved_issue = resolved_process
@@ -216,17 +203,17 @@ fn build_service_summary(
     let gateway_state = runtime_service
         .map(reported_gateway_state)
         .unwrap_or_else(|| service_state_label(installed, desired_running, running));
-    let issue = service_issue(
+    let issue = service_issue(ServiceIssueContext {
         installed,
         desired_running,
         daemon,
-        &gateway_state,
+        gateway_state: &gateway_state,
         gateway_port,
         foreign_listener,
         skipped_reason,
         runtime_service,
         resolved_issue,
-    );
+    });
 
     Ok(ServiceSummary {
         env_name: meta.name.clone(),
@@ -356,17 +343,30 @@ fn binding_from_meta(meta: &EnvMeta) -> Option<(String, String)> {
         })
 }
 
-fn service_issue(
+struct ServiceIssueContext<'a> {
     installed: bool,
     desired_running: bool,
-    daemon: &SupervisorDaemonSummary,
-    gateway_state: &str,
+    daemon: &'a SupervisorDaemonSummary,
+    gateway_state: &'a str,
     gateway_port: u32,
     foreign_listener: bool,
-    skipped_reason: Option<&String>,
-    runtime_service: Option<&SupervisorRuntimeService>,
+    skipped_reason: Option<&'a String>,
+    runtime_service: Option<&'a SupervisorRuntimeService>,
     resolved_issue: Option<String>,
-) -> Option<String> {
+}
+
+fn service_issue(context: ServiceIssueContext<'_>) -> Option<String> {
+    let ServiceIssueContext {
+        installed,
+        desired_running,
+        daemon,
+        gateway_state,
+        gateway_port,
+        foreign_listener,
+        skipped_reason,
+        runtime_service,
+        resolved_issue,
+    } = context;
     if let Some(issue) = resolved_issue {
         return Some(issue);
     }
@@ -604,7 +604,7 @@ fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
 
 #[cfg(test)]
 mod service_issue_tests {
-    use super::{service_issue, tcp_port_reachable};
+    use super::{ServiceIssueContext, service_issue, tcp_port_reachable};
     use crate::supervisor::SupervisorDaemonSummary;
     use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 
@@ -626,9 +626,17 @@ mod service_issue_tests {
             stderr_path: "/tmp/stderr.log".to_string(),
         };
 
-        let issue = service_issue(
-            true, false, &daemon, "stopped", 19_566, true, None, None, None,
-        );
+        let issue = service_issue(ServiceIssueContext {
+            installed: true,
+            desired_running: false,
+            daemon: &daemon,
+            gateway_state: "stopped",
+            gateway_port: 19_566,
+            foreign_listener: true,
+            skipped_reason: None,
+            runtime_service: None,
+            resolved_issue: None,
+        });
 
         assert_eq!(
             issue.as_deref(),
