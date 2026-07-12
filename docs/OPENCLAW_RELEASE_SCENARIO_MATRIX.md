@@ -11,15 +11,17 @@ failed.
 
 ## Operating Rules
 
-- Use OCM from `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm`.
+- Set `OCM_BIN=/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm/target/debug/ocm`,
+  verify it is executable, and use `"$OCM_BIN"` for every OCM command.
 - Fetch from the OpenClaw source repo at
   `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`,
   resolve one immutable `origin/main` commit, and create a unique detached
   worktree for the run.
 - Do not use `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/openclaw`
   or `../openclaw`; that is an active working repo.
-- Build a uniquely named package-shaped runtime with `ocm runtime build-local`
-  from the detached worktree. Use that runtime for the matrix.
+- Build a uniquely named package-shaped runtime with
+  `"$OCM_BIN" runtime build-local` from the detached worktree. Use that runtime
+  for the matrix.
 - Use the detached worktree's `openclaw.mjs` only for the S02 direct boot smoke.
 - Do not use `pnpm openclaw` as the main release-validation path.
 - Use the local built OCM binary, usually `<ocm>/target/debug/ocm`.
@@ -31,8 +33,9 @@ failed.
 - Treat copied and cloned state as secret-bearing. Keep services stopped and
   make no external requests by default. Use mocks, credential-free fresh envs,
   or dedicated test accounts unless the run explicitly authorizes real access.
-- Use `ocm env clone` only when clearing sessions, logs, and backups is
-  intended. Use a copied `.openclaw` home plus `ocm adopt import` for S20.
+- Use `"$OCM_BIN" env clone` only when clearing sessions, logs, and backups is
+  intended. Use a copied `.openclaw` home plus `"$OCM_BIN" adopt import` for
+  S20.
 - Keep the report quiet: summarize pass/fail per scenario, then include details
   only for failures, blocked scenarios, or release-risk notes.
 - Redact credentials, private endpoints, user identifiers, and secret-bearing
@@ -51,24 +54,28 @@ every service side effect as an OCM bug.
 
 Use OCM this way during validation:
 
-- Create or bind envs with `ocm start`, `ocm dev`, `ocm env clone`,
-  `ocm adopt`, and `ocm migrate` as appropriate.
-- Run OpenClaw inside an env with `ocm @<env> -- <openclaw args>`.
+- Create or bind envs with `"$OCM_BIN" start`, `"$OCM_BIN" dev`,
+  `"$OCM_BIN" env clone`, `"$OCM_BIN" adopt`, and `"$OCM_BIN" migrate` as
+  appropriate.
+- Run OpenClaw inside an env with
+  `"$OCM_BIN" @<env> -- <openclaw args>`.
 - OCM env runs should inject `OPENCLAW_SERVICE_REPAIR_POLICY=external` so
   OpenClaw can report service health but does not mutate global/user-level
   service registrations from `doctor --fix`.
-- Inspect env services with `ocm service status <env>`, `ocm service list`,
-  and `ocm logs <env>`.
-- Simulate upgrades with `ocm upgrade simulate <env> --to <target>`.
-- Use `ocm help start`, `ocm help service`, `ocm help logs`, `ocm help
-  upgrade`, and `ocm help env` when the command shape is unclear.
+- Inspect env services with `"$OCM_BIN" service status <env>`,
+  `"$OCM_BIN" service list`, and `"$OCM_BIN" logs <env>`.
+- Simulate upgrades with
+  `"$OCM_BIN" upgrade simulate <env> --to <target>`.
+- Use `"$OCM_BIN" help start`, `"$OCM_BIN" help service`,
+  `"$OCM_BIN" help logs`, `"$OCM_BIN" help upgrade`, and
+  `"$OCM_BIN" help env` when the command shape is unclear.
 
 Service terminology:
 
 - OCM-managed service: background process policy/state owned by OCM for one
   environment.
 - OpenClaw service/gateway: OpenClaw's own gateway/service behavior, invoked
-  inside an OCM env through `ocm @<env> -- ...`.
+  inside an OCM env through `"$OCM_BIN" @<env> -- ...`.
 - LaunchAgent: macOS service registration. A test may intentionally create one,
   but it must match the scenario and be cleaned up.
 
@@ -182,7 +189,7 @@ What to test:
 - Run-specific `OCM_HOME` contains only the verified package runtime before the
   fresh env is created; it contains no prior env, snapshot, or supervisor
   state.
-- `ocm start <env> --runtime <run-runtime>` creates a usable env.
+- `"$OCM_BIN" start <env> --runtime <run-runtime>` creates a usable env.
 - First run writes only expected minimum config/state.
 - `openclaw --version`, `openclaw doctor`, `plugins list --json`, gateway
   status, and logs work.
@@ -201,13 +208,13 @@ What to test:
 
 - Copy the source env into the run root.
 - Import/adopt the copy into the run's OCM state.
-- Use `ocm env clone` only for scenarios that do not require sessions, logs, or
-  backups.
+- Use `"$OCM_BIN" env clone` only for scenarios that do not require sessions,
+  logs, or backups.
 - Keep the copied or cloned env service stopped while retained credentials are
   present.
 - Bind the fixture to the package-shaped runtime.
-- Run `ocm upgrade simulate <env> --to <run-worktree> --scenario current
-  --json`.
+- Run `"$OCM_BIN" upgrade simulate <env> --to <run-worktree> --scenario
+  current --json`.
 
 Run for:
 
@@ -223,8 +230,8 @@ Pass evidence:
 
 What to test:
 
-- `ocm upgrade --dry-run` previews without mutating env metadata, runtime
-  bindings, snapshots, service policy, or files.
+- `"$OCM_BIN" upgrade --dry-run` previews without mutating env metadata,
+  runtime bindings, snapshots, service policy, or files.
 - Failed upgrade paths roll back or clearly report retained changes when
   rollback is disabled.
 - Snapshot/backup references are usable.
@@ -244,7 +251,7 @@ Pass evidence:
 What to test:
 
 - Env resolves the intended runtime or launcher.
-- `ocm @<env> -- <command>` uses the selected OpenClaw artifact.
+- `"$OCM_BIN" @<env> -- <command>` uses the selected OpenClaw artifact.
 - Binding changes are visible in `env show`, status, and JSON output.
 - Clearing or replacing a binding does not leave stale execution paths.
 
@@ -417,7 +424,8 @@ Pass evidence:
 
 What to test:
 
-- `ocm logs <env>` and relevant OpenClaw log commands show current env logs.
+- `"$OCM_BIN" logs <env>` and relevant OpenClaw log commands show current env
+  logs.
 - JSON/raw log output is script-friendly.
 - Failed startup or plugin errors are visible without digging through random
   files.
@@ -494,8 +502,8 @@ Pass evidence:
 What to test:
 
 - Copy the source env's `.openclaw` directory into the run root and import that
-  copy with `ocm adopt import`. Do not use `ocm env clone`; clone intentionally
-  removes sessions, logs, and backups.
+  copy with `"$OCM_BIN" adopt import`. Do not use `"$OCM_BIN" env clone`;
+  clone intentionally removes sessions, logs, and backups.
 - Before upgrading, assert that at least one expected non-empty session fixture
   exists in the imported env and record its non-secret identifier.
 - Existing sessions, bindings, and conversation state can be read after upgrade.
@@ -613,7 +621,7 @@ What to test:
 - Temp OCM homes, copied envs, generated fixtures, worktrees, and services are
   removed when no longer needed.
 - Run-owned envs are destroyed before the run-owned package runtime is removed
-  with `ocm runtime remove`.
+  with `"$OCM_BIN" runtime remove`.
 - Every cleanup target carries the current run id or another explicit ownership
   marker.
 - Worktree status is inspected before removal; unclean or unowned worktrees are
