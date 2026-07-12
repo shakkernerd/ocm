@@ -1268,7 +1268,7 @@ impl SourceWatchProcessGuard {
         }
         #[cfg(unix)]
         {
-            let _ = signal_unix_process_group(root_pid, libc::SIGKILL)?;
+            let _ = signal_unix_process_group_for_cleanup(root_pid, libc::SIGKILL)?;
             return wait_for_unix_process_group_to_stop(root_pid);
         }
         #[cfg(not(any(unix, windows)))]
@@ -1390,9 +1390,9 @@ fn stop_source_watch_child(
                 thread::sleep(Duration::from_millis(50));
             }
         }
-        signal_unix_process_group(child.id(), libc::SIGSTOP)
+        signal_unix_process_group_for_cleanup(child.id(), libc::SIGSTOP)
             .map_err(SourceWatchError::unverified)?;
-        signal_unix_process_group(child.id(), libc::SIGKILL)
+        signal_unix_process_group_for_cleanup(child.id(), libc::SIGKILL)
             .map_err(SourceWatchError::unverified)?;
         let status = child.wait().map_err(|error| {
             SourceWatchError::unverified(format!(
@@ -1532,6 +1532,18 @@ fn signal_unix_process(pid: u32, signal: i32) -> Result<bool, String> {
 #[cfg(unix)]
 fn signal_unix_process_group(process_group: u32, signal: i32) -> Result<bool, String> {
     signal_unix_target(-(process_group as i32), signal)
+}
+
+#[cfg(unix)]
+fn signal_unix_process_group_for_cleanup(process_group: u32, signal: i32) -> Result<bool, String> {
+    match signal_unix_process_group(process_group, signal) {
+        Ok(signaled) => Ok(signaled),
+        Err(signal_error) => match unix_process_group_has_live_members(process_group) {
+            Ok(false) => Ok(false),
+            Ok(true) => Err(signal_error),
+            Err(verification_error) => Err(format!("{signal_error}; {verification_error}")),
+        },
+    }
 }
 
 #[cfg(unix)]
