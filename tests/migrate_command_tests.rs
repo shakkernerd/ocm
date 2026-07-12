@@ -613,7 +613,7 @@ fn migrate_does_not_bind_a_non_executable_openclaw_file_from_path() {
     let openclaw = bin_dir.join("openclaw");
     fs::write(&openclaw, "#!/bin/sh\nexit 0\n").unwrap();
     let mut permissions = fs::metadata(&openclaw).unwrap().permissions();
-    permissions.set_mode(0o001);
+    permissions.set_mode(0o000);
     fs::set_permissions(&openclaw, permissions).unwrap();
 
     let mut env = ocm_env(&root);
