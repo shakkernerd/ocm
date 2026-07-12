@@ -1857,7 +1857,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
             "Inspect OpenClaw releases",
             "Show releases from the official OpenClaw source or from a custom manifest without installing them.",
             vec![format!(
-                "{cmd} runtime releases [--manifest-url <url>] [--version <version> | --channel <channel>] [--json]"
+                "{cmd} runtime releases [--manifest-url <url>] [--version <version> | --channel <channel>] [--raw] [--json]"
             )],
             &[
                 (
@@ -1869,6 +1869,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                     "Select one release by explicit version",
                 ),
                 ("--channel <channel>", "Select one release by channel"),
+                ("--raw", "Force plain line output"),
                 ("--json", "Print releases as JSON"),
             ],
             vec![
