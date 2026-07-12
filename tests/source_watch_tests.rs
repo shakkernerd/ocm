@@ -133,6 +133,7 @@ fn lock_source_watch_with_id(root: &TestDir, lease_id: &str) -> SourceWatchFixtu
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(lock_path)
         .unwrap();
     FileExt::lock_exclusive(&lock_file).unwrap();
@@ -149,6 +150,7 @@ fn share_source_watch_lock_with_id(root: &TestDir, lease_id: &str) -> SourceWatc
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(lock_path)
         .unwrap();
     FileExt::lock_shared(&lock_file).unwrap();

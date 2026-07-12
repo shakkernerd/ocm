@@ -156,6 +156,7 @@ fn launcher_binding_and_removal_share_the_environment_registry_lock() {
         .with_extension("lock");
     let lock = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(lock_path)
