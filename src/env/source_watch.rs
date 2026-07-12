@@ -1,7 +1,9 @@
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -25,11 +27,16 @@ pub struct SourceWatchOverride {
     pub started_at: OffsetDateTime,
 }
 
-#[derive(Clone, Debug)]
-pub struct CreateSourceWatchOverrideOptions {
-    pub env_name: String,
-    pub repo_root: PathBuf,
-    pub watch_pid: u32,
+#[derive(Debug)]
+pub(crate) struct SourceWatchLease {
+    env_name: String,
+    lock_file: File,
+}
+
+impl Drop for SourceWatchLease {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.lock_file);
+    }
 }
 
 impl SourceWatchOverride {
@@ -47,21 +54,76 @@ impl SourceWatchOverride {
 }
 
 impl<'a> EnvironmentService<'a> {
-    pub fn create_source_watch_override(
+    pub(crate) fn acquire_source_watch_lease(
         &self,
-        options: CreateSourceWatchOverrideOptions,
+        env_name: &str,
+    ) -> Result<SourceWatchLease, String> {
+        let env_name = validate_name(env_name, "Environment name")?;
+        let override_path = source_watch_override_path(&env_name, self.env, self.cwd)?;
+        let lock_path = override_path.with_extension("lock");
+        if let Some(parent) = lock_path.parent() {
+            ensure_dir(parent)?;
+        }
+        let mut lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&lock_path)
+            .map_err(|error| {
+                format!(
+                    "failed opening source watch lock {}: {error}",
+                    display_path(&lock_path)
+                )
+            })?;
+        match FileExt::try_lock_exclusive(&lock_file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err(format!(
+                    "source watch for env \"{env_name}\" is already active or starting"
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed locking source watch for env \"{env_name}\": {error}"
+                ));
+            }
+        }
+
+        // Owning the OS lock proves any surviving metadata belongs to a dead
+        // lease, even if its child PID has since been reused by another process.
+        remove_file_if_present(&override_path)?;
+
+        lock_file
+            .set_len(0)
+            .and_then(|()| writeln!(lock_file, "{}", std::process::id()))
+            .map_err(|error| {
+                format!(
+                    "failed recording source watch lock {}: {error}",
+                    display_path(&lock_path)
+                )
+            })?;
+        Ok(SourceWatchLease {
+            env_name,
+            lock_file,
+        })
+    }
+
+    pub(crate) fn create_source_watch_override(
+        &self,
+        lease: &SourceWatchLease,
+        repo_root: &Path,
+        watch_pid: u32,
     ) -> Result<SourceWatchOverride, String> {
-        let env_name = validate_name(&options.env_name, "Environment name")?;
-        let path = source_watch_override_path(&env_name, self.env, self.cwd)?;
+        let path = source_watch_override_path(&lease.env_name, self.env, self.cwd)?;
         if let Some(parent) = path.parent() {
             ensure_dir(parent)?;
         }
-        let token = format!("{}-{}", options.watch_pid, now_utc().unix_timestamp_nanos());
+        let token = format!("{watch_pid}-{}", now_utc().unix_timestamp_nanos());
         let meta = SourceWatchOverride {
             kind: SOURCE_WATCH_OVERRIDE_KIND.to_string(),
-            env_name,
-            repo_root: display_path(&options.repo_root),
-            watch_pid: options.watch_pid,
+            env_name: lease.env_name.clone(),
+            repo_root: display_path(repo_root),
+            watch_pid,
             token,
             started_at: now_utc(),
         };
@@ -95,6 +157,7 @@ impl<'a> EnvironmentService<'a> {
     ) -> Result<Option<SourceWatchOverride>, String> {
         let env_name = validate_name(env_name, "Environment name")?;
         let path = source_watch_override_path(&env_name, self.env, self.cwd)?;
+        let lock_path = path.with_extension("lock");
         if !path.exists() {
             return Ok(None);
         }
@@ -105,7 +168,7 @@ impl<'a> EnvironmentService<'a> {
                 return Ok(None);
             }
         };
-        if !is_valid_source_watch_override(&meta, &env_name) {
+        if !is_valid_source_watch_override(&meta, &env_name, &lock_path)? {
             remove_file_if_present(&path)?;
             return Ok(None);
         }
@@ -113,15 +176,52 @@ impl<'a> EnvironmentService<'a> {
     }
 }
 
-fn is_valid_source_watch_override(meta: &SourceWatchOverride, env_name: &str) -> bool {
-    meta.kind == SOURCE_WATCH_OVERRIDE_KIND
+fn is_valid_source_watch_override(
+    meta: &SourceWatchOverride,
+    env_name: &str,
+    lock_path: &Path,
+) -> Result<bool, String> {
+    let metadata_valid = meta.kind == SOURCE_WATCH_OVERRIDE_KIND
         && meta.env_name == env_name
         && !meta.repo_root.trim().is_empty()
         && !meta.token.trim().is_empty()
         && meta.watch_pid > 0
         && Path::new(&meta.repo_root).join("openclaw.mjs").is_file()
         && Path::new(&meta.repo_root).join("extensions").is_dir()
-        && is_process_alive(meta.watch_pid)
+        && is_process_alive(meta.watch_pid);
+    if !metadata_valid {
+        return Ok(false);
+    }
+    source_watch_lease_is_active(lock_path)
+}
+
+fn source_watch_lease_is_active(lock_path: &Path) -> Result<bool, String> {
+    let lock_file = match OpenOptions::new().read(true).write(true).open(lock_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "failed opening source watch lock {}: {error}",
+                display_path(lock_path)
+            ));
+        }
+    };
+    match FileExt::try_lock_exclusive(&lock_file) {
+        Ok(()) => {
+            FileExt::unlock(&lock_file).map_err(|error| {
+                format!(
+                    "failed unlocking stale source watch lock {}: {error}",
+                    display_path(lock_path)
+                )
+            })?;
+            Ok(false)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) => Err(format!(
+            "failed checking source watch lock {}: {error}",
+            display_path(lock_path)
+        )),
+    }
 }
 
 fn remove_file_if_present(path: &Path) -> Result<(), String> {

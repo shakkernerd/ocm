@@ -8,13 +8,14 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::Cli;
 use super::render::RenderProfile;
-use crate::env::{CreateEnvironmentOptions, CreateSourceWatchOverrideOptions, EnvDevMeta, EnvMeta};
+use crate::env::{CreateEnvironmentOptions, EnvDevMeta, EnvMeta, SourceWatchLease};
 use crate::infra::process::run_direct;
 use crate::infra::shell::{build_openclaw_dev_source_env, build_openclaw_env};
 use crate::infra::terminal::{Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table};
@@ -162,6 +163,14 @@ impl Cli {
                 meta.name
             ));
         }
+        let source_watch_lease = if watch {
+            Some(
+                self.environment_service()
+                    .acquire_source_watch_lease(&meta.name)?,
+            )
+        } else {
+            None
+        };
         self.stderr_lines(render_dev_run_summary(
             &meta,
             created,
@@ -222,7 +231,7 @@ impl Cli {
                     ),
                     stderr_profile,
                 ));
-                self.service_service().stop(&meta.name)?;
+                self.stop_service_for_source_watch(&meta.name)?;
             }
             self.stderr_lines(render_dev_run_step(
                 "Watch",
@@ -233,21 +242,29 @@ impl Cli {
                 ),
                 stderr_profile,
             ));
-            let watch_result = self.run_dev_gateway_watch(&meta);
-            if watch_takes_over_service {
+            let watch_result = self.run_dev_gateway_watch(
+                &meta,
+                source_watch_lease
+                    .as_ref()
+                    .ok_or_else(|| "source watch lease is missing".to_string())?,
+            );
+            let restore_result = if watch_takes_over_service {
                 self.stderr_lines(render_dev_run_step(
                     "Restore",
                     format!("Starting background service for {}", meta.name),
                     stderr_profile,
                 ));
-                self.service_service().start(&meta.name)?;
-                self.stdout_lines(render_dev_service_restored(
-                    &meta,
-                    &self.command_example(),
-                    self.dev_stdout_profile(),
-                ));
-            }
-            return watch_result;
+                self.service_service().start(&meta.name).map(|_| {
+                    self.stdout_lines(render_dev_service_restored(
+                        &meta,
+                        &self.command_example(),
+                        self.dev_stdout_profile(),
+                    ));
+                })
+            } else {
+                Ok(())
+            };
+            return combine_watch_and_restore_results(watch_result, restore_result, &meta.name);
         }
 
         self.stderr_lines(render_dev_run_step(
@@ -307,6 +324,9 @@ impl Cli {
         let meta = self
             .environment_service()
             .apply_effective_gateway_port(existing)?;
+        let source_watch_lease = self
+            .environment_service()
+            .acquire_source_watch_lease(&meta.name)?;
         let stderr_profile = self.dev_stderr_profile();
         self.stderr_lines(render_source_watch_takeover_summary(
             &meta,
@@ -329,7 +349,7 @@ impl Cli {
                 ),
                 stderr_profile,
             ));
-            self.service_service().stop(&meta.name)?;
+            self.stop_service_for_source_watch(&meta.name)?;
         }
 
         self.stderr_lines(render_dev_run_step(
@@ -342,24 +362,46 @@ impl Cli {
             ),
             stderr_profile,
         ));
-        let watch_result = self.run_source_gateway_watch(&meta, &repo_root, true);
+        let watch_result =
+            self.run_source_gateway_watch(&meta, &repo_root, true, &source_watch_lease);
 
-        if restore_service {
+        let restore_result = if restore_service {
             self.stderr_lines(render_dev_run_step(
                 "Restore",
                 format!("Starting background service for {}", meta.name),
                 stderr_profile,
             ));
-            self.service_service().start(&meta.name)?;
-            self.stdout_lines(render_source_watch_service_restored(
-                &meta,
-                &repo_root,
-                &self.command_example(),
-                self.dev_stdout_profile(),
-            ));
-        }
+            self.service_service().start(&meta.name).map(|_| {
+                self.stdout_lines(render_source_watch_service_restored(
+                    &meta,
+                    &repo_root,
+                    &self.command_example(),
+                    self.dev_stdout_profile(),
+                ));
+            })
+        } else {
+            Ok(())
+        };
 
-        watch_result
+        combine_watch_and_restore_results(watch_result, restore_result, &meta.name)
+    }
+
+    fn stop_service_for_source_watch(&self, env_name: &str) -> Result<(), String> {
+        let stop_result = self.service_service().stop(env_name);
+        let stop_error = match stop_result {
+            Ok(summary) if !summary.running => return Ok(()),
+            Ok(summary) => source_watch_stop_timeout_error(&summary),
+            Err(error) => format!("failed stopping background service for {env_name}: {error}"),
+        };
+
+        match self.service_service().start(env_name) {
+            Ok(_) => Err(format!(
+                "{stop_error}; restored the background service policy and did not start source watch"
+            )),
+            Err(restore_error) => Err(format!(
+                "{stop_error}; also failed restoring the background service policy: {restore_error}"
+            )),
+        }
     }
 
     fn ensure_dev_env(
@@ -616,12 +658,21 @@ impl Cli {
         )
     }
 
-    fn run_dev_gateway_watch(&self, meta: &EnvMeta) -> Result<i32, String> {
+    fn run_dev_gateway_watch(
+        &self,
+        meta: &EnvMeta,
+        source_watch_lease: &SourceWatchLease,
+    ) -> Result<i32, String> {
         let dev = meta
             .dev
             .as_ref()
             .ok_or_else(|| format!("environment \"{}\" is missing its dev binding", meta.name))?;
-        self.run_source_gateway_watch(meta, Path::new(&dev.worktree_root), false)
+        self.run_source_gateway_watch(
+            meta,
+            Path::new(&dev.worktree_root),
+            false,
+            source_watch_lease,
+        )
     }
 
     fn run_source_gateway_watch(
@@ -629,6 +680,7 @@ impl Cli {
         meta: &EnvMeta,
         repo_root: &Path,
         tee_to_env_logs: bool,
+        source_watch_lease: &SourceWatchLease,
     ) -> Result<i32, String> {
         let args = vec![
             "scripts/watch-node.mjs".to_string(),
@@ -668,11 +720,9 @@ impl Cli {
             .spawn()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
         let source_watch = match self.environment_service().create_source_watch_override(
-            CreateSourceWatchOverrideOptions {
-                env_name: meta.name.clone(),
-                repo_root: repo_root.to_path_buf(),
-                watch_pid: child.id(),
-            },
+            source_watch_lease,
+            repo_root,
+            child.id(),
         ) {
             Ok(source_watch) => source_watch,
             Err(error) => {
@@ -683,14 +733,22 @@ impl Cli {
         };
         let mut tee_threads = Vec::new();
         if let Some(log_files) = log_files.take() {
-            let stdout = child
-                .stdout
-                .take()
-                .ok_or_else(|| "failed to capture source watch stdout".to_string())?;
-            let stderr = child
-                .stderr
-                .take()
-                .ok_or_else(|| "failed to capture source watch stderr".to_string())?;
+            let Some(stdout) = child.stdout.take() else {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = self
+                    .environment_service()
+                    .clear_source_watch_override(&meta.name, &source_watch.token);
+                return Err("failed to capture source watch stdout".to_string());
+            };
+            let Some(stderr) = child.stderr.take() else {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = self
+                    .environment_service()
+                    .clear_source_watch_override(&meta.name, &source_watch.token);
+                return Err("failed to capture source watch stderr".to_string());
+            };
             tee_threads.push(spawn_tee_thread(
                 stdout,
                 io::stdout(),
@@ -705,18 +763,19 @@ impl Cli {
             ));
         }
 
-        let status_result = child
-            .wait()
-            .map_err(|error| format!("failed waiting for source watch: {error}"));
+        let status_result =
+            wait_for_source_watch_child(&mut child, &stop_requested).map_err(|error| {
+                let _ = child.kill();
+                let _ = child.wait();
+                error
+            });
         let tee_result = wait_for_tee_threads(tee_threads);
         let clear_result = self
             .environment_service()
-            .clear_source_watch_override(&meta.name, &source_watch.token);
+            .clear_source_watch_override(&meta.name, &source_watch.token)
+            .map(|_| ());
 
-        let status = status_result?;
-        tee_result?;
-        clear_result?;
-
+        let status = combine_source_watch_cleanup_results(status_result, tee_result, clear_result)?;
         Ok(match status.code() {
             Some(code) => code,
             None if stop_requested.load(Ordering::SeqCst) => 130,
@@ -747,6 +806,84 @@ impl Cli {
             logs_command: format!("{} logs {} --follow", self.command_example(), env_name),
             status_command: format!("{} service status {}", self.command_example(), env_name),
         }))
+    }
+}
+
+fn source_watch_stop_timeout_error(summary: &crate::service::ServiceActionSummary) -> String {
+    let warnings = if summary.warnings.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", summary.warnings.join("; "))
+    };
+    format!(
+        "background service for {} is still running after the stop request{warnings}",
+        summary.env_name
+    )
+}
+
+fn combine_watch_and_restore_results(
+    watch_result: Result<i32, String>,
+    restore_result: Result<(), String>,
+    env_name: &str,
+) -> Result<i32, String> {
+    match (watch_result, restore_result) {
+        (Ok(code), Ok(())) => Ok(code),
+        (Err(watch_error), Ok(())) => Err(watch_error),
+        (Ok(_), Err(restore_error)) => Err(format!(
+            "source watch ended, but failed restoring background service for {env_name}: {restore_error}"
+        )),
+        (Err(watch_error), Err(restore_error)) => Err(format!(
+            "{watch_error}; also failed restoring background service for {env_name}: {restore_error}"
+        )),
+    }
+}
+
+fn combine_source_watch_cleanup_results(
+    status_result: Result<std::process::ExitStatus, String>,
+    tee_result: Result<(), String>,
+    clear_result: Result<(), String>,
+) -> Result<std::process::ExitStatus, String> {
+    let mut errors = Vec::new();
+    let status = match status_result {
+        Ok(status) => Some(status),
+        Err(error) => {
+            errors.push(error);
+            None
+        }
+    };
+    if let Err(error) = tee_result {
+        errors.push(error);
+    }
+    if let Err(error) = clear_result {
+        errors.push(error);
+    }
+    if errors.is_empty() {
+        status.ok_or_else(|| "source watch ended without an exit status".to_string())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn wait_for_source_watch_child(
+    child: &mut std::process::Child,
+    stop_requested: &AtomicBool,
+) -> Result<std::process::ExitStatus, String> {
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("failed waiting for source watch: {error}"))?
+        {
+            return Ok(status);
+        }
+        if stop_requested.load(Ordering::SeqCst) {
+            child
+                .kill()
+                .map_err(|error| format!("failed stopping source watch: {error}"))?;
+            return child
+                .wait()
+                .map_err(|error| format!("failed waiting for stopped source watch: {error}"));
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -1401,7 +1538,11 @@ fn render_dev_status_list(summaries: &[DevStatusSummary], profile: RenderProfile
 
 #[cfg(test)]
 mod tests {
-    use super::{DevStatusSummary, RenderProfile, render_dev_status};
+    use super::{
+        DevStatusSummary, RenderProfile, combine_watch_and_restore_results, render_dev_status,
+        source_watch_stop_timeout_error,
+    };
+    use crate::service::ServiceActionSummary;
 
     fn sample_summary() -> DevStatusSummary {
         DevStatusSummary {
@@ -1444,5 +1585,46 @@ mod tests {
                 .any(|line| line.contains("/tmp/demo/.openclaw/workspace"))
         );
         assert!(!lines.iter().any(|line| line.contains("Service enabled")));
+    }
+
+    #[test]
+    fn source_watch_stop_timeout_preserves_service_diagnostics() {
+        let summary = ServiceActionSummary {
+            env_name: "demo".to_string(),
+            service_kind: "supervisor".to_string(),
+            action: "stop".to_string(),
+            installed: true,
+            loaded: true,
+            running: true,
+            desired_running: false,
+            gateway_port: 18789,
+            binding_kind: Some("runtime".to_string()),
+            binding_name: Some("stable".to_string()),
+            stdout_path: None,
+            stderr_path: None,
+            warnings: vec!["gateway is still shutting down".to_string()],
+        };
+
+        assert_eq!(
+            source_watch_stop_timeout_error(&summary),
+            "background service for demo is still running after the stop request (gateway is still shutting down)"
+        );
+    }
+
+    #[test]
+    fn source_watch_reports_watch_and_restore_failures_together() {
+        let result = combine_watch_and_restore_results(
+            Err("watch failed".to_string()),
+            Err("restore failed".to_string()),
+            "demo",
+        );
+
+        assert_eq!(
+            result,
+            Err(
+                "watch failed; also failed restoring background service for demo: restore failed"
+                    .to_string()
+            )
+        );
     }
 }
