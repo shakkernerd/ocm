@@ -875,6 +875,92 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
     assert_ne!(imported_config["gateway"]["port"].as_u64(), Some(19_789));
 }
 
+#[cfg(unix)]
+#[test]
+fn environment_import_materializes_an_archived_config_symlink() {
+    let root = TestDir::new("store-env-import-config-symlink");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let source = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            service_enabled: false,
+            service_running: false,
+            default_runtime: None,
+            default_launcher: None,
+            dev: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = Path::new(&source.root);
+    let source_config = source_root.join(".openclaw/openclaw.json");
+    let external_config = root.child("external/openclaw.json");
+    let external_raw = format!(
+        "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}},\"gateway\":{{\"port\":19789}}}}\n",
+        source_root.join(".openclaw/workspace").display()
+    );
+    write_text(&external_config, &external_raw);
+    if source_config.exists() {
+        fs::remove_file(&source_config).unwrap();
+    }
+    std::os::unix::fs::symlink(&external_config, &source_config).unwrap();
+
+    let exported = export_environment(
+        ExportEnvironmentOptions {
+            name: "source".to_string(),
+            output: Some("./archives/source-symlink.tar".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let imported = import_environment(
+        ImportEnvironmentOptions {
+            archive: exported.archive_path,
+            name: Some("target".to_string()),
+            root: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(fs::read_to_string(&external_config).unwrap(), external_raw);
+    let imported_config = Path::new(&imported.root).join(".openclaw/openclaw.json");
+    assert!(
+        fs::symlink_metadata(&imported_config)
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    let imported_value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(imported_config).unwrap()).unwrap();
+    let expected_workspace = Path::new(&imported.root)
+        .join(".openclaw/workspace")
+        .display()
+        .to_string();
+    assert_eq!(
+        imported_value["agents"]["defaults"]["workspace"].as_str(),
+        Some(expected_workspace.as_str())
+    );
+    assert_eq!(
+        imported_value["gateway"]["port"].as_u64(),
+        Some(
+            get_environment("target", &env, &cwd)
+                .unwrap()
+                .gateway_port
+                .unwrap() as u64
+        )
+    );
+}
+
 #[test]
 fn environment_import_clears_copied_runtime_state_outside_workspace_and_config() {
     let root = TestDir::new("store-env-import-runtime-cleanup");
