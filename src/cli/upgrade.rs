@@ -2249,40 +2249,6 @@ fn version_output_matches_expected(actual: &str, expected: &str) -> bool {
         .any(|token| token == expected)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::version_output_matches_expected;
-
-    #[test]
-    fn version_output_accepts_exact_version() {
-        assert!(version_output_matches_expected("2026.5.14", "2026.5.14"));
-    }
-
-    #[test]
-    fn version_output_accepts_decorated_openclaw_version() {
-        assert!(version_output_matches_expected(
-            "OpenClaw 2026.5.14 (62375ae)",
-            "2026.5.14"
-        ));
-    }
-
-    #[test]
-    fn version_output_accepts_beta_version_tokens() {
-        assert!(version_output_matches_expected(
-            "OpenClaw 2026.5.12-beta.8 (local)",
-            "2026.5.12-beta.8"
-        ));
-    }
-
-    #[test]
-    fn version_output_rejects_partial_token_matches() {
-        assert!(!version_output_matches_expected(
-            "OpenClaw 12026.5.14",
-            "2026.5.14"
-        ));
-    }
-}
-
 fn simulation_env_name(source_name: &str, scenario: &str) -> String {
     format!(
         "{}-{}-sim-{}",
@@ -2476,4 +2442,38 @@ fn gateway_health_ok(port: u32) -> bool {
     };
     let text = String::from_utf8_lossy(&response[..read]);
     text.starts_with("HTTP/1.1 200") || text.starts_with("HTTP/1.0 200")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_output_matches_expected;
+
+    #[test]
+    fn version_output_accepts_exact_version() {
+        assert!(version_output_matches_expected("2026.5.14", "2026.5.14"));
+    }
+
+    #[test]
+    fn version_output_accepts_decorated_openclaw_version() {
+        assert!(version_output_matches_expected(
+            "OpenClaw 2026.5.14 (62375ae)",
+            "2026.5.14"
+        ));
+    }
+
+    #[test]
+    fn version_output_accepts_beta_version_tokens() {
+        assert!(version_output_matches_expected(
+            "OpenClaw 2026.5.12-beta.8 (local)",
+            "2026.5.12-beta.8"
+        ));
+    }
+
+    #[test]
+    fn version_output_rejects_partial_token_matches() {
+        assert!(!version_output_matches_expected(
+            "OpenClaw 12026.5.14",
+            "2026.5.14"
+        ));
+    }
 }
