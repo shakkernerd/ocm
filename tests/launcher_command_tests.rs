@@ -3,6 +3,7 @@ mod support;
 use std::fs;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
+use serde_json::Value;
 
 #[test]
 fn launcher_list_uses_launcher_wording_when_empty() {
@@ -86,6 +87,43 @@ fn launcher_show_and_remove_use_launcher_metadata() {
     let launcher_list = run_ocm(&cwd, &env, &["launcher", "list"]);
     assert!(launcher_list.status.success(), "{}", stderr(&launcher_list));
     assert_eq!(stdout(&launcher_list), "No launchers.\n");
+}
+
+#[test]
+fn launcher_remove_rejects_bound_environments_without_changing_state() {
+    let root = TestDir::new("launcher-remove-bound");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "sh"],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let remove = run_ocm(&cwd, &env, &["launcher", "remove", "stable"]);
+    assert!(!remove.status.success());
+    assert!(stderr(&remove).contains(
+        "launcher \"stable\" is still used by environment(s): demo; clear those bindings before removing it"
+    ));
+
+    let launcher = run_ocm(&cwd, &env, &["launcher", "show", "stable", "--json"]);
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let launcher: Value = serde_json::from_str(&stdout(&launcher)).unwrap();
+    assert_eq!(launcher["name"], "stable");
+
+    let environment = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(environment.status.success(), "{}", stderr(&environment));
+    let environment: Value = serde_json::from_str(&stdout(&environment)).unwrap();
+    assert_eq!(environment["defaultLauncher"], "stable");
 }
 
 #[test]

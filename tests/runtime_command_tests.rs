@@ -1771,6 +1771,49 @@ fn runtime_releases_lists_manifest_entries() {
     assert!(output.contains("sha256=abc123"));
     assert!(output.contains("0.3.0-dev"));
 
+    let raw_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body,
+    );
+    let raw = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "releases",
+            "--manifest-url",
+            &raw_server.url(),
+            "--raw",
+        ],
+    );
+    assert!(raw.status.success(), "{}", stderr(&raw));
+    assert!(stdout(&raw).contains("0.2.0"));
+
+    let color_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body,
+    );
+    let color = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "releases",
+            "--manifest-url",
+            &color_server.url(),
+            "--color",
+            "never",
+        ],
+    );
+    assert!(color.status.success(), "{}", stderr(&color));
+    assert!(stdout(&color).contains("0.2.0"));
+
+    let mixed = run_ocm(&cwd, &env, &["runtime", "releases", "--json", "--raw"]);
+    assert_eq!(mixed.status.code(), Some(1));
+    assert!(stderr(&mixed).contains("runtime releases accepts only one of --json or --raw"));
+
     let json_server = TestHttpServer::serve_bytes(
         "/manifests/releases.json",
         "application/json",

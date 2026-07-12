@@ -666,6 +666,23 @@ fn runtime_verify_help_mentions_raw_mode() {
 }
 
 #[test]
+fn runtime_releases_help_mentions_standard_output_modes() {
+    let root = TestDir::new("help-runtime-releases");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let releases = run_ocm(&cwd, &env, &["help", "runtime", "releases"]);
+    assert!(releases.status.success(), "{}", stderr(&releases));
+    let output = stdout(&releases);
+    assert!(output.contains(
+        "ocm runtime releases [--manifest-url <url>] [--version <version> | --channel <channel>] [--raw] [--json]"
+    ));
+    assert!(output.contains("--raw"));
+    assert!(output.contains("--json"));
+}
+
+#[test]
 fn runtime_which_help_mentions_raw_mode_and_tty_cards() {
     let root = TestDir::new("help-runtime-which");
     let cwd = root.child("workspace");
