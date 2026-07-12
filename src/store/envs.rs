@@ -166,6 +166,18 @@ fn normalize_environment(mut meta: EnvMeta) -> Result<EnvMeta, String> {
     Ok(meta)
 }
 
+fn canonicalize_launcher_binding(
+    mut meta: EnvMeta,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
+    if let Some(launcher_name) = meta.default_launcher.as_deref() {
+        let launcher = super::launchers::get_launcher(launcher_name, env, cwd)?;
+        meta.default_launcher = Some(launcher.name);
+    }
+    Ok(meta)
+}
+
 fn upsert_environment(registry: &mut EnvRegistry, meta: EnvMeta) -> Result<EnvMeta, String> {
     let meta = normalize_environment(meta)?;
     registry.envs.retain(|entry| entry.name != meta.name);
@@ -210,6 +222,20 @@ pub fn save_environment(
     Ok(meta)
 }
 
+pub(crate) fn save_environment_with_validated_launcher(
+    mut meta: EnvMeta,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
+    let _lock = lock_env_registry(env, cwd)?;
+    let mut registry = load_env_registry(env, cwd)?;
+    meta = canonicalize_launcher_binding(meta, env, cwd)?;
+    meta = upsert_environment(&mut registry, meta)?;
+    write_env_registry(&mut registry, env, cwd)?;
+
+    Ok(meta)
+}
+
 pub fn create_environment(
     options: CreateEnvironmentOptions,
     env: &BTreeMap<String, String>,
@@ -221,6 +247,12 @@ pub fn create_environment(
     if find_environment(&registry, &name).is_some() {
         return Err(format!("environment \"{name}\" already exists"));
     }
+    let default_launcher = options
+        .default_launcher
+        .as_deref()
+        .map(|launcher_name| super::launchers::get_launcher(launcher_name, env, cwd))
+        .transpose()?
+        .map(|launcher| launcher.name);
 
     let root = if let Some(root) = options.root.as_deref() {
         resolve_absolute_path(root, env, cwd)?
@@ -261,7 +293,7 @@ pub fn create_environment(
         service_enabled: options.service_enabled,
         service_running: options.service_running,
         default_runtime: options.default_runtime,
-        default_launcher: options.default_launcher,
+        default_launcher,
         dev: options.dev,
         protected: options.protected,
         created_at,
@@ -581,6 +613,16 @@ pub fn remove_environment(
     write_env_registry(&mut registry, env, cwd)?;
 
     Ok(meta)
+}
+
+pub(super) fn with_locked_environments<T>(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    action: impl FnOnce(&[EnvMeta]) -> Result<T, String>,
+) -> Result<T, String> {
+    let _lock = lock_env_registry(env, cwd)?;
+    let registry = load_env_registry(env, cwd)?;
+    action(&registry.envs)
 }
 
 fn import_staging_dir() -> PathBuf {

@@ -1,5 +1,8 @@
 use super::{EnvMeta, EnvironmentService};
-use crate::store::{get_environment, get_launcher, get_runtime_verified, save_environment};
+use crate::store::{
+    get_environment, get_runtime_verified, save_environment,
+    save_environment_with_validated_launcher,
+};
 use crate::supervisor::sync_supervisor_if_present;
 
 impl<'a> EnvironmentService<'a> {
@@ -9,11 +12,10 @@ impl<'a> EnvironmentService<'a> {
         if launcher_name.eq_ignore_ascii_case("none") {
             meta.default_launcher = None;
         } else {
-            get_launcher(launcher_name, self.env, self.cwd)?;
             meta.default_launcher = Some(launcher_name.to_string());
             meta.default_runtime = None;
         }
-        let meta = save_environment(meta, self.env, self.cwd)?;
+        let meta = save_environment_with_validated_launcher(meta, self.env, self.cwd)?;
         sync_supervisor_if_present(self.env, self.cwd)?;
         Ok(meta)
     }

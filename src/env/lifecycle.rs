@@ -6,7 +6,7 @@ use super::EnvironmentService;
 use crate::runtime::RuntimeService;
 use crate::store::{
     EnvironmentOperationLock, clone_environment, create_environment, export_environment,
-    get_environment, get_launcher, get_runtime_verified, import_environment, list_environments,
+    get_environment, get_runtime_verified, import_environment, list_environments,
     lock_environment_operation, now_utc, remove_environment, resolve_config_gateway_port,
     resolve_effective_gateway_ports, resolve_env_gateway_port, save_environment,
 };
@@ -214,9 +214,6 @@ impl<'a> EnvironmentService<'a> {
     pub fn create(&self, options: CreateEnvironmentOptions) -> Result<EnvMeta, String> {
         if let Some(runtime_name) = options.default_runtime.as_deref() {
             get_runtime_verified(runtime_name, self.env, self.cwd)?;
-        }
-        if let Some(launcher_name) = options.default_launcher.as_deref() {
-            get_launcher(launcher_name, self.env, self.cwd)?;
         }
         let meta = create_environment(options, self.env, self.cwd)?;
         sync_supervisor_if_present(self.env, self.cwd)?;

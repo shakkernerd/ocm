@@ -321,7 +321,8 @@ impl Cli {
     }
 
     pub(super) fn handle_runtime_releases(&self, args: Vec<String>) -> Result<i32, String> {
-        let (args, json_flag) = Self::consume_flag(args, "--json");
+        let (args, json_flag, _profile) =
+            self.consume_human_output_flags(args, "runtime releases")?;
         let (args, version) = Self::consume_option(args, "--version")?;
         let version = Self::require_option_value(version, "--version")?;
         let (args, channel) = Self::consume_option(args, "--channel")?;

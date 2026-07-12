@@ -517,6 +517,7 @@ ocm --color always runtime list
 ### `runtime`
 
 - add
+- build-local
 - list
 - show
 - install
