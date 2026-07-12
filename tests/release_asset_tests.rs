@@ -207,6 +207,7 @@ esac
 fn verify_release_tag_requires_a_verified_annotated_tag_matching_the_package() {
     let root = TestDir::new("verify-release-tag");
     let fake_bin = root.child("bin");
+    let package_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
     fs::create_dir_all(&fake_bin).unwrap();
     let expected_commit_output = Command::new("git")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -226,7 +227,7 @@ fn verify_release_tag_requires_a_verified_annotated_tag_matching_the_package() {
 set -euo pipefail
 case "$*" in
   *"/git/ref/tags/"*) printf 'tag\t{tag_object}\n' ;;
-  *"/git/tags/"*) printf '%s\tcommit\t{expected_commit}\t%s\n' "${{TEST_TAG:-v0.2.25}}" "${{TEST_TAG_VERIFIED:-true}}" ;;
+  *"/git/tags/"*) printf '%s\tcommit\t{expected_commit}\t%s\n' "${{TEST_TAG:-{package_tag}}}" "${{TEST_TAG_VERIFIED:-true}}" ;;
   *"/git/ref/heads/main"*) printf '{expected_commit}\n' ;;
   *"/compare/"*) printf '%s\n' "${{TEST_COMPARE_STATUS:-identical}}" ;;
   "api repos/example/ocm --jq .default_branch") printf 'main\n' ;;
@@ -242,28 +243,18 @@ esac
     );
 
     let verified = Command::new(script("verify-release-tag.sh"))
-        .args([
-            "--repo",
-            "example/ocm",
-            "--tag",
-            "v0.2.25",
-            "--commit",
-            &expected_commit,
-        ])
+        .args(["--repo", "example/ocm", "--tag"])
+        .arg(&package_tag)
+        .args(["--commit", &expected_commit])
         .env("PATH", &path)
         .output()
         .unwrap();
     assert!(verified.status.success(), "{}", stderr(&verified));
 
     let unsigned = Command::new(script("verify-release-tag.sh"))
-        .args([
-            "--repo",
-            "example/ocm",
-            "--tag",
-            "v0.2.25",
-            "--commit",
-            &expected_commit,
-        ])
+        .args(["--repo", "example/ocm", "--tag"])
+        .arg(&package_tag)
+        .args(["--commit", &expected_commit])
         .env("PATH", &path)
         .env("TEST_TAG_VERIFIED", "false")
         .output()
@@ -276,26 +267,21 @@ esac
             "--repo",
             "example/ocm",
             "--tag",
-            "v0.2.26",
+            "v999.999.999",
             "--commit",
             &expected_commit,
         ])
         .env("PATH", &path)
-        .env("TEST_TAG", "v0.2.26")
+        .env("TEST_TAG", "v999.999.999")
         .output()
         .unwrap();
     assert_eq!(mismatched.status.code(), Some(1));
     assert!(stderr(&mismatched).contains("does not match package version"));
 
     let unreviewed = Command::new(script("verify-release-tag.sh"))
-        .args([
-            "--repo",
-            "example/ocm",
-            "--tag",
-            "v0.2.25",
-            "--commit",
-            &expected_commit,
-        ])
+        .args(["--repo", "example/ocm", "--tag"])
+        .arg(&package_tag)
+        .args(["--commit", &expected_commit])
         .env("PATH", path)
         .env("TEST_COMPARE_STATUS", "diverged")
         .output()
