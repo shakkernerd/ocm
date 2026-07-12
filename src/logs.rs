@@ -919,10 +919,10 @@ fn collect_merged_follow_startup(
         .flat_map(|snapshot| log_records(snapshot.bytes))
         .collect::<Vec<_>>();
     for cursor in cursors {
-        if !cursor.is_initialized() {
-            if let Some(snapshot) = cursor.snapshot(tail_lines, true)? {
-                records.extend(log_records(snapshot.bytes));
-            }
+        if !cursor.is_initialized()
+            && let Some(snapshot) = cursor.snapshot(tail_lines, true)?
+        {
+            records.extend(log_records(snapshot.bytes));
         }
         if cursor.is_initialized() {
             if let Some(update) = cursor.read_update()? {

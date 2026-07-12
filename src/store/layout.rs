@@ -77,20 +77,19 @@ fn normalize_value(value: &str) -> &str {
 }
 
 pub fn resolve_user_home(env: &BTreeMap<String, String>) -> PathBuf {
-    if let Some(home) = env.get("HOME").map(String::as_str).map(normalize_value) {
-        if !home.is_empty() {
-            return PathBuf::from(home);
-        }
+    if let Some(home) = env.get("HOME").map(String::as_str).map(normalize_value)
+        && !home.is_empty()
+    {
+        return PathBuf::from(home);
     }
 
     if let Some(home) = env
         .get("USERPROFILE")
         .map(String::as_str)
         .map(normalize_value)
+        && !home.is_empty()
     {
-        if !home.is_empty() {
-            return PathBuf::from(home);
-        }
+        return PathBuf::from(home);
     }
 
     std::env::var("HOME")

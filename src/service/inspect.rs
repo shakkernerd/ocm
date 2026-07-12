@@ -404,10 +404,8 @@ fn service_issue(
             "port {gateway_port} is occupied by a process outside the OCM background service"
         ));
     }
-    if desired_running {
-        if gateway_state != "running" {
-            return Some("env gateway is not running under the OCM background service".to_string());
-        }
+    if desired_running && gateway_state != "running" {
+        return Some("env gateway is not running under the OCM background service".to_string());
     }
     None
 }
