@@ -19,3 +19,4 @@ All notable changes to OCM are documented here.
 - Reject launcher deletion while environments still depend on it, and route shell-expanding launcher recipes through a shell instead of lossy direct execution.
 - Accept the standard human-output flags for `runtime releases` and document `runtime build-local` in the command map.
 - Keep plain-home migration path rewrites scoped to the imported OpenClaw state and reject overlapping source and target roots before mutation.
+- Fail migration planning on corrupt environment registries and only auto-bind executable OpenClaw commands from `PATH`.

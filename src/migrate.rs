@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService};
 use crate::launcher::{AddLauncherOptions, LauncherService};
 use crate::store::{
-    copy_dir_recursive, default_env_root, derive_env_paths, display_path, get_environment,
+    copy_dir_recursive, default_env_root, derive_env_paths, display_path, list_environments,
     prepare_migrated_runtime_state, resolve_absolute_path, resolve_user_home,
     rewrite_openclaw_config_for_migration, validate_name,
 };
@@ -92,9 +92,13 @@ pub fn plan_migration(
         default_env_root(&env_name, env, cwd)?
     };
 
+    let env_exists = list_environments(env, cwd)?
+        .iter()
+        .any(|meta| meta.name == env_name);
+
     Ok(MigrationPlanSummary {
         source: inspect_migration_source(explicit_source_home, env),
-        env_exists: get_environment(&env_name, env, cwd).is_ok(),
+        env_exists,
         env_name,
         target_root: display_path(&target_root),
     })
@@ -307,8 +311,22 @@ fn resolve_executable_on_path(command: &str, env: &BTreeMap<String, String>) -> 
     let path_value = env.get("PATH")?;
     std::env::split_paths(path_value)
         .map(|dir| dir.join(command))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| is_executable_file(candidate))
         .map(|candidate| display_path(&candidate))
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]

@@ -180,6 +180,22 @@ fn adopt_plan_reports_the_target_env_and_root() {
 }
 
 #[test]
+fn adopt_plan_fails_when_the_environment_registry_is_corrupt() {
+    let root = TestDir::new("adopt-plan-corrupt-registry");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(root.child("ocm-home")).unwrap();
+    fs::write(root.child("ocm-home/envs.json"), "{not-json\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["adopt", "plan", "--name", "mira", "--json"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!stdout(&output).contains("\"envExists\": false"));
+    assert!(!stderr(&output).is_empty());
+}
+
+#[test]
 fn adopt_plan_requires_name_when_only_a_positional_token_is_given() {
     let root = TestDir::new("adopt-plan-requires-name");
     let cwd = root.child("workspace");
@@ -490,6 +506,40 @@ fn migrate_rejects_a_target_that_contains_the_source_before_mutation() {
     assert!(stderr(&output).contains("migration source and target must not overlap"));
     assert!(!root.child("ocm-home/envs.json").exists());
     assert!(source_home.join("workspace/notes.txt").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn migrate_does_not_bind_a_non_executable_openclaw_file_from_path() {
+    let root = TestDir::new("migrate-non-executable-openclaw");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let bin_dir = root.child("bin");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let openclaw = bin_dir.join("openclaw");
+    fs::write(&openclaw, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut permissions = fs::metadata(&openclaw).unwrap().permissions();
+    permissions.set_mode(0o644);
+    fs::set_permissions(&openclaw, permissions).unwrap();
+
+    let mut env = ocm_env(&root);
+    env.insert("PATH".to_string(), bin_dir.display().to_string());
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("\"defaultLauncher\": null"));
+    assert!(!root.child("ocm-home/launchers/mira.migrated.json").exists());
 }
 
 #[test]
