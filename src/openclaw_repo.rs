@@ -121,6 +121,13 @@ pub(crate) fn remove_openclaw_worktree(
         return Ok(());
     }
 
+    if worktree_root.exists() && !is_existing_openclaw_worktree(repo_root, worktree_root) {
+        return Err(format!(
+            "refusing to remove registered worktree whose checkout identity does not match this OpenClaw checkout: {}",
+            display_path(worktree_root)
+        ));
+    }
+
     remove_registered_worktree(repo_root, worktree_root)
 }
 
@@ -179,7 +186,7 @@ fn ensure_worktree_clean(worktree_root: &Path) -> Result<(), String> {
 }
 
 fn ensure_no_ignored_local_files(worktree_root: &Path) -> Result<(), String> {
-    let output = Command::new("git")
+    let worktree_output = Command::new("git")
         .arg("-C")
         .arg(worktree_root)
         .args([
@@ -191,16 +198,45 @@ fn ensure_no_ignored_local_files(worktree_root: &Path) -> Result<(), String> {
         ])
         .output()
         .map_err(|error| format!("failed to inspect ignored worktree files: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !worktree_output.status.success() {
+        let stderr = String::from_utf8_lossy(&worktree_output.stderr)
+            .trim()
+            .to_string();
+        let stdout = String::from_utf8_lossy(&worktree_output.stdout)
+            .trim()
+            .to_string();
         let detail = if !stderr.is_empty() { stderr } else { stdout };
         return Err(format!("git ignored-file inspection failed: {detail}"));
     }
 
-    let has_local_files = output
-        .stdout
-        .split(|byte| *byte == 0)
+    let submodule_output = Command::new("git")
+        .arg("-C")
+        .arg(worktree_root)
+        .args([
+            "submodule",
+            "foreach",
+            "--quiet",
+            "--recursive",
+            "git ls-files --others --ignored --exclude-standard -z",
+        ])
+        .output()
+        .map_err(|error| format!("failed to inspect ignored submodule files: {error}"))?;
+    if !submodule_output.status.success() {
+        let stderr = String::from_utf8_lossy(&submodule_output.stderr)
+            .trim()
+            .to_string();
+        let stdout = String::from_utf8_lossy(&submodule_output.stdout)
+            .trim()
+            .to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!(
+            "git ignored-file inspection failed for initialized submodules: {detail}"
+        ));
+    }
+
+    let has_local_files = [&worktree_output.stdout, &submodule_output.stdout]
+        .into_iter()
+        .flat_map(|output| output.split(|byte| *byte == 0))
         .filter(|path| !path.is_empty())
         .map(git_path_from_bytes)
         .collect::<Result<Vec<_>, _>>()?
