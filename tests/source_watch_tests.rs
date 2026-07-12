@@ -117,15 +117,22 @@ impl Drop for SourceWatchFixture {
 }
 
 fn lock_source_watch(root: &TestDir) -> SourceWatchFixture {
+    lock_source_watch_with_id(root, "")
+}
+
+fn lock_source_watch_with_id(root: &TestDir, lease_id: &str) -> SourceWatchFixture {
     let lock_path = root.child("ocm-home/source-watch/demo.lock");
     fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
-    let lock_file = OpenOptions::new()
+    let mut lock_file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .open(lock_path)
         .unwrap();
     FileExt::lock_exclusive(&lock_file).unwrap();
+    lock_file.set_len(0).unwrap();
+    use std::io::Write;
+    writeln!(lock_file, "{lease_id}").unwrap();
     SourceWatchFixture { lock_file }
 }
 
@@ -251,9 +258,10 @@ fn leased_source_watch_remains_active_after_its_wrapper_pid_exits() {
     let source_repo = create_source_repo(&root);
     let env = ocm_env(&root);
     create_runtime_backed_env(&root, &cwd, &env);
-    let _source_watch = lock_source_watch(&root);
+    let lease_id = "fixture-lease";
+    let _source_watch = lock_source_watch_with_id(&root, lease_id);
     let override_path = root.child("ocm-home/source-watch/demo.json");
-    let lease_token = format!("lease-{}", "<redacted>");
+    let lease_token = format!("lease:{lease_id}:{}", "<redacted>");
     fs::write(
         &override_path,
         json!({
@@ -276,6 +284,43 @@ fn leased_source_watch_remains_active_after_its_wrapper_pid_exits() {
     assert!(resolve.status.success(), "{}", stderr(&resolve));
     let resolved: Value = serde_json::from_str(&stdout(&resolve)).unwrap();
     assert_eq!(resolved["bindingKind"], "source-watch");
+    assert!(override_path.exists());
+}
+
+#[test]
+fn leased_source_watch_rejects_metadata_from_an_older_lease() {
+    let root = TestDir::new("source-watch-stale-generation");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let source_repo = create_source_repo(&root);
+    let env = ocm_env(&root);
+    let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
+    let _source_watch = lock_source_watch_with_id(&root, "current-lease");
+    let override_path = root.child("ocm-home/source-watch/demo.json");
+    let lease_token = format!("lease:stale-lease:{}", "<redacted>");
+    fs::write(
+        &override_path,
+        json!({
+            "kind": "ocm-source-watch-override",
+            "envName": "demo",
+            "repoRoot": path_string(&source_repo),
+            "watchPid": std::process::id(),
+            "token": lease_token,
+            "startedAt": "2026-06-17T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let resolve = run_ocm(
+        &cwd,
+        &env,
+        &["env", "resolve", "demo", "--json", "--", "status"],
+    );
+    assert!(resolve.status.success(), "{}", stderr(&resolve));
+    let resolved: Value = serde_json::from_str(&stdout(&resolve)).unwrap();
+    assert_eq!(resolved["bindingKind"], "runtime");
+    assert_eq!(resolved["binaryPath"], path_string(&runtime_path));
     assert!(override_path.exists());
 }
 

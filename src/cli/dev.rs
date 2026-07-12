@@ -740,6 +740,16 @@ impl Cli {
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
+        if let Err(error) = _source_watch_lease.attach_to_child(&child) {
+            #[cfg(windows)]
+            return Err(stop_suspended_source_watch_after_error(&mut child, error));
+            #[cfg(not(windows))]
+            return Err(stop_source_watch_after_error(
+                &mut child,
+                &process_guard,
+                error,
+            ));
+        }
         if let Err(error) = process_guard.assign_and_start(&child) {
             #[cfg(windows)]
             return Err(stop_suspended_source_watch_after_error(&mut child, error));

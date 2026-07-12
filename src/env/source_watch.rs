@@ -7,6 +7,8 @@ use std::process::Command;
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -42,6 +44,7 @@ pub struct CreateSourceWatchOverrideOptions {
 #[derive(Debug)]
 pub(crate) struct SourceWatchLease {
     env_name: String,
+    lease_id: String,
     lock_file: File,
 }
 
@@ -68,6 +71,37 @@ impl SourceWatchLease {
 
     #[cfg(not(unix))]
     pub(crate) fn configure_child(&self, _command: &mut Command) {}
+
+    #[cfg(windows)]
+    pub(crate) fn attach_to_child(&self, child: &std::process::Child) -> Result<(), String> {
+        use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE};
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+        let mut child_handle: HANDLE = std::ptr::null_mut();
+        let duplicated = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                self.lock_file.as_raw_handle() as HANDLE,
+                child.as_raw_handle() as HANDLE,
+                &mut child_handle,
+                0,
+                0,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        if duplicated == 0 {
+            return Err(format!(
+                "failed attaching source watch lease to child: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    pub(crate) fn attach_to_child(&self, _child: &std::process::Child) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl SourceWatchOverride {
@@ -134,9 +168,14 @@ impl<'a> EnvironmentService<'a> {
         // lease, even if its child PID has since been reused by another process.
         remove_file_if_present(&override_path)?;
 
+        let lease_id = format!(
+            "{}-{}",
+            std::process::id(),
+            now_utc().unix_timestamp_nanos()
+        );
         lock_file
             .set_len(0)
-            .and_then(|()| writeln!(lock_file, "{}", std::process::id()))
+            .and_then(|()| writeln!(lock_file, "{lease_id}"))
             .map_err(|error| {
                 format!(
                     "failed recording source watch lock {}: {error}",
@@ -145,6 +184,7 @@ impl<'a> EnvironmentService<'a> {
             })?;
         Ok(SourceWatchLease {
             env_name,
+            lease_id,
             lock_file,
         })
     }
@@ -153,7 +193,7 @@ impl<'a> EnvironmentService<'a> {
         &self,
         options: CreateSourceWatchOverrideOptions,
     ) -> Result<SourceWatchOverride, String> {
-        self.write_source_watch_override(options, false)
+        self.write_source_watch_override(options, None)
     }
 
     pub(crate) fn create_source_watch_override_with_lease(
@@ -167,25 +207,27 @@ impl<'a> EnvironmentService<'a> {
                 lease.env_name, options.env_name
             ));
         }
-        self.write_source_watch_override(options, true)
+        self.write_source_watch_override(options, Some(&lease.lease_id))
     }
 
     fn write_source_watch_override(
         &self,
         options: CreateSourceWatchOverrideOptions,
-        leased: bool,
+        lease_id: Option<&str>,
     ) -> Result<SourceWatchOverride, String> {
         let env_name = validate_name(&options.env_name, "Environment name")?;
         let path = source_watch_override_path(&env_name, self.env, self.cwd)?;
         if let Some(parent) = path.parent() {
             ensure_dir(parent)?;
         }
-        let token_prefix = if leased { "lease-" } else { "" };
-        let token = format!(
-            "{token_prefix}{}-{}",
-            options.watch_pid,
-            now_utc().unix_timestamp_nanos()
-        );
+        let token = match lease_id {
+            Some(lease_id) => format!(
+                "lease:{lease_id}:{}-{}",
+                options.watch_pid,
+                now_utc().unix_timestamp_nanos()
+            ),
+            None => format!("{}-{}", options.watch_pid, now_utc().unix_timestamp_nanos()),
+        };
         let meta = SourceWatchOverride {
             kind: SOURCE_WATCH_OVERRIDE_KIND.to_string(),
             env_name,
@@ -259,11 +301,23 @@ impl<'a> EnvironmentService<'a> {
                 Ok(None)
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                let metadata_valid = if is_leased_source_watch(&meta) {
-                    is_valid_source_watch_structure(&meta, &env_name)
-                } else {
-                    is_valid_source_watch_metadata(&meta, &env_name)
-                };
+                let lock_lease_id = fs::read_to_string(&lock_path)
+                    .map_err(|error| {
+                        format!(
+                            "failed reading active source watch lock {}: {error}",
+                            display_path(&lock_path)
+                        )
+                    })?
+                    .trim()
+                    .to_string();
+                let meta = read_json::<SourceWatchOverride>(&path).map_err(|error| {
+                    format!(
+                        "failed reading active source watch override {}: {error}",
+                        display_path(&path)
+                    )
+                })?;
+                let metadata_valid = source_watch_matches_lease(&meta, &lock_lease_id)
+                    && is_valid_source_watch_structure(&meta, &env_name);
                 if metadata_valid {
                     Ok(Some(meta))
                 } else {
@@ -279,7 +333,17 @@ impl<'a> EnvironmentService<'a> {
 }
 
 fn is_leased_source_watch(meta: &SourceWatchOverride) -> bool {
-    meta.token.starts_with("lease-")
+    meta.token.starts_with("lease:")
+}
+
+fn source_watch_matches_lease(meta: &SourceWatchOverride, lease_id: &str) -> bool {
+    if lease_id.is_empty() {
+        return !is_leased_source_watch(meta) && is_process_alive(meta.watch_pid);
+    }
+    meta.token
+        .strip_prefix("lease:")
+        .and_then(|token| token.split_once(':'))
+        .is_some_and(|(metadata_lease_id, _)| metadata_lease_id == lease_id)
 }
 
 fn is_valid_source_watch_metadata(meta: &SourceWatchOverride, env_name: &str) -> bool {
