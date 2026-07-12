@@ -239,6 +239,139 @@ fn env_destroy_preview_reports_service_snapshot_and_env_steps() {
 
     let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
     assert!(show.status.success(), "{}", stderr(&show));
+
+    let json_preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
+    assert!(json_preview.status.success(), "{}", stderr(&json_preview));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&json_preview)).unwrap();
+    assert_eq!(json["apply"], false);
+    assert!(
+        json["stateToken"]
+            .as_str()
+            .is_some_and(|token| token.starts_with("v1:"))
+    );
+}
+
+#[test]
+fn env_destroy_state_token_refuses_stale_service_state_without_teardown() {
+    let root = TestDir::new("env-destroy-state-token");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+    install_fake_launchctl(&root, &mut env);
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "openclaw"],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
+    assert!(preview.status.success(), "{}", stderr(&preview));
+    let preview_json: serde_json::Value = serde_json::from_str(&stdout(&preview)).unwrap();
+    let stale_guard = preview_json["stateToken"].as_str().unwrap();
+
+    let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+
+    let guarded = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "destroy",
+            "demo",
+            "--yes",
+            "--if-state-token",
+            stale_guard,
+            "--json",
+        ],
+    );
+    assert!(!guarded.status.success());
+    assert!(stderr(&guarded).is_empty(), "{}", stderr(&guarded));
+    let guarded_json: serde_json::Value = serde_json::from_str(&stdout(&guarded)).unwrap();
+    assert_eq!(guarded_json["code"], "state_changed");
+    assert_eq!(guarded_json["removed"], false);
+    assert_ne!(guarded_json["stateToken"], preview_json["stateToken"]);
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let status = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stdout(&status)).unwrap()["installed"],
+        true
+    );
+
+    let fresh_preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
+    assert!(fresh_preview.status.success(), "{}", stderr(&fresh_preview));
+    let fresh_json: serde_json::Value = serde_json::from_str(&stdout(&fresh_preview)).unwrap();
+    let fresh_guard = fresh_json["stateToken"].as_str().unwrap();
+    let destroy = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "destroy",
+            "demo",
+            "--yes",
+            "--if-state-token",
+            fresh_guard,
+            "--json",
+        ],
+    );
+    assert!(destroy.status.success(), "{}", stderr(&destroy));
+    let destroy_json: serde_json::Value = serde_json::from_str(&stdout(&destroy)).unwrap();
+    assert_eq!(destroy_json["removed"], true);
+}
+
+#[test]
+fn env_destroy_state_token_requires_guarded_apply_mode() {
+    let root = TestDir::new("env-destroy-state-token-options");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_launchd_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let without_yes = run_ocm(
+        &cwd,
+        &env,
+        &["env", "destroy", "demo", "--if-state-token", "v1:test"],
+    );
+    assert!(!without_yes.status.success());
+    assert!(stderr(&without_yes).contains("--if-state-token requires --yes"));
+
+    let empty = run_ocm(
+        &cwd,
+        &env,
+        &["env", "destroy", "demo", "--yes", "--if-state-token="],
+    );
+    assert!(!empty.status.success());
+    assert!(stderr(&empty).contains("--if-state-token requires a non-empty value"));
+
+    let forced = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "destroy",
+            "demo",
+            "--yes",
+            "--force",
+            "--if-state-token",
+            "v1:test",
+        ],
+    );
+    assert!(!forced.status.success());
+    assert!(stderr(&forced).contains("accepts only one of --force or --if-state-token"));
 }
 
 #[test]

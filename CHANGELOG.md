@@ -6,6 +6,7 @@ All notable changes to OCM are documented here.
 
 ### Fixed
 
+- Add atomic state-token guards for automation that previews and destroys environments.
 - Keep automatically assigned gateway ports stable across create, show, list, and status output.
 - Give cloned and imported environments independent service state and collision-free gateway ports.
 - Serialize environment registry transactions so concurrent lifecycle commands preserve every entry and allocate distinct ports.

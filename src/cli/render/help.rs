@@ -1345,7 +1345,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Destroy an environment",
             "Preview or remove an environment, its env snapshots, and its attached OCM-managed service.",
             vec![format!(
-                "{cmd} env destroy <name> [--yes] [--force] [--raw] [--json]"
+                "{cmd} env destroy <name> [--yes] [--force | --if-state-token <token>] [--raw] [--json]"
             )],
             &[
                 ("--yes", "Apply destruction instead of showing a preview"),
@@ -1353,12 +1353,17 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                     "--force",
                     "Override protection checks and destroy the env anyway",
                 ),
+                (
+                    "--if-state-token <token>",
+                    "Apply only if state still matches a JSON preview",
+                ),
                 ("--raw", "Force plain output instead of TTY cards"),
                 ("--json", "Print the destroy preview or result as JSON"),
             ],
             vec![
                 format!("{cmd} env destroy mira"),
                 format!("{cmd} env destroy mira --yes"),
+                format!("{cmd} env destroy mira --yes --if-state-token <token>"),
                 format!("{cmd} env destroy mira --yes --force"),
             ],
             &[

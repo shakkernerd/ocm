@@ -10,6 +10,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use super::{Cli, render};
 use crate::env::{
@@ -21,6 +22,7 @@ use crate::infra::process::{run_direct, run_shell};
 use crate::infra::shell::{
     build_openclaw_dev_source_env, build_openclaw_env, render_use_script, resolve_shell_name,
 };
+use crate::service::ServiceSummary;
 use crate::store::{
     clear_skip_bootstrap_for_openclaw_onboarding, derive_env_paths, summarize_env, validate_name,
 };
@@ -46,6 +48,9 @@ pub(crate) struct EnvDestroySummary {
     pub service_loaded: bool,
     pub service_running: bool,
     pub service_label: String,
+    pub state_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     pub blockers: Vec<String>,
     pub steps: Vec<EnvDestroyStepSummary>,
     pub snapshots_removed: usize,
@@ -53,6 +58,15 @@ pub(crate) struct EnvDestroySummary {
     pub processes_terminated: usize,
     pub worktree_removed: bool,
     pub removed: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvDestroyState<'a> {
+    kind: &'static str,
+    environment: &'a EnvMeta,
+    service: &'a ServiceSummary,
+    process_candidates: &'a [u32],
 }
 
 fn should_clear_skip_bootstrap_for_openclaw_args(args: &[String]) -> bool {
@@ -119,13 +133,28 @@ impl Cli {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "env destroy")?;
         let (args, yes) = Self::consume_flag(args, "--yes");
         let (args, force) = Self::consume_flag(args, "--force");
+        let (args, expected_state_token) = Self::consume_option(args, "--if-state-token")?;
         let Some(name) = args.first() else {
             return Err("environment name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let mut summary = self.build_env_destroy_summary(name, yes, force)?;
+        if expected_state_token.is_some() && !yes {
+            return Err("--if-state-token requires --yes".to_string());
+        }
+        if expected_state_token
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err("--if-state-token requires a non-empty value".to_string());
+        }
+        if expected_state_token.is_some() && force {
+            return Err("env destroy accepts only one of --force or --if-state-token".to_string());
+        }
+
         if !yes {
+            let _operation_lock = self.environment_service().lock_operation(name)?;
+            let summary = self.build_env_destroy_summary(name, false, force)?;
             if json_flag {
                 self.print_json(&summary)?;
                 return Ok(0);
@@ -137,6 +166,31 @@ impl Cli {
                 &self.command_example(),
             ));
             return Ok(0);
+        }
+
+        // Service and binding mutations use the same per-env lock. Keep it
+        // through validation and teardown so a successful guard cannot go stale.
+        let _operation_lock = self.environment_service().lock_operation(name)?;
+        let mut summary = self.build_env_destroy_summary(name, true, force)?;
+        if expected_state_token
+            .as_deref()
+            .is_some_and(|expected| expected != summary.state_token)
+        {
+            summary.code = Some("state_changed".to_string());
+            summary.blockers.push(
+                "environment state changed since destroy preview; request a new preview"
+                    .to_string(),
+            );
+            if json_flag {
+                self.print_json(&summary)?;
+            } else {
+                self.stdout_lines(render::env::env_destroy_preview(
+                    &summary,
+                    profile,
+                    &self.command_example(),
+                ));
+            }
+            return Ok(1);
         }
 
         if !summary.blockers.is_empty() {
@@ -162,13 +216,13 @@ impl Cli {
             .collect::<Vec<_>>();
 
         if summary.service_installed || summary.service_loaded || summary.service_running {
-            self.service_service().uninstall(name)?;
+            self.service_service().uninstall_locked(name)?;
             summary.service_uninstalled = true;
         }
 
         summary.processes_terminated = self.terminate_env_processes(&env_meta)?;
 
-        self.environment_service().remove(name, force)?;
+        self.environment_service().remove_locked(name, force)?;
         summary.removed = true;
         summary.worktree_removed = env_meta
             .dev
@@ -832,9 +886,11 @@ impl Cli {
         let service = self.service_service().status(name)?;
         let snapshots = self.environment_service().list_snapshots(Some(name))?;
         let mut blockers = Vec::new();
-        let process_candidates = self
+        let mut process_candidates = self
             .destroy_process_candidates(&env_meta)
             .unwrap_or_default();
+        process_candidates.sort_unstable();
+        let state_token = env_destroy_state_token(&env_meta, &service, &process_candidates)?;
 
         if env_meta.protected && !force {
             blockers.push("env is protected; re-run with --force to destroy it".to_string());
@@ -881,6 +937,8 @@ impl Cli {
             service_loaded: service.loaded,
             service_running: service.running,
             service_label: "ocm".to_string(),
+            state_token,
+            code: None,
             blockers,
             steps,
             snapshots_removed: 0,
@@ -1158,6 +1216,22 @@ impl Cli {
         ));
         Ok(0)
     }
+}
+
+fn env_destroy_state_token(
+    environment: &EnvMeta,
+    service: &ServiceSummary,
+    process_candidates: &[u32],
+) -> Result<String, String> {
+    let state = EnvDestroyState {
+        kind: "ocm-env-destroy-state-v1",
+        environment,
+        service,
+        process_candidates,
+    };
+    let encoded = serde_json::to_vec(&state)
+        .map_err(|error| format!("failed to encode environment destroy state: {error}"))?;
+    Ok(format!("v1:{:x}", Sha256::digest(encoded)))
 }
 
 #[cfg(unix)]
