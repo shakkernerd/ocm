@@ -705,7 +705,9 @@ pub fn remove_environment(
     }
 
     registry.envs.retain(|entry| entry.name != meta.name);
-    registry.service_policy_revisions.remove(&meta.name);
+    // Keep a monotonic tombstone so a stale rollback token cannot target a
+    // later environment that reuses the same name.
+    bump_service_policy_revision(&mut registry, &meta.name);
     write_env_registry(&mut registry, env, cwd)?;
 
     Ok(meta)
@@ -736,7 +738,7 @@ mod tests {
     use crate::env::CreateEnvironmentOptions;
 
     use super::{
-        NEXT_IMPORT_ID, Ordering, create_environment, get_environment,
+        NEXT_IMPORT_ID, Ordering, create_environment, get_environment, remove_environment,
         restore_environment_service_policy, save_environment, set_environment_service_policy,
     };
 
@@ -786,12 +788,34 @@ mod tests {
 
         let change =
             set_environment_service_policy("demo", Some(true), Some(true), &env, &cwd).unwrap();
-        let _same_policy =
+        let same_policy =
             set_environment_service_policy("demo", Some(true), Some(true), &env, &cwd).unwrap();
         assert!(!restore_environment_service_policy(&change, &env, &cwd).unwrap());
         let current = get_environment("demo", &env, &cwd).unwrap();
         assert!(current.service_enabled);
         assert!(current.service_running);
+
+        remove_environment("demo", false, &env, &cwd).unwrap();
+        create_environment(
+            CreateEnvironmentOptions {
+                name: "demo".to_string(),
+                root: None,
+                gateway_port: None,
+                service_enabled: false,
+                service_running: false,
+                default_runtime: None,
+                default_launcher: None,
+                dev: None,
+                protected: false,
+            },
+            &env,
+            &cwd,
+        )
+        .unwrap();
+        assert!(!restore_environment_service_policy(&same_policy, &env, &cwd).unwrap());
+        let recreated = get_environment("demo", &env, &cwd).unwrap();
+        assert!(!recreated.service_enabled);
+        assert!(!recreated.service_running);
 
         fs::remove_dir_all(root).unwrap();
     }
