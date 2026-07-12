@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -48,14 +49,25 @@ pub(crate) fn ensure_openclaw_worktree(
     let repo_root = detect_openclaw_checkout(repo_root)
         .ok_or_else(|| format!("OpenClaw checkout not found at {}", display_path(repo_root)))?;
     let worktree_root = default_worktree_root(&repo_root, env_name);
+    let registered = registered_worktree_paths(&repo_root)?;
+    let worktree_registered = contains_worktree_path(&registered, &worktree_root);
 
-    if is_existing_openclaw_worktree(&worktree_root) {
-        return Ok(worktree_root);
+    if worktree_registered {
+        if !worktree_root.exists() {
+            remove_registered_worktree(&repo_root, &worktree_root)?;
+        } else if is_existing_openclaw_worktree(&worktree_root) {
+            return Ok(worktree_root);
+        } else {
+            return Err(format!(
+                "registered worktree is not a valid OpenClaw checkout: {}",
+                display_path(&worktree_root)
+            ));
+        }
     }
 
     if worktree_root.exists() {
         return Err(format!(
-            "worktree path already exists and is not a valid OpenClaw worktree: {}",
+            "worktree path already exists but is not registered to this OpenClaw checkout: {}",
             display_path(&worktree_root)
         ));
     }
@@ -78,7 +90,10 @@ pub(crate) fn ensure_openclaw_worktree(
         return Err(format!("git worktree add failed: {detail}"));
     }
 
-    if !is_existing_openclaw_worktree(&worktree_root) {
+    let registered = registered_worktree_paths(&repo_root)?;
+    if !contains_worktree_path(&registered, &worktree_root)
+        || !is_existing_openclaw_worktree(&worktree_root)
+    {
         return Err(format!(
             "created worktree is not a valid OpenClaw checkout: {}",
             display_path(&worktree_root)
@@ -92,14 +107,25 @@ pub(crate) fn remove_openclaw_worktree(
     repo_root: &Path,
     worktree_root: &Path,
 ) -> Result<(), String> {
-    if !worktree_root.exists() {
+    let registered = registered_worktree_paths(repo_root)?;
+    if !contains_worktree_path(&registered, worktree_root) {
+        if worktree_root.exists() {
+            return Err(format!(
+                "refusing to remove worktree path not registered to this OpenClaw checkout: {}",
+                display_path(worktree_root)
+            ));
+        }
         return Ok(());
     }
 
+    remove_registered_worktree(repo_root, worktree_root)
+}
+
+fn remove_registered_worktree(repo_root: &Path, worktree_root: &Path) -> Result<(), String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root)
-        .args(["worktree", "remove", "--force"])
+        .args(["worktree", "remove"])
         .arg(worktree_root)
         .output()
         .map_err(|error| format!("failed to run git worktree remove: {error}"))?;
@@ -107,14 +133,65 @@ pub(crate) fn remove_openclaw_worktree(
         return Ok(());
     }
 
-    fs::remove_dir_all(worktree_root).map_err(|error| {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() { stderr } else { stdout };
+    Err(format!("git worktree remove failed: {detail}"))
+}
+
+fn registered_worktree_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["worktree", "list", "--porcelain", "-z"])
+        .output()
+        .map_err(|error| format!("failed to run git worktree list: {error}"))?;
+    if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.is_empty() {
-            error.to_string()
-        } else {
-            format!("{stderr}; fallback remove failed: {error}")
-        }
-    })
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!("git worktree list failed: {detail}"));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|_| "git worktree list returned a non-UTF-8 path".to_string())?;
+    Ok(stdout
+        .split('\0')
+        .filter_map(|field| field.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .collect())
+}
+
+fn contains_worktree_path(registered: &[PathBuf], expected: &Path) -> bool {
+    let expected = normalize_worktree_path(expected);
+    registered
+        .iter()
+        .any(|path| normalize_worktree_path(path) == expected)
+}
+
+fn normalize_worktree_path(path: &Path) -> PathBuf {
+    if let Ok(path) = fs::canonicalize(path) {
+        return path;
+    }
+
+    let mut ancestor = path;
+    let mut missing = Vec::<OsString>::new();
+    while !ancestor.exists() {
+        let Some(name) = ancestor.file_name() else {
+            return clean_path(path);
+        };
+        missing.push(name.to_os_string());
+        let Some(parent) = ancestor.parent() else {
+            return clean_path(path);
+        };
+        ancestor = parent;
+    }
+
+    let mut normalized = fs::canonicalize(ancestor).unwrap_or_else(|_| clean_path(ancestor));
+    for component in missing.into_iter().rev() {
+        normalized.push(component);
+    }
+    clean_path(&normalized)
 }
 
 fn is_existing_openclaw_worktree(path: &Path) -> bool {

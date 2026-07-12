@@ -91,6 +91,48 @@ fn init_openclaw_repo(root: &TestDir) -> PathBuf {
     repo
 }
 
+fn init_nested_openclaw_repo(path: &Path) {
+    fs::create_dir_all(path.join("scripts")).unwrap();
+    fs::write(
+        path.join("package.json"),
+        r#"{"name":"openclaw","version":"2026.4.19"}"#,
+    )
+    .unwrap();
+    fs::write(path.join("scripts/run-node.mjs"), "console.log('run');\n").unwrap();
+    fs::write(path.join("SENTINEL"), "preserve me\n").unwrap();
+    let init = Command::new("git").arg("init").arg(path).output().unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+}
+
+fn git_worktree_paths(repo: &Path) -> Vec<PathBuf> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &path_string(repo),
+            "worktree",
+            "list",
+            "--porcelain",
+            "-z",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .split('\0')
+        .filter_map(|field| field.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .collect()
+}
+
 fn prepend_fake_bin(env: &mut std::collections::BTreeMap<String, String>, bin_dir: &Path) {
     let existing_path = env.get("PATH").cloned().unwrap_or_default();
     let combined_path = if existing_path.is_empty() {
@@ -173,6 +215,133 @@ fn dev_command_provisions_worktree_bootstraps_config_and_runs_gateway() {
         path_string(&worktree_root.join("extensions"))
     )));
     assert!(pnpm_log.contains(&format!("|devroot={}", path_string(&worktree_root))));
+}
+
+#[test]
+fn dev_command_rejects_an_unregistered_clone_at_the_managed_path() {
+    let root = TestDir::new("dev-command-unregistered-clone");
+    let repo = init_openclaw_repo(&root);
+    let worktree_root = repo.join(".worktrees/demo");
+    init_nested_openclaw_repo(&worktree_root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(!run.status.success());
+    assert!(
+        stderr(&run).contains("is not registered to this OpenClaw checkout"),
+        "{}",
+        stderr(&run)
+    );
+    assert_eq!(
+        fs::read_to_string(worktree_root.join("SENTINEL")).unwrap(),
+        "preserve me\n"
+    );
+}
+
+#[test]
+fn dev_command_recreates_an_exactly_registered_missing_worktree() {
+    let root = TestDir::new("dev-command-missing-worktree");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let first = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    let worktree_root = PathBuf::from(show_json["devWorktreeRoot"].as_str().unwrap());
+    fs::remove_dir_all(&worktree_root).unwrap();
+
+    let second = run_ocm(&cwd, &env, &["dev", "demo"]);
+    assert!(second.status.success(), "{}", stderr(&second));
+    assert!(worktree_root.join(".git").exists());
+    let canonical_worktree_root = fs::canonicalize(&worktree_root).unwrap();
+    assert_eq!(
+        git_worktree_paths(&repo)
+            .into_iter()
+            .filter(|path| fs::canonicalize(path).ok().as_ref() == Some(&canonical_worktree_root))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn env_remove_preserves_an_untracked_dev_worktree() {
+    let root = TestDir::new("dev-command-dirty-remove");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    let worktree_root = PathBuf::from(show_json["devWorktreeRoot"].as_str().unwrap());
+    fs::write(worktree_root.join("SENTINEL"), "preserve me\n").unwrap();
+
+    let remove = run_ocm(&cwd, &env, &["env", "remove", "demo", "--force"]);
+    assert!(!remove.status.success());
+    assert!(stderr(&remove).contains("contains modified or untracked files"));
+    assert_eq!(
+        fs::read_to_string(worktree_root.join("SENTINEL")).unwrap(),
+        "preserve me\n"
+    );
+    let still_registered = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(
+        still_registered.status.success(),
+        "{}",
+        stderr(&still_registered)
+    );
+}
+
+#[test]
+fn env_remove_refuses_an_unrelated_replacement_checkout() {
+    let root = TestDir::new("dev-command-replacement-remove");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    let worktree_root = PathBuf::from(show_json["devWorktreeRoot"].as_str().unwrap());
+    let detach = Command::new("git")
+        .args([
+            "-C",
+            &path_string(&repo),
+            "worktree",
+            "remove",
+            &path_string(&worktree_root),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        detach.status.success(),
+        "{}",
+        String::from_utf8_lossy(&detach.stderr)
+    );
+    init_nested_openclaw_repo(&worktree_root);
+
+    let remove = run_ocm(&cwd, &env, &["env", "remove", "demo", "--force"]);
+    assert!(!remove.status.success());
+    assert!(
+        stderr(&remove).contains("refusing to remove worktree path not registered"),
+        "{}",
+        stderr(&remove)
+    );
+    assert_eq!(
+        fs::read_to_string(worktree_root.join("SENTINEL")).unwrap(),
+        "preserve me\n"
+    );
 }
 
 #[test]

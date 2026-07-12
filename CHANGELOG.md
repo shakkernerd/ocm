@@ -23,3 +23,4 @@ All notable changes to OCM are documented here.
 - Report launcher and environment rollback failures alongside the original migration error instead of hiding partial cleanup.
 - Make release preparation rollback-safe, verify signed annotated tags on every resume path, and publish branch and tag refs atomically.
 - Build locked release artifacts only from a GitHub-verified tag matching the package version, require the complete supported target matrix before publication, publish a versioned checksum-verifying installer, pin CI actions, and test the declared Rust 1.88 minimum.
+- Preserve uncommitted dev worktrees and reject unrelated checkout collisions by requiring exact Git worktree registration before reuse or removal.
