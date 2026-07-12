@@ -349,10 +349,19 @@ fn service_start_still_requires_a_managed_service_backend() {
     fs::create_dir_all(&cwd).unwrap();
     let env = unsupported_env(&root);
     setup_launcher_env(&cwd, &env);
+    let before = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(before.status.success(), "{}", stderr(&before));
+    let before = json_output(&before);
 
     let output = run_ocm(&cwd, &env, &["service", "start", "demo"]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("managed services are not supported on this platform yet"));
+
+    let after = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(after.status.success(), "{}", stderr(&after));
+    let after = json_output(&after);
+    assert_eq!(after["serviceEnabled"], before["serviceEnabled"]);
+    assert_eq!(after["serviceRunning"], before["serviceRunning"]);
 }
 
 #[test]

@@ -23,7 +23,7 @@ use crate::service::platform::{
     managed_service_identity, service_manager_kind, write_managed_service_definition,
 };
 use crate::store::{
-    display_path, ensure_dir, ensure_store, list_environments, now_utc,
+    display_path, ensure_dir, ensure_store, list_environments, lock_file, now_utc,
     openclaw_port_family_available, openclaw_port_family_range, read_json, resolve_ocm_home,
     supervisor_logs_dir, supervisor_runtime_path, supervisor_state_path, write_json,
 };
@@ -258,6 +258,7 @@ impl<'a> SupervisorService<'a> {
     pub fn sync(&self) -> Result<SupervisorView, String> {
         let state_path = supervisor_state_path(self.env, self.cwd)?;
         let mut state = self.build_state()?;
+        let _lock = lock_supervisor_state(&state_path)?;
         preserve_persisted_restart_requests(&state_path, &mut state);
         if let Some(parent) = state_path.parent() {
             ensure_dir(parent)?;
@@ -335,17 +336,27 @@ impl<'a> SupervisorService<'a> {
     }
 
     pub fn recover_child_restart(&self, name: &str) -> Result<SupervisorDaemonSummary, String> {
+        self.recover_child_restart_with_request_id(name)
+            .map(|(summary, _)| summary)
+    }
+
+    pub(crate) fn recover_child_restart_with_request_id(
+        &self,
+        name: &str,
+    ) -> Result<(SupervisorDaemonSummary, String), String> {
         // Reissue only the target request; a full sync could reload unrelated children.
-        let _ = self.request_child_restart(name)?;
+        let request_id = self.request_child_restart(name)?;
         let status = self.daemon_status()?;
         if status.running {
-            return Ok(status);
+            return Ok((status, request_id));
         }
         self.activate_daemon("install")
+            .map(|summary| (summary, request_id))
     }
 
     pub fn request_child_restart(&self, name: &str) -> Result<String, String> {
         let state_path = supervisor_state_path(self.env, self.cwd)?;
+        let _lock = lock_supervisor_state(&state_path)?;
         let mut state = self.build_state()?;
         if let Ok(persisted_state) = read_json::<SupervisorState>(&state_path) {
             preserve_persisted_child_specs_except(&mut state, persisted_state.children, name);
@@ -374,6 +385,8 @@ impl<'a> SupervisorService<'a> {
     }
 
     pub fn clear_child_restart_request(&self, name: &str, request_id: &str) -> Result<(), String> {
+        let state_path = supervisor_state_path(self.env, self.cwd)?;
+        let _lock = lock_supervisor_state(&state_path)?;
         let (state_path, mut state) = self.read_persisted_state()?;
         let previous_len = state.restart_requests.len();
         state
@@ -688,6 +701,11 @@ impl<'a> SupervisorService<'a> {
             child_results,
         })
     }
+}
+
+fn lock_supervisor_state(state_path: &Path) -> Result<crate::store::ExclusiveFileLock, String> {
+    let lock_path = state_path.with_extension("lock");
+    lock_file(&lock_path, "supervisor state")
 }
 
 struct RunningSupervisorChild {
@@ -1124,6 +1142,17 @@ fn clear_processed_restart_requests(
         return;
     }
 
+    let _lock = match lock_supervisor_state(state_path) {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!(
+                "ocm service: failed locking state to clear processed restart request {}: {}",
+                display_path(state_path),
+                error
+            );
+            return;
+        }
+    };
     let mut state = match read_json::<SupervisorState>(state_path) {
         Ok(state) => state,
         Err(error) => {

@@ -8,6 +8,7 @@ use serde::Serialize;
 use super::inspect::ServiceSummary;
 use super::service_backend_support_error;
 use crate::env::EnvironmentService;
+use crate::store::save_environment;
 use crate::supervisor::SupervisorService;
 
 #[derive(Clone, Debug, Serialize)]
@@ -129,26 +130,40 @@ pub fn restart_service(
     }
 
     let supervisor = SupervisorService::new(env, cwd);
-    let request_id = supervisor.request_child_restart(name)?;
+    let mut request_id = supervisor.request_child_restart(name)?;
     let restart_result = wait_for_restart_action_summary(name, before.child_pid, env, cwd);
     match restart_result {
         Ok(mut status) => {
-            if status.observed_restart {
-                if let Err(clear_error) = supervisor.clear_child_restart_request(name, &request_id)
-                {
-                    status.warnings.push(format!(
-                        "restart completed, but failed to clear restart request: {clear_error}"
-                    ));
+            if !status.observed_restart {
+                let (_, recovery_request_id) = supervisor
+                    .recover_child_restart_with_request_id(name)
+                    .map_err(|error| {
+                        format!(
+                            "gateway restart was not observed and targeted supervisor recovery failed: {error}"
+                        )
+                    })?;
+                request_id = recovery_request_id;
+                status = wait_for_restart_action_summary_with_timeout(
+                    name,
+                    before.child_pid,
+                    Duration::from_secs(5),
+                    env,
+                    cwd,
+                )?;
+                if !status.observed_restart {
+                    return Err(
+                        "gateway restart was not observed after targeted supervisor recovery"
+                            .to_string(),
+                    );
                 }
-            } else {
-                match supervisor.recover_child_restart(name) {
-                    Ok(_) => status.warnings.push(
-                        "gateway restart was not observed; the targeted restart request was requeued and the supervisor was rechecked".to_string(),
-                    ),
-                    Err(error) => status.warnings.push(format!(
-                        "gateway restart was not observed; targeted supervisor recovery failed: {error}"
-                    )),
-                }
+                status
+                    .warnings
+                    .push("gateway restart required targeted supervisor recovery".to_string());
+            }
+            if let Err(clear_error) = supervisor.clear_child_restart_request(name, &request_id) {
+                status.warnings.push(format!(
+                    "restart completed, but failed to clear restart request: {clear_error}"
+                ));
             }
             Ok(service_action_summary(
                 "restart",
@@ -209,13 +224,20 @@ fn update_service(
     if require_binding {
         ensure_gateway_binding(name, env, cwd)?;
     }
-    EnvironmentService::new(env, cwd).set_service_policy_locked(
-        name,
-        service_enabled,
-        service_running,
-    )?;
+    let env_service = EnvironmentService::new(env, cwd);
+    let previous = env_service.get(name)?;
     if let ServiceSupervisorPolicy::EnsureRunning = supervisor_policy {
         ensure_supervisor_running(env, cwd)?;
+    }
+    if let Err(error) = env_service.set_service_policy(name, service_enabled, service_running) {
+        let rollback = save_environment(previous, env, cwd)
+            .and_then(|_| SupervisorService::new(env, cwd).sync().map(|_| ()));
+        return match rollback {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(format!(
+                "{error}; failed to restore the previous service policy: {rollback_error}"
+            )),
+        };
     }
     let (summary, warnings) = wait_for_action_summary(name, action, env, cwd)?;
     Ok(service_action_summary(action, summary, warnings))
@@ -260,7 +282,23 @@ fn wait_for_restart_action_summary(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<RestartActionStatus, String> {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    wait_for_restart_action_summary_with_timeout(
+        name,
+        previous_pid,
+        Duration::from_secs(30),
+        env,
+        cwd,
+    )
+}
+
+fn wait_for_restart_action_summary_with_timeout(
+    name: &str,
+    previous_pid: Option<u32>,
+    timeout: Duration,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<RestartActionStatus, String> {
+    let deadline = Instant::now() + timeout;
     let mut latest = super::inspect::service_status_fast(name, env, cwd)?;
     while Instant::now() < deadline {
         if latest.running
