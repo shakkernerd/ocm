@@ -119,6 +119,7 @@ impl<'a> EnvironmentService<'a> {
         &self,
         options: CreateEnvSnapshotOptions,
     ) -> Result<EnvSnapshotSummary, String> {
+        let _lock = self.lock_operation(&options.env_name)?;
         let meta = create_env_snapshot(options, self.env, self.cwd)?;
         Ok(summarize_snapshot(&meta))
     }
@@ -147,12 +148,21 @@ impl<'a> EnvironmentService<'a> {
         &self,
         options: RestoreEnvSnapshotOptions,
     ) -> Result<EnvSnapshotRestoreSummary, String> {
+        let _lock = self.lock_operation(&options.env_name)?;
         let summary = restore_env_snapshot(options, self.env, self.cwd)?;
         sync_supervisor_if_present(self.env, self.cwd)?;
         Ok(summary)
     }
 
     pub fn remove_snapshot(
+        &self,
+        options: RemoveEnvSnapshotOptions,
+    ) -> Result<EnvSnapshotRemoveSummary, String> {
+        let _lock = self.lock_operation(&options.env_name)?;
+        self.remove_snapshot_locked(options)
+    }
+
+    pub(crate) fn remove_snapshot_locked(
         &self,
         options: RemoveEnvSnapshotOptions,
     ) -> Result<EnvSnapshotRemoveSummary, String> {
@@ -183,6 +193,7 @@ impl<'a> EnvironmentService<'a> {
         let candidates = self.prune_snapshot_candidates(env_name, keep, older_than_days)?;
         let mut removed = Vec::with_capacity(candidates.len());
         for candidate in candidates {
+            let _lock = self.lock_operation(&candidate.env_name)?;
             removed.push(remove_env_snapshot(
                 RemoveEnvSnapshotOptions {
                     env_name: candidate.env_name,

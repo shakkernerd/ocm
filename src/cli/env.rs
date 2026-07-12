@@ -10,17 +10,19 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use super::{Cli, render};
 use crate::env::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvMeta,
-    EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions, RemoveEnvSnapshotOptions,
-    RestoreEnvSnapshotOptions,
+    EnvSnapshotSummary, EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
 };
 use crate::infra::process::{run_direct, run_shell};
 use crate::infra::shell::{
     build_openclaw_dev_source_env, build_openclaw_env, render_use_script, resolve_shell_name,
 };
+use crate::service::ServiceSummary;
 use crate::store::{
     clear_skip_bootstrap_for_openclaw_onboarding, derive_env_paths, summarize_env, validate_name,
 };
@@ -30,6 +32,21 @@ use crate::store::{
 pub(crate) struct EnvDestroyStepSummary {
     pub kind: String,
     pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EnvDestroyProcessIdentity {
+    // Parent, cwd, and argv can change or contain credentials. PID plus a
+    // normalized start time detects reuse without exposing mutable details.
+    pid: u32,
+    started_at: String,
+}
+
+#[derive(Debug)]
+struct ProcessTerminationError {
+    terminated: usize,
+    message: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -46,6 +63,12 @@ pub(crate) struct EnvDestroySummary {
     pub service_loaded: bool,
     pub service_running: bool,
     pub service_label: String,
+    pub process_count: usize,
+    #[serde(skip)]
+    pub(crate) process_candidates: Vec<EnvDestroyProcessIdentity>,
+    pub state_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     pub blockers: Vec<String>,
     pub steps: Vec<EnvDestroyStepSummary>,
     pub snapshots_removed: usize,
@@ -53,6 +76,16 @@ pub(crate) struct EnvDestroySummary {
     pub processes_terminated: usize,
     pub worktree_removed: bool,
     pub removed: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvDestroyState<'a> {
+    kind: &'static str,
+    environment: &'a EnvMeta,
+    service: &'a ServiceSummary,
+    process_candidates: &'a [EnvDestroyProcessIdentity],
+    snapshots: &'a [EnvSnapshotSummary],
 }
 
 fn should_clear_skip_bootstrap_for_openclaw_args(args: &[String]) -> bool {
@@ -119,13 +152,28 @@ impl Cli {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "env destroy")?;
         let (args, yes) = Self::consume_flag(args, "--yes");
         let (args, force) = Self::consume_flag(args, "--force");
+        let (args, expected_state_token) = Self::consume_option(args, "--if-state-token")?;
         let Some(name) = args.first() else {
             return Err("environment name is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let mut summary = self.build_env_destroy_summary(name, yes, force)?;
+        if expected_state_token.is_some() && !yes {
+            return Err("--if-state-token requires --yes".to_string());
+        }
+        if expected_state_token
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err("--if-state-token requires a non-empty value".to_string());
+        }
+        if expected_state_token.is_some() && force {
+            return Err("env destroy accepts only one of --force or --if-state-token".to_string());
+        }
+
         if !yes {
+            let _operation_lock = self.environment_service().lock_operation(name)?;
+            let summary = self.build_env_destroy_summary(name, false, force)?;
             if json_flag {
                 self.print_json(&summary)?;
                 return Ok(0);
@@ -137,6 +185,31 @@ impl Cli {
                 &self.command_example(),
             ));
             return Ok(0);
+        }
+
+        // Service and binding mutations use the same per-env lock. Keep it
+        // through validation and teardown so a successful guard cannot go stale.
+        let _operation_lock = self.environment_service().lock_operation(name)?;
+        let mut summary = self.build_env_destroy_summary(name, true, force)?;
+        if expected_state_token
+            .as_deref()
+            .is_some_and(|expected| expected != summary.state_token)
+        {
+            summary.code = Some("state_changed".to_string());
+            summary.blockers.push(
+                "environment state changed since destroy preview; request a new preview"
+                    .to_string(),
+            );
+            if json_flag {
+                self.print_json(&summary)?;
+            } else {
+                self.stdout_lines(render::env::env_destroy_preview(
+                    &summary,
+                    profile,
+                    &self.command_example(),
+                ));
+            }
+            return Ok(1);
         }
 
         if !summary.blockers.is_empty() {
@@ -162,13 +235,66 @@ impl Cli {
             .collect::<Vec<_>>();
 
         if summary.service_installed || summary.service_loaded || summary.service_running {
-            self.service_service().uninstall(name)?;
+            self.service_service().uninstall_locked(name)?;
             summary.service_uninstalled = true;
         }
 
-        summary.processes_terminated = self.terminate_env_processes(&env_meta)?;
+        if expected_state_token.is_some() {
+            summary.processes_terminated =
+                match self.terminate_env_processes_exact(&summary.process_candidates) {
+                    Ok(count) => count,
+                    Err(error) => {
+                        summary.processes_terminated = error.terminated;
+                        summary.code = Some("partial_apply".to_string());
+                        summary.blockers.push(format!(
+                            "process teardown failed after environment teardown began: {}",
+                            error.message
+                        ));
+                        if json_flag {
+                            self.print_json(&summary)?;
+                        } else {
+                            self.stdout_lines(render::env::env_destroy_preview(
+                                &summary,
+                                profile,
+                                &self.command_example(),
+                            ));
+                        }
+                        return Ok(1);
+                    }
+                };
+        } else {
+            summary.processes_terminated = self.terminate_env_processes(&env_meta)?;
+        }
+        let process_change = if expected_state_token.is_some() {
+            match self.destroy_process_candidates(&env_meta) {
+                Ok(candidates) if candidates.is_empty() => None,
+                Ok(_) => Some(
+                    "environment process state changed after teardown began; preview again to finish cleanup"
+                        .to_string(),
+                ),
+                Err(error) => Some(format!(
+                    "process state could not be verified after teardown began: {error}"
+                )),
+            }
+        } else {
+            None
+        };
+        if let Some(blocker) = process_change {
+            summary.code = Some("partial_apply".to_string());
+            summary.blockers.push(blocker);
+            if json_flag {
+                self.print_json(&summary)?;
+            } else {
+                self.stdout_lines(render::env::env_destroy_preview(
+                    &summary,
+                    profile,
+                    &self.command_example(),
+                ));
+            }
+            return Ok(1);
+        }
 
-        self.environment_service().remove(name, force)?;
+        self.environment_service().remove_locked(name, force)?;
         summary.removed = true;
         summary.worktree_removed = env_meta
             .dev
@@ -179,7 +305,7 @@ impl Cli {
         // remove them only after the environment and worktree are gone.
         for snapshot_id in &snapshot_ids {
             self.environment_service()
-                .remove_snapshot(RemoveEnvSnapshotOptions {
+                .remove_snapshot_locked(RemoveEnvSnapshotOptions {
                     env_name: name.clone(),
                     snapshot_id: snapshot_id.clone(),
                 })?;
@@ -830,11 +956,12 @@ impl Cli {
     ) -> Result<EnvDestroySummary, String> {
         let env_meta = self.environment_service().get(name)?;
         let service = self.service_service().status(name)?;
-        let snapshots = self.environment_service().list_snapshots(Some(name))?;
+        let mut snapshots = self.environment_service().list_snapshots(Some(name))?;
+        snapshots.sort_by(|left, right| left.id.cmp(&right.id));
         let mut blockers = Vec::new();
-        let process_candidates = self
-            .destroy_process_candidates(&env_meta)
-            .unwrap_or_default();
+        let process_candidates = self.destroy_process_candidates(&env_meta)?;
+        let state_token =
+            env_destroy_state_token(&env_meta, &service, &process_candidates, &snapshots)?;
 
         if env_meta.protected && !force {
             blockers.push("env is protected; re-run with --force to destroy it".to_string());
@@ -881,6 +1008,10 @@ impl Cli {
             service_loaded: service.loaded,
             service_running: service.running,
             service_label: "ocm".to_string(),
+            process_count: process_candidates.len(),
+            process_candidates,
+            state_token,
+            code: None,
             blockers,
             steps,
             snapshots_removed: 0,
@@ -895,8 +1026,18 @@ impl Cli {
         terminate_associated_processes(meta)
     }
 
-    fn destroy_process_candidates(&self, meta: &EnvMeta) -> Result<Vec<u32>, String> {
-        associated_process_pids(meta)
+    fn terminate_env_processes_exact(
+        &self,
+        candidates: &[EnvDestroyProcessIdentity],
+    ) -> Result<usize, ProcessTerminationError> {
+        terminate_exact_processes(candidates)
+    }
+
+    fn destroy_process_candidates(
+        &self,
+        meta: &EnvMeta,
+    ) -> Result<Vec<EnvDestroyProcessIdentity>, String> {
+        associated_processes(meta)
     }
 
     pub(super) fn handle_env_use(&self, args: Vec<String>) -> Result<i32, String> {
@@ -1160,21 +1301,37 @@ impl Cli {
     }
 }
 
+fn env_destroy_state_token(
+    environment: &EnvMeta,
+    service: &ServiceSummary,
+    process_candidates: &[EnvDestroyProcessIdentity],
+    snapshots: &[EnvSnapshotSummary],
+) -> Result<String, String> {
+    let state = EnvDestroyState {
+        kind: "ocm-env-destroy-state-v1",
+        environment,
+        service,
+        process_candidates,
+        snapshots,
+    };
+    let encoded = serde_json::to_vec(&state)
+        .map_err(|error| format!("failed to encode environment destroy state: {error}"))?;
+    Ok(format!("v1:{:x}", Sha256::digest(encoded)))
+}
+
 #[cfg(unix)]
 fn terminate_associated_processes(meta: &EnvMeta) -> Result<usize, String> {
-    let pids = associated_process_pids(meta)?;
-    if pids.is_empty() {
+    let candidates = associated_processes(meta)?;
+    if candidates.is_empty() {
         return Ok(0);
     }
 
-    for pid in &pids {
-        terminate_pid(*pid)?;
-    }
+    terminate_exact_processes(&candidates).map_err(|error| error.message)?;
 
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
-        if associated_process_pids(meta)?.is_empty() {
-            return Ok(pids.len());
+        if associated_processes(meta)?.is_empty() {
+            return Ok(candidates.len());
         }
         sleep(Duration::from_millis(100));
     }
@@ -1188,7 +1345,87 @@ fn terminate_associated_processes(_meta: &EnvMeta) -> Result<usize, String> {
 }
 
 #[cfg(unix)]
-fn associated_process_pids(meta: &EnvMeta) -> Result<Vec<u32>, String> {
+fn terminate_exact_processes(
+    candidates: &[EnvDestroyProcessIdentity],
+) -> Result<usize, ProcessTerminationError> {
+    let mut terminated = 0;
+    for candidate in candidates {
+        let current =
+            current_process_identity(candidate.pid).map_err(|message| ProcessTerminationError {
+                terminated,
+                message,
+            })?;
+        if current.as_ref() != Some(candidate) {
+            continue;
+        }
+        terminate_pid(candidate.pid).map_err(|message| ProcessTerminationError {
+            terminated,
+            message,
+        })?;
+        let current =
+            current_process_identity(candidate.pid).map_err(|message| ProcessTerminationError {
+                terminated,
+                message,
+            })?;
+        if current.as_ref() == Some(candidate) {
+            return Err(ProcessTerminationError {
+                terminated,
+                message: format!("failed to terminate pid {}", candidate.pid),
+            });
+        }
+        terminated += 1;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        let mut remaining = false;
+        for candidate in candidates {
+            let current = current_process_identity(candidate.pid).map_err(|message| {
+                ProcessTerminationError {
+                    terminated,
+                    message,
+                }
+            })?;
+            if current.as_ref() == Some(candidate) {
+                remaining = true;
+                break;
+            }
+        }
+        if !remaining {
+            return Ok(terminated);
+        }
+        sleep(Duration::from_millis(100));
+    }
+    Err(ProcessTerminationError {
+        terminated,
+        message: "failed to terminate the previewed env processes".to_string(),
+    })
+}
+
+#[cfg(not(unix))]
+fn terminate_exact_processes(
+    _candidates: &[EnvDestroyProcessIdentity],
+) -> Result<usize, ProcessTerminationError> {
+    Ok(0)
+}
+
+#[cfg(unix)]
+fn associated_processes(meta: &EnvMeta) -> Result<Vec<EnvDestroyProcessIdentity>, String> {
+    let first = associated_processes_once(meta)?;
+    if first.is_empty() {
+        return Ok(first);
+    }
+    let second = associated_processes_once(meta)?;
+    if first != second {
+        return Err(
+            "environment process state changed during inspection; retry the command".to_string(),
+        );
+    }
+    Ok(second)
+}
+
+#[cfg(unix)]
+fn associated_processes_once(meta: &EnvMeta) -> Result<Vec<EnvDestroyProcessIdentity>, String> {
     let processes = process_table()?;
     let cwd_map = process_cwd_map(&processes)?;
     let parent_map = processes
@@ -1205,11 +1442,10 @@ fn associated_process_pids(meta: &EnvMeta) -> Result<Vec<u32>, String> {
 
     let mut seeds = BTreeSet::new();
     for process in &processes {
-        let command = process_command(process.pid)?;
-        if interactive_shell_command(&command) {
+        if interactive_shell_command(&process.command) {
             continue;
         }
-        if process_belongs_to_env(process.pid, &command, meta, &cwd_map) {
+        if process_belongs_to_env(process.pid, &process.command, meta, &cwd_map) {
             seeds.insert(process.pid);
         }
     }
@@ -1223,8 +1459,10 @@ fn associated_process_pids(meta: &EnvMeta) -> Result<Vec<u32>, String> {
     while let Some(pid) = queue.pop() {
         if let Some(children) = children_map.get(&pid) {
             for child in children {
-                let command = process_command(*child)?;
-                if interactive_shell_command(&command) {
+                let Some(process) = processes.iter().find(|process| process.pid == *child) else {
+                    continue;
+                };
+                if interactive_shell_command(&process.command) {
                     continue;
                 }
                 if related.insert(*child) {
@@ -1236,8 +1474,28 @@ fn associated_process_pids(meta: &EnvMeta) -> Result<Vec<u32>, String> {
 
     let depths = process_depths(&parent_map);
     let mut ordered = related.into_iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|pid| std::cmp::Reverse(depths.get(pid).copied().unwrap_or(0)));
-    Ok(ordered)
+    ordered.sort_by_key(|pid| {
+        (
+            std::cmp::Reverse(depths.get(pid).copied().unwrap_or(0)),
+            *pid,
+        )
+    });
+    ordered
+        .into_iter()
+        .map(|pid| {
+            process_start_id(pid)?
+                .map(|started_at| EnvDestroyProcessIdentity { pid, started_at })
+                .ok_or_else(|| {
+                    "environment process state changed during inspection; retry the command"
+                        .to_string()
+                })
+        })
+        .collect()
+}
+
+#[cfg(not(unix))]
+fn associated_processes(_meta: &EnvMeta) -> Result<Vec<EnvDestroyProcessIdentity>, String> {
+    Ok(Vec::new())
 }
 
 #[cfg(unix)]
@@ -1282,27 +1540,142 @@ fn process_belongs_to_env(
 struct ProcessEntry {
     pid: u32,
     ppid: u32,
+    command: String,
 }
 
 #[cfg(unix)]
 fn process_table() -> Result<Vec<ProcessEntry>, String> {
     let output = Command::new("ps")
-        .args(["-axo", "pid=,ppid="])
+        .args(["-axo", "pid=,ppid=,command="])
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
         .output()
         .map_err(|error| format!("failed to inspect running processes: {error}"))?;
     if !output.status.success() {
         return Err("failed to inspect running processes".to_string());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            let pid = parts.next()?.parse::<u32>().ok()?;
-            let ppid = parts.next()?.parse::<u32>().ok()?;
-            Some(ProcessEntry { pid, ppid })
-        })
-        .collect())
+    let mut processes = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(pid), Some(ppid)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let (Ok(pid), Ok(ppid)) = (pid.parse::<u32>(), ppid.parse::<u32>()) else {
+            continue;
+        };
+        let command = parts.collect::<Vec<_>>().join(" ");
+        processes.push(ProcessEntry { pid, ppid, command });
+    }
+    Ok(processes)
+}
+
+#[cfg(unix)]
+fn current_process_identity(pid: u32) -> Result<Option<EnvDestroyProcessIdentity>, String> {
+    if !process_alive(pid) {
+        return Ok(None);
+    }
+    Ok(process_start_id(pid)?.map(|started_at| EnvDestroyProcessIdentity { pid, started_at }))
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_id(pid: u32) -> Result<Option<String>, String> {
+    let path = format!("/proc/{pid}/stat");
+    let stat = match fs::read_to_string(&path) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect process start identity for pid {pid}: {error}"
+            ));
+        }
+    };
+    let Some(fields) = stat.rsplit_once(')').map(|(_, fields)| fields) else {
+        return Err(format!(
+            "failed to parse process start identity for pid {pid}"
+        ));
+    };
+    let Some(start_ticks) = fields.split_whitespace().nth(19) else {
+        return Err(format!(
+            "failed to parse process start identity for pid {pid}"
+        ));
+    };
+    Ok(Some(start_ticks.to_string()))
+}
+
+#[cfg(target_os = "macos")]
+fn process_start_id(pid: u32) -> Result<Option<String>, String> {
+    const PROC_PIDTBSDINFO: i32 = 3;
+    let mut info = std::mem::MaybeUninit::<ProcBsdInfo>::zeroed();
+    let size = std::mem::size_of::<ProcBsdInfo>() as i32;
+    // SAFETY: `info` is a correctly sized C-compatible buffer for
+    // `PROC_PIDTBSDINFO`; the return size is checked before initialization.
+    let bytes = unsafe {
+        proc_pidinfo(
+            pid as i32,
+            PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if bytes == 0 && !process_alive(pid) {
+        return Ok(None);
+    }
+    if bytes != size {
+        return Err(format!(
+            "failed to inspect process start identity for pid {pid}"
+        ));
+    }
+    // SAFETY: `proc_pidinfo` filled the complete buffer above.
+    let info = unsafe { info.assume_init() };
+    if info.pbi_pid != pid {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{}:{:06}",
+        info.pbi_start_tvsec, info.pbi_start_tvusec
+    )))
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn process_start_id(pid: u32) -> Result<Option<String>, String> {
+    Err(format!(
+        "process start identity inspection is unsupported for pid {pid} on this platform"
+    ))
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct ProcBsdInfo {
+    pbi_flags: u32,
+    pbi_status: u32,
+    pbi_xstatus: u32,
+    pbi_pid: u32,
+    pbi_ppid: u32,
+    pbi_uid: u32,
+    pbi_gid: u32,
+    pbi_ruid: u32,
+    pbi_rgid: u32,
+    pbi_svuid: u32,
+    pbi_svgid: u32,
+    rfu_1: u32,
+    pbi_comm: [i8; 16],
+    pbi_name: [i8; 32],
+    pbi_nfiles: u32,
+    pbi_pgid: u32,
+    pbi_pjobc: u32,
+    e_tdev: u32,
+    e_tpgid: u32,
+    pbi_nice: i32,
+    pbi_start_tvsec: u64,
+    pbi_start_tvusec: u64,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "proc")]
+unsafe extern "C" {
+    fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut u8, size: i32) -> i32;
 }
 
 #[cfg(unix)]
@@ -1398,18 +1771,6 @@ fn process_cwd_map(
         }
     }
     Ok(cwd_map)
-}
-
-#[cfg(unix)]
-fn process_command(pid: u32) -> Result<String, String> {
-    let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "command="])
-        .output()
-        .map_err(|error| format!("failed to inspect process command for pid {pid}: {error}"))?;
-    if !output.status.success() {
-        return Ok(String::new());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[cfg(unix)]

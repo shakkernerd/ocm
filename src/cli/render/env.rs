@@ -1736,6 +1736,10 @@ mod tests {
             service_loaded: true,
             service_running: false,
             service_label: "ocm".to_string(),
+            process_count: 0,
+            process_candidates: Vec::new(),
+            state_token: "v1:test".to_string(),
+            code: None,
             blockers: if blocked {
                 vec!["manual review required before destroying this env".to_string()]
             } else {
