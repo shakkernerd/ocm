@@ -209,7 +209,11 @@ fn update_service(
     if require_binding {
         ensure_gateway_binding(name, env, cwd)?;
     }
-    EnvironmentService::new(env, cwd).set_service_policy(name, service_enabled, service_running)?;
+    EnvironmentService::new(env, cwd).set_service_policy_locked(
+        name,
+        service_enabled,
+        service_running,
+    )?;
     if let ServiceSupervisorPolicy::EnsureRunning = supervisor_policy {
         ensure_supervisor_running(env, cwd)?;
     }
