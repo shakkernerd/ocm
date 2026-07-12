@@ -852,12 +852,17 @@ while True:
     let deadline = Instant::now() + Duration::from_secs(5);
     while !ready.exists() && Instant::now() < deadline {
         if let Some(status) = child.try_wait().unwrap() {
+            let _ = child.wait();
             let log = fs::read_to_string(&helper_log).unwrap_or_default();
             panic!("replacement helper exited before becoming ready: {status}; {log}");
         }
         sleep(Duration::from_millis(50));
     }
-    assert!(ready.exists(), "replacement helper did not become ready");
+    if !ready.exists() {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("replacement helper did not become ready");
+    }
 
     let preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
     assert!(preview.status.success(), "{}", stderr(&preview));
@@ -889,6 +894,8 @@ while True:
                 .as_str()
                 .is_some_and(|message| message.contains("teardown began"))))
     );
+    let helper_status = child.wait().unwrap();
+    assert!(helper_status.success());
 
     let replacement_pid = fs::read_to_string(&replacement_pid)
         .unwrap()
