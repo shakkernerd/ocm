@@ -60,6 +60,8 @@ pub struct RuntimeMeta {
     #[serde(default)]
     pub source_sha256: Option<String>,
     #[serde(default)]
+    pub source_integrity: Option<String>,
+    #[serde(default)]
     pub release_version: Option<String>,
     #[serde(default)]
     pub release_channel: Option<String>,

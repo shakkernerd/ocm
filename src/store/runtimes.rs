@@ -255,6 +255,7 @@ struct RuntimeSourceDetails {
     url: Option<String>,
     manifest_url: Option<String>,
     sha256: Option<String>,
+    integrity: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -285,6 +286,16 @@ struct RuntimeInstallTarget {
     install_root: PathBuf,
     install_files: PathBuf,
     _lock: ExclusiveFileLock,
+}
+
+pub(crate) struct OfficialRuntimeInstallResult {
+    pub meta: RuntimeMeta,
+    pub reused: bool,
+}
+
+enum OfficialRuntimeInstallTarget {
+    Install(RuntimeInstallTarget),
+    Reuse(RuntimeMeta),
 }
 
 impl Drop for RuntimeInstallTarget {
@@ -545,6 +556,7 @@ fn build_installed_runtime_meta(
         source_url: source.url.clone(),
         source_manifest_url: source.manifest_url.clone(),
         source_sha256: source.sha256.clone(),
+        source_integrity: source.integrity.clone(),
         release_version: release.version.clone(),
         release_channel: release.channel.clone(),
         release_selector_kind: release.selector_kind.clone(),
@@ -616,9 +628,19 @@ fn prepare_runtime_install_target(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<RuntimeInstallTarget, String> {
+    let lock = lock_runtime(&name, env, cwd)?;
+    prepare_runtime_install_target_with_lock(name, replace_existing, env, cwd, lock)
+}
+
+fn prepare_runtime_install_target_with_lock(
+    name: String,
+    replace_existing: bool,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    lock: ExclusiveFileLock,
+) -> Result<RuntimeInstallTarget, String> {
     let final_meta_path = runtime_meta_path(&name, env, cwd)?;
     let final_install_root = runtime_install_root(&name, env, cwd)?;
-    let lock = lock_runtime(&name, env, cwd)?;
     let parent = final_install_root
         .parent()
         .ok_or_else(|| format!("runtime install root has no parent: {name}"))?;
@@ -642,6 +664,34 @@ fn prepare_runtime_install_target(
     })
 }
 
+fn prepare_official_runtime_install_target(
+    name: String,
+    force: bool,
+    source: &RuntimeSourceDetails,
+    release: &RuntimeReleaseDetails,
+    context: InstallContext<'_>,
+) -> Result<OfficialRuntimeInstallTarget, String> {
+    let lock = lock_runtime(&name, context.env, context.cwd)?;
+    let meta_path = runtime_meta_path(&name, context.env, context.cwd)?;
+    if path_exists(&meta_path) && !force {
+        let existing = get_runtime(&name, context.env, context.cwd)?;
+        let same_release = existing.release_version == release.version
+            && existing.release_channel == release.channel
+            && existing.release_selector_kind == release.selector_kind
+            && existing.release_selector_value == release.selector_value
+            && existing.source_url == source.url
+            && existing.source_manifest_url == source.manifest_url
+            && existing.source_integrity == source.integrity;
+        if same_release && runtime_integrity_issue(&existing, context.env).is_none() {
+            return Ok(OfficialRuntimeInstallTarget::Reuse(existing));
+        }
+        return Err(format!("runtime \"{name}\" already exists"));
+    }
+
+    prepare_runtime_install_target_with_lock(name, force, context.env, context.cwd, lock)
+        .map(OfficialRuntimeInstallTarget::Install)
+}
+
 fn lock_runtime(
     name: &str,
     env: &BTreeMap<String, String>,
@@ -661,7 +711,6 @@ fn lock_runtime(
 fn install_runtime_from_openclaw_package(
     target: RuntimeInstallTarget,
     source: RuntimeSourceDetails,
-    source_integrity: String,
     release: RuntimeReleaseDetails,
     description: Option<String>,
     context: InstallContext<'_>,
@@ -677,10 +726,13 @@ fn install_runtime_from_openclaw_package(
         let tarball_url = source.url.as_deref().ok_or_else(|| {
             "official OpenClaw runtime install requires a tarball URL".to_string()
         })?;
+        let source_integrity = source.integrity.as_deref().ok_or_else(|| {
+            "official OpenClaw runtime install requires source integrity".to_string()
+        })?;
         let archive_name = artifact_file_name_from_url(tarball_url)?;
         let archive_path = target.install_files.join(&archive_name);
         download_to_file(tarball_url, &archive_path)?;
-        verify_file_integrity(&archive_path, &source_integrity)?;
+        verify_file_integrity(&archive_path, source_integrity)?;
 
         let meta = stage_runtime_from_openclaw_package_archive(
             &target,
@@ -895,6 +947,7 @@ pub fn add_runtime(
         source_url: None,
         source_manifest_url: None,
         source_sha256: None,
+        source_integrity: None,
         release_version: None,
         release_channel: None,
         release_selector_kind: None,
@@ -1179,6 +1232,7 @@ pub fn install_runtime_from_official_openclaw_release(
         description,
         InstallContext { env, cwd },
     )
+    .map(|result| result.meta)
 }
 
 pub(crate) fn install_runtime_from_selected_official_openclaw_release(
@@ -1189,7 +1243,7 @@ pub(crate) fn install_runtime_from_selected_official_openclaw_release(
     release_details: RuntimeReleaseDetails,
     description: Option<String>,
     context: InstallContext<'_>,
-) -> Result<RuntimeMeta, String> {
+) -> Result<OfficialRuntimeInstallResult, String> {
     let source_integrity = release
         .integrity
         .as_deref()
@@ -1200,12 +1254,12 @@ pub(crate) fn install_runtime_from_selected_official_openclaw_release(
             )
         })
         .and_then(normalize_file_integrity)?;
-    let target = prepare_runtime_install_target(name, force, context.env, context.cwd)?;
     let description = trim_description(description)
         .or_else(|| Some(format!("Official OpenClaw release {}", release.version)));
     let source = RuntimeSourceDetails {
         url: Some(release.tarball_url),
         manifest_url: Some(releases_url),
+        integrity: Some(source_integrity),
         ..RuntimeSourceDetails::default()
     };
     let release = RuntimeReleaseDetails {
@@ -1214,14 +1268,18 @@ pub(crate) fn install_runtime_from_selected_official_openclaw_release(
         selector_kind: release_details.selector_kind,
         selector_value: release_details.selector_value,
     };
-    install_runtime_from_openclaw_package(
-        target,
-        source,
-        source_integrity,
-        release,
-        description,
-        context,
-    )
+    match prepare_official_runtime_install_target(name, force, &source, &release, context)? {
+        OfficialRuntimeInstallTarget::Reuse(meta) => {
+            Ok(OfficialRuntimeInstallResult { meta, reused: true })
+        }
+        OfficialRuntimeInstallTarget::Install(target) => {
+            install_runtime_from_openclaw_package(target, source, release, description, context)
+                .map(|meta| OfficialRuntimeInstallResult {
+                    meta,
+                    reused: false,
+                })
+        }
+    }
 }
 
 pub fn runtime_integrity_issue(

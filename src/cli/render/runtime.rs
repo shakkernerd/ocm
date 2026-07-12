@@ -245,6 +245,9 @@ pub fn runtime_show(
     if let Some(source_sha256) = meta.source_sha256.as_deref() {
         source_rows.push(KeyValueRow::plain("SHA-256", source_sha256));
     }
+    if let Some(source_integrity) = meta.source_integrity.as_deref() {
+        source_rows.push(KeyValueRow::plain("Integrity", source_integrity));
+    }
     push_card(&mut lines, "Source details", source_rows, profile.color);
 
     push_card(
@@ -313,6 +316,9 @@ fn runtime_show_raw(meta: &RuntimeMeta) -> Result<Vec<String>, String> {
     }
     if let Some(source_sha256) = meta.source_sha256.as_deref() {
         lines.insert("sourceSha256".to_string(), source_sha256.to_string());
+    }
+    if let Some(source_integrity) = meta.source_integrity.as_deref() {
+        lines.insert("sourceIntegrity".to_string(), source_integrity.to_string());
     }
     if let Some(release_version) = meta.release_version.as_deref() {
         lines.insert("releaseVersion".to_string(), release_version.to_string());
@@ -1163,6 +1169,7 @@ mod tests {
             source_url: None,
             source_manifest_url: None,
             source_sha256: None,
+            source_integrity: None,
             release_version: Some("2026.3.24".to_string()),
             release_channel: Some("stable".to_string()),
             release_selector_kind: Some(RuntimeReleaseSelectorKind::Channel),
@@ -1185,6 +1192,7 @@ mod tests {
             ),
             source_manifest_url: Some("https://registry.npmjs.org/openclaw".to_string()),
             source_sha256: Some("abc123".to_string()),
+            source_integrity: Some("sha512-abc123".to_string()),
             release_version: Some("2026.3.24".to_string()),
             release_channel: Some("stable".to_string()),
             release_selector_kind: Some(RuntimeReleaseSelectorKind::Channel),
