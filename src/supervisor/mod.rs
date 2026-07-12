@@ -257,8 +257,8 @@ impl<'a> SupervisorService<'a> {
 
     pub fn sync(&self) -> Result<SupervisorView, String> {
         let state_path = supervisor_state_path(self.env, self.cwd)?;
-        let mut state = self.build_state()?;
         let _lock = lock_supervisor_state(&state_path)?;
+        let mut state = self.build_state()?;
         preserve_persisted_restart_requests(&state_path, &mut state);
         if let Some(parent) = state_path.parent() {
             ensure_dir(parent)?;
