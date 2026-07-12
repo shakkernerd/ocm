@@ -919,7 +919,14 @@ fn concurrent_official_runtime_installs_reject_changed_integrity() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let first = first.spawn().unwrap();
-    std::thread::sleep(Duration::from_millis(250));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while tarball_server.requests().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "first installer did not request the runtime tarball"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     let second = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
     let first = first.wait_with_output().unwrap();
