@@ -6,6 +6,9 @@ All notable changes to OCM are documented here.
 
 ### Fixed
 
+- Match environment-owned processes by path components so destroy never targets sibling-prefix directories.
+- Replace copied OpenClaw config symlinks with environment-owned files without rewriting external targets.
+- Serialize environment cleanup with other mutations so repairs cannot save stale bindings or race destroy.
 - Add atomic state-token guards for automation that previews and destroys environments.
 - Keep automatically assigned gateway ports stable across create, show, list, and status output.
 - Give cloned and imported environments independent service state and collision-free gateway ports.
