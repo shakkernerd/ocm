@@ -76,6 +76,10 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     assert!(paths.contains("export OCM_HOME="));
     assert!(paths.contains("runtime which"));
     assert!(!paths.contains("$HOME/.ocm/runtimes"));
-    assert!(release_skill.contains("ocm runtime remove"));
+    assert!(release_skill.contains("OCM_BIN=<ocm-repo>/target/debug/ocm"));
+    assert!(release_skill.contains("\"$OCM_BIN\" runtime build-local"));
+    assert!(release_skill.contains("\"$OCM_BIN\" runtime verify"));
+    assert!(release_skill.contains("\"$OCM_BIN\" runtime remove"));
+    assert!(release_skill.contains("\"$OCM_BIN\" @<env> --"));
     assert!(matrix.contains("run-owned package runtime is removed"));
 }
