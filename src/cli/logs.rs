@@ -7,15 +7,17 @@ use crate::logs::LogComponentSummary;
 struct PrettyLogWriter<'a, W: Write> {
     inner: &'a mut W,
     profile: RenderProfile,
-    pending: String,
+    buffer_partial: bool,
+    pending: Vec<u8>,
 }
 
 impl<'a, W: Write> PrettyLogWriter<'a, W> {
-    fn new(inner: &'a mut W, profile: RenderProfile) -> Self {
+    fn new(inner: &'a mut W, profile: RenderProfile, buffer_partial: bool) -> Self {
         Self {
             inner,
             profile,
-            pending: String::new(),
+            buffer_partial,
+            pending: Vec::new(),
         }
     }
 
@@ -23,7 +25,8 @@ impl<'a, W: Write> PrettyLogWriter<'a, W> {
         if self.pending.is_empty() {
             return Ok(());
         }
-        let rendered = render::logs::render_log_text(&self.pending, self.profile);
+        let pending = String::from_utf8_lossy(&self.pending);
+        let rendered = render::logs::render_log_text(&pending, self.profile);
         self.inner
             .write_all(rendered.as_bytes())
             .map_err(|error| error.to_string())?;
@@ -34,12 +37,16 @@ impl<'a, W: Write> PrettyLogWriter<'a, W> {
 
 impl<W: Write> Write for PrettyLogWriter<'_, W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.pending.push_str(&String::from_utf8_lossy(buf));
-        while let Some(newline_index) = self.pending.find('\n') {
-            let line = self.pending[..=newline_index].to_string();
-            self.pending.drain(..=newline_index);
+        if !self.buffer_partial {
+            self.inner.write_all(buf)?;
+            return Ok(buf.len());
+        }
+        self.pending.extend_from_slice(buf);
+        while let Some(newline_index) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line = String::from_utf8_lossy(&self.pending[..=newline_index]);
             let rendered = render::logs::render_log_text(&line, self.profile);
             self.inner.write_all(rendered.as_bytes())?;
+            self.pending.drain(..=newline_index);
         }
         Ok(buf.len())
     }
@@ -94,7 +101,9 @@ impl Cli {
             let stdout = io::stdout();
             let mut handle = stdout.lock();
             if profile.pretty {
-                let mut writer = PrettyLogWriter::new(&mut handle, profile);
+                // Merged streams need complete records for ordering and rendering.
+                // A single stream must forward partial bytes immediately.
+                let mut writer = PrettyLogWriter::new(&mut handle, profile, stream == "all");
                 self.log_service()
                     .follow(name, stream, tail_lines, &mut writer)?;
                 writer.finish()?;
@@ -143,4 +152,42 @@ fn follow_components(targets: Vec<crate::logs::LogTarget>) -> Vec<LogComponentSu
             path: target.path.to_string_lossy().into_owned(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PrettyLogWriter;
+    use crate::cli::render::RenderProfile;
+    use std::io::Write;
+
+    #[test]
+    fn pretty_writer_preserves_utf8_split_across_writes() {
+        let mut output = Vec::new();
+        let mut writer = PrettyLogWriter::new(&mut output, RenderProfile::raw(), true);
+        writer.write_all(&[b'a', 0xe2]).unwrap();
+        writer.write_all(&[0x82, 0xac, b'\n']).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "a€\n");
+    }
+
+    #[test]
+    fn pretty_writer_replaces_invalid_utf8_without_failing() {
+        let mut output = Vec::new();
+        let mut writer = PrettyLogWriter::new(&mut output, RenderProfile::raw(), true);
+        writer.write_all(b"valid\ninvalid \xff\n").unwrap();
+        writer.finish().unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "valid\ninvalid \u{fffd}\n"
+        );
+    }
+
+    #[test]
+    fn single_stream_writer_forwards_unterminated_bytes_immediately() {
+        let mut output = Vec::new();
+        let mut writer = PrettyLogWriter::new(&mut output, RenderProfile::pretty(false), false);
+        writer.write_all(b"progress \xff").unwrap();
+        writer.flush().unwrap();
+        assert_eq!(output, b"progress \xff");
+    }
 }
