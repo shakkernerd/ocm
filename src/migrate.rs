@@ -449,12 +449,55 @@ fn preflight_migrated_launcher(
     }
 }
 
+#[cfg(not(windows))]
 fn resolve_executable_on_path(command: &str, env: &BTreeMap<String, String>) -> Option<String> {
     let path_value = env.get("PATH")?;
     std::env::split_paths(path_value)
         .map(|dir| dir.join(command))
         .find(|candidate| is_executable_file(candidate))
         .map(|candidate| display_path(&candidate))
+}
+
+#[cfg(windows)]
+fn resolve_executable_on_path(command: &str, env: &BTreeMap<String, String>) -> Option<String> {
+    let path_value = env.get("PATH")?;
+    let extensions = env
+        .get("PATHEXT")
+        .map(|value| {
+            value
+                .split(';')
+                .map(str::trim)
+                .filter(|extension| !extension.is_empty())
+                .map(|extension| {
+                    if extension.starts_with('.') {
+                        extension.to_string()
+                    } else {
+                        format!(".{extension}")
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|extensions| !extensions.is_empty())
+        .unwrap_or_else(|| {
+            [".COM", ".EXE", ".BAT", ".CMD"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        });
+
+    for dir in std::env::split_paths(path_value) {
+        let exact = dir.join(command);
+        if exact.is_file() {
+            return Some(display_path(&exact));
+        }
+        for extension in &extensions {
+            let candidate = dir.join(format!("{command}{extension}"));
+            if candidate.is_file() {
+                return Some(display_path(&candidate));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(unix)]
@@ -474,9 +517,9 @@ fn is_executable_file(path: &Path) -> bool {
     unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
 }
 
-#[cfg(not(unix))]
-fn is_executable_file(_path: &Path) -> bool {
-    false
+#[cfg(all(not(unix), not(windows)))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]
