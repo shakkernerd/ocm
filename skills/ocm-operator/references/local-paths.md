@@ -94,9 +94,10 @@ test "$(git -C "$worktree" rev-parse HEAD)" = "$openclaw_sha"
 test -z "$(git -C "$worktree" status --porcelain)"
 
 cd "$worktree"
-pnpm install
+pnpm install --frozen-lockfile
 pnpm check
 pnpm build
+test -z "$(git -C "$worktree" status --porcelain)"
 
 cd "$ocm_repo"
 "$ocm_bin" runtime build-local "$runtime" --repo "$worktree" --force
@@ -106,6 +107,7 @@ runtime_bin="$("$ocm_bin" runtime which "$runtime" --raw)"
 "$runtime_bin" --version
 
 test "$(git -C "$worktree" rev-parse HEAD)" = "$openclaw_sha"
+test -z "$(git -C "$worktree" status --porcelain)"
 ```
 
 Keep `run_id`, `run_root`, `repo_store`, `worktree`, `runtime`, env names, and

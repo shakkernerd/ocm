@@ -79,6 +79,11 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     assert!(paths.contains("run_root=\"$(mktemp -d"));
     assert!(paths.contains("run_id=\"${run_root##*/}\""));
     assert!(!paths.contains("date -u +%Y%m%dT%H%M%SZ"));
+    assert!(paths.contains("pnpm install --frozen-lockfile"));
+    assert!(
+        paths.matches("status --porcelain").count() >= 3,
+        "release recipe must prove cleanliness before and after packaging"
+    );
     assert!(paths.contains("git clone --no-checkout"));
     assert!(paths.contains("--reference-if-able"));
     assert!(!paths.contains("git -C \"$source_repo\" fetch"));
