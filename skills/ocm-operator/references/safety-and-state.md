@@ -21,10 +21,24 @@ For tests involving existing users:
 3. Keep the source env untouched.
 4. Destroy the clone when done.
 
+Clones keep durable auth/settings but clear sessions, logs, and backups. Treat
+every clone as secret-bearing:
+
+- keep its service stopped by default
+- do not contact providers, channels, webhooks, browsers, or other external
+  services without explicit authorization
+- use mocks, dedicated test accounts, or a credential-free fresh env for
+  networked and untrusted-plugin checks
+- do not export, publish, attach, or paste raw clone config or auth data
+
+When the test must preserve sessions or history, copy the source env's
+`.openclaw` directory into a task-owned temporary root and use `ocm adopt
+import` on that copy. Verify the expected fixture exists before mutation.
+
 Pattern:
 
 ```sh
-ocm env clone Violet <test-env>
+ocm env clone <existing-env> <test-env>
 ocm upgrade <test-env> --runtime <runtime>
 ocm @<test-env> -- doctor --fix
 ocm env destroy <test-env> --yes
@@ -133,8 +147,14 @@ Remove temp worktrees created by manual git commands:
 
 ```sh
 git -C /path/to/openclaw worktree list
-git -C /path/to/openclaw worktree remove --force /path/to/worktree
+git -C /path/to/worktree status --short
+git -C /path/to/openclaw worktree remove /path/to/worktree
 ```
+
+Remove only a worktree whose path and run id prove it belongs to the current
+task. If status is not clean, stop and inspect it. Use `--force` only after
+separately confirming that the worktree is disposable and every change in it
+belongs to the current task.
 
 Remove temp archives/directories:
 
