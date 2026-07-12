@@ -191,16 +191,18 @@ impl<'a> EnvironmentService<'a> {
             }
         }
 
-        // Owning the OS lock proves any surviving metadata belongs to a dead
-        // lease, even if its child PID has since been reused by another process.
-        remove_file_if_present(&override_path)?;
-
         let lease_id = format!(
             "{}-{}",
             std::process::id(),
             now_utc().unix_timestamp_nanos()
         );
+        // Publish the new generation before touching stale metadata. Readers that
+        // observe this exclusive owner must never correlate an old token with it.
         write_source_watch_lock(&mut lock_file, &lease_id)?;
+
+        // Owning the OS lock proves any surviving metadata belongs to a dead
+        // lease, even if its child PID has since been reused by another process.
+        remove_file_if_present(&override_path)?;
         Ok(SourceWatchLease {
             env_name,
             lease_id,
@@ -288,12 +290,26 @@ impl<'a> EnvironmentService<'a> {
         let env_name = validate_name(env_name, "Environment name")?;
         let path = source_watch_override_path(&env_name, self.env, self.cwd)?;
         let lock_path = path.with_extension("lock");
-        if let Some(parent) = lock_path.parent() {
-            ensure_dir(parent)?;
-        }
-        // Open/create before inspecting metadata so first-watch lease creation cannot
-        // interleave between a missing-lock check and stale override cleanup.
-        let lock_file = open_source_watch_lock(&lock_path)?;
+        let lock_file = match OpenOptions::new().read(true).open(&lock_path) {
+            Ok(lock_file) => lock_file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // A lookup with no watch state remains read-only. If an override exists,
+                // create the lock before cleanup so lease creation cannot interleave.
+                if !path.exists() {
+                    return Ok(None);
+                }
+                if let Some(parent) = lock_path.parent() {
+                    ensure_dir(parent)?;
+                }
+                open_source_watch_lock(&lock_path)?
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed opening source watch lock {}: {error}",
+                    display_path(&lock_path)
+                ));
+            }
+        };
 
         #[cfg(windows)]
         if let Some(_lease_event) = open_windows_source_watch_event(&lock_path)? {

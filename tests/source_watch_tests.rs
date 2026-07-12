@@ -2,12 +2,15 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use fs2::FileExt;
+use ocm::env::EnvironmentService;
 use serde_json::{Value, json};
 
 use crate::support::{
@@ -268,6 +271,24 @@ fn stale_source_watch_without_a_lock_is_cleaned_under_a_new_lock() {
     assert_eq!(resolved["binaryPath"], path_string(&runtime_path));
     assert!(!override_path.exists());
     assert!(lock_path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn source_watch_lookup_without_state_keeps_a_read_only_home_unchanged() {
+    let root = TestDir::new("source-watch-read-only-home");
+    let cwd = root.child("workspace");
+    let ocm_home = root.child("ocm-home");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&ocm_home).unwrap();
+    let env = ocm_env(&root);
+    fs::set_permissions(&ocm_home, fs::Permissions::from_mode(0o500)).unwrap();
+
+    let result = EnvironmentService::new(&env, &cwd).active_source_watch_override("demo");
+
+    fs::set_permissions(&ocm_home, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.unwrap().is_none());
+    assert!(!ocm_home.join("source-watch").exists());
 }
 
 #[test]
