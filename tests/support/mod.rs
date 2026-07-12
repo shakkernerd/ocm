@@ -285,7 +285,7 @@ pub fn install_fake_launchctl(root: &TestDir, env: &mut BTreeMap<String, String>
     let log_path = root.child("launchctl.log");
     let print_path = root.child("launchctl-print.txt");
     let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  bootstrap)\n    printf 'state = running\\npid = 23613\\n' > \"{}\"\n    exit 0\n    ;;\n  bootout|unload)\n    rm -f \"{}\"\n    exit 0\n    ;;\n  print)\n    if [ -f \"{}\" ]; then\n      /bin/cat \"{}\"\n      exit 0\n    fi\n    printf 'Could not find service \"%s\" in domain for user gui\\n' \"$2\" >&2\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n  bootstrap)\n    printf 'state = running\\npid = 23613\\n' > \"{}\"\n    exit 0\n    ;;\n  bootout|unload)\n    /bin/rm -f \"{}\"\n    exit 0\n    ;;\n  print)\n    if [ -f \"{}\" ]; then\n      /bin/cat \"{}\"\n      exit 0\n    fi\n    printf 'Could not find service \"%s\" in domain for user gui\\n' \"$2\" >&2\n    exit 1\n    ;;\n  *)\n    exit 0\n    ;;\nesac\n",
         path_string(&log_path),
         path_string(&print_path),
         path_string(&print_path),

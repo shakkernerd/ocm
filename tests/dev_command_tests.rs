@@ -1482,7 +1482,11 @@ fn dev_watch_force_restores_runtime_service_when_source_watch_cannot_spawn() {
         ],
     );
     assert!(!watch.status.success());
-    assert!(stderr(&watch).contains("failed to run \"node\""));
+    assert!(
+        stderr(&watch).contains("failed to run \"node\""),
+        "{}",
+        stderr(&watch)
+    );
 
     let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
     assert!(show.status.success(), "{}", stderr(&show));
