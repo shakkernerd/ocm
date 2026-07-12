@@ -25,4 +25,4 @@ All notable changes to OCM are documented here.
 - Build locked release artifacts only from a GitHub-verified tag matching the package version, require the complete supported target matrix before publication, publish a versioned checksum-verifying installer, pin CI actions, and test the declared Rust 1.88 minimum.
 - Preserve uncommitted dev worktrees and reject unrelated checkout collisions by requiring exact Git worktree registration before reuse or removal.
 - Make single and merged log following rotation-safe and byte-safe, preserving split or invalid UTF-8, multiline record ordering, and boundaries around unterminated records.
-- Prevent overlapping source watches, remove the unleased override mutation path, reclaim stale watch locks, and restore background-service policy when takeover cannot stop or exits with an error.
+- Prevent overlapping source watches, remove the unleased override mutation path, reclaim stale watch locks, handle termination signals, and restore background-service policy when takeover cannot stop or exits with an error.

@@ -1859,9 +1859,8 @@ fn dev_watch_aborts_and_restores_policy_when_service_stop_times_out() {
 }
 
 #[cfg(unix)]
-#[test]
-fn dev_watch_signal_stops_the_child_and_restores_the_service() {
-    let root = TestDir::new("dev-command-watch-signal");
+fn assert_dev_watch_signal_restores_service(test_name: &str, signal_name: &str) {
+    let root = TestDir::new(test_name);
     let repo = init_openclaw_repo(&root);
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -1890,7 +1889,7 @@ fn dev_watch_signal_stops_the_child_and_restores_the_service() {
     let mut watch = watch.spawn().unwrap();
     let did_start = wait_for_path(&started, Duration::from_secs(30));
     let signal = Command::new("kill")
-        .args(["-INT", &watch.id().to_string()])
+        .args([signal_name, &watch.id().to_string()])
         .output()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1916,6 +1915,18 @@ fn dev_watch_signal_stops_the_child_and_restores_the_service() {
     let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
     assert_eq!(show_json["serviceRunning"], true);
     assert!(!source_watch_override_path(&root, "demo").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_watch_interrupt_stops_the_child_and_restores_the_service() {
+    assert_dev_watch_signal_restores_service("dev-command-watch-interrupt", "-INT");
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_watch_termination_stops_the_child_and_restores_the_service() {
+    assert_dev_watch_signal_restores_service("dev-command-watch-termination", "-TERM");
 }
 
 #[cfg(unix)]

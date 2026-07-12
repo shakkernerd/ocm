@@ -28,7 +28,7 @@ unicode-width = "0.2"
 terminal_size = "0.4"
 dialoguer = { version = "0.12", default-features = false }
 zip = { version = "8.5", default-features = false, features = ["deflate"] }
-ctrlc = "3.4"
+ctrlc = { version = "3.4", features = ["termination"] }
 libc = "0.2"
 
 [target.'cfg(unix)'.dependencies]
