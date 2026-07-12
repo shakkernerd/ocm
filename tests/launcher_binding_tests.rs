@@ -77,6 +77,19 @@ fn launcher_bindings_require_an_existing_launcher() {
     assert!(show.status.success(), "{}", stderr(&show));
     let environment: serde_json::Value = serde_json::from_str(&stdout(&show)).unwrap();
     assert!(environment["defaultLauncher"].is_null());
+
+    let registry_path = env_registry_path(&env, &cwd).unwrap();
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+    registry["envs"][0]["defaultLauncher"] = "missing".into();
+    fs::write(
+        registry_path,
+        format!("{}\n", serde_json::to_string_pretty(&registry).unwrap()),
+    )
+    .unwrap();
+    let bind = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "missing"]);
+    assert!(!bind.status.success());
+    assert!(stderr(&bind).contains("launcher \"missing\" does not exist"));
 }
 
 #[test]

@@ -173,11 +173,7 @@ fn upsert_environment(
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
     let mut meta = normalize_environment(meta)?;
-    let existing_launcher =
-        find_environment(registry, &meta.name).and_then(|existing| existing.default_launcher);
-    if meta.default_launcher != existing_launcher
-        && let Some(launcher_name) = meta.default_launcher.as_deref()
-    {
+    if let Some(launcher_name) = meta.default_launcher.as_deref() {
         let launcher = super::launchers::get_launcher(launcher_name, env, cwd)?;
         meta.default_launcher = Some(launcher.name);
     }
