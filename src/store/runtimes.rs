@@ -764,7 +764,13 @@ fn publish_runtime(target: RuntimeInstallTarget, meta: RuntimeMeta) -> Result<Ru
     }
     if had_meta && let Err(error) = fs::rename(&target.final_meta_path, &backup_meta) {
         if had_root {
-            let _ = fs::rename(&backup_root, &target.final_install_root);
+            if let Err(rollback_error) = fs::rename(&backup_root, &target.final_install_root) {
+                return Err(format!(
+                    "failed to preserve runtime \"{}\" metadata before replacement: {error}; failed to restore its install root from {}: {rollback_error}",
+                    target.name,
+                    display_path(&backup_root)
+                ));
+            }
         }
         return Err(format!(
             "failed to preserve runtime \"{}\" metadata before replacement: {error}",
