@@ -929,13 +929,23 @@ fn wait_for_source_watch_child(
     let mut tracked_processes = Vec::new();
     #[cfg(unix)]
     let track_descendants = source_watch_needs_descendant_tracking();
+    #[cfg(unix)]
+    let tracking_started = std::time::Instant::now();
+    #[cfg(unix)]
+    let mut next_tracking_refresh = tracking_started;
     loop {
         #[cfg(unix)]
-        if track_descendants {
-            merge_unix_processes(
-                &mut tracked_processes,
-                unix_descendant_processes(child.id()).map_err(source_watch_tree_discovery_error)?,
-            );
+        if track_descendants && std::time::Instant::now() >= next_tracking_refresh {
+            // Non-TTY watch-node runners detach into their own process group. Sample quickly
+            // during startup, then throttle native process snapshots for long-running watches.
+            tracked_processes = refresh_tracked_unix_processes(child.id(), &tracked_processes)
+                .map_err(source_watch_tree_discovery_error)?;
+            let refresh_interval = if tracking_started.elapsed() < Duration::from_secs(2) {
+                Duration::from_millis(50)
+            } else {
+                Duration::from_secs(2)
+            };
+            next_tracking_refresh = std::time::Instant::now() + refresh_interval;
         }
         if let Some(status) = child
             .try_wait()
@@ -1103,7 +1113,7 @@ impl Drop for SourceWatchProcessGuard {
 fn stop_source_watch_child(
     child: &mut std::process::Child,
     process_guard: &SourceWatchProcessGuard,
-    tracked_processes: &[(u32, u32)],
+    tracked_processes: &[UnixProcessIdentity],
 ) -> Result<std::process::ExitStatus, String> {
     #[cfg(not(windows))]
     let _ = process_guard;
@@ -1112,10 +1122,8 @@ fn stop_source_watch_child(
         let mut tracked_processes = tracked_processes.to_vec();
         let track_descendants = source_watch_needs_descendant_tracking();
         if track_descendants {
-            merge_unix_processes(
-                &mut tracked_processes,
-                unix_descendant_processes(child.id()).map_err(source_watch_tree_discovery_error)?,
-            );
+            tracked_processes = refresh_tracked_unix_processes(child.id(), &tracked_processes)
+                .map_err(source_watch_tree_discovery_error)?;
         }
         // watch-node forwards TERM to its runner; allow that grace before
         // enforcing the process-group ownership boundary.
@@ -1130,23 +1138,19 @@ fn stop_source_watch_child(
                     return Ok(status);
                 }
                 if track_descendants {
-                    merge_unix_processes(
-                        &mut tracked_processes,
-                        unix_descendant_processes(child.id())
-                            .map_err(source_watch_tree_discovery_error)?,
-                    );
+                    tracked_processes =
+                        refresh_tracked_unix_processes(child.id(), &tracked_processes)
+                            .map_err(source_watch_tree_discovery_error)?;
                 }
                 thread::sleep(Duration::from_millis(50));
             }
         }
         signal_unix_process_group(child.id(), libc::SIGSTOP)?;
         if track_descendants {
-            merge_unix_processes(
-                &mut tracked_processes,
-                unix_descendant_processes(child.id()).map_err(source_watch_tree_discovery_error)?,
-            );
+            tracked_processes = refresh_tracked_unix_processes(child.id(), &tracked_processes)
+                .map_err(source_watch_tree_discovery_error)?;
         }
-        kill_tracked_unix_processes(child.id(), &tracked_processes)?;
+        kill_tracked_unix_processes(child.id(), true, &tracked_processes)?;
         let status = child
             .wait()
             .map_err(|error| format!("failed waiting for stopped source watch: {error}"))?;
@@ -1174,26 +1178,61 @@ fn stop_source_watch_child(
 }
 
 #[cfg(unix)]
-fn unix_descendant_processes(root_pid: u32) -> Result<Vec<(u32, u32)>, String> {
-    let processes = unix_process_snapshot()?;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct UnixProcessIdentity {
+    pid: u32,
+    parent_pid: u32,
+    process_group: u32,
+    start_id: u64,
+}
+
+#[cfg(not(unix))]
+type UnixProcessIdentity = ();
+
+#[cfg(unix)]
+fn refresh_tracked_unix_processes(
+    root_pid: u32,
+    tracked_processes: &[UnixProcessIdentity],
+) -> Result<Vec<UnixProcessIdentity>, String> {
+    let snapshot = unix_process_snapshot()?;
+    let tracked_identities = tracked_processes
+        .iter()
+        .map(|process| (process.pid, process.start_id))
+        .collect::<BTreeSet<_>>();
+    let descendants = unix_descendant_processes_from_snapshot(root_pid, snapshot.clone())
+        .into_iter()
+        .map(|process| (process.pid, process.start_id))
+        .collect::<BTreeSet<_>>();
+    Ok(snapshot
+        .into_iter()
+        .filter(|process| {
+            let identity = (process.pid, process.start_id);
+            descendants.contains(&identity) || tracked_identities.contains(&identity)
+        })
+        .collect())
+}
+
+#[cfg(unix)]
+fn unix_descendant_processes_from_snapshot(
+    root_pid: u32,
+    processes: Vec<UnixProcessIdentity>,
+) -> Vec<UnixProcessIdentity> {
     let mut tree = BTreeSet::from([root_pid]);
     loop {
         let before = tree.len();
-        for (pid, parent_pid, _) in &processes {
-            if tree.contains(parent_pid) {
-                tree.insert(*pid);
+        for process in &processes {
+            if tree.contains(&process.parent_pid) {
+                tree.insert(process.pid);
             }
         }
         if tree.len() == before {
             break;
         }
     }
-    Ok(processes
+    processes
         .into_iter()
-        .filter_map(|(pid, _, process_group)| {
-            (pid != root_pid && tree.contains(&pid)).then_some((pid, process_group))
-        })
-        .collect())
+        .filter(|process| process.pid != root_pid && tree.contains(&process.pid))
+        .collect()
 }
 
 #[cfg(unix)]
@@ -1202,7 +1241,7 @@ fn source_watch_needs_descendant_tracking() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn unix_process_snapshot() -> Result<Vec<(u32, u32, u32)>, String> {
+fn unix_process_snapshot() -> Result<Vec<UnixProcessIdentity>, String> {
     let mut processes = Vec::new();
     for entry in fs::read_dir("/proc")
         .map_err(|error| format!("failed reading /proc for source watch processes: {error}"))?
@@ -1223,21 +1262,28 @@ fn unix_process_snapshot() -> Result<Vec<(u32, u32, u32)>, String> {
         let Some((_, fields)) = stat.rsplit_once(") ") else {
             continue;
         };
-        let mut fields = fields.split_whitespace();
-        let _state = fields.next();
-        let Some(parent_pid) = fields.next().and_then(|value| value.parse::<u32>().ok()) else {
+        let fields = fields.split_whitespace().collect::<Vec<_>>();
+        let Some(parent_pid) = fields.get(1).and_then(|value| value.parse::<u32>().ok()) else {
             continue;
         };
-        let Some(process_group) = fields.next().and_then(|value| value.parse::<u32>().ok()) else {
+        let Some(process_group) = fields.get(2).and_then(|value| value.parse::<u32>().ok()) else {
             continue;
         };
-        processes.push((pid, parent_pid, process_group));
+        let Some(start_id) = fields.get(19).and_then(|value| value.parse::<u64>().ok()) else {
+            continue;
+        };
+        processes.push(UnixProcessIdentity {
+            pid,
+            parent_pid,
+            process_group,
+            start_id,
+        });
     }
     Ok(processes)
 }
 
 #[cfg(target_os = "macos")]
-fn unix_process_snapshot() -> Result<Vec<(u32, u32, u32)>, String> {
+fn unix_process_snapshot() -> Result<Vec<UnixProcessIdentity>, String> {
     let capacity = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     if capacity <= 0 {
         return Err(format!(
@@ -1271,62 +1317,90 @@ fn unix_process_snapshot() -> Result<Vec<(u32, u32, u32)>, String> {
             )
         };
         if read == std::mem::size_of_val(&info) as i32 {
-            processes.push((info.pbi_pid, info.pbi_ppid, info.pbi_pgid));
+            processes.push(UnixProcessIdentity {
+                pid: info.pbi_pid,
+                parent_pid: info.pbi_ppid,
+                process_group: info.pbi_pgid,
+                start_id: ((info.pbi_start_tvsec as u64) << 32) | info.pbi_start_tvusec as u64,
+            });
         }
     }
     Ok(processes)
 }
 
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-fn unix_process_snapshot() -> Result<Vec<(u32, u32, u32)>, String> {
+fn unix_process_snapshot() -> Result<Vec<UnixProcessIdentity>, String> {
     Err("source watch process discovery is unsupported on this Unix platform".to_string())
 }
 
 #[cfg(unix)]
-fn merge_unix_processes(target: &mut Vec<(u32, u32)>, processes: Vec<(u32, u32)>) {
-    for process in processes {
-        if !target.contains(&process) {
-            target.push(process);
-        }
-    }
+fn current_tracked_unix_processes(
+    tracked_processes: &[UnixProcessIdentity],
+) -> Result<Vec<UnixProcessIdentity>, String> {
+    Ok(tracked_unix_processes_from_snapshot(
+        tracked_processes,
+        unix_process_snapshot()?,
+    ))
 }
 
 #[cfg(unix)]
-fn kill_tracked_unix_processes(root_pid: u32, processes: &[(u32, u32)]) -> Result<(), String> {
-    let mut process_groups = processes
+fn tracked_unix_processes_from_snapshot(
+    tracked_processes: &[UnixProcessIdentity],
+    snapshot: Vec<UnixProcessIdentity>,
+) -> Vec<UnixProcessIdentity> {
+    let tracked_identities = tracked_processes
         .iter()
-        .map(|(_, process_group)| *process_group)
+        .map(|process| (process.pid, process.start_id))
         .collect::<BTreeSet<_>>();
+    snapshot
+        .into_iter()
+        .filter(|current| tracked_identities.contains(&(current.pid, current.start_id)))
+        .collect()
+}
+
+#[cfg(unix)]
+fn kill_tracked_unix_processes(
+    root_pid: u32,
+    root_is_alive: bool,
+    tracked_processes: &[UnixProcessIdentity],
+) -> Result<(), String> {
+    let current_processes = current_tracked_unix_processes(tracked_processes)?;
+    let mut process_groups = current_processes
+        .iter()
+        .map(|process| process.process_group)
+        .collect::<BTreeSet<_>>();
+    // configure_child creates this group before exec. It remains our ownership boundary
+    // after the wrapper exits, including descendants that escaped the first snapshot.
     process_groups.insert(root_pid);
     for process_group in process_groups {
         let _ = signal_unix_process_group(process_group, libc::SIGKILL)?;
     }
-    for (pid, _) in processes {
-        let _ = signal_unix_process(*pid, libc::SIGKILL)?;
+    for process in current_processes {
+        let _ = signal_unix_process(process.pid, libc::SIGKILL)?;
     }
-    let _ = signal_unix_process(root_pid, libc::SIGKILL)?;
+    if root_is_alive {
+        let _ = signal_unix_process(root_pid, libc::SIGKILL)?;
+    }
     Ok(())
 }
 
 #[cfg(unix)]
-fn stop_tracked_unix_processes(root_pid: u32, processes: &[(u32, u32)]) -> Result<(), String> {
-    kill_tracked_unix_processes(root_pid, processes)?;
+fn stop_tracked_unix_processes(
+    root_pid: u32,
+    processes: &[UnixProcessIdentity],
+) -> Result<(), String> {
+    kill_tracked_unix_processes(root_pid, false, processes)?;
     wait_for_unix_processes_to_stop(processes)
 }
 
 #[cfg(unix)]
-fn wait_for_unix_processes_to_stop(processes: &[(u32, u32)]) -> Result<(), String> {
+fn wait_for_unix_processes_to_stop(processes: &[UnixProcessIdentity]) -> Result<(), String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
-        let alive = processes
+        let alive = current_tracked_unix_processes(processes)?
             .iter()
-            .map(|(pid, _)| *pid)
-            .filter_map(|pid| match unix_process_is_alive(pid) {
-                Ok(true) => Some(Ok(pid)),
-                Ok(false) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|process| process.pid)
+            .collect::<Vec<_>>();
         if alive.is_empty() {
             return Ok(());
         }
@@ -1352,11 +1426,6 @@ fn signal_unix_process(pid: u32, signal: i32) -> Result<bool, String> {
 #[cfg(unix)]
 fn signal_unix_process_group(process_group: u32, signal: i32) -> Result<bool, String> {
     signal_unix_target(-(process_group as i32), signal)
-}
-
-#[cfg(unix)]
-fn unix_process_is_alive(pid: u32) -> Result<bool, String> {
-    signal_unix_process(pid, 0)
 }
 
 #[cfg(unix)]
@@ -2142,6 +2211,8 @@ mod tests {
         source_watch_allows_service_restore, source_watch_exit_code,
         source_watch_stop_timeout_error,
     };
+    #[cfg(unix)]
+    use super::{UnixProcessIdentity, tracked_unix_processes_from_snapshot};
     use crate::service::ServiceActionSummary;
 
     fn sample_summary() -> DevStatusSummary {
@@ -2244,5 +2315,26 @@ mod tests {
         assert!(!source_watch_allows_service_restore(&Err(
             "source watch process tree is still active: 123".to_string()
         )));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_watch_tracking_rejects_reused_process_ids() {
+        let tracked = UnixProcessIdentity {
+            pid: 42,
+            parent_pid: 10,
+            process_group: 42,
+            start_id: 100,
+        };
+        let reused = UnixProcessIdentity {
+            start_id: 101,
+            ..tracked
+        };
+
+        assert!(tracked_unix_processes_from_snapshot(&[tracked], vec![reused]).is_empty());
+        assert_eq!(
+            tracked_unix_processes_from_snapshot(&[tracked], vec![tracked]),
+            vec![tracked]
+        );
     }
 }
