@@ -234,6 +234,12 @@ pub fn create_environment(
     if find_environment(&registry, &name).is_some() {
         return Err(format!("environment \"{name}\" already exists"));
     }
+    let default_launcher = options
+        .default_launcher
+        .as_deref()
+        .map(|launcher_name| super::launchers::get_launcher(launcher_name, env, cwd))
+        .transpose()?
+        .map(|launcher| launcher.name);
 
     let root = if let Some(root) = options.root.as_deref() {
         resolve_absolute_path(root, env, cwd)?
@@ -274,7 +280,7 @@ pub fn create_environment(
         service_enabled: options.service_enabled,
         service_running: options.service_running,
         default_runtime: options.default_runtime,
-        default_launcher: options.default_launcher,
+        default_launcher,
         dev: options.dev,
         protected: options.protected,
         created_at,

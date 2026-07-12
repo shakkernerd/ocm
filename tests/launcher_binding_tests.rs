@@ -53,10 +53,19 @@ fn launcher_bindings_require_an_existing_launcher() {
     let create = run_ocm(
         &cwd,
         &env,
-        &["env", "create", "invalid", "--launcher", "missing"],
+        &[
+            "env",
+            "create",
+            "invalid",
+            "--root",
+            "./orphan",
+            "--launcher",
+            "missing",
+        ],
     );
     assert!(!create.status.success());
     assert!(stderr(&create).contains("launcher \"missing\" does not exist"));
+    assert!(!cwd.join("orphan").exists());
 
     let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
     assert!(create.status.success(), "{}", stderr(&create));
