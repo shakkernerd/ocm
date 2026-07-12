@@ -475,6 +475,31 @@ fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
     !process_is_alive(pid)
 }
 
+#[cfg(unix)]
+fn wait_for_process_stop(pid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let mut status = 0;
+        let waited = unsafe {
+            libc::waitpid(
+                pid as libc::pid_t,
+                &mut status,
+                libc::WNOHANG | libc::WUNTRACED,
+            )
+        };
+        if waited == pid as libc::pid_t && libc::WIFSTOPPED(status) {
+            return true;
+        }
+        assert!(
+            waited >= 0,
+            "failed waiting for process stop: {}",
+            std::io::Error::last_os_error()
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    false
+}
+
 fn service_env(root: &TestDir) -> std::collections::BTreeMap<String, String> {
     let mut env = ocm_env(root);
     install_fake_service_manager(root, &mut env);
@@ -1721,6 +1746,18 @@ fn dev_watch_gives_interactive_child_terminal_foreground_ownership() {
     assert!(
         wait_for_path(&started, Duration::from_secs(30)),
         "source watch did not reach its interactive stdin read"
+    );
+    terminal.write_all(&[0x1a]).unwrap();
+    assert!(
+        wait_for_process_stop(watch.id(), Duration::from_secs(10)),
+        "OCM did not suspend with its foreground source watch"
+    );
+    let resumed = unsafe { libc::kill(watch.id() as libc::pid_t, libc::SIGCONT) };
+    assert_eq!(
+        resumed,
+        0,
+        "failed resuming OCM: {}",
+        std::io::Error::last_os_error()
     );
     terminal.write_all(b"terminal-input\n").unwrap();
     assert!(

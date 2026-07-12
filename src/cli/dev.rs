@@ -1090,6 +1090,36 @@ fn wait_for_source_watch_child(
         if stop_requested.load(Ordering::SeqCst) {
             return stop_source_watch_child(child, process_guard);
         }
+        #[cfg(unix)]
+        {
+            let mut status = 0;
+            let waited = unsafe {
+                libc::waitpid(
+                    child.id() as libc::pid_t,
+                    &mut status,
+                    libc::WNOHANG | libc::WUNTRACED,
+                )
+            };
+            if waited == -1 {
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::Interrupted {
+                    return Err(SourceWatchError::unverified(format!(
+                        "failed checking source watch job-control state: {error}"
+                    )));
+                }
+            } else if waited != 0 {
+                if libc::WIFSTOPPED(status) {
+                    process_guard
+                        .suspend_with_child(child.id())
+                        .map_err(SourceWatchError::unverified)?;
+                } else if libc::WIFEXITED(status) || libc::WIFSIGNALED(status) {
+                    process_guard
+                        .stop_remaining(child.id())
+                        .map_err(SourceWatchError::unverified)?;
+                    return Ok(std::process::ExitStatus::from_raw(status));
+                }
+            }
+        }
         thread::sleep(Duration::from_millis(50));
     }
 }
@@ -1103,9 +1133,9 @@ struct SourceWatchProcessGuard {
 
 #[cfg(unix)]
 struct SourceWatchTerminalGuard {
-    original_process_group: libc::pid_t,
-    startup_reader: UnixStream,
-    startup_writer: UnixStream,
+    parent_process_group: libc::pid_t,
+    startup_reader: Option<UnixStream>,
+    startup_writer: Option<UnixStream>,
     foreground_assigned: AtomicBool,
 }
 
@@ -1114,18 +1144,25 @@ impl SourceWatchProcessGuard {
         #[cfg(unix)]
         {
             let terminal = if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 {
-                let original_process_group = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
-                if original_process_group == -1 {
+                let foreground_process_group = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
+                if foreground_process_group == -1 {
                     return Err(format!(
                         "failed reading source watch terminal ownership: {}",
                         io::Error::last_os_error()
                     ));
                 }
-                let (startup_reader, startup_writer) = UnixStream::pair().map_err(|error| {
-                    format!("failed creating source watch startup gate: {error}")
-                })?;
+                let parent_process_group = unsafe { libc::getpgrp() };
+                let (startup_reader, startup_writer) =
+                    if foreground_process_group == parent_process_group {
+                        let (reader, writer) = UnixStream::pair().map_err(|error| {
+                            format!("failed creating source watch startup gate: {error}")
+                        })?;
+                        (Some(reader), Some(writer))
+                    } else {
+                        (None, None)
+                    };
                 Some(SourceWatchTerminalGuard {
-                    original_process_group,
+                    parent_process_group,
                     startup_reader,
                     startup_writer,
                     foreground_assigned: AtomicBool::new(false),
@@ -1179,8 +1216,12 @@ impl SourceWatchProcessGuard {
 
     fn configure_command(&mut self, command: &mut Command) -> Result<(), String> {
         #[cfg(unix)]
-        if let Some(terminal) = &self.terminal {
-            let startup_fd = terminal.startup_reader.as_raw_fd();
+        if let Some(startup_reader) = self
+            .terminal
+            .as_ref()
+            .and_then(|terminal| terminal.startup_reader.as_ref())
+        {
+            let startup_fd = startup_reader.as_raw_fd();
             command.env("OCM_SOURCE_WATCH_START_FD", startup_fd.to_string());
             unsafe {
                 command.pre_exec(move || {
@@ -1221,7 +1262,9 @@ impl SourceWatchProcessGuard {
             }
         }
         #[cfg(unix)]
-        if let Some(terminal) = &self.terminal {
+        if let Some(terminal) = &self.terminal
+            && terminal.startup_reader.is_some()
+        {
             set_terminal_foreground_process_group(child.id() as libc::pid_t)?;
             terminal.foreground_assigned.store(true, Ordering::SeqCst);
         }
@@ -1232,8 +1275,12 @@ impl SourceWatchProcessGuard {
 
     fn start_child(&self, _child: &std::process::Child) -> Result<(), String> {
         #[cfg(unix)]
-        if let Some(terminal) = &self.terminal {
-            let mut writer = &terminal.startup_writer;
+        if let Some(startup_writer) = self
+            .terminal
+            .as_ref()
+            .and_then(|terminal| terminal.startup_writer.as_ref())
+        {
+            let mut writer = startup_writer;
             writer
                 .write_all(&[1])
                 .map_err(|error| format!("failed releasing source watch startup gate: {error}"))?;
@@ -1248,8 +1295,28 @@ impl SourceWatchProcessGuard {
         if let Some(terminal) = &self.terminal
             && terminal.foreground_assigned.swap(false, Ordering::SeqCst)
         {
-            set_terminal_foreground_process_group(terminal.original_process_group)?;
+            set_terminal_foreground_process_group(terminal.parent_process_group)?;
         }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn suspend_with_child(&self, child_pid: u32) -> Result<(), String> {
+        self.restore_terminal()?;
+        if unsafe { libc::kill(libc::getpid(), libc::SIGSTOP) } == -1 {
+            return Err(format!(
+                "failed suspending OCM with source watch: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        if let Some(terminal) = &self.terminal {
+            let foreground_process_group = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
+            if foreground_process_group == terminal.parent_process_group {
+                set_terminal_foreground_process_group(child_pid as libc::pid_t)?;
+                terminal.foreground_assigned.store(true, Ordering::SeqCst);
+            }
+        }
+        signal_unix_process_group(child_pid, libc::SIGCONT)?;
         Ok(())
     }
 
