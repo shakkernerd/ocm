@@ -661,6 +661,51 @@ fn env_remove_accepts_a_missing_worktree_with_a_non_git_repo_path() {
 }
 
 #[test]
+fn env_remove_accepts_a_clean_registered_worktree_without_openclaw_markers() {
+    let root = TestDir::new("dev-command-markerless-remove");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    let worktree_root = PathBuf::from(show_json["devWorktreeRoot"].as_str().unwrap());
+    let remove_markers = Command::new("git")
+        .args(["-C", &path_string(&worktree_root), "rm"])
+        .args(["package.json", "scripts/run-node.mjs"])
+        .output()
+        .unwrap();
+    assert!(
+        remove_markers.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remove_markers.stderr)
+    );
+    let commit = Command::new("git")
+        .args([
+            "-C",
+            &path_string(&worktree_root),
+            "commit",
+            "-m",
+            "remove markers",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+
+    let remove = run_ocm(&cwd, &env, &["env", "remove", "demo"]);
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    assert!(!worktree_root.exists());
+}
+
+#[test]
 fn env_remove_preserves_ignored_files_inside_initialized_submodules() {
     let root = TestDir::new("dev-command-ignored-submodule");
     let repo = init_openclaw_repo(&root);

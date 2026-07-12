@@ -125,7 +125,7 @@ pub(crate) fn remove_openclaw_worktree(
         return Ok(());
     }
 
-    if worktree_root.exists() && !is_existing_openclaw_worktree(repo_root, worktree_root) {
+    if worktree_root.exists() && !has_expected_worktree_identity(repo_root, worktree_root) {
         return Err(format!(
             "refusing to remove registered worktree whose checkout identity does not match this OpenClaw checkout: {}",
             display_path(worktree_root)
@@ -365,9 +365,12 @@ fn normalize_worktree_path(path: &Path) -> PathBuf {
 }
 
 fn is_existing_openclaw_worktree(repo_root: &Path, path: &Path) -> bool {
+    detect_openclaw_checkout(path).is_some() && has_expected_worktree_identity(repo_root, path)
+}
+
+fn has_expected_worktree_identity(repo_root: &Path, path: &Path) -> bool {
     path.exists()
         && path.join(".git").exists()
-        && detect_openclaw_checkout(path).is_some()
         && git_top_level(path).is_some_and(|top_level| {
             normalize_worktree_path(&top_level) == normalize_worktree_path(path)
         })
@@ -403,17 +406,22 @@ fn git_rev_parse_path(path: &Path, selector: &str) -> Option<PathBuf> {
     let output = Command::new("git")
         .arg("-C")
         .arg(path)
-        .args(["rev-parse", "--path-format=absolute", selector])
+        .args(["rev-parse", selector])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
 
-    let path = PathBuf::from(git_path_from_bytes(trim_git_line(&output.stdout)).ok()?);
-    fs::canonicalize(&path)
+    let resolved = PathBuf::from(git_path_from_bytes(trim_git_line(&output.stdout)).ok()?);
+    let resolved = if resolved.is_absolute() {
+        resolved
+    } else {
+        clean_path(&path.join(resolved))
+    };
+    fs::canonicalize(&resolved)
         .ok()
-        .or_else(|| Some(clean_path(&path)))
+        .or_else(|| Some(clean_path(&resolved)))
 }
 
 fn trim_git_line(output: &[u8]) -> &[u8] {
