@@ -141,12 +141,12 @@ pub fn restart_service(
                     ));
                 }
             } else {
-                match supervisor.ensure_daemon_running() {
+                match supervisor.recover_child_restart(name) {
                     Ok(_) => status.warnings.push(
-                        "gateway restart was not observed; restart request was retained and the supervisor was rechecked".to_string(),
+                        "gateway restart was not observed; the targeted restart request was requeued and the supervisor was rechecked".to_string(),
                     ),
                     Err(error) => status.warnings.push(format!(
-                        "gateway restart was not observed; restart request was retained, but supervisor recovery failed: {error}"
+                        "gateway restart was not observed; targeted supervisor recovery failed: {error}"
                     )),
                 }
             }
