@@ -100,7 +100,7 @@ fn install_fake_node_and_packing_npm(
     let log_path = root.child("fake-pack-npm.log");
     write_executable_script(
         &bin_dir.join("node"),
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'v22.14.0\\n'\n  exit 0\nfi\nprintf 'fake node\\n'\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'v22.14.0\\n'\n  exit 0\nfi\nif [ \"$(basename \"$1\")\" = \"ocm-npm-workspace-deps.mjs\" ]; then\n  script=\"$1\"\n  shift\n  exec \"$script\" \"$@\"\nfi\nprintf 'fake node\\n'\n",
     );
     let npm_script = format!(
         r#"#!/bin/sh
@@ -112,6 +112,7 @@ fi
 
 if [ "$1" = "pack" ]; then
   printf 'verify-deps-before-run=%s\n' "$PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN" >> "{}"
+  printf 'allow-unreleased-changelog=%s\n' "$OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG" >> "{}"
   shift
   destination=""
   while [ "$#" -gt 0 ]; do
@@ -166,6 +167,7 @@ if grep -q '"chokidar"' "$prefix/node_modules/openclaw/package.json"; then
   printf '{{"name":"@scope/tool","version":"1.0.0"}}\n' > "$prefix/node_modules/@scope/tool/package.json"
 fi
 "#,
+        path_string(&log_path),
         path_string(&log_path),
         path_string(&log_path),
         path_string(archive_path),
@@ -408,6 +410,7 @@ fn runtime_build_local_packs_and_installs_release_shaped_package() {
     let npm_log = fs::read_to_string(npm_log).unwrap();
     assert!(npm_log.contains("pack --pack-destination"));
     assert!(npm_log.contains("verify-deps-before-run=false"));
+    assert!(npm_log.contains("allow-unreleased-changelog=1"));
     assert!(npm_log.contains("install --prefix"));
 
     let install_root = runtime_install_root("main-local", &env, &cwd).unwrap();
@@ -433,6 +436,82 @@ fn runtime_build_local_packs_and_installs_release_shaped_package() {
 
     let verify = run_ocm(&cwd, &env, &["runtime", "verify", "main-local", "--raw"]);
     assert!(verify.status.success(), "{}", stderr(&verify));
+}
+
+#[test]
+fn runtime_build_local_uses_repo_workspace_dependency_adapter() {
+    let root = TestDir::new("runtime-build-local-workspace-adapter");
+    let cwd = root.child("workspace");
+    let repo = cwd.join("openclaw");
+    let workspace_dependency = repo.join("packages/ai");
+    fs::create_dir_all(repo.join("scripts")).unwrap();
+    fs::create_dir_all(&workspace_dependency).unwrap();
+    fs::write(
+        repo.join("pnpm-workspace.yaml"),
+        "packages:\n  - .\n  - packages/*\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("package.json"),
+        br#"{"name":"openclaw","version":"2026.4.25","bin":{"openclaw":"openclaw.mjs"},"dependencies":{"@openclaw/ai":"workspace:*"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        workspace_dependency.join("package.json"),
+        br#"{"name":"@openclaw/ai","version":"2026.4.25"}"#,
+    )
+    .unwrap();
+
+    let adapter_log = root.child("workspace-adapter.log");
+    write_executable_script(
+        &repo.join("scripts/ocm-npm-workspace-deps.mjs"),
+        &format!(
+            r#"#!/bin/sh
+printf 'args=%s\n' "$*" >> "{}"
+printf 'real-npm=%s\n' "$OPENCLAW_OCM_REAL_NPM_BIN" >> "{}"
+printf 'workspace-dirs=%s\n' "$OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS" >> "{}"
+exec "$OPENCLAW_OCM_REAL_NPM_BIN" "$@"
+"#,
+            path_string(&adapter_log),
+            path_string(&adapter_log),
+            path_string(&adapter_log),
+        ),
+    );
+
+    let archive_path = root.child("packed-openclaw.tgz");
+    fs::write(
+        &archive_path,
+        openclaw_package_tarball_with_version(
+            "#!/usr/bin/env node\nconsole.log('local workspace package runtime');\n",
+            "2026.4.25",
+        ),
+    )
+    .unwrap();
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_packing_npm(&root, &mut env, &archive_path);
+    let build = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "build-local",
+            "main-workspace",
+            "--repo",
+            "./openclaw",
+            "--raw",
+        ],
+    );
+
+    assert!(build.status.success(), "{}", stderr(&build));
+    let adapter_log = fs::read_to_string(adapter_log).unwrap();
+    assert!(adapter_log.contains("args=pack --pack-destination"));
+    assert!(adapter_log.contains("args=install --prefix"));
+    assert!(adapter_log.contains("real-npm=npm"));
+    assert!(adapter_log.contains(&format!(
+        "workspace-dirs={}",
+        path_string(&fs::canonicalize(workspace_dependency).unwrap())
+    )));
 }
 
 #[test]

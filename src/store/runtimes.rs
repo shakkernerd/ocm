@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -10,7 +11,7 @@ use crate::infra::download::{
     artifact_file_name_from_url, download_to_file, file_sha256, normalize_file_integrity,
     normalize_sha256, verify_file_integrity, verify_file_sha256,
 };
-use crate::managed_node::managed_runtime_install_command;
+use crate::managed_node::{CommandSpec, managed_runtime_install_command};
 use crate::runtime::releases::{
     OpenClawRelease, load_official_openclaw_release_selection, load_release_manifest,
     normalize_openclaw_channel_selector, official_openclaw_releases_url,
@@ -328,11 +329,11 @@ fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
             .filter(|line| !line.is_empty())
             .filter(|line| !line.starts_with("npm notice"))
             .filter(|line| !line.starts_with("npm warn"))
-            .take(12)
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
         if !meaningful.is_empty() {
-            return Some(meaningful.join("\n"));
+            let start = meaningful.len().saturating_sub(12);
+            return Some(meaningful[start..].join("\n"));
         }
         fallback.extend(
             text.lines()
@@ -346,11 +347,191 @@ fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> Option<String> {
 }
 
 fn npm_program(env: &BTreeMap<String, String>) -> String {
+    configured_npm_program(env).unwrap_or_else(|| "npm".to_string())
+}
+
+fn configured_npm_program(env: &BTreeMap<String, String>) -> Option<String> {
     env.get("OCM_INTERNAL_NPM_BIN")
         .map(String::as_str)
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("npm")
-        .to_string()
+        .map(str::to_string)
+}
+
+#[derive(Clone, Debug)]
+struct LocalBuildNpmAdapter {
+    command: CommandSpec,
+    real_npm: String,
+    workspace_dependency_dirs: Option<OsString>,
+}
+
+impl LocalBuildNpmAdapter {
+    fn apply_environment(&self, command: &mut Command) {
+        command.env("OPENCLAW_OCM_REAL_NPM_BIN", &self.real_npm);
+        if let Some(workspace_dependency_dirs) = &self.workspace_dependency_dirs {
+            command.env(
+                "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS",
+                workspace_dependency_dirs,
+            );
+        }
+    }
+}
+
+fn local_workspace_package_dirs(repo_path: &Path) -> Result<Vec<PathBuf>, String> {
+    let workspace_path = repo_path.join("pnpm-workspace.yaml");
+    let raw = fs::read_to_string(&workspace_path).map_err(|error| {
+        format!(
+            "failed to read OpenClaw workspace manifest at {}: {error}",
+            display_path(&workspace_path)
+        )
+    })?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&raw).map_err(|error| {
+        format!(
+            "failed to parse OpenClaw workspace manifest at {}: {error}",
+            display_path(&workspace_path)
+        )
+    })?;
+    let patterns = value
+        .get("packages")
+        .and_then(serde_yaml::Value::as_sequence)
+        .ok_or_else(|| "OpenClaw pnpm-workspace.yaml is missing a packages list".to_string())?;
+
+    let mut dirs = Vec::new();
+    for pattern in patterns {
+        let Some(pattern) = pattern.as_str() else {
+            continue;
+        };
+        if pattern == "." {
+            dirs.push(repo_path.to_path_buf());
+            continue;
+        }
+        if let Some(parent) = pattern.strip_suffix("/*")
+            && !parent.contains(['*', '?', '['])
+        {
+            let parent_path = repo_path.join(parent);
+            if !parent_path.is_dir() {
+                continue;
+            }
+            let entries = fs::read_dir(&parent_path).map_err(|error| {
+                format!(
+                    "failed to read OpenClaw workspace directory at {}: {error}",
+                    display_path(&parent_path)
+                )
+            })?;
+            dirs.extend(
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| path.is_dir()),
+            );
+            continue;
+        }
+        if !pattern.contains(['*', '?', '[']) {
+            let path = repo_path.join(pattern);
+            if path.is_dir() {
+                dirs.push(path);
+            }
+        }
+    }
+    Ok(dirs)
+}
+
+fn local_workspace_dependency_dirs(repo_path: &Path) -> Result<Option<OsString>, String> {
+    let package_json_path = repo_path.join("package.json");
+    let raw = fs::read_to_string(&package_json_path).map_err(|error| {
+        format!(
+            "failed to read OpenClaw package.json at {}: {error}",
+            display_path(&package_json_path)
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "failed to parse OpenClaw package.json at {}: {error}",
+            display_path(&package_json_path)
+        )
+    })?;
+
+    let mut names = Vec::new();
+    for section in [
+        "dependencies",
+        "optionalDependencies",
+        "peerDependencies",
+        "devDependencies",
+    ] {
+        let Some(dependencies) = value.get(section).and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        for (name, spec) in dependencies {
+            if spec
+                .as_str()
+                .is_some_and(|value| value.starts_with("workspace:"))
+            {
+                names.push(name.clone());
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        return Ok(None);
+    }
+
+    let mut packages = BTreeMap::new();
+    for package_dir in local_workspace_package_dirs(repo_path)? {
+        let package_json_path = package_dir.join("package.json");
+        let Ok(package_raw) = fs::read_to_string(&package_json_path) else {
+            continue;
+        };
+        let package_value: serde_json::Value =
+            serde_json::from_str(&package_raw).map_err(|error| {
+                format!(
+                    "failed to parse workspace dependency package.json at {}: {error}",
+                    display_path(&package_json_path)
+                )
+            })?;
+        if let Some(name) = package_value
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+        {
+            packages.insert(name.to_string(), package_dir);
+        }
+    }
+
+    let dirs = names
+        .into_iter()
+        .map(|name| {
+            packages.remove(&name).ok_or_else(|| {
+                format!(
+                    "OpenClaw workspace dependency \"{name}\" is not declared by pnpm-workspace.yaml"
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    std::env::join_paths(dirs)
+        .map(Some)
+        .map_err(|error| format!("failed to encode OpenClaw workspace dependency paths: {error}"))
+}
+
+fn local_build_npm_adapter(
+    repo_path: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<LocalBuildNpmAdapter>, String> {
+    if configured_npm_program(env).is_some() {
+        return Ok(None);
+    }
+
+    let adapter_path = repo_path.join("scripts/ocm-npm-workspace-deps.mjs");
+    if !adapter_path.is_file() {
+        return Ok(None);
+    }
+
+    Ok(Some(LocalBuildNpmAdapter {
+        command: CommandSpec {
+            program: "node".to_string(),
+            args: vec![display_path(&adapter_path)],
+        },
+        real_npm: "npm".to_string(),
+        workspace_dependency_dirs: local_workspace_dependency_dirs(repo_path)?,
+    }))
 }
 
 fn install_openclaw_package_with_npm(
@@ -358,10 +539,13 @@ fn install_openclaw_package_with_npm(
     install_files: &Path,
     cwd: &Path,
     env: &BTreeMap<String, String>,
+    local_adapter: Option<&LocalBuildNpmAdapter>,
 ) -> Result<(), String> {
     let host_ready = verify_official_openclaw_runtime_host(env).is_ok();
-    let install_command = if host_ready {
-        crate::managed_node::CommandSpec {
+    let install_command = if let Some(local_adapter) = local_adapter {
+        local_adapter.command.clone()
+    } else if host_ready {
+        CommandSpec {
             program: npm_program(env),
             args: Vec::new(),
         }
@@ -369,7 +553,8 @@ fn install_openclaw_package_with_npm(
         managed_runtime_install_command(env, cwd)?
     };
 
-    let output = Command::new(&install_command.program)
+    let mut command = Command::new(&install_command.program);
+    command
         .args(&install_command.args)
         .arg("install")
         .arg("--prefix")
@@ -383,14 +568,16 @@ fn install_openclaw_package_with_npm(
         .env("npm_config_update_notifier", "false")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| {
-            format!(
-                "failed to run {} while installing the OpenClaw package: {error}",
-                install_command.program
-            )
-        })?;
+        .stderr(Stdio::piped());
+    if let Some(local_adapter) = local_adapter {
+        local_adapter.apply_environment(&mut command);
+    }
+    let output = command.output().map_err(|error| {
+        format!(
+            "failed to run {} while installing the OpenClaw package: {error}",
+            install_command.program
+        )
+    })?;
 
     if output.status.success() {
         return Ok(());
@@ -473,10 +660,18 @@ fn pack_local_openclaw_repo(
     repo_path: &Path,
     pack_dir: &Path,
     env: &BTreeMap<String, String>,
+    local_adapter: Option<&LocalBuildNpmAdapter>,
 ) -> Result<PathBuf, String> {
     ensure_dir(pack_dir)?;
-    let npm = npm_program(env);
-    let output = Command::new(&npm)
+    let npm = local_adapter
+        .map(|adapter| adapter.command.clone())
+        .unwrap_or_else(|| CommandSpec {
+            program: npm_program(env),
+            args: Vec::new(),
+        });
+    let mut command = Command::new(&npm.program);
+    command
+        .args(&npm.args)
         .arg("pack")
         .arg("--pack-destination")
         .arg(pack_dir)
@@ -485,17 +680,20 @@ fn pack_local_openclaw_repo(
         .env("npm_config_audit", "false")
         .env("npm_config_update_notifier", "false")
         .env("PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN", "false")
+        .env("OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG", "1")
         .current_dir(repo_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| {
-            format!(
-                "failed to run npm pack for local OpenClaw build in {}: {error}",
-                display_path(repo_path)
-            )
-        })?;
+        .stderr(Stdio::piped());
+    if let Some(local_adapter) = local_adapter {
+        local_adapter.apply_environment(&mut command);
+    }
+    let output = command.output().map_err(|error| {
+        format!(
+            "failed to run npm pack for local OpenClaw build in {}: {error}",
+            display_path(repo_path)
+        )
+    })?;
 
     if !output.status.success() {
         let detail =
@@ -742,6 +940,7 @@ fn install_runtime_from_openclaw_package(
             release,
             description,
             context,
+            None,
         );
         let _ = fs::remove_file(&archive_path);
         publish_runtime(target, meta?)
@@ -755,12 +954,14 @@ fn stage_runtime_from_openclaw_package_archive(
     release: RuntimeReleaseDetails,
     description: Option<String>,
     context: InstallContext<'_>,
+    local_adapter: Option<&LocalBuildNpmAdapter>,
 ) -> Result<RuntimeMeta, String> {
     install_openclaw_package_with_npm(
         archive_path,
         &target.install_files,
         context.cwd,
         context.env,
+        local_adapter,
     )?;
     expose_openclaw_package_runtime_dependencies(&target.install_files)?;
 
@@ -1089,7 +1290,9 @@ pub(crate) fn install_runtime_from_local_openclaw_build(
     let _ = fs::remove_dir_all(&pack_dir);
 
     let result = (|| {
-        let archive_path = pack_local_openclaw_repo(&repo_path, &pack_dir, context.env)?;
+        let local_adapter = local_build_npm_adapter(&repo_path, context.env)?;
+        let archive_path =
+            pack_local_openclaw_repo(&repo_path, &pack_dir, context.env, local_adapter.as_ref())?;
         let target = prepare_runtime_install_target(name, options.force, context.env, context.cwd)?;
         if path_exists(&target.install_root) {
             return Err(format!(
@@ -1113,6 +1316,7 @@ pub(crate) fn install_runtime_from_local_openclaw_build(
             },
             description,
             context,
+            local_adapter.as_ref(),
         )?;
         publish_runtime(target, meta)
     })();
@@ -1370,5 +1574,31 @@ npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMExcep
         let summary = summarize_command_output(b"", stderr).unwrap();
 
         assert!(summary.contains("deprecated node-domexception"));
+    }
+
+    #[test]
+    fn command_summary_keeps_the_failure_tail() {
+        let stderr = br#"
+phase 01
+phase 02
+phase 03
+phase 04
+phase 05
+phase 06
+phase 07
+phase 08
+phase 09
+phase 10
+phase 11
+phase 12
+phase 13
+Error: CHANGELOG.md does not contain a release section
+"#;
+
+        let summary = summarize_command_output(b"", stderr).unwrap();
+
+        assert!(!summary.contains("phase 01"));
+        assert!(summary.contains("phase 03"));
+        assert!(summary.contains("Error: CHANGELOG.md does not contain a release section"));
     }
 }

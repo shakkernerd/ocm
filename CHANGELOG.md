@@ -8,6 +8,7 @@ All notable changes to OCM are documented here.
 
 ### Fixed
 
+- Let `runtime build-local` package unreleased OpenClaw `main` checkouts with local workspace dependencies through the repo-provided npm adapter, and report the failing command tail instead of early build chatter.
 - Prevent `runtime build-local` from reconciling or replacing an OpenClaw checkout's dependencies while running its package build.
 - Reject an already-running shared OCM daemon when its service definition belongs to another `OCM_HOME`, and remove the shared service binding after the last running environment stops or is uninstalled.
 - Reuse an identical healthy official runtime when concurrent installers publish it first instead of failing the waiting command.
