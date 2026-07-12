@@ -110,11 +110,11 @@ pub(crate) fn remove_openclaw_worktree(
     repo_root: &Path,
     worktree_root: &Path,
 ) -> Result<(), String> {
-    if !repo_root.exists() && !worktree_root.exists() {
-        return Ok(());
-    }
-
-    let registered = registered_worktree_paths(repo_root)?;
+    let registered = match registered_worktree_paths(repo_root) {
+        Ok(registered) => registered,
+        Err(_) if !worktree_root.exists() => return Ok(()),
+        Err(error) => return Err(error),
+    };
     if !contains_worktree_path(&registered, worktree_root) {
         if worktree_root.exists() {
             return Err(format!(

@@ -636,8 +636,8 @@ fn env_remove_accepts_a_clean_worktree_with_an_initialized_submodule() {
 }
 
 #[test]
-fn env_remove_accepts_a_missing_repo_and_worktree() {
-    let root = TestDir::new("dev-command-missing-repo-remove");
+fn env_remove_accepts_a_missing_worktree_with_a_non_git_repo_path() {
+    let root = TestDir::new("dev-command-non-git-repo-remove");
     let repo = init_openclaw_repo(&root);
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -647,11 +647,17 @@ fn env_remove_accepts_a_missing_repo_and_worktree() {
     let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
     assert!(run.status.success(), "{}", stderr(&run));
     fs::remove_dir_all(&repo).unwrap();
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(repo.join("SENTINEL"), "preserve me\n").unwrap();
 
     let remove = run_ocm(&cwd, &env, &["env", "remove", "demo"]);
     assert!(remove.status.success(), "{}", stderr(&remove));
     let show = run_ocm(&cwd, &env, &["env", "show", "demo"]);
     assert!(!show.status.success());
+    assert_eq!(
+        fs::read_to_string(repo.join("SENTINEL")).unwrap(),
+        "preserve me\n"
+    );
 }
 
 #[test]
