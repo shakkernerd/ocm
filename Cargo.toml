@@ -2,7 +2,7 @@
 name = "ocm"
 version = "0.2.25"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "OpenClaw Manager: the local control plane for isolated OpenClaw environments, launchers, runtimes, and services."
 readme = "README.md"
 license-file = "LICENSE"

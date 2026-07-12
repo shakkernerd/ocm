@@ -110,6 +110,12 @@ require_command curl
 require_command tar
 require_command mktemp
 require_command uname
+require_command awk
+require_command tr
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  echo "error: required command not found: sha256sum or shasum" >&2
+  exit 1
+fi
 
 if [[ -z "$bin_dir" ]]; then
   bin_dir="${prefix}/bin"
@@ -118,6 +124,7 @@ fi
 target="$(detect_target)"
 asset="ocm-${target}.tar.gz"
 url="$(download_url_for "$version" "$asset")"
+checksums_url="$(download_url_for "$version" "SHA256SUMS")"
 
 tmp_dir="$(mktemp -d)"
 cleanup() {
@@ -126,14 +133,48 @@ cleanup() {
 trap cleanup EXIT
 
 archive_path="${tmp_dir}/${asset}"
+checksums_path="${tmp_dir}/SHA256SUMS"
 
 echo "Downloading ${url}"
 curl -fsSL "$url" -o "$archive_path"
+curl -fsSL "$checksums_url" -o "$checksums_path"
+
+expected_sha256="$(
+  awk -v asset="$asset" '
+    $2 == asset || $2 == "*" asset {
+      print $1
+      found = 1
+      exit
+    }
+    END {
+      if (!found) exit 1
+    }
+  ' "$checksums_path"
+)" || {
+  echo "error: SHA256SUMS does not contain ${asset}" >&2
+  exit 1
+}
+if [[ ! "$expected_sha256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  echo "error: SHA256SUMS contains an invalid digest for ${asset}" >&2
+  exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+else
+  actual_sha256="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
+fi
+actual_sha256="$(printf '%s' "$actual_sha256" | tr '[:upper:]' '[:lower:]')"
+expected_sha256="$(printf '%s' "$expected_sha256" | tr '[:upper:]' '[:lower:]')"
+if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+  echo "error: checksum mismatch for ${asset}" >&2
+  exit 1
+fi
+
 tar -xzf "$archive_path" -C "$tmp_dir"
 
 binary_path="${tmp_dir}/ocm"
-if [[ ! -x "$binary_path" ]]; then
-  echo "error: release archive did not contain an executable ocm binary" >&2
+if [[ ! -f "$binary_path" || -L "$binary_path" ]]; then
+  echo "error: release archive did not contain a regular ocm binary" >&2
   exit 1
 fi
 
