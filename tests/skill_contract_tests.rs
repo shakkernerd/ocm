@@ -76,6 +76,9 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     assert!(paths.contains("rev-parse HEAD"));
     assert!(paths.contains("ocm_bin="));
     assert!(paths.contains("export OCM_HOME="));
+    assert!(paths.contains("run_root=\"$(mktemp -d"));
+    assert!(paths.contains("run_id=\"${run_root##*/}\""));
+    assert!(!paths.contains("date -u +%Y%m%dT%H%M%SZ"));
     assert!(paths.contains("git clone --no-checkout"));
     assert!(paths.contains("--reference-if-able"));
     assert!(!paths.contains("git -C \"$source_repo\" fetch"));
