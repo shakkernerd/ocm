@@ -38,7 +38,7 @@ pub use layout::{
 pub(crate) use openclaw_config::{
     OpenClawConfigAudit, audit_openclaw_config, clear_skip_bootstrap_for_openclaw_onboarding,
     ensure_minimum_local_openclaw_config, repair_openclaw_config,
-    rewrite_openclaw_config_for_target,
+    rewrite_openclaw_config_for_migration, rewrite_openclaw_config_for_target,
 };
 pub(crate) use openclaw_state::{
     OpenClawStateAudit, audit_openclaw_state, clear_nonportable_runtime_state,

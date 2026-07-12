@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,7 +10,7 @@ use crate::launcher::{AddLauncherOptions, LauncherService};
 use crate::store::{
     copy_dir_recursive, default_env_root, derive_env_paths, display_path, get_environment,
     prepare_migrated_runtime_state, resolve_absolute_path, resolve_user_home,
-    rewrite_openclaw_config_for_target, validate_name,
+    rewrite_openclaw_config_for_migration, validate_name,
 };
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -113,7 +114,7 @@ fn migrate_plain_openclaw_home_inner(
     cwd: &Path,
 ) -> Result<(EnvImportSummary, Option<String>), String> {
     let service = EnvironmentService::new(env, cwd);
-    let migrated_launcher = preflight_migrated_launcher(&options.name, env, cwd)?;
+    let env_name = validate_name(&options.name, "Environment name")?;
     let source_home =
         resolve_migration_source_home(options.source_home.as_deref().map(Path::new), env);
     if !source_home.exists() {
@@ -122,10 +123,17 @@ fn migrate_plain_openclaw_home_inner(
             display_path(&source_home)
         ));
     }
+    let target_root = if let Some(root) = options.root.as_deref() {
+        resolve_absolute_path(root, env, cwd)?
+    } else {
+        default_env_root(&env_name, env, cwd)?
+    };
+    reject_overlapping_migration_paths(&source_home, &target_root)?;
+    let migrated_launcher = preflight_migrated_launcher(&env_name, env, cwd)?;
 
     let created = service.create(CreateEnvironmentOptions {
-        name: options.name.clone(),
-        root: options.root.clone(),
+        name: env_name,
+        root: Some(display_path(&target_root)),
         gateway_port: None,
         service_enabled: false,
         service_running: false,
@@ -189,8 +197,7 @@ fn complete_migration_import(
     }
 
     copy_dir_recursive(source_home, &target_paths.state_dir)?;
-    let legacy_root = source_home.parent().unwrap_or(source_home);
-    rewrite_openclaw_config_for_target(target_paths, Some(legacy_root), created.gateway_port)?;
+    rewrite_openclaw_config_for_migration(target_paths, source_home, created.gateway_port)?;
     prepare_migrated_runtime_state(target_paths, source_home)?;
 
     let Some(launcher) = migrated_launcher else {
@@ -220,6 +227,47 @@ fn complete_migration_import(
             Err(error)
         }
     }
+}
+
+fn reject_overlapping_migration_paths(
+    source_home: &Path,
+    target_root: &Path,
+) -> Result<(), String> {
+    let source_home = canonicalize_path_allow_missing(source_home)?;
+    let target_root = canonicalize_path_allow_missing(target_root)?;
+    if source_home.starts_with(&target_root) || target_root.starts_with(&source_home) {
+        return Err(format!(
+            "migration source and target must not overlap: source={} target={}",
+            display_path(&source_home),
+            display_path(&target_root)
+        ));
+    }
+    Ok(())
+}
+
+fn canonicalize_path_allow_missing(path: &Path) -> Result<PathBuf, String> {
+    let mut existing = path;
+    let mut missing = Vec::<OsString>::new();
+    while !existing.exists() {
+        let name = existing
+            .file_name()
+            .ok_or_else(|| format!("failed to resolve migration path: {}", display_path(path)))?;
+        missing.push(name.to_os_string());
+        existing = existing
+            .parent()
+            .ok_or_else(|| format!("failed to resolve migration path: {}", display_path(path)))?;
+    }
+
+    let mut resolved = fs::canonicalize(existing).map_err(|error| {
+        format!(
+            "failed to resolve migration path {}: {error}",
+            display_path(path)
+        )
+    })?;
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
 }
 
 fn preflight_migrated_launcher(

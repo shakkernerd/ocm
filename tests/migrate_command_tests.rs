@@ -350,8 +350,13 @@ fn seed_plain_openclaw_home(source_home: &std::path::Path) {
     fs::write(
         source_home.join("openclaw.json"),
         format!(
-            "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}}}}\n",
-            source_home.join("workspace").display()
+            "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}},\"externalProject\":\"{}\"}}\n",
+            source_home.join("workspace").display(),
+            source_home
+                .parent()
+                .unwrap()
+                .join("projects/unrelated")
+                .display()
         ),
     )
     .unwrap();
@@ -406,6 +411,16 @@ fn assert_imported_plain_openclaw_home(
 
     let config_text = fs::read_to_string(imported_state.join("openclaw.json")).unwrap();
     assert!(config_text.contains(&imported_state.join("workspace").display().to_string()));
+    assert!(
+        config_text.contains(
+            &source_home
+                .parent()
+                .unwrap()
+                .join("projects/unrelated")
+                .display()
+                .to_string()
+        )
+    );
     assert!(!config_text.contains(&source_home.display().to_string()));
 
     let session_text =
@@ -419,6 +434,62 @@ fn assert_imported_plain_openclaw_home(
     assert!(!log_text.contains(&source_home.display().to_string()));
     assert!(backup_text.contains(&imported_state.display().to_string()));
     assert!(!backup_text.contains(&source_home.display().to_string()));
+}
+
+#[test]
+fn migrate_rejects_a_target_nested_inside_the_source_before_creating_an_env() {
+    let root = TestDir::new("migrate-overlap-target-in-source");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let target_root = source_home.join("managed");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("migration source and target must not overlap"));
+    assert!(!root.child("ocm-home/envs.json").exists());
+    assert!(!target_root.exists());
+}
+
+#[test]
+fn migrate_rejects_a_target_that_contains_the_source_before_mutation() {
+    let root = TestDir::new("migrate-overlap-source-in-target");
+    let cwd = root.child("workspace");
+    let target_root = root.child("legacy-home");
+    let source_home = target_root.join(".openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("migration source and target must not overlap"));
+    assert!(!root.child("ocm-home/envs.json").exists());
+    assert!(source_home.join("workspace/notes.txt").exists());
 }
 
 #[test]
