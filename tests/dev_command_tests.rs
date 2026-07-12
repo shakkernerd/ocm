@@ -546,6 +546,37 @@ fn env_remove_accepts_a_clean_worktree_with_an_initialized_submodule() {
 }
 
 #[test]
+fn dev_command_supports_relative_worktree_links() {
+    let root = TestDir::new("dev-command-relative-links");
+    let repo = init_openclaw_repo(&root);
+    let configure = Command::new("git")
+        .args([
+            "-C",
+            &path_string(&repo),
+            "config",
+            "worktree.useRelativePaths",
+            "true",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        configure.status.success(),
+        "{}",
+        String::from_utf8_lossy(&configure.stderr)
+    );
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    let remove = run_ocm(&cwd, &env, &["env", "remove", "demo"]);
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    assert!(!repo.join(".worktrees/demo").exists());
+}
+
+#[test]
 fn env_remove_refuses_an_unrelated_replacement_checkout() {
     let root = TestDir::new("dev-command-replacement-remove");
     let repo = init_openclaw_repo(&root);

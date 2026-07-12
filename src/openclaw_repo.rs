@@ -266,7 +266,11 @@ fn git_worktree_backlink(path: &Path) -> Option<PathBuf> {
     let backlink = fs::read(git_dir.join("gitdir")).ok()?;
     let backlink = trim_git_line(&backlink);
     let backlink = PathBuf::from(git_path_from_bytes(backlink).ok()?);
-    Some(backlink)
+    if backlink.is_absolute() {
+        Some(backlink)
+    } else {
+        Some(clean_path(&git_dir.join(backlink)))
+    }
 }
 
 fn git_rev_parse_path(path: &Path, selector: &str) -> Option<PathBuf> {
