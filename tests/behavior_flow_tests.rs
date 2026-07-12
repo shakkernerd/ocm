@@ -1,6 +1,7 @@
 mod support;
 
 use std::fs;
+use std::process::Command;
 
 use crate::support::{TestDir, ocm_env, path_string, run_ocm, stderr, stdout, write_text};
 use ocm::store::clean_path;
@@ -24,7 +25,21 @@ fn env_use_prints_activation_exports_for_the_selected_environment() {
     let root = TestDir::new("behavior-env-use");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
-    let env = ocm_env(&root);
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OPENCLAW_DEV_SOURCE_ROOT".to_string(),
+        "/tmp/stale-source".to_string(),
+    );
+    env.insert(
+        "OPENCLAW_BUNDLED_PLUGINS_DIR".to_string(),
+        "/tmp/stale-plugins".to_string(),
+    );
+    env.insert(
+        "OPENCLAW_RANDOM_USER_VALUE".to_string(),
+        "stale".to_string(),
+    );
+    env.insert("OPENCLAW_PROFILE".to_string(), "legacy".to_string());
+    env.insert("OPENCLAW_DIAGNOSTICS".to_string(), "timeline".to_string());
 
     let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--port", "19789"]);
     assert!(create.status.success(), "{}", stderr(&create));
@@ -35,9 +50,30 @@ fn env_use_prints_activation_exports_for_the_selected_environment() {
     let env_root = clean_path(&root.child("ocm-home/envs/demo"));
     let script = stdout(&use_output);
     assert!(script.contains("unset OPENCLAW_PROFILE"));
+    assert!(script.contains("unset OPENCLAW_DEV_SOURCE_ROOT"));
+    assert!(script.contains("unset OPENCLAW_BUNDLED_PLUGINS_DIR"));
+    assert!(script.contains("unset OPENCLAW_RANDOM_USER_VALUE"));
+    assert!(!script.contains("unset OPENCLAW_DIAGNOSTICS"));
     assert!(script.contains(&format!("export OPENCLAW_HOME='{}'", env_root.display())));
     assert!(script.contains("export OPENCLAW_SERVICE_REPAIR_POLICY='external'"));
     assert!(script.contains(&format!("export OPENCLAW_GATEWAY_PORT='{}'", 19789)));
+
+    let evaluated = Command::new("bash")
+        .args([
+            "-c",
+            "eval \"$1\"; printf '%s|%s|%s|%s|%s' \"${OPENCLAW_DEV_SOURCE_ROOT-unset}\" \"${OPENCLAW_BUNDLED_PLUGINS_DIR-unset}\" \"${OPENCLAW_RANDOM_USER_VALUE-unset}\" \"$OPENCLAW_DIAGNOSTICS\" \"$OPENCLAW_GATEWAY_PORT\"",
+            "bash",
+            &script,
+        ])
+        .env_clear()
+        .envs(&env)
+        .output()
+        .unwrap();
+    assert!(evaluated.status.success());
+    assert_eq!(
+        String::from_utf8(evaluated.stdout).unwrap(),
+        "unset|unset|unset|timeline|19789"
+    );
 }
 
 #[test]

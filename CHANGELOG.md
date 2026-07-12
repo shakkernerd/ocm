@@ -12,3 +12,4 @@ All notable changes to OCM are documented here.
 - Preserve environment roots and recovery snapshots when dev worktree cleanup fails during destroy.
 - Keep auto-assigned ports stable without overriding a later gateway port written by OpenClaw configuration.
 - Reject non-UTF-8 process input cleanly, require version flags to stand alone, and terminate quietly when a pipeline closes its output.
+- Prevent Fish activation injection through crafted paths and clear stale OpenClaw controls when switching environments.
