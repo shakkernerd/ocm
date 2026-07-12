@@ -689,6 +689,42 @@ time.sleep(60)
 
 #[cfg(unix)]
 #[test]
+fn env_destroy_ignores_processes_in_sibling_prefix_paths() {
+    let root = TestDir::new("env-destroy-sibling-prefix");
+    let cwd = root.child("workspace");
+    let sibling_root = root.child("ocm-home/envs/demo-sibling");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&sibling_root).unwrap();
+    let env = ocm_launchd_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let mut sibling_process = Command::new("python3")
+        .current_dir(&sibling_root)
+        .args(["-c", "import time; time.sleep(60)"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    sleep(Duration::from_millis(100));
+
+    let preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
+    assert!(preview.status.success(), "{}", stderr(&preview));
+    let preview_json: serde_json::Value = serde_json::from_str(&stdout(&preview)).unwrap();
+    assert_eq!(preview_json["processCount"], 0);
+    assert!(
+        sibling_process.try_wait().unwrap().is_none(),
+        "destroy preview must not terminate a process from a sibling prefix path"
+    );
+
+    sibling_process.kill().unwrap();
+    sibling_process.wait().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn env_destroy_partial_apply_preserves_completed_process_count() {
     let root = TestDir::new("env-destroy-partial-process-count");
     let cwd = root.child("workspace");
