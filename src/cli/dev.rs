@@ -109,6 +109,15 @@ struct DevStatusSummary {
     status_command: String,
 }
 
+struct ExistingEnvSourceWatchOptions {
+    repo_root: Option<String>,
+    root: Option<String>,
+    gateway_port: Option<u32>,
+    watch: bool,
+    force: bool,
+    onboard: bool,
+}
+
 impl Cli {
     pub(super) fn handle_dev_command(&self, args: Vec<String>) -> Result<i32, String> {
         match args.first().map(String::as_str).unwrap_or("") {
@@ -192,12 +201,14 @@ impl Cli {
         {
             return self.handle_existing_env_source_watch(
                 existing,
-                repo_root,
-                root,
-                gateway_port,
-                watch,
-                force,
-                onboard,
+                ExistingEnvSourceWatchOptions {
+                    repo_root,
+                    root,
+                    gateway_port,
+                    watch,
+                    force,
+                    onboard,
+                },
             );
         }
 
@@ -359,13 +370,16 @@ impl Cli {
     fn handle_existing_env_source_watch(
         &self,
         existing: EnvMeta,
-        repo_root: Option<String>,
-        root: Option<String>,
-        gateway_port: Option<u32>,
-        watch: bool,
-        force: bool,
-        onboard: bool,
+        options: ExistingEnvSourceWatchOptions,
     ) -> Result<i32, String> {
+        let ExistingEnvSourceWatchOptions {
+            repo_root,
+            root,
+            gateway_port,
+            watch,
+            force,
+            onboard,
+        } = options;
         if !watch || !force {
             return Err(format!(
                 "environment \"{}\" is not a dev env; use a new env name for `ocm dev`, or rerun with --repo <path> --watch --force to take it over temporarily",
@@ -492,7 +506,7 @@ impl Cli {
     fn stop_service_for_source_watch(&self, env_name: &str) -> Result<(), String> {
         let stop_result = self.service_service().stop(env_name);
         match stop_result {
-            Ok(summary) if !summary.running => return Ok(()),
+            Ok(summary) if !summary.running => Ok(()),
             Ok(summary) => Err(source_watch_stop_timeout_error(&summary)),
             Err(error) => Err(format!(
                 "failed stopping background service for {env_name}: {error}"
@@ -626,10 +640,10 @@ impl Cli {
             return Ok(repo_root);
         }
 
-        if let Some(repo_root) = self.load_preferred_dev_repo()? {
-            if let Some(repo_root) = detect_openclaw_checkout(&repo_root) {
-                return Ok(repo_root);
-            }
+        if let Some(repo_root) = self.load_preferred_dev_repo()?
+            && let Some(repo_root) = detect_openclaw_checkout(&repo_root)
+        {
+            return Ok(repo_root);
         }
 
         let repo_root = self.prompt_dev_repo_root()?;
@@ -799,7 +813,7 @@ impl Cli {
         tee_to_env_logs: bool,
         _source_watch_lease: &SourceWatchLease,
     ) -> SourceWatchResult<i32> {
-        let args = vec![
+        let args = [
             "scripts/watch-node.mjs".to_string(),
             "gateway".to_string(),
             "run".to_string(),
@@ -1170,7 +1184,7 @@ impl SourceWatchProcessGuard {
             } else {
                 None
             };
-            return Ok(Self { terminal });
+            Ok(Self { terminal })
         }
         #[cfg(windows)]
         {
@@ -1206,7 +1220,7 @@ impl SourceWatchProcessGuard {
                     io::Error::last_os_error()
                 ));
             }
-            return Ok(Self { job });
+            Ok(Self { job })
         }
         #[cfg(not(any(unix, windows)))]
         {
@@ -1346,7 +1360,7 @@ impl SourceWatchProcessGuard {
         #[cfg(unix)]
         {
             let _ = signal_unix_process_group_for_cleanup(root_pid, libc::SIGKILL)?;
-            return wait_for_unix_process_group_to_stop(root_pid);
+            wait_for_unix_process_group_to_stop(root_pid)
         }
         #[cfg(not(any(unix, windows)))]
         let _ = root_pid;
@@ -1477,7 +1491,7 @@ fn stop_source_watch_child(
             ))
         })?;
         wait_for_unix_process_group_to_stop(child.id()).map_err(SourceWatchError::unverified)?;
-        return Ok(status);
+        Ok(status)
     }
 
     #[cfg(windows)]
@@ -1485,11 +1499,11 @@ fn stop_source_watch_child(
         process_guard
             .stop_remaining(child.id())
             .map_err(SourceWatchError::unverified)?;
-        return child.wait().map_err(|error| {
+        child.wait().map_err(|error| {
             SourceWatchError::unverified(format!(
                 "failed waiting for stopped source watch: {error}"
             ))
-        });
+        })
     }
 
     #[cfg(not(any(unix, windows)))]
