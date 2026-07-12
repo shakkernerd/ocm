@@ -1520,19 +1520,49 @@ fn process_belongs_to_env(
     }
 
     let command = normalize_process_path(command);
-    if markers.iter().any(|marker| command.contains(marker)) {
+    if markers
+        .iter()
+        .any(|marker| command_contains_process_path(&command, marker))
+    {
         return true;
     }
 
     if let Some(cwd) = cwd_map.get(&pid)
         && markers
             .iter()
-            .any(|marker| normalize_process_path(&cwd).starts_with(marker))
+            .any(|marker| process_path_is_within(&normalize_process_path(cwd), marker))
     {
         return true;
     }
 
     false
+}
+
+#[cfg(unix)]
+fn process_path_is_within(candidate: &str, root: &str) -> bool {
+    let candidate = Path::new(candidate);
+    let root = Path::new(root);
+    candidate == root || candidate.starts_with(root)
+}
+
+#[cfg(unix)]
+fn command_contains_process_path(command: &str, marker: &str) -> bool {
+    command.match_indices(marker).any(|(start, matched)| {
+        let end = start + matched.len();
+        let before_is_boundary = command[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|value| !is_process_path_component_char(value));
+        let after_is_boundary = command[end..].chars().next().is_none_or(|value| {
+            matches!(value, '/' | '\\') || !is_process_path_component_char(value)
+        });
+        before_is_boundary && after_is_boundary
+    })
+}
+
+#[cfg(unix)]
+fn is_process_path_component_char(value: char) -> bool {
+    value.is_alphanumeric() || matches!(value, '.' | '_' | '-' | '/' | '\\')
 }
 
 #[cfg(unix)]
@@ -1831,4 +1861,35 @@ fn process_alive(pid: u32) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::{command_contains_process_path, process_path_is_within};
+
+    #[test]
+    fn process_path_containment_requires_component_boundaries() {
+        assert!(process_path_is_within("/tmp/demo", "/tmp/demo"));
+        assert!(process_path_is_within(
+            "/tmp/demo/.openclaw/workspace",
+            "/tmp/demo"
+        ));
+        assert!(!process_path_is_within("/tmp/demo-sibling", "/tmp/demo"));
+    }
+
+    #[test]
+    fn command_path_matching_rejects_sibling_prefixes() {
+        assert!(command_contains_process_path(
+            "OPENCLAW_HOME=/tmp/demo node /tmp/demo/openclaw.mjs",
+            "/tmp/demo"
+        ));
+        assert!(!command_contains_process_path(
+            "node /tmp/demo-sibling/openclaw.mjs",
+            "/tmp/demo"
+        ));
+        assert!(!command_contains_process_path(
+            "node /tmp/parent-demo/openclaw.mjs",
+            "/tmp/demo"
+        ));
+    }
 }
