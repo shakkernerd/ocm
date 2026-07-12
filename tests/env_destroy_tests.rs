@@ -12,6 +12,9 @@ use std::thread::sleep;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
+use ocm::env::EnvDevMeta;
+use ocm::store::{get_environment, save_environment};
+
 use crate::support::{
     TestDir, managed_service_definition_path, ocm_env, path_string, run_ocm, stderr, stdout,
     write_executable_script,
@@ -335,6 +338,45 @@ fn env_destroy_yes_removes_dev_worktree() {
     let destroy = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--yes"]);
     assert!(destroy.status.success(), "{}", stderr(&destroy));
     assert!(!worktree.exists(), "dev worktree should be removed");
+}
+
+#[test]
+fn env_destroy_preserves_recovery_data_when_worktree_removal_fails() {
+    let root = TestDir::new("env-destroy-worktree-failure");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_launchd_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "demo"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+
+    let invalid_worktree = root.child("invalid-worktree");
+    fs::write(&invalid_worktree, "not a directory").unwrap();
+    let mut meta = get_environment("demo", &env, &cwd).unwrap();
+    meta.dev = Some(EnvDevMeta {
+        repo_root: path_string(&root.child("missing-repo")),
+        worktree_root: path_string(&invalid_worktree),
+    });
+    let env_root = PathBuf::from(&meta.root);
+    save_environment(meta, &env, &cwd).unwrap();
+
+    let destroy = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--yes"]);
+    assert!(!destroy.status.success());
+    assert!(env_root.exists(), "env root should remain recoverable");
+    assert!(get_environment("demo", &env, &cwd).is_ok());
+
+    let snapshots = run_ocm(&cwd, &env, &["env", "snapshot", "list", "demo", "--json"]);
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stdout(&snapshots))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[cfg(unix)]

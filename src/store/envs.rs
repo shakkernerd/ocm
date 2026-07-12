@@ -520,14 +520,13 @@ pub fn remove_environment(
     }
 
     let paths = derive_env_paths(Path::new(&meta.root));
-    let root_exists = path_exists(&paths.root);
-
-    if root_exists {
-        fs::remove_dir_all(&paths.root).map_err(|error| error.to_string())?;
-    }
 
     if let Some(dev) = meta.dev.as_ref() {
         remove_openclaw_worktree(Path::new(&dev.repo_root), Path::new(&dev.worktree_root))?;
+    }
+
+    if path_exists(&paths.root) {
+        fs::remove_dir_all(&paths.root).map_err(|error| error.to_string())?;
     }
 
     registry.envs.retain(|entry| entry.name != meta.name);
