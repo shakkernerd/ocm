@@ -313,13 +313,13 @@ fn leased_source_watch_remains_active_after_its_wrapper_pid_exits() {
 }
 
 #[test]
-fn leased_source_watch_rejects_metadata_from_an_older_lease() {
+fn leased_source_watch_blocks_fallback_for_metadata_from_an_older_lease() {
     let root = TestDir::new("source-watch-stale-generation");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let source_repo = create_source_repo(&root);
     let env = ocm_env(&root);
-    let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
+    create_runtime_backed_env(&root, &cwd, &env);
     let _source_watch = lock_source_watch_with_id(&root, "current-lease");
     let override_path = root.child("ocm-home/source-watch/demo.json");
     let lease_token = format!("lease:stale-lease:{}", "<redacted>");
@@ -342,10 +342,12 @@ fn leased_source_watch_rejects_metadata_from_an_older_lease() {
         &env,
         &["env", "resolve", "demo", "--json", "--", "status"],
     );
-    assert!(resolve.status.success(), "{}", stderr(&resolve));
-    let resolved: Value = serde_json::from_str(&stdout(&resolve)).unwrap();
-    assert_eq!(resolved["bindingKind"], "runtime");
-    assert_eq!(resolved["binaryPath"], path_string(&runtime_path));
+    assert!(!resolve.status.success());
+    assert!(
+        stderr(&resolve).contains("metadata does not match the active lease"),
+        "{}",
+        stderr(&resolve)
+    );
     assert!(override_path.exists());
 }
 

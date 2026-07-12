@@ -981,7 +981,8 @@ fn dev_command_can_onboard_then_watch() {
     assert!(pnpm_log.contains("openclaw onboard --mode local --no-install-daemon"));
 
     let node_log = fs::read_to_string(root.child("node.log")).unwrap();
-    assert!(node_log.contains("scripts/watch-node.mjs gateway run --port"));
+    assert!(node_log.contains("scripts/watch-node.mjs"));
+    assert!(node_log.contains("gateway run --port"));
     assert!(!source_watch_override_path(&root, "demo").exists());
 }
 
@@ -1284,7 +1285,8 @@ fn dev_watch_force_takes_over_runtime_env_without_rebinding() {
     let node_log = fs::read_to_string(root.child("node.log")).unwrap();
     assert!(node_log.contains(&path_string(&repo)));
     assert!(node_log.contains(show_json["configPath"].as_str().unwrap()));
-    assert!(node_log.contains("21901|scripts/watch-node.mjs gateway run --port 21901"));
+    assert!(node_log.contains("21901|--input-type=module"));
+    assert!(node_log.contains("gateway run --port 21901"));
     assert!(node_log.contains(&format!(
         "|bundled={}",
         path_string(&repo.join("extensions"))
@@ -1850,5 +1852,6 @@ fn dev_watch_force_temporarily_takes_over_and_restores_the_background_service() 
     assert!(!source_watch_override_path(&root, "demo").exists());
 
     let node_log = fs::read_to_string(root.child("node.log")).unwrap();
-    assert!(node_log.contains("scripts/watch-node.mjs gateway run --port"));
+    assert!(node_log.contains("scripts/watch-node.mjs"));
+    assert!(node_log.contains("gateway run --port"));
 }

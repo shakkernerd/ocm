@@ -203,7 +203,7 @@ impl Cli {
                 meta.name
             ));
         }
-        let source_watch_lease = if watch {
+        let mut source_watch_lease = if watch {
             Some(
                 self.environment_service()
                     .acquire_source_watch_lease(&meta.name)?,
@@ -271,7 +271,12 @@ impl Cli {
                     ),
                     stderr_profile,
                 ));
-                self.stop_service_for_source_watch(&meta.name, meta.service_running)?;
+                if let Err(stop_error) = self.stop_service_for_source_watch(&meta.name) {
+                    drop(source_watch_lease.take());
+                    return Err(
+                        self.restore_service_policy_after_failed_takeover(&meta.name, stop_error)
+                    );
+                }
             }
             self.stderr_lines(render_dev_run_step(
                 "Watch",
@@ -288,6 +293,7 @@ impl Cli {
                     .as_ref()
                     .ok_or_else(|| "source watch lease is missing".to_string())?,
             );
+            drop(source_watch_lease.take());
             let restore_result =
                 if watch_takes_over_service && source_watch_allows_service_restore(&watch_result) {
                     self.stderr_lines(render_dev_run_step(
@@ -365,9 +371,10 @@ impl Cli {
         let meta = self
             .environment_service()
             .apply_effective_gateway_port(existing)?;
-        let source_watch_lease = self
-            .environment_service()
-            .acquire_source_watch_lease(&meta.name)?;
+        let mut source_watch_lease = Some(
+            self.environment_service()
+                .acquire_source_watch_lease(&meta.name)?,
+        );
         let stderr_profile = self.dev_stderr_profile();
         self.stderr_lines(render_source_watch_takeover_summary(
             &meta,
@@ -390,7 +397,12 @@ impl Cli {
                 ),
                 stderr_profile,
             ));
-            self.stop_service_for_source_watch(&meta.name, meta.service_running)?;
+            if let Err(stop_error) = self.stop_service_for_source_watch(&meta.name) {
+                drop(source_watch_lease.take());
+                return Err(
+                    self.restore_service_policy_after_failed_takeover(&meta.name, stop_error)
+                );
+            }
         }
 
         self.stderr_lines(render_dev_run_step(
@@ -403,8 +415,15 @@ impl Cli {
             ),
             stderr_profile,
         ));
-        let watch_result =
-            self.run_source_gateway_watch(&meta, &repo_root, true, &source_watch_lease);
+        let watch_result = self.run_source_gateway_watch(
+            &meta,
+            &repo_root,
+            true,
+            source_watch_lease
+                .as_ref()
+                .ok_or_else(|| "source watch lease is missing".to_string())?,
+        );
+        drop(source_watch_lease.take());
 
         let restore_result =
             if restore_service && source_watch_allows_service_restore(&watch_result) {
@@ -428,28 +447,29 @@ impl Cli {
         combine_watch_and_restore_results(watch_result, restore_result, &meta.name)
     }
 
-    fn stop_service_for_source_watch(
+    fn stop_service_for_source_watch(&self, env_name: &str) -> Result<(), String> {
+        let stop_result = self.service_service().stop(env_name);
+        match stop_result {
+            Ok(summary) if !summary.running => return Ok(()),
+            Ok(summary) => Err(source_watch_stop_timeout_error(&summary)),
+            Err(error) => Err(format!(
+                "failed stopping background service for {env_name}: {error}"
+            )),
+        }
+    }
+
+    fn restore_service_policy_after_failed_takeover(
         &self,
         env_name: &str,
-        restore_running_policy: bool,
-    ) -> Result<(), String> {
-        let stop_result = self.service_service().stop(env_name);
-        let stop_error = match stop_result {
-            Ok(summary) if !summary.running => return Ok(()),
-            Ok(summary) => source_watch_stop_timeout_error(&summary),
-            Err(error) => format!("failed stopping background service for {env_name}: {error}"),
-        };
-
-        if !restore_running_policy {
-            return Err(stop_error);
-        }
+        stop_error: String,
+    ) -> String {
         match self.service_service().start(env_name) {
-            Ok(_) => Err(format!(
+            Ok(_) => format!(
                 "{stop_error}; restored the background service policy and did not start source watch"
-            )),
-            Err(restore_error) => Err(format!(
+            ),
+            Err(restore_error) => format!(
                 "{stop_error}; also failed restoring the background service policy: {restore_error}"
-            )),
+            ),
         }
     }
 
