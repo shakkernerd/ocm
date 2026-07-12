@@ -13,14 +13,14 @@ fn release_validation_requires_isolated_package_shaped_runs() {
     let normalized = combined.to_lowercase();
 
     for required in [
-        "ocm runtime build-local",
+        "\"$ocm_bin\" runtime build-local",
         "immutable",
         "detached worktree",
         "run id",
         "package-shaped runtime",
     ] {
         assert!(
-            combined.contains(required),
+            normalized.contains(required),
             "release-validation contract must mention {required:?}"
         );
     }
@@ -62,6 +62,8 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     let safety = read("skills/ocm-operator/references/safety-and-state.md");
     let paths = read("skills/ocm-operator/references/local-paths.md");
     let release_skill = read("skills/openclaw-release-validation/SKILL.md");
+    let release_paths =
+        read("skills/openclaw-release-validation/references/release-validation-paths.md");
     let matrix = read("docs/OPENCLAW_RELEASE_SCENARIO_MATRIX.md");
 
     assert!(usage.contains("ocm logs mira --stream error"));
@@ -84,6 +86,8 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     assert!(release_skill.contains("\"$OCM_BIN\" runtime verify"));
     assert!(release_skill.contains("\"$OCM_BIN\" runtime remove"));
     assert!(release_skill.contains("\"$OCM_BIN\" @<env> --"));
+    assert!(!release_skill.contains("`ocm "));
+    assert!(!release_paths.contains("`ocm "));
     assert!(matrix.contains("OCM_BIN="));
     assert!(matrix.contains("/target/debug/ocm"));
     assert!(matrix.contains("\"$OCM_BIN\" runtime build-local"));
