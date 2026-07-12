@@ -407,10 +407,10 @@ impl Cli {
             return Ok(runtime_name.map(StartBinding::Runtime));
         }
 
-        if let Some(existing) = existing {
-            if existing.default_runtime.is_some() || existing.default_launcher.is_some() {
-                return Ok(None);
-            }
+        if let Some(existing) = existing
+            && (existing.default_runtime.is_some() || existing.default_launcher.is_some())
+        {
+            return Ok(None);
         }
 
         let runtime_name = self.with_progress(
