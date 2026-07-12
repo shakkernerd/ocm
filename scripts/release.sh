@@ -63,6 +63,68 @@ tag_has_signature() {
   git cat-file -p "$1" | grep -Eq -- '-----BEGIN (PGP|SSH) SIGNATURE-----'
 }
 
+ssh_public_signing_key() {
+  local signing_key key_path candidate first_field
+  signing_key="$(git config --get user.signingkey || true)"
+  case "$signing_key" in
+    key::*)
+      printf '%s\n' "${signing_key#key::}"
+      return 0
+      ;;
+    ssh-*|ecdsa-*|sk-*)
+      printf '%s\n' "$signing_key"
+      return 0
+      ;;
+  esac
+
+  key_path="$(git config --path --get user.signingkey || true)"
+  [[ -n "$key_path" ]] || return 1
+  for candidate in "$key_path" "${key_path}.pub"; do
+    [[ -f "$candidate" ]] || continue
+    read -r first_field _ <"$candidate" || continue
+    case "$first_field" in
+      ssh-*|ecdsa-*|sk-*)
+        head -n1 "$candidate"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+verify_tag_signature() {
+  local release_tag="$1"
+  local signing_format allowed_signers principal public_key trust_dir trust_file verify_status
+  signing_format="$(git config --get gpg.format || true)"
+  if [[ "$signing_format" != "ssh" ]]; then
+    git verify-tag "$release_tag"
+    return
+  fi
+
+  allowed_signers="$(git config --path --get gpg.ssh.allowedSignersFile || true)"
+  if [[ -n "$allowed_signers" ]]; then
+    git verify-tag "$release_tag"
+    return
+  fi
+
+  principal="$(git config --get user.email || true)"
+  [[ -n "$principal" && "$principal" != *[[:space:],]* ]] || return 1
+  public_key="$(ssh_public_signing_key)" || return 1
+  trust_dir="$(mktemp -d "${TMPDIR:-/tmp}/ocm-release-signers.XXXXXX")" || return 1
+  trust_file="${trust_dir}/allowed_signers"
+  chmod 700 "$trust_dir"
+  printf '%s namespaces="git" %s\n' "$principal" "$public_key" >"$trust_file"
+  chmod 600 "$trust_file"
+
+  if git -c "gpg.ssh.allowedSignersFile=$trust_file" verify-tag "$release_tag"; then
+    verify_status=0
+  else
+    verify_status=$?
+  fi
+  rm -rf "$trust_dir"
+  return "$verify_status"
+}
+
 refresh_dirty_files() {
   dirty_files=()
   while IFS= read -r file; do
@@ -342,7 +404,7 @@ if [[ "$(git cat-file -t "$tag" 2>/dev/null || true)" != "tag" ]]; then
   echo "error: release tag ${tag} must be an annotated tag" >&2
   exit 1
 fi
-if ! git verify-tag "$tag" >/dev/null 2>&1; then
+if ! verify_tag_signature "$tag" >/dev/null 2>&1; then
   echo "error: release tag ${tag} does not have a valid configured signature" >&2
   exit 1
 fi
