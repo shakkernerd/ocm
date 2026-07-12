@@ -3,15 +3,31 @@
 Default paths for this machine:
 
 - OCM repo: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm`
-- OpenClaw test repo: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`
+- OpenClaw source repo: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`
+- Per-run root: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/release-validation/<run-id>`
+- Detached OpenClaw worktree: `<run-root>/openclaw`
 - Do not use active OpenClaw repo: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/openclaw`
 - Existing user source env: `/Users/shakker/.ocm/envs/Violet`
-- Report pattern: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/ocm-openclaw-release-validation-YYYY-MM-DD.md`
+- Report pattern: `<run-root>/ocm-openclaw-release-validation-<run-id>.md`
 
 Preferred binaries:
 
 - OCM: `<ocm repo>/target/debug/ocm`
-- OpenClaw: `<test-build>/openclaw.mjs`
+- Package-shaped OpenClaw runtime: an OCM runtime named with `<run-id>`, built
+  from `<run-root>/openclaw` with `ocm runtime build-local`
+- Direct OpenClaw executable: `<run-root>/openclaw/openclaw.mjs`, only for the
+  S02 source-artifact boot smoke check
+
+Existing-user fixture modes:
+
+- Durable-state clone: `ocm env clone`; keeps auth/settings but intentionally
+  clears sessions, logs, and backups.
+- Session-preserving fixture: copy the source `.openclaw` directory under
+  `<run-root>`, then import that copy with `ocm adopt import`.
+
+Both modes are secret-bearing until credentials are removed or replaced. Keep
+their services stopped and use mocks or dedicated test accounts for external
+checks unless the run explicitly authorizes real access.
 
 Canonical scenario matrix:
 

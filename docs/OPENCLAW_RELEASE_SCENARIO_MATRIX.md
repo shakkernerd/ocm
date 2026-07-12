@@ -12,19 +12,31 @@ failed.
 ## Operating Rules
 
 - Use OCM from `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm`.
-- Use the OpenClaw test repo at
-  `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`.
+- Fetch from the OpenClaw source repo at
+  `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`,
+  resolve one immutable `origin/main` commit, and create a unique detached
+  worktree for the run.
 - Do not use `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/openclaw`
   or `../openclaw`; that is an active working repo.
-- Pull and test latest `origin/main` in `temp/test-build`.
-- Test the built OpenClaw artifact, usually `<test-build>/openclaw.mjs`.
+- Build a uniquely named package-shaped runtime with `ocm runtime build-local`
+  from the detached worktree. Use that runtime for the matrix.
+- Use the detached worktree's `openclaw.mjs` only for the S02 direct boot smoke.
 - Do not use `pnpm openclaw` as the main release-validation path.
 - Use the local built OCM binary, usually `<ocm>/target/debug/ocm`.
-- Copy existing user state, preferably `~/.ocm/envs/Violet`, into temp state
+- Use a run id in every worktree, runtime, env, report, and cleanup name.
+- Copy existing user state, preferably `~/.ocm/envs/Violet`, into the run root
   before testing. Never mutate the real env.
+- Treat copied and cloned state as secret-bearing. Keep services stopped and
+  make no external requests by default. Use mocks, credential-free fresh envs,
+  or dedicated test accounts unless the run explicitly authorizes real access.
+- Use `ocm env clone` only when clearing sessions, logs, and backups is
+  intended. Use a copied `.openclaw` home plus `ocm adopt import` for S20.
 - Keep the report quiet: summarize pass/fail per scenario, then include details
   only for failures, blocked scenarios, or release-risk notes.
-- Clean up temp envs, services, LaunchAgents, generated fixtures, and worktrees.
+- Redact credentials, private endpoints, user identifiers, and secret-bearing
+  command output from the report.
+- Clean up only temp envs, services, LaunchAgents, fixtures, and worktrees owned
+  by the current run id. Inspect worktree status before removal.
 
 ## OCM Usage Primer For Test Agents
 
@@ -72,9 +84,12 @@ Start each report with:
 
 - OCM commit/version
 - OpenClaw commit/version
+- package runtime identity
 - previous release or changelog baseline reviewed
+- run id
 - temp paths used
-- whether real user state was copied and left untouched
+- fixture modes used and whether real user state was left untouched
+- external-access policy used
 
 Then use this summary table:
 
@@ -122,10 +137,12 @@ Pass evidence:
 
 What to test:
 
-- Pull latest `origin/main` in `temp/test-build`.
-- Build the release artifact.
-- Run the built executable directly with `--version`.
-- Run the built executable through OCM-bound env execution.
+- Fetch and resolve one immutable `origin/main` commit.
+- Create a clean detached per-run worktree at that commit.
+- Run the source-built executable directly with `--version` as a narrow smoke
+  check.
+- Build and verify a named package-shaped OCM runtime from the worktree.
+- Run the package-shaped runtime through OCM-bound env execution.
 
 Run for:
 
@@ -134,7 +151,8 @@ Run for:
 
 Pass evidence:
 
-- Build passes, version prints expected commit/version, OCM runs that artifact.
+- Build and runtime verification pass, both version checks identify the
+  expected commit/version, and OCM runs the package-shaped runtime.
 
 ### S03 - Release Packaging And Postinstall Shape
 
@@ -158,8 +176,7 @@ Pass evidence:
 What to test:
 
 - Empty `HOME`, `OCM_HOME`, and OpenClaw state.
-- `ocm start <env> --command <built-openclaw> --cwd <test-build>` creates a
-  usable env.
+- `ocm start <env> --runtime <run-runtime>` creates a usable env.
 - First run writes only expected minimum config/state.
 - `openclaw --version`, `openclaw doctor`, `plugins list --json`, gateway
   status, and logs work.
@@ -176,11 +193,15 @@ Pass evidence:
 
 What to test:
 
-- Copy `Violet` into temp state.
-- Import/adopt the copy into temp OCM state.
-- Clone the copied env before destructive tests.
-- Bind the clone to the built artifact.
-- Run `ocm upgrade simulate <env> --to <test-build> --scenario current --json`.
+- Copy the source env into the run root.
+- Import/adopt the copy into the run's OCM state.
+- Use `ocm env clone` only for scenarios that do not require sessions, logs, or
+  backups.
+- Keep the copied or cloned env service stopped while retained credentials are
+  present.
+- Bind the fixture to the package-shaped runtime.
+- Run `ocm upgrade simulate <env> --to <run-worktree> --scenario current
+  --json`.
 
 Run for:
 
@@ -189,7 +210,8 @@ Run for:
 Pass evidence:
 
 - Simulation passes, original copied env is not mutated, real `Violet` is not
-  touched, and expected simulation steps are recorded.
+  touched, expected simulation steps are recorded, and no unauthorized
+  external request is made.
 
 ### S06 - Upgrade Dry Run And Rollback Safety
 
@@ -411,6 +433,9 @@ What to test:
 - Channel-specific env vars and secret/config validation behave correctly.
 - Telegram, Discord, Slack, MCP, browser, voice/video, TTS, or other changed
   channels do not break plugin discovery or doctor.
+- Use mocks or dedicated test accounts. Do not send through credentials copied
+  from a real user fixture without explicit authorization for that destination
+  and account.
 
 Run for:
 
@@ -429,6 +454,8 @@ What to test:
 - Default model/provider changes are reflected in config and startup.
 - Existing user provider settings are preserved.
 - Missing provider credentials fail with clear diagnostics, not startup crashes.
+- Use mocks or dedicated test credentials for live calls. Do not spend against
+  copied production credentials without explicit authorization.
 
 Run for:
 
@@ -460,6 +487,11 @@ Pass evidence:
 
 What to test:
 
+- Copy the source env's `.openclaw` directory into the run root and import that
+  copy with `ocm adopt import`. Do not use `ocm env clone`; clone intentionally
+  removes sessions, logs, and backups.
+- Before upgrading, assert that at least one expected non-empty session fixture
+  exists in the imported env and record its non-secret identifier.
 - Existing sessions, bindings, and conversation state can be read after upgrade.
 - New sessions can be created in clean state.
 - Session state paths stay under the intended OpenClaw home.
@@ -471,7 +503,8 @@ Run for:
 
 Pass evidence:
 
-- Existing state remains readable and new state is written to the env root.
+- The fixture exists before the upgrade, existing state remains readable after
+  it, and new state is written to the env root.
 
 ### S21 - Secrets And Environment Isolation
 
@@ -480,6 +513,10 @@ What to test:
 - Env-scoped secrets/config are resolved from the copied or clean env only.
 - Parent shell `OPENCLAW_*` or OCM variables do not leak into child envs.
 - Missing secrets produce actionable diagnostics.
+- Copied fixtures remain offline unless credentials were replaced with mocks or
+  dedicated test accounts, or real access was explicitly authorized.
+- Reports and attached evidence contain no credentials, private endpoints, raw
+  auth files, or secret-bearing config.
 
 Run for:
 
@@ -489,7 +526,8 @@ Run for:
 Pass evidence:
 
 - Commands use the intended env root and no cross-env secret/config leakage is
-  observed.
+  observed, no unauthorized external request is made, and report redaction is
+  verified.
 
 ### S22 - Filesystem And Path Safety
 
@@ -568,6 +606,12 @@ What to test:
 
 - Temp OCM homes, copied envs, generated fixtures, worktrees, and services are
   removed when no longer needed.
+- Every cleanup target carries the current run id or another explicit ownership
+  marker.
+- Worktree status is inspected before removal; unclean or unowned worktrees are
+  retained and reported instead of force-removed.
+- The detached worktree still points at the recorded OpenClaw commit before it
+  is removed.
 - Real `Violet` was not mutated.
 - `temp/test-build` has no unintended worktree changes.
 
