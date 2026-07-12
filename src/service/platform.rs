@@ -248,7 +248,7 @@ pub(crate) fn write_managed_service_definition(
             &definition.stdout_path,
             &definition.stderr_path,
             &definition.environment,
-            systemd_supports_append_output(env),
+            systemd_output_mode(env),
         )?,
         ServiceManagerKind::Unsupported => {
             return Err(unsupported_service_manager_message().to_string());
@@ -359,7 +359,7 @@ fn build_systemd_unit(
     stdout_path: &Path,
     stderr_path: &Path,
     environment: &BTreeMap<String, String>,
-    append_output: bool,
+    output_mode: SystemdOutputMode,
 ) -> Result<String, String> {
     validate_systemd_value("Description", description)?;
     validate_systemd_value("WorkingDirectory", &display_path(working_directory))?;
@@ -401,37 +401,55 @@ fn build_systemd_unit(
         systemd_quote(&display_path(working_directory)),
         exec_start,
         environment_block,
-        systemd_quote(&systemd_output_target(stdout_path, append_output)),
-        systemd_quote(&systemd_output_target(stderr_path, append_output)),
+        systemd_quote(&systemd_output_target(stdout_path, output_mode)),
+        systemd_quote(&systemd_output_target(stderr_path, output_mode)),
     ))
 }
 
-fn systemd_supports_append_output(env: &BTreeMap<String, String>) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SystemdOutputMode {
+    Journal,
+    File,
+    Append,
+}
+
+fn systemd_output_mode(env: &BTreeMap<String, String>) -> SystemdOutputMode {
     let systemctl = env
         .get(SYSTEMCTL_BIN_OVERRIDE)
         .map(String::as_str)
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("systemctl");
-    Command::new(systemctl)
+    let version = Command::new(systemctl)
         .arg("--version")
         .output()
         .ok()
         .filter(|output| output.status.success())
-        .is_some_and(|output| systemd_version_supports_append(&output.stdout))
+        .and_then(|output| systemd_version(&output.stdout));
+    systemd_output_mode_for_version(version)
 }
 
-fn systemd_version_supports_append(stdout: &[u8]) -> bool {
+fn systemd_version(stdout: &[u8]) -> Option<u32> {
     String::from_utf8_lossy(stdout)
         .lines()
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
         .and_then(|version| version.parse::<u32>().ok())
-        .is_some_and(|version| version >= 240)
 }
 
-fn systemd_output_target(path: &Path, append: bool) -> String {
-    let mode = if append { "append" } else { "file" };
-    format!("{mode}:{}", display_path(path))
+fn systemd_output_mode_for_version(version: Option<u32>) -> SystemdOutputMode {
+    match version {
+        Some(240..) => SystemdOutputMode::Append,
+        Some(236..=239) => SystemdOutputMode::File,
+        _ => SystemdOutputMode::Journal,
+    }
+}
+
+fn systemd_output_target(path: &Path, mode: SystemdOutputMode) -> String {
+    match mode {
+        SystemdOutputMode::Journal => "journal".to_string(),
+        SystemdOutputMode::File => format!("file:{}", display_path(path)),
+        SystemdOutputMode::Append => format!("append:{}", display_path(path)),
+    }
 }
 
 fn plist_escape(value: &str) -> String {
@@ -701,7 +719,7 @@ mod tests {
     use super::{
         ManagedServiceDefinition, ManagedServiceIdentity, OCM_SERVICE_LABEL, ServiceManagerKind,
         gui_domain, managed_service_identity, managed_service_label, service_backend_support_error,
-        service_definition_dir, service_manager_kind, systemd_version_supports_append,
+        service_definition_dir, service_manager_kind, systemd_output_mode_for_version,
         write_managed_service_definition,
     };
 
@@ -716,10 +734,27 @@ mod tests {
     }
 
     #[test]
-    fn systemd_append_output_requires_version_240() {
-        assert!(!systemd_version_supports_append(b"systemd 239\n"));
-        assert!(systemd_version_supports_append(b"systemd 240 (240.1)\n"));
-        assert!(!systemd_version_supports_append(b""));
+    fn systemd_output_modes_follow_supported_versions() {
+        assert_eq!(
+            systemd_output_mode_for_version(Some(235)),
+            super::SystemdOutputMode::Journal
+        );
+        assert_eq!(
+            systemd_output_mode_for_version(Some(236)),
+            super::SystemdOutputMode::File
+        );
+        assert_eq!(
+            systemd_output_mode_for_version(Some(239)),
+            super::SystemdOutputMode::File
+        );
+        assert_eq!(
+            systemd_output_mode_for_version(Some(240)),
+            super::SystemdOutputMode::Append
+        );
+        assert_eq!(
+            systemd_output_mode_for_version(None),
+            super::SystemdOutputMode::Journal
+        );
     }
 
     #[test]
@@ -961,8 +996,8 @@ mod tests {
         assert!(unit.contains("ExecStart=/bin/sh -lc"));
         assert!(unit.contains("WorkingDirectory=/tmp/work"));
         assert!(unit.contains("Environment=\"OPENCLAW_HOME=/tmp/demo\""));
-        assert!(unit.contains("StandardOutput=file:"));
-        assert!(unit.contains("StandardError=file:"));
+        assert!(unit.contains("StandardOutput=journal"));
+        assert!(unit.contains("StandardError=journal"));
 
         fs::remove_dir_all(&root).unwrap();
     }
