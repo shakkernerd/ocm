@@ -25,14 +25,14 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvDevMeta {
     pub repo_root: String,
     pub worktree_root: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvMeta {
     pub kind: String,
@@ -294,7 +294,7 @@ impl<'a> EnvironmentService<'a> {
         service_running: Option<bool>,
     ) -> Result<EnvMeta, String> {
         let _lock = self.lock_operation(name)?;
-        let saved = set_environment_service_policy(
+        let change = set_environment_service_policy(
             name,
             service_enabled,
             service_running,
@@ -302,7 +302,7 @@ impl<'a> EnvironmentService<'a> {
             self.cwd,
         )?;
         sync_supervisor_if_present(self.env, self.cwd)?;
-        Ok(saved)
+        Ok(change.applied)
     }
 
     pub fn remove(&self, name: &str, force: bool) -> Result<EnvMeta, String> {

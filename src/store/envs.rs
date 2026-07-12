@@ -38,6 +38,12 @@ struct EnvRegistry {
     envs: Vec<EnvMeta>,
 }
 
+pub(crate) struct EnvironmentServicePolicyChange {
+    pub(crate) applied: EnvMeta,
+    previous_service_enabled: bool,
+    previous_service_running: bool,
+}
+
 fn empty_env_registry() -> EnvRegistry {
     EnvRegistry {
         kind: "ocm-env-registry".to_string(),
@@ -242,7 +248,7 @@ pub(crate) fn set_environment_service_policy(
     service_running: Option<bool>,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) -> Result<EnvMeta, String> {
+) -> Result<EnvironmentServicePolicyChange, String> {
     let safe_name = validate_name(name, "Environment name")?;
     let _lock = lock_env_registry(env, cwd)?;
     let mut registry = load_env_registry(env, cwd)?;
@@ -251,6 +257,8 @@ pub(crate) fn set_environment_service_policy(
         .iter_mut()
         .find(|meta| meta.name == safe_name)
         .ok_or_else(|| format!("environment \"{safe_name}\" does not exist"))?;
+    let previous_service_enabled = meta.service_enabled;
+    let previous_service_running = meta.service_running;
     if let Some(service_enabled) = service_enabled {
         meta.service_enabled = service_enabled;
     }
@@ -258,38 +266,35 @@ pub(crate) fn set_environment_service_policy(
         meta.service_running = service_running;
     }
     meta.updated_at = now_utc();
-    let saved = meta.clone();
+    let applied = meta.clone();
     write_env_registry(&mut registry, env, cwd)?;
-    Ok(saved)
+    Ok(EnvironmentServicePolicyChange {
+        applied,
+        previous_service_enabled,
+        previous_service_running,
+    })
 }
 
 pub(crate) fn restore_environment_service_policy(
-    name: &str,
-    attempted_service_enabled: Option<bool>,
-    attempted_service_running: Option<bool>,
-    previous_service_enabled: bool,
-    previous_service_running: bool,
+    change: &EnvironmentServicePolicyChange,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) -> Result<EnvMeta, String> {
-    let safe_name = validate_name(name, "Environment name")?;
+) -> Result<bool, String> {
     let _lock = lock_env_registry(env, cwd)?;
     let mut registry = load_env_registry(env, cwd)?;
     let meta = registry
         .envs
         .iter_mut()
-        .find(|meta| meta.name == safe_name)
-        .ok_or_else(|| format!("environment \"{safe_name}\" does not exist"))?;
-    if attempted_service_enabled.is_some_and(|attempted| meta.service_enabled == attempted) {
-        meta.service_enabled = previous_service_enabled;
+        .find(|meta| meta.name == change.applied.name)
+        .ok_or_else(|| format!("environment \"{}\" does not exist", change.applied.name))?;
+    if *meta != change.applied {
+        return Ok(false);
     }
-    if attempted_service_running.is_some_and(|attempted| meta.service_running == attempted) {
-        meta.service_running = previous_service_running;
-    }
+    meta.service_enabled = change.previous_service_enabled;
+    meta.service_running = change.previous_service_running;
     meta.updated_at = now_utc();
-    let restored = meta.clone();
     write_env_registry(&mut registry, env, cwd)?;
-    Ok(restored)
+    Ok(true)
 }
 
 pub fn create_environment(
@@ -686,4 +691,71 @@ fn import_staging_dir() -> PathBuf {
     std::env::temp_dir()
         .join("ocm-env-imports")
         .join(format!("{}-{id}", std::process::id()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+
+    use crate::env::CreateEnvironmentOptions;
+
+    use super::{
+        NEXT_IMPORT_ID, Ordering, create_environment, get_environment,
+        restore_environment_service_policy, save_environment, set_environment_service_policy,
+    };
+
+    #[test]
+    fn service_policy_rollback_requires_the_applied_snapshot_to_still_be_current() {
+        let id = NEXT_IMPORT_ID.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir()
+            .join("ocm-env-policy-tests")
+            .join(format!("{}-{id}", std::process::id()));
+        let cwd = root.join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+        let env = BTreeMap::from([
+            ("HOME".to_string(), root.join("home").display().to_string()),
+            (
+                "OCM_HOME".to_string(),
+                root.join("ocm-home").display().to_string(),
+            ),
+        ]);
+        create_environment(
+            CreateEnvironmentOptions {
+                name: "demo".to_string(),
+                root: None,
+                gateway_port: None,
+                service_enabled: false,
+                service_running: false,
+                default_runtime: None,
+                default_launcher: None,
+                dev: None,
+                protected: false,
+            },
+            &env,
+            &cwd,
+        )
+        .unwrap();
+
+        let change =
+            set_environment_service_policy("demo", Some(true), Some(true), &env, &cwd).unwrap();
+        let mut concurrent = get_environment("demo", &env, &cwd).unwrap();
+        concurrent.default_runtime = Some("stable".to_string());
+        save_environment(concurrent, &env, &cwd).unwrap();
+
+        assert!(!restore_environment_service_policy(&change, &env, &cwd).unwrap());
+        let current = get_environment("demo", &env, &cwd).unwrap();
+        assert!(current.service_enabled);
+        assert!(current.service_running);
+        assert_eq!(current.default_runtime.as_deref(), Some("stable"));
+
+        let change =
+            set_environment_service_policy("demo", Some(false), Some(false), &env, &cwd).unwrap();
+        assert!(restore_environment_service_policy(&change, &env, &cwd).unwrap());
+        let restored = get_environment("demo", &env, &cwd).unwrap();
+        assert!(restored.service_enabled);
+        assert!(restored.service_running);
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

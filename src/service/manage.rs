@@ -224,23 +224,18 @@ fn update_service(
     if require_binding {
         ensure_gateway_binding(name, env, cwd)?;
     }
-    let env_service = EnvironmentService::new(env, cwd);
-    let previous = env_service.get(name)?;
     if let ServiceSupervisorPolicy::EnsureRunning = supervisor_policy {
         ensure_supervisor_running(env, cwd)?;
     }
-    set_environment_service_policy(name, service_enabled, service_running, env, cwd)?;
+    let change = set_environment_service_policy(name, service_enabled, service_running, env, cwd)?;
     if let Err(error) = sync_supervisor_if_present(env, cwd) {
-        let rollback = restore_environment_service_policy(
-            name,
-            service_enabled,
-            service_running,
-            previous.service_enabled,
-            previous.service_running,
-            env,
-            cwd,
-        )
-        .and_then(|_| sync_supervisor_if_present(env, cwd).map(|_| ()));
+        let rollback = restore_environment_service_policy(&change, env, cwd).and_then(|restored| {
+            if restored {
+                sync_supervisor_if_present(env, cwd).map(|_| ())
+            } else {
+                Ok(())
+            }
+        });
         return match rollback {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(format!(
