@@ -81,5 +81,10 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     assert!(release_skill.contains("\"$OCM_BIN\" runtime verify"));
     assert!(release_skill.contains("\"$OCM_BIN\" runtime remove"));
     assert!(release_skill.contains("\"$OCM_BIN\" @<env> --"));
+    assert!(matrix.contains("OCM_BIN="));
+    assert!(matrix.contains("/target/debug/ocm"));
+    assert!(matrix.contains("\"$OCM_BIN\" runtime build-local"));
+    assert!(matrix.contains("\"$OCM_BIN\" upgrade simulate"));
+    assert!(!matrix.contains("`ocm "));
     assert!(matrix.contains("run-owned package runtime is removed"));
 }
