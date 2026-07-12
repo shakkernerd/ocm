@@ -125,10 +125,12 @@ pub(crate) fn remove_openclaw_worktree(
 }
 
 fn remove_registered_worktree(repo_root: &Path, worktree_root: &Path) -> Result<(), String> {
+    ensure_worktree_clean(worktree_root)?;
+
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root)
-        .args(["worktree", "remove"])
+        .args(["worktree", "remove", "--force"])
         .arg(worktree_root)
         .output()
         .map_err(|error| format!("failed to run git worktree remove: {error}"))?;
@@ -140,6 +142,39 @@ fn remove_registered_worktree(repo_root: &Path, worktree_root: &Path) -> Result<
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let detail = if !stderr.is_empty() { stderr } else { stdout };
     Err(format!("git worktree remove failed: {detail}"))
+}
+
+fn ensure_worktree_clean(worktree_root: &Path) -> Result<(), String> {
+    if !worktree_root.exists() {
+        return Ok(());
+    }
+
+    let output = Command::new("git")
+        .args(["-c", "status.showUntrackedFiles=all"])
+        .arg("-C")
+        .arg(worktree_root)
+        .args([
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ])
+        .output()
+        .map_err(|error| format!("failed to inspect git worktree status: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!("git worktree status failed: {detail}"));
+    }
+    if !output.stdout.is_empty() {
+        return Err(format!(
+            "git worktree remove failed: {} contains modified or untracked files",
+            display_path(worktree_root)
+        ));
+    }
+
+    Ok(())
 }
 
 fn registered_worktree_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -207,28 +242,64 @@ fn is_existing_openclaw_worktree(repo_root: &Path, path: &Path) -> bool {
     path.exists()
         && path.join(".git").exists()
         && detect_openclaw_checkout(path).is_some()
+        && git_top_level(path).is_some_and(|top_level| {
+            normalize_worktree_path(&top_level) == normalize_worktree_path(path)
+        })
         && git_common_dir(repo_root)
             .zip(git_common_dir(path))
             .is_some_and(|(repo, worktree)| repo == worktree)
+        && git_worktree_backlink(path).is_some_and(|backlink| {
+            normalize_git_file_path(&backlink) == normalize_git_file_path(&path.join(".git"))
+        })
 }
 
 fn git_common_dir(path: &Path) -> Option<PathBuf> {
+    git_rev_parse_path(path, "--git-common-dir")
+}
+
+fn git_top_level(path: &Path) -> Option<PathBuf> {
+    git_rev_parse_path(path, "--show-toplevel")
+}
+
+fn git_worktree_backlink(path: &Path) -> Option<PathBuf> {
+    let git_dir = git_rev_parse_path(path, "--git-dir")?;
+    let backlink = fs::read(git_dir.join("gitdir")).ok()?;
+    let backlink = trim_git_line(&backlink);
+    let backlink = PathBuf::from(git_path_from_bytes(backlink).ok()?);
+    Some(backlink)
+}
+
+fn git_rev_parse_path(path: &Path, selector: &str) -> Option<PathBuf> {
     let output = Command::new("git")
         .arg("-C")
         .arg(path)
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .args(["rev-parse", "--path-format=absolute", selector])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
 
-    let common_dir = output.stdout.strip_suffix(b"\n").unwrap_or(&output.stdout);
-    let common_dir = common_dir.strip_suffix(b"\r").unwrap_or(common_dir);
-    let common_dir = PathBuf::from(git_path_from_bytes(common_dir).ok()?);
-    fs::canonicalize(&common_dir)
+    let path = PathBuf::from(git_path_from_bytes(trim_git_line(&output.stdout)).ok()?);
+    fs::canonicalize(&path)
         .ok()
-        .or_else(|| Some(clean_path(&common_dir)))
+        .or_else(|| Some(clean_path(&path)))
+}
+
+fn trim_git_line(output: &[u8]) -> &[u8] {
+    let output = output.strip_suffix(b"\n").unwrap_or(output);
+    output.strip_suffix(b"\r").unwrap_or(output)
+}
+
+fn normalize_git_file_path(path: &Path) -> PathBuf {
+    let Some(parent) = path.parent() else {
+        return clean_path(path);
+    };
+    let Some(name) = path.file_name() else {
+        return clean_path(path);
+    };
+    let parent = fs::canonicalize(parent).unwrap_or_else(|_| clean_path(parent));
+    clean_path(&parent.join(name))
 }
 
 #[cfg(unix)]

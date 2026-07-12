@@ -355,6 +355,21 @@ fn env_remove_preserves_an_untracked_dev_worktree() {
     let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
     let worktree_root = PathBuf::from(show_json["devWorktreeRoot"].as_str().unwrap());
     fs::write(worktree_root.join("SENTINEL"), "preserve me\n").unwrap();
+    let hide_untracked = Command::new("git")
+        .args([
+            "-C",
+            &path_string(&repo),
+            "config",
+            "status.showUntrackedFiles",
+            "no",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        hide_untracked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hide_untracked.stderr)
+    );
 
     let remove = run_ocm(&cwd, &env, &["env", "remove", "demo", "--force"]);
     assert!(!remove.status.success());
@@ -369,6 +384,165 @@ fn env_remove_preserves_an_untracked_dev_worktree() {
         "{}",
         stderr(&still_registered)
     );
+}
+
+#[test]
+fn dev_command_rejects_another_worktrees_git_backlink() {
+    let root = TestDir::new("dev-command-wrong-backlink");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let first = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    let worktree_root = PathBuf::from(show_json["devWorktreeRoot"].as_str().unwrap());
+    let other_worktree = repo.join(".worktrees/other");
+    let add = Command::new("git")
+        .args([
+            "-C",
+            &path_string(&repo),
+            "worktree",
+            "add",
+            "--detach",
+            &path_string(&other_worktree),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    fs::remove_dir_all(&worktree_root).unwrap();
+    fs::create_dir_all(worktree_root.join("scripts")).unwrap();
+    fs::write(
+        worktree_root.join("package.json"),
+        r#"{"name":"openclaw","version":"2026.4.19"}"#,
+    )
+    .unwrap();
+    fs::write(
+        worktree_root.join("scripts/run-node.mjs"),
+        "console.log('run');\n",
+    )
+    .unwrap();
+    fs::copy(other_worktree.join(".git"), worktree_root.join(".git")).unwrap();
+    fs::write(worktree_root.join("SENTINEL"), "preserve me\n").unwrap();
+
+    let second = run_ocm(&cwd, &env, &["dev", "demo"]);
+    assert!(!second.status.success());
+    assert!(
+        stderr(&second).contains("registered worktree is not a valid OpenClaw checkout"),
+        "{}",
+        stderr(&second)
+    );
+    assert_eq!(
+        fs::read_to_string(worktree_root.join("SENTINEL")).unwrap(),
+        "preserve me\n"
+    );
+}
+
+#[test]
+fn env_remove_accepts_a_clean_worktree_with_an_initialized_submodule() {
+    let root = TestDir::new("dev-command-clean-submodule");
+    let repo = init_openclaw_repo(&root);
+    let submodule = root.child("repo/submodule");
+    fs::create_dir_all(&submodule).unwrap();
+    let init = Command::new("git")
+        .arg("init")
+        .arg(&submodule)
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+    Command::new("git")
+        .args([
+            "-C",
+            &path_string(&submodule),
+            "config",
+            "user.email",
+            "tests@example.com",
+        ])
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args([
+            "-C",
+            &path_string(&submodule),
+            "config",
+            "user.name",
+            "OCM Tests",
+        ])
+        .output()
+        .unwrap();
+    fs::write(submodule.join("content.txt"), "submodule\n").unwrap();
+    Command::new("git")
+        .args(["-C", &path_string(&submodule), "add", "."])
+        .output()
+        .unwrap();
+    let commit = Command::new("git")
+        .args(["-C", &path_string(&submodule), "commit", "-m", "init"])
+        .output()
+        .unwrap();
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+    let add = Command::new("git")
+        .args([
+            "-c",
+            "protocol.file.allow=always",
+            "-C",
+            &path_string(&repo),
+        ])
+        .args(["submodule", "add"])
+        .arg(&submodule)
+        .arg("vendor/submodule")
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let commit = Command::new("git")
+        .args(["-C", &path_string(&repo), "commit", "-am", "add submodule"])
+        .output()
+        .unwrap();
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    let worktree_root = PathBuf::from(show_json["devWorktreeRoot"].as_str().unwrap());
+    let init_submodule = Command::new("git")
+        .args(["-c", "protocol.file.allow=always", "-C"])
+        .arg(&worktree_root)
+        .args(["submodule", "update", "--init"])
+        .output()
+        .unwrap();
+    assert!(
+        init_submodule.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init_submodule.stderr)
+    );
+
+    let remove = run_ocm(&cwd, &env, &["env", "remove", "demo"]);
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    assert!(!worktree_root.exists());
 }
 
 #[test]
