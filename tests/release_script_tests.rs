@@ -16,6 +16,23 @@ struct ReleaseRepo {
 }
 
 impl ReleaseRepo {
+    fn apply_toolchain_env(&self, command: &mut Command) {
+        for name in ["RUSTUP_TOOLCHAIN"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        let host_home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        command.env(
+            "CARGO_HOME",
+            std::env::var_os("CARGO_HOME").unwrap_or_else(|| host_home.join(".cargo").into()),
+        );
+        command.env(
+            "RUSTUP_HOME",
+            std::env::var_os("RUSTUP_HOME").unwrap_or_else(|| host_home.join(".rustup").into()),
+        );
+    }
+
     fn script_path(&self) -> PathBuf {
         self.repo.join("scripts/release.sh")
     }
@@ -30,6 +47,18 @@ impl ReleaseRepo {
         command.env_clear();
         command.env("HOME", &self.home);
         command.env("PATH", &self.env_path);
+        self.apply_toolchain_env(&mut command);
+        command.output().unwrap()
+    }
+
+    fn run_update_version(&self, version: &str) -> Output {
+        let mut command = Command::new(self.repo.join("scripts/update-version.sh"));
+        command.current_dir(&self.repo);
+        command.arg(version);
+        command.env_clear();
+        command.env("HOME", &self.home);
+        command.env("PATH", &self.env_path);
+        self.apply_toolchain_env(&mut command);
         command.output().unwrap()
     }
 
@@ -92,6 +121,14 @@ impl ReleaseRepo {
         }
         fallback.unwrap_or_default()
     }
+
+    fn mark_tag_signed(&self, tag: &str) {
+        fs::write(
+            self.repo.join(".git").join(format!("test-signed-{tag}")),
+            "",
+        )
+        .unwrap();
+    }
 }
 
 fn stdout(output: &Output) -> String {
@@ -124,6 +161,8 @@ version = "0.2.7"
     )
     .unwrap();
     fs::write(path.join("README.md"), "release fixture\n").unwrap();
+    fs::create_dir_all(path.join("src")).unwrap();
+    fs::write(path.join("src/main.rs"), "fn main() {}\n").unwrap();
 }
 
 fn copy_script(repo: &Path, relative: &str) {
@@ -154,6 +193,7 @@ fn init_release_repo(label: &str) -> ReleaseRepo {
     write_release_fixture(&repo);
     copy_script(&repo, "scripts/release.sh");
     copy_script(&repo, "scripts/update-version.sh");
+    copy_script(&repo, "scripts/validate-version.sh");
 
     let git = std::process::Command::new("sh")
         .arg("-lc")
@@ -167,7 +207,7 @@ fn init_release_repo(label: &str) -> ReleaseRepo {
     write_executable_script(
         &git_wrapper,
         &format!(
-            "#!/usr/bin/env bash\nset -euo pipefail\nreal_git=\"{}\"\nif [[ \"${{1:-}}\" == \"-c\" && \"${{2:-}}\" == \"tag.gpgSign=true\" && \"${{3:-}}\" == \"tag\" ]]; then\n  shift 2\n  exec \"$real_git\" \"$@\"\nfi\nif [[ \"${{1:-}}\" == \"cat-file\" && \"${{2:-}}\" == \"-p\" ]]; then\n  \"$real_git\" \"$@\"\n  if [[ -n \"${{3:-}}\" ]] && [[ \"$(\"$real_git\" cat-file -t \"$3\" 2>/dev/null || true)\" == \"tag\" ]]; then\n    printf '%s\\n' '-----BEGIN SSH SIGNATURE-----' 'test-signature' '-----END SSH SIGNATURE-----'\n  fi\n  exit 0\nfi\nexec \"$real_git\" \"$@\"\n",
+            "#!/usr/bin/env bash\nset -euo pipefail\nreal_git=\"{}\"\nif [[ \"${{1:-}}\" == \"-c\" && \"${{2:-}}\" == \"tag.gpgSign=true\" && \"${{3:-}}\" == \"tag\" ]]; then\n  shift 2\n  \"$real_git\" \"$@\"\n  touch \".git/test-signed-${{3}}\"\n  exit 0\nfi\nif [[ \"${{1:-}}\" == \"cat-file\" && \"${{2:-}}\" == \"-p\" ]]; then\n  \"$real_git\" \"$@\"\n  if [[ -n \"${{3:-}}\" && -f \".git/test-signed-${{3}}\" ]]; then\n    printf '%s\\n' '-----BEGIN SSH SIGNATURE-----' 'test-signature' '-----END SSH SIGNATURE-----'\n  fi\n  exit 0\nfi\nif [[ \"${{1:-}}\" == \"verify-tag\" ]]; then\n  [[ -n \"${{2:-}}\" && -f \".git/test-signed-${{2}}\" ]]\n  exit\nfi\nexec \"$real_git\" \"$@\"\n",
             real_git
         ),
     );
@@ -215,7 +255,14 @@ fn init_release_repo(label: &str) -> ReleaseRepo {
 
     let add = Command::new(&real_git)
         .current_dir(&repo)
-        .args(["add", "Cargo.toml", "Cargo.lock", "README.md", "scripts"])
+        .args([
+            "add",
+            "Cargo.toml",
+            "Cargo.lock",
+            "README.md",
+            "src",
+            "scripts",
+        ])
         .env_clear()
         .env("HOME", &home)
         .env("PATH", &env_path)
@@ -301,8 +348,9 @@ fn release_script_resumes_after_local_tag_creation() {
     assert!(add.status.success(), "{}", stderr(&add));
     let commit = repo.git_output(&["commit", "-m", "chore: bump version to 0.2.8"]);
     assert!(commit.status.success(), "{}", stderr(&commit));
-    let tag = repo.git_output(&["tag", "v0.2.8"]);
+    let tag = repo.git_output(&["tag", "-a", "v0.2.8", "-m", "v0.2.8"]);
     assert!(tag.status.success(), "{}", stderr(&tag));
+    repo.mark_tag_signed("v0.2.8");
 
     let output = repo.run_release("0.2.8");
     assert!(output.status.success(), "{}", stderr(&output));
@@ -318,6 +366,92 @@ fn release_script_resumes_after_local_tag_creation() {
             .contains(head_sha.trim())
     );
     assert_eq!(repo.remote_tag_commit("v0.2.8"), head_sha.trim());
+}
+
+#[test]
+fn release_script_rejects_unsigned_existing_tag() {
+    let repo = init_release_repo("release-script-rejects-unsigned-tag");
+    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
+    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
+
+    assert!(
+        repo.git_output(&["add", "Cargo.toml", "Cargo.lock"])
+            .status
+            .success()
+    );
+    assert!(
+        repo.git_output(&["commit", "-m", "chore: bump version to 0.2.8"])
+            .status
+            .success()
+    );
+    assert!(repo.git_output(&["tag", "v0.2.8"]).status.success());
+
+    let output = repo.run_release("0.2.8");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("must be an annotated tag"));
+    assert!(repo.remote_ls_remote("refs/tags/v0.2.8").is_empty());
+}
+
+#[test]
+fn release_script_rolls_back_when_atomic_push_is_rejected() {
+    let repo = init_release_repo("release-script-atomic-push-rollback");
+    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
+    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
+    let starting_head = repo.git_stdout(&["rev-parse", "HEAD"]);
+
+    let hook = repo.remote.join("hooks/update");
+    write_executable_script(
+        &hook,
+        "#!/usr/bin/env bash\n[[ \"$1\" != \"refs/heads/main\" ]]\n",
+    );
+
+    let output = repo.run_release("0.2.8");
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("Rolling back local release preparation"));
+    assert!(repo.remote_ls_remote("refs/heads/main").is_empty());
+    assert!(repo.remote_ls_remote("refs/tags/v0.2.8").is_empty());
+    assert_eq!(repo.git_stdout(&["rev-parse", "HEAD"]), starting_head);
+    assert!(
+        !repo
+            .git_output(&["show-ref", "--verify", "refs/tags/v0.2.8"])
+            .status
+            .success()
+    );
+    assert!(
+        fs::read_to_string(repo.repo.join("Cargo.toml"))
+            .unwrap()
+            .contains("version = \"0.2.8\"")
+    );
+}
+
+#[test]
+fn update_version_rejects_invalid_semver_without_mutating_files() {
+    let repo = init_release_repo("update-version-invalid-semver");
+    let cargo_toml = fs::read(repo.repo.join("Cargo.toml")).unwrap();
+    let cargo_lock = fs::read(repo.repo.join("Cargo.lock")).unwrap();
+
+    let output = repo.run_update_version("0.2.8..1");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("invalid semantic version"));
+    assert_eq!(fs::read(repo.repo.join("Cargo.toml")).unwrap(), cargo_toml);
+    assert_eq!(fs::read(repo.repo.join("Cargo.lock")).unwrap(), cargo_lock);
+}
+
+#[test]
+fn update_version_accepts_semver_build_metadata() {
+    let repo = init_release_repo("update-version-build-metadata");
+    let output = repo.run_update_version("0.2.8+build.1");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        fs::read_to_string(repo.repo.join("Cargo.toml"))
+            .unwrap()
+            .contains("version = \"0.2.8+build.1\"")
+    );
+    assert!(
+        fs::read_to_string(repo.repo.join("Cargo.lock"))
+            .unwrap()
+            .contains("version = \"0.2.8+build.1\"")
+    );
 }
 
 #[test]

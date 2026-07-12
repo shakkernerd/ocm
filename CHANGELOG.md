@@ -21,3 +21,4 @@ All notable changes to OCM are documented here.
 - Keep plain-home migration path rewrites scoped to the imported OpenClaw state and reject overlapping source and target roots before mutation.
 - Fail migration planning on corrupt environment registries and only auto-bind executable OpenClaw commands from `PATH`.
 - Report launcher and environment rollback failures alongside the original migration error instead of hiding partial cleanup.
+- Make release preparation rollback-safe, verify signed annotated tags on every resume path, and publish branch and tag refs atomically.
