@@ -765,6 +765,16 @@ impl Cli {
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
+        if let Err(error) = process_guard.assign_child(&child) {
+            #[cfg(windows)]
+            return Err(stop_suspended_source_watch_after_error(&mut child, error));
+            #[cfg(not(windows))]
+            return Err(stop_source_watch_after_error(
+                &mut child,
+                &process_guard,
+                error,
+            ));
+        }
         if let Err(error) = _source_watch_lease.attach_to_child(&child) {
             #[cfg(windows)]
             return Err(stop_suspended_source_watch_after_error(&mut child, error));
@@ -775,7 +785,7 @@ impl Cli {
                 error,
             ));
         }
-        if let Err(error) = process_guard.assign_and_start(&child) {
+        if let Err(error) = process_guard.start_child(&child) {
             #[cfg(windows)]
             return Err(stop_suspended_source_watch_after_error(&mut child, error));
             #[cfg(not(windows))]
@@ -1107,7 +1117,7 @@ impl SourceWatchProcessGuard {
         Ok(())
     }
 
-    fn assign_and_start(&self, child: &std::process::Child) -> Result<(), String> {
+    fn assign_child(&self, child: &std::process::Child) -> Result<(), String> {
         #[cfg(windows)]
         {
             let assigned = unsafe {
@@ -1122,8 +1132,15 @@ impl SourceWatchProcessGuard {
                     io::Error::last_os_error()
                 ));
             }
-            resume_windows_process(child.id())?;
         }
+        #[cfg(not(windows))]
+        let _ = child;
+        Ok(())
+    }
+
+    fn start_child(&self, child: &std::process::Child) -> Result<(), String> {
+        #[cfg(windows)]
+        resume_windows_process(child.id())?;
         #[cfg(not(windows))]
         let _ = child;
         Ok(())
