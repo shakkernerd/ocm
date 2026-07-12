@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 use super::{Cli, render};
 use crate::env::{
     CloneEnvironmentOptions, CreateEnvSnapshotOptions, CreateEnvironmentOptions, EnvMeta,
-    EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions, RemoveEnvSnapshotOptions,
-    RestoreEnvSnapshotOptions,
+    EnvSnapshotSummary, EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,
 };
 use crate::infra::process::{run_direct, run_shell};
 use crate::infra::shell::{
@@ -67,6 +67,7 @@ struct EnvDestroyState<'a> {
     environment: &'a EnvMeta,
     service: &'a ServiceSummary,
     process_candidates: &'a [u32],
+    snapshots: &'a [EnvSnapshotSummary],
 }
 
 fn should_clear_skip_bootstrap_for_openclaw_args(args: &[String]) -> bool {
@@ -233,7 +234,7 @@ impl Cli {
         // remove them only after the environment and worktree are gone.
         for snapshot_id in &snapshot_ids {
             self.environment_service()
-                .remove_snapshot(RemoveEnvSnapshotOptions {
+                .remove_snapshot_locked(RemoveEnvSnapshotOptions {
                     env_name: name.clone(),
                     snapshot_id: snapshot_id.clone(),
                 })?;
@@ -884,13 +885,15 @@ impl Cli {
     ) -> Result<EnvDestroySummary, String> {
         let env_meta = self.environment_service().get(name)?;
         let service = self.service_service().status(name)?;
-        let snapshots = self.environment_service().list_snapshots(Some(name))?;
+        let mut snapshots = self.environment_service().list_snapshots(Some(name))?;
+        snapshots.sort_by(|left, right| left.id.cmp(&right.id));
         let mut blockers = Vec::new();
         let mut process_candidates = self
             .destroy_process_candidates(&env_meta)
             .unwrap_or_default();
         process_candidates.sort_unstable();
-        let state_token = env_destroy_state_token(&env_meta, &service, &process_candidates)?;
+        let state_token =
+            env_destroy_state_token(&env_meta, &service, &process_candidates, &snapshots)?;
 
         if env_meta.protected && !force {
             blockers.push("env is protected; re-run with --force to destroy it".to_string());
@@ -1222,12 +1225,14 @@ fn env_destroy_state_token(
     environment: &EnvMeta,
     service: &ServiceSummary,
     process_candidates: &[u32],
+    snapshots: &[EnvSnapshotSummary],
 ) -> Result<String, String> {
     let state = EnvDestroyState {
         kind: "ocm-env-destroy-state-v1",
         environment,
         service,
         process_candidates,
+        snapshots,
     };
     let encoded = serde_json::to_vec(&state)
         .map_err(|error| format!("failed to encode environment destroy state: {error}"))?;

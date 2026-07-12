@@ -375,6 +375,52 @@ fn env_destroy_state_token_requires_guarded_apply_mode() {
 }
 
 #[test]
+fn env_destroy_state_token_refuses_unpreviewed_snapshots() {
+    let root = TestDir::new("env-destroy-state-token-snapshot");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_launchd_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
+    assert!(preview.status.success(), "{}", stderr(&preview));
+    let preview_json: serde_json::Value = serde_json::from_str(&stdout(&preview)).unwrap();
+    let stale_guard = preview_json["stateToken"].as_str().unwrap();
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "demo"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let guarded = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "destroy",
+            "demo",
+            "--yes",
+            "--if-state-token",
+            stale_guard,
+            "--json",
+        ],
+    );
+    assert!(!guarded.status.success());
+    let guarded_json: serde_json::Value = serde_json::from_str(&stdout(&guarded)).unwrap();
+    assert_eq!(guarded_json["code"], "state_changed");
+    assert_eq!(guarded_json["removed"], false);
+
+    let snapshots = run_ocm(&cwd, &env, &["env", "snapshot", "list", "demo", "--json"]);
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stdout(&snapshots))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn env_destroy_yes_uninstalls_service_removes_snapshots_and_deletes_env() {
     let root = TestDir::new("env-destroy-apply");
     let cwd = root.child("workspace");
