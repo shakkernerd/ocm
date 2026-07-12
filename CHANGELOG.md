@@ -16,3 +16,4 @@ All notable changes to OCM are documented here.
 - Prevent Fish activation injection through crafted paths and clear stale OpenClaw controls when switching environments.
 - Keep tables within narrow terminal widths by truncating headers or falling back to compact rows.
 - Verify self-update release digests and staged binary versions before replacement, compare releases with SemVer precedence, clean temporary artifacts on failure, and reject Linux ARM64 until release assets are published.
+- Reject launcher deletion while environments still depend on it, and route shell-expanding launcher recipes through a shell instead of lossy direct execution.
