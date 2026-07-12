@@ -32,6 +32,7 @@ fn init_openclaw_repo(root: &TestDir) -> PathBuf {
         "console.log('watch');\n",
     )
     .unwrap();
+    fs::write(repo.join(".gitignore"), ".env\nnode_modules/\n").unwrap();
 
     let init = Command::new("git").arg("init").arg(&repo).output().unwrap();
     assert!(
@@ -384,6 +385,53 @@ fn env_remove_preserves_an_untracked_dev_worktree() {
         "{}",
         stderr(&still_registered)
     );
+}
+
+#[test]
+fn env_remove_preserves_ignored_local_files() {
+    let root = TestDir::new("dev-command-ignored-remove");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    let worktree_root = PathBuf::from(show_json["devWorktreeRoot"].as_str().unwrap());
+    fs::write(worktree_root.join(".env"), "TOKEN=preserve-me\n").unwrap();
+
+    let remove = run_ocm(&cwd, &env, &["env", "remove", "demo", "--force"]);
+    assert!(!remove.status.success());
+    assert!(stderr(&remove).contains("contains ignored local files"));
+    assert_eq!(
+        fs::read_to_string(worktree_root.join(".env")).unwrap(),
+        "TOKEN=preserve-me\n"
+    );
+}
+
+#[test]
+fn env_remove_discards_installed_node_modules() {
+    let root = TestDir::new("dev-command-node-modules-remove");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    let worktree_root = PathBuf::from(show_json["devWorktreeRoot"].as_str().unwrap());
+    fs::create_dir_all(worktree_root.join("node_modules/pkg")).unwrap();
+    fs::write(worktree_root.join("node_modules/pkg/package.json"), "{}\n").unwrap();
+
+    let remove = run_ocm(&cwd, &env, &["env", "remove", "demo"]);
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    assert!(!worktree_root.exists());
 }
 
 #[test]

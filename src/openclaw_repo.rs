@@ -174,7 +174,52 @@ fn ensure_worktree_clean(worktree_root: &Path) -> Result<(), String> {
         ));
     }
 
+    ensure_no_ignored_local_files(worktree_root)?;
     Ok(())
+}
+
+fn ensure_no_ignored_local_files(worktree_root: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(worktree_root)
+        .args([
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+        ])
+        .output()
+        .map_err(|error| format!("failed to inspect ignored worktree files: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!("git ignored-file inspection failed: {detail}"));
+    }
+
+    let has_local_files = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(git_path_from_bytes)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(PathBuf::from)
+        .any(|path| !is_disposable_ignored_path(&path));
+    if has_local_files {
+        return Err(format!(
+            "git worktree remove failed: {} contains ignored local files",
+            display_path(worktree_root)
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_disposable_ignored_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == "node_modules")
 }
 
 fn registered_worktree_paths(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
