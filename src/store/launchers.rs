@@ -86,8 +86,11 @@ pub fn remove_launcher(
     with_locked_environments(env, cwd, |envs| {
         let bound_envs = envs
             .iter()
-            .filter(|env| env.default_launcher.as_deref() == Some(meta.name.as_str()))
-            .map(|env| env.name.as_str())
+            .filter_map(|environment| {
+                let launcher_name = environment.default_launcher.as_deref()?;
+                let launcher = get_launcher(launcher_name, env, cwd).ok()?;
+                (launcher.name == meta.name).then_some(environment.name.as_str())
+            })
             .collect::<Vec<_>>();
         if !bound_envs.is_empty() {
             return Err(format!(

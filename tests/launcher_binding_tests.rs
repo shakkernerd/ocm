@@ -71,6 +71,49 @@ fn launcher_bindings_require_an_existing_launcher() {
 }
 
 #[test]
+fn case_variant_launcher_bindings_use_metadata_identity_when_supported() {
+    let root = TestDir::new("launcher-binding-case-variant");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "sh"],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "STABLE"],
+    );
+    if !create.status.success() {
+        assert!(stderr(&create).contains("launcher \"STABLE\" does not exist"));
+        return;
+    }
+
+    let environment = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(environment.status.success(), "{}", stderr(&environment));
+    let environment: serde_json::Value = serde_json::from_str(&stdout(&environment)).unwrap();
+    assert_eq!(environment["defaultLauncher"], "stable");
+
+    let registry_path = env_registry_path(&env, &cwd).unwrap();
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+    registry["envs"][0]["defaultLauncher"] = "STABLE".into();
+    fs::write(
+        registry_path,
+        format!("{}\n", serde_json::to_string_pretty(&registry).unwrap()),
+    )
+    .unwrap();
+
+    let remove = run_ocm(&cwd, &env, &["launcher", "remove", "stable"]);
+    assert!(!remove.status.success());
+    assert!(stderr(&remove).contains("is still used by environment(s): demo"));
+}
+
+#[test]
 fn launcher_binding_and_removal_share_the_environment_registry_lock() {
     let root = TestDir::new("launcher-binding-remove-lock");
     let cwd = root.child("workspace");

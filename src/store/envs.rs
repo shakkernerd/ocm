@@ -172,13 +172,14 @@ fn upsert_environment(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
-    let meta = normalize_environment(meta)?;
+    let mut meta = normalize_environment(meta)?;
     let existing_launcher =
         find_environment(registry, &meta.name).and_then(|existing| existing.default_launcher);
     if meta.default_launcher != existing_launcher
         && let Some(launcher_name) = meta.default_launcher.as_deref()
     {
-        super::launchers::get_launcher(launcher_name, env, cwd)?;
+        let launcher = super::launchers::get_launcher(launcher_name, env, cwd)?;
+        meta.default_launcher = Some(launcher.name);
     }
     registry.envs.retain(|entry| entry.name != meta.name);
     registry.envs.push(meta.clone());
