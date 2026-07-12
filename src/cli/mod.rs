@@ -16,9 +16,11 @@ mod setup;
 mod start;
 mod upgrade;
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -72,9 +74,18 @@ impl ColorMode {
 pub struct Cli {
     pub env: BTreeMap<String, String>,
     pub cwd: PathBuf,
+    output_error: Rc<RefCell<Option<io::Error>>>,
 }
 
 impl Cli {
+    pub fn new(env: BTreeMap<String, String>, cwd: PathBuf) -> Self {
+        Self {
+            env,
+            cwd,
+            output_error: Rc::new(RefCell::new(None)),
+        }
+    }
+
     fn with_color_mode(&self, mode: ColorMode) -> Self {
         let mut env = self.env.clone();
         env.insert(
@@ -84,6 +95,7 @@ impl Cli {
         Self {
             env,
             cwd: self.cwd.clone(),
+            output_error: Rc::clone(&self.output_error),
         }
     }
 
@@ -116,7 +128,12 @@ impl Cli {
     }
 
     fn stdout_line(&self, line: impl AsRef<str>) {
-        println!("{}", line.as_ref());
+        if self.output_error.borrow().is_some() {
+            return;
+        }
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        self.record_output_result(writeln!(handle, "{}", line.as_ref()));
     }
 
     fn stdout_lines<I, S>(&self, lines: I)
@@ -130,7 +147,12 @@ impl Cli {
     }
 
     fn stderr_line(&self, line: impl AsRef<str>) {
-        eprintln!("{}", line.as_ref());
+        if self.output_error.borrow().is_some() {
+            return;
+        }
+        let stderr = io::stderr();
+        let mut handle = stderr.lock();
+        self.record_output_result(writeln!(handle, "{}", line.as_ref()));
     }
 
     fn stderr_lines<I, S>(&self, lines: I)
@@ -144,18 +166,51 @@ impl Cli {
     }
 
     fn print_json<T: Serialize>(&self, value: &T) -> Result<(), String> {
+        if self.output_error.borrow().is_some() {
+            return Ok(());
+        }
         let stdout = io::stdout();
         let mut handle = stdout.lock();
-        serde_json::to_writer_pretty(&mut handle, value).map_err(|error| error.to_string())?;
-        writeln!(handle).map_err(|error| error.to_string())
+        if let Err(error) = serde_json::to_writer_pretty(&mut handle, value) {
+            if let Some(kind) = error.io_error_kind() {
+                self.record_output_error(io::Error::from(kind));
+                return Ok(());
+            }
+            return Err(error.to_string());
+        }
+        self.record_output_result(writeln!(handle));
+        Ok(())
     }
 
     fn stdout_text(&self, text: &str) -> Result<(), String> {
+        if self.output_error.borrow().is_some() {
+            return Ok(());
+        }
         let stdout = io::stdout();
         let mut handle = stdout.lock();
-        handle
-            .write_all(text.as_bytes())
-            .map_err(|error| error.to_string())
+        self.record_output_result(handle.write_all(text.as_bytes()));
+        Ok(())
+    }
+
+    fn record_output_result(&self, result: io::Result<()>) {
+        if let Err(error) = result {
+            self.record_output_error(error);
+        }
+    }
+
+    fn record_output_error(&self, error: io::Error) {
+        let mut output_error = self.output_error.borrow_mut();
+        if output_error.is_none() {
+            *output_error = Some(error);
+        }
+    }
+
+    fn finish_output(&self, code: i32) -> i32 {
+        match self.output_error.borrow_mut().take() {
+            Some(error) if error.kind() == io::ErrorKind::BrokenPipe => 0,
+            Some(_) => 1,
+            None => code,
+        }
     }
 
     fn command_example(&self) -> String {
@@ -423,6 +478,12 @@ impl Cli {
     }
 
     pub fn run(&self, args: Vec<String>) -> i32 {
+        self.output_error.borrow_mut().take();
+        let code = self.run_inner(args);
+        self.finish_output(code)
+    }
+
+    fn run_inner(&self, args: Vec<String>) -> i32 {
         let (args, color_mode) = match Self::consume_leading_color_option(args) {
             Ok(result) => result,
             Err(error) => {
@@ -449,6 +510,11 @@ impl Cli {
         }
 
         if matches!(args[0].as_str(), "--version" | "-v") {
+            if let Err(error) = Self::assert_no_extra_args(&args[1..]) {
+                cli.stderr_line(format!("ocm: {error}"));
+                cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
+                return 1;
+            }
             cli.stdout_line(VERSION);
             return 0;
         }

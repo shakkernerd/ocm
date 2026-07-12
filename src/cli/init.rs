@@ -17,7 +17,7 @@ impl Cli {
             return Err(format!("unsupported init shell: {shell}"));
         }
         Self::assert_no_extra_args(&args)?;
-        print!("{}", render_init_script(&self.command_example(), &shell)?);
+        self.stdout_text(&render_init_script(&self.command_example(), &shell)?)?;
         Ok(0)
     }
 }

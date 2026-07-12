@@ -11,3 +11,4 @@ All notable changes to OCM are documented here.
 - Serialize environment registry transactions so concurrent lifecycle commands preserve every entry and allocate distinct ports.
 - Preserve environment roots and recovery snapshots when dev worktree cleanup fails during destroy.
 - Keep auto-assigned ports stable without overriding a later gateway port written by OpenClaw configuration.
+- Reject non-UTF-8 process input cleanly, require version flags to stand alone, and terminate quietly when a pipeline closes its output.
