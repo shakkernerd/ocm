@@ -484,6 +484,7 @@ fn pack_local_openclaw_repo(
         .env("npm_config_fund", "false")
         .env("npm_config_audit", "false")
         .env("npm_config_update_notifier", "false")
+        .env("PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN", "false")
         .current_dir(repo_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

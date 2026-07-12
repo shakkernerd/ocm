@@ -111,6 +111,7 @@ if [ "$1" = "--version" ]; then
 fi
 
 if [ "$1" = "pack" ]; then
+  printf 'verify-deps-before-run=%s\n' "$PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN" >> "{}"
   shift
   destination=""
   while [ "$#" -gt 0 ]; do
@@ -165,6 +166,7 @@ if grep -q '"chokidar"' "$prefix/node_modules/openclaw/package.json"; then
   printf '{{"name":"@scope/tool","version":"1.0.0"}}\n' > "$prefix/node_modules/@scope/tool/package.json"
 fi
 "#,
+        path_string(&log_path),
         path_string(&log_path),
         path_string(archive_path),
     );
@@ -405,6 +407,7 @@ fn runtime_build_local_packs_and_installs_release_shaped_package() {
 
     let npm_log = fs::read_to_string(npm_log).unwrap();
     assert!(npm_log.contains("pack --pack-destination"));
+    assert!(npm_log.contains("verify-deps-before-run=false"));
     assert!(npm_log.contains("install --prefix"));
 
     let install_root = runtime_install_root("main-local", &env, &cwd).unwrap();

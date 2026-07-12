@@ -6,6 +6,7 @@ All notable changes to OCM are documented here.
 
 ### Fixed
 
+- Prevent `runtime build-local` from reconciling or replacing an OpenClaw checkout's dependencies while running its package build.
 - Reject an already-running shared OCM daemon when its service definition belongs to another `OCM_HOME`, and remove the shared service binding after the last running environment stops or is uninstalled.
 - Reuse an identical healthy official runtime when concurrent installers publish it first instead of failing the waiting command.
 - Match environment-owned processes by path components so destroy never targets sibling-prefix directories.
