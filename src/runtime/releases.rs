@@ -39,6 +39,8 @@ pub struct OpenClawRelease {
     pub version: String,
     #[serde(default)]
     pub channel: Option<String>,
+    #[serde(skip)]
+    pub channels: Vec<String>,
     pub tarball_url: String,
     #[serde(default)]
     pub shasum: Option<String>,
@@ -215,11 +217,16 @@ pub fn select_official_openclaw_release_by_channel(
         return Err("OpenClaw release channel is required".to_string());
     }
 
-    releases
+    let mut release = releases
         .iter()
-        .find(|release| release.channel.as_deref() == Some(channel.as_str()))
+        .find(|release| {
+            release.channel.as_deref() == Some(channel.as_str())
+                || release.channels.iter().any(|value| value == &channel)
+        })
         .cloned()
-        .ok_or_else(|| format!("OpenClaw release channel \"{channel}\" was not found"))
+        .ok_or_else(|| format!("OpenClaw release channel \"{channel}\" was not found"))?;
+    release.channel = Some(channel);
+    Ok(release)
 }
 
 pub fn query_official_openclaw_releases(
@@ -353,18 +360,19 @@ fn validate_official_openclaw_releases(
         return Err("OpenClaw package source does not contain any published versions".to_string());
     }
 
-    let mut channel_by_version = BTreeMap::<String, String>::new();
+    let mut channels_by_version = BTreeMap::<String, Vec<String>>::new();
     for (tag, version) in manifest.dist_tags {
         let Some(channel) = map_openclaw_dist_tag(&tag) else {
             continue;
         };
-        match channel_by_version.get(version.as_str()) {
-            Some(existing)
-                if openclaw_channel_priority(existing) <= openclaw_channel_priority(channel) => {}
-            _ => {
-                channel_by_version.insert(version, channel.to_string());
-            }
-        }
+        channels_by_version
+            .entry(version)
+            .or_default()
+            .push(channel.to_string());
+    }
+    for channels in channels_by_version.values_mut() {
+        channels.sort_by_key(|channel| openclaw_channel_priority(channel));
+        channels.dedup();
     }
 
     let mut releases = Vec::with_capacity(manifest.versions.len());
@@ -385,9 +393,14 @@ fn validate_official_openclaw_releases(
             OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
         });
 
+        let channels = channels_by_version
+            .get(version)
+            .cloned()
+            .unwrap_or_default();
         releases.push(OpenClawRelease {
             version: version.to_string(),
-            channel: channel_by_version.get(version).cloned(),
+            channel: channels.first().cloned(),
+            channels,
             tarball_url: tarball_url.to_string(),
             shasum: version_meta
                 .dist
