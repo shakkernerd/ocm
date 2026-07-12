@@ -636,6 +636,25 @@ fn env_remove_accepts_a_clean_worktree_with_an_initialized_submodule() {
 }
 
 #[test]
+fn env_remove_accepts_a_missing_repo_and_worktree() {
+    let root = TestDir::new("dev-command-missing-repo-remove");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+
+    let run = run_ocm(&cwd, &env, &["dev", "demo", "--repo", &path_string(&repo)]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    fs::remove_dir_all(&repo).unwrap();
+
+    let remove = run_ocm(&cwd, &env, &["env", "remove", "demo"]);
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo"]);
+    assert!(!show.status.success());
+}
+
+#[test]
 fn env_remove_preserves_ignored_files_inside_initialized_submodules() {
     let root = TestDir::new("dev-command-ignored-submodule");
     let repo = init_openclaw_repo(&root);
