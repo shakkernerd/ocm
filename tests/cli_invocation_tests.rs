@@ -1,8 +1,18 @@
 mod support;
 
+#[cfg(unix)]
+use std::ffi::OsString;
 use std::fs;
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 
-use crate::support::{TestDir, ocm_env, run_ocm, stderr};
+use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
 
 #[test]
 fn env_exec_propagates_the_child_exit_code() {
@@ -84,4 +94,82 @@ fn env_run_requires_double_dash_before_openclaw_arguments() {
     let run = run_ocm(&cwd, &env, &["env", "run", "demo", "-lc", "printf ok"]);
     assert_eq!(run.status.code(), Some(1));
     assert!(stderr(&run).contains("env run requires -- before OpenClaw arguments"));
+}
+
+#[test]
+fn version_rejects_trailing_arguments() {
+    let root = TestDir::new("cli-version-trailing");
+    let env = ocm_env(&root);
+
+    let version = run_ocm(root.path(), &env, &["--version"]);
+    assert!(version.status.success(), "{}", stderr(&version));
+    assert!(!stdout(&version).trim().is_empty());
+
+    for flag in ["--version", "-v"] {
+        let invalid = run_ocm(root.path(), &env, &[flag, "extra"]);
+        assert_eq!(invalid.status.code(), Some(1));
+        assert!(stderr(&invalid).contains("unexpected arguments: extra"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_rejects_non_utf8_environment_values_without_panicking() {
+    let output = Command::new(env!("CARGO_BIN_EXE_ocm"))
+        .arg("--version")
+        .env("OCM_INVALID_UTF8_TEST", OsString::from_vec(vec![0xff]))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("OCM_INVALID_UTF8_TEST contains a non-UTF-8 value"));
+    assert!(!stderr.contains("panicked"));
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_rejects_non_utf8_arguments_without_panicking() {
+    let output = Command::new(env!("CARGO_BIN_EXE_ocm"))
+        .arg(OsString::from_vec(vec![0xff]))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("command arguments must be valid UTF-8"));
+    assert!(!stderr.contains("panicked"));
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stdout_terminates_quietly() {
+    let (reader, writer) = UnixStream::pair().unwrap();
+    drop(reader);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ocm"))
+        .arg("--version")
+        .stdout(Stdio::from(OwnedFd::from(writer)))
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stderr_preserves_command_failure() {
+    let (reader, writer) = UnixStream::pair().unwrap();
+    drop(reader);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ocm"))
+        .args(["--version", "extra"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(OwnedFd::from(writer)))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
 }

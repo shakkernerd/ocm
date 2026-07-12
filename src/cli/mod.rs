@@ -16,6 +16,7 @@ mod setup;
 mod start;
 mod upgrade;
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
@@ -34,6 +35,17 @@ use crate::supervisor::SupervisorService;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const INTERNAL_COLOR_MODE_ENV: &str = "OCM_INTERNAL_COLOR_MODE";
+
+#[derive(Default)]
+struct OutputErrors {
+    stdout: Option<io::Error>,
+    stderr: Option<io::Error>,
+}
+
+thread_local! {
+    // CLI rendering is synchronous; retain write errors until the dispatcher can choose an exit code.
+    static OUTPUT_ERRORS: RefCell<OutputErrors> = RefCell::new(OutputErrors::default());
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ColorMode {
@@ -116,7 +128,12 @@ impl Cli {
     }
 
     fn stdout_line(&self, line: impl AsRef<str>) {
-        println!("{}", line.as_ref());
+        if Self::output_failed() {
+            return;
+        }
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        Self::record_stdout_result(writeln!(handle, "{}", line.as_ref()));
     }
 
     fn stdout_lines<I, S>(&self, lines: I)
@@ -130,7 +147,12 @@ impl Cli {
     }
 
     fn stderr_line(&self, line: impl AsRef<str>) {
-        eprintln!("{}", line.as_ref());
+        if Self::output_failed() {
+            return;
+        }
+        let stderr = io::stderr();
+        let mut handle = stderr.lock();
+        Self::record_stderr_result(writeln!(handle, "{}", line.as_ref()));
     }
 
     fn stderr_lines<I, S>(&self, lines: I)
@@ -144,18 +166,82 @@ impl Cli {
     }
 
     fn print_json<T: Serialize>(&self, value: &T) -> Result<(), String> {
+        if Self::output_failed() {
+            return Ok(());
+        }
         let stdout = io::stdout();
         let mut handle = stdout.lock();
-        serde_json::to_writer_pretty(&mut handle, value).map_err(|error| error.to_string())?;
-        writeln!(handle).map_err(|error| error.to_string())
+        if let Err(error) = serde_json::to_writer_pretty(&mut handle, value) {
+            if let Some(kind) = error.io_error_kind() {
+                Self::record_stdout_error(io::Error::from(kind));
+                return Ok(());
+            }
+            return Err(error.to_string());
+        }
+        Self::record_stdout_result(writeln!(handle));
+        Ok(())
     }
 
     fn stdout_text(&self, text: &str) -> Result<(), String> {
+        if Self::output_failed() {
+            return Ok(());
+        }
         let stdout = io::stdout();
         let mut handle = stdout.lock();
-        handle
-            .write_all(text.as_bytes())
-            .map_err(|error| error.to_string())
+        Self::record_stdout_result(handle.write_all(text.as_bytes()));
+        Ok(())
+    }
+
+    fn record_stdout_result(result: io::Result<()>) {
+        if let Err(error) = result {
+            Self::record_stdout_error(error);
+        }
+    }
+
+    fn record_stderr_result(result: io::Result<()>) {
+        if let Err(error) = result {
+            OUTPUT_ERRORS.with(|errors| {
+                let mut errors = errors.borrow_mut();
+                if errors.stderr.is_none() {
+                    errors.stderr = Some(error);
+                }
+            });
+        }
+    }
+
+    fn record_stdout_error(error: io::Error) {
+        OUTPUT_ERRORS.with(|errors| {
+            let mut errors = errors.borrow_mut();
+            if errors.stdout.is_none() {
+                errors.stdout = Some(error);
+            }
+        });
+    }
+
+    fn output_failed() -> bool {
+        OUTPUT_ERRORS.with(|errors| {
+            let errors = errors.borrow();
+            errors.stdout.is_some() || errors.stderr.is_some()
+        })
+    }
+
+    fn reset_output_errors() {
+        OUTPUT_ERRORS.with(|errors| {
+            *errors.borrow_mut() = OutputErrors::default();
+        });
+    }
+
+    fn finish_output(code: i32) -> i32 {
+        let errors = OUTPUT_ERRORS.with(|errors| std::mem::take(&mut *errors.borrow_mut()));
+        if code != 0 {
+            return code;
+        }
+        match errors.stdout {
+            Some(error) if error.kind() == io::ErrorKind::BrokenPipe => 0,
+            Some(_) => 1,
+            None if errors.stderr.is_some() => 1,
+            None => 0,
+        }
     }
 
     fn command_example(&self) -> String {
@@ -423,6 +509,12 @@ impl Cli {
     }
 
     pub fn run(&self, args: Vec<String>) -> i32 {
+        Self::reset_output_errors();
+        let code = self.run_inner(args);
+        Self::finish_output(code)
+    }
+
+    fn run_inner(&self, args: Vec<String>) -> i32 {
         let (args, color_mode) = match Self::consume_leading_color_option(args) {
             Ok(result) => result,
             Err(error) => {
@@ -449,6 +541,11 @@ impl Cli {
         }
 
         if matches!(args[0].as_str(), "--version" | "-v") {
+            if let Err(error) = Self::assert_no_extra_args(&args[1..]) {
+                cli.stderr_line(format!("ocm: {error}"));
+                cli.stderr_line(format!("Run \"{} help\" for usage.", cli.command_example()));
+                return 1;
+            }
             cli.stdout_line(VERSION);
             return 0;
         }

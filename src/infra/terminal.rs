@@ -142,7 +142,6 @@ pub(crate) fn render_table_with_limit(
         .iter()
         .map(|header| display_width(header))
         .collect::<Vec<_>>();
-    let min_widths = widths.clone();
 
     for row in rows {
         for (index, cell) in row.iter().enumerate().take(widths.len()) {
@@ -151,6 +150,10 @@ pub(crate) fn render_table_with_limit(
     }
 
     if let Some(max_width) = max_width {
+        let min_widths = vec![1; headers.len()];
+        if table_width(&min_widths) > max_width {
+            return render_compact_table(headers, rows, color, max_width);
+        }
         shrink_widths_to_fit(&mut widths, &min_widths, max_width);
     }
 
@@ -162,6 +165,51 @@ pub(crate) fn render_table_with_limit(
         lines.push(render_row(row, &widths, color));
     }
     lines.push(render_border('└', '┴', '┘', &widths, color));
+    lines
+}
+
+fn render_compact_table(
+    headers: &[&str],
+    rows: &[Vec<Cell>],
+    color: bool,
+    max_width: usize,
+) -> Vec<String> {
+    if max_width == 0 {
+        return Vec::new();
+    }
+    if rows.is_empty() {
+        return headers
+            .iter()
+            .map(|header| {
+                paint(
+                    &truncate_for_width(header, max_width, Align::Left),
+                    Tone::Strong,
+                    color,
+                )
+            })
+            .collect();
+    }
+
+    let mut lines = Vec::with_capacity(rows.len() * headers.len());
+    for (row_index, row) in rows.iter().enumerate() {
+        if row_index > 0 {
+            lines.push(String::new());
+        }
+        for (index, header) in headers.iter().enumerate() {
+            let cell = row.get(index).cloned().unwrap_or_else(|| Cell::plain(""));
+            let prefix = format!("{header}: ");
+            let prefix_width = display_width(&prefix);
+            let text = if prefix_width >= max_width {
+                truncate_for_width(header, max_width, Align::Left)
+            } else {
+                format!(
+                    "{prefix}{}",
+                    truncate_for_width(&cell.text, max_width - prefix_width, Align::Left)
+                )
+            };
+            lines.push(paint(&text, cell.tone, color));
+        }
+    }
     lines
 }
 
@@ -538,5 +586,40 @@ mod tests {
 
         assert!(table.iter().all(|line| display_width(line) <= 60));
         assert!(table[3].contains('…'));
+    }
+
+    #[test]
+    fn render_table_truncates_headers_to_fit_narrow_terminals() {
+        let table = render_table_with_limit(
+            &["Environment", "Command", "Working directory"],
+            &[vec![
+                Cell::plain("demo"),
+                Cell::plain("openclaw"),
+                Cell::plain("/tmp/demo"),
+            ]],
+            false,
+            Some(24),
+        );
+
+        assert!(table.iter().all(|line| display_width(line) <= 24));
+        assert!(table[1].contains('…'));
+    }
+
+    #[test]
+    fn render_table_uses_compact_rows_when_borders_cannot_fit() {
+        let table = render_table_with_limit(
+            &["Name", "State", "Port"],
+            &[vec![
+                Cell::plain("demo"),
+                Cell::success("running"),
+                Cell::plain("18789"),
+            ]],
+            false,
+            Some(8),
+        );
+
+        assert!(table.iter().all(|line| display_width(line) <= 8));
+        assert!(table.iter().all(|line| !line.contains('│')));
+        assert!(table.iter().any(|line| line.starts_with("Name:")));
     }
 }

@@ -9,7 +9,7 @@ pub fn quote_posix(value: &str) -> String {
 }
 
 fn quote_fish(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "\\'"))
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
 fn render_assignment(shell: &str, key: &str, value: &str) -> String {
@@ -21,11 +21,18 @@ fn render_assignment(shell: &str, key: &str, value: &str) -> String {
 }
 
 fn render_unset(shell: &str, key: &str) -> String {
+    debug_assert!(is_shell_identifier(key));
     if shell == "fish" {
         format!("set -e {key};")
     } else {
         format!("unset {key}")
     }
+}
+
+fn is_shell_identifier(key: &str) -> bool {
+    let mut chars = key.chars();
+    matches!(chars.next(), Some('_' | 'A'..='Z' | 'a'..='z'))
+        && chars.all(|ch| matches!(ch, '_' | 'A'..='Z' | 'a'..='z' | '0'..='9'))
 }
 
 pub fn resolve_shell_name(explicit: Option<&str>, env: &BTreeMap<String, String>) -> String {
@@ -129,10 +136,39 @@ fn is_openclaw_diagnostics_passthrough_key(key: &str) -> bool {
     )
 }
 
-pub fn render_use_script(meta: &EnvMeta, shell: &str) -> String {
+pub fn render_use_script(
+    meta: &EnvMeta,
+    shell: &str,
+    base_env: &BTreeMap<String, String>,
+) -> String {
     let paths = derive_env_paths(Path::new(&meta.root));
-    let mut lines = vec![
-        render_unset(shell, "OPENCLAW_PROFILE"),
+    let mut unset_keys = base_env
+        .keys()
+        .filter(|key| {
+            is_shell_identifier(key)
+                && ((key.starts_with("OPENCLAW_") && !is_openclaw_diagnostics_passthrough_key(key))
+                    || matches!(key.as_str(), "OCM_ACTIVE_ENV" | "OCM_ACTIVE_ENV_ROOT"))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    unset_keys.extend(
+        [
+            "OPENCLAW_PROFILE",
+            "OPENCLAW_GATEWAY_PORT",
+            "OPENCLAW_DEV_SOURCE_ROOT",
+            "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        ]
+        .into_iter()
+        .map(str::to_string),
+    );
+    unset_keys.sort();
+    unset_keys.dedup();
+
+    let mut lines = unset_keys
+        .into_iter()
+        .map(|key| render_unset(shell, &key))
+        .collect::<Vec<_>>();
+    lines.extend([
         render_assignment(
             shell,
             "OPENCLAW_HOME",
@@ -151,7 +187,7 @@ pub fn render_use_script(meta: &EnvMeta, shell: &str) -> String {
         render_assignment(shell, "OPENCLAW_SERVICE_REPAIR_POLICY", "external"),
         render_assignment(shell, "OCM_ACTIVE_ENV", &meta.name),
         render_assignment(shell, "OCM_ACTIVE_ENV_ROOT", &paths.root.to_string_lossy()),
-    ];
+    ]);
 
     if let Some(port) = meta.gateway_port {
         lines.push(render_assignment(
@@ -306,5 +342,62 @@ mod tests {
             Some(root.to_string_lossy().as_ref())
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fish_quoting_preserves_backslashes_before_apostrophes() {
+        assert_eq!(
+            quote_fish(r"bad\'; touch /tmp/pwned; #"),
+            r"'bad\\\'; touch /tmp/pwned; #'"
+        );
+    }
+
+    #[test]
+    fn activation_unsets_only_valid_stale_control_names() {
+        let meta = EnvMeta {
+            kind: "ocm-env".to_string(),
+            name: "demo".to_string(),
+            root: "/tmp/ocm/envs/demo".to_string(),
+            gateway_port: None,
+            gateway_port_auto_assigned: false,
+            service_enabled: false,
+            service_running: false,
+            default_runtime: None,
+            default_launcher: None,
+            dev: None,
+            protected: false,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            last_used_at: None,
+        };
+        let base = BTreeMap::from([
+            (
+                "OPENCLAW_DEV_SOURCE_ROOT".to_string(),
+                "/tmp/previous".to_string(),
+            ),
+            (
+                "OPENCLAW_BUNDLED_PLUGINS_DIR".to_string(),
+                "/tmp/previous/extensions".to_string(),
+            ),
+            (
+                "OPENCLAW_RANDOM_USER_VALUE".to_string(),
+                "stale".to_string(),
+            ),
+            ("OPENCLAW_DIAGNOSTICS".to_string(), "timeline".to_string()),
+            (
+                "OPENCLAW_X; touch /tmp/pwn".to_string(),
+                "stale".to_string(),
+            ),
+        ]);
+
+        let script = render_use_script(&meta, "zsh", &base);
+
+        assert!(script.contains("unset OPENCLAW_DEV_SOURCE_ROOT"));
+        assert!(script.contains("unset OPENCLAW_BUNDLED_PLUGINS_DIR"));
+        assert!(script.contains("unset OPENCLAW_RANDOM_USER_VALUE"));
+        assert!(script.contains("unset OPENCLAW_GATEWAY_PORT"));
+        assert!(!script.contains("unset OPENCLAW_DIAGNOSTICS"));
+        assert!(!script.contains("touch /tmp/pwn"));
+        assert!(script.contains("export OPENCLAW_HOME='/tmp/ocm/envs/demo'"));
     }
 }
