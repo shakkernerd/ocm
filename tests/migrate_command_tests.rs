@@ -180,6 +180,22 @@ fn adopt_plan_reports_the_target_env_and_root() {
 }
 
 #[test]
+fn adopt_plan_fails_when_the_environment_registry_is_corrupt() {
+    let root = TestDir::new("adopt-plan-corrupt-registry");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(root.child("ocm-home")).unwrap();
+    fs::write(root.child("ocm-home/envs.json"), "{not-json\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(&cwd, &env, &["adopt", "plan", "--name", "mira", "--json"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!stdout(&output).contains("\"envExists\": false"));
+    assert!(!stderr(&output).is_empty());
+}
+
+#[test]
 fn adopt_plan_requires_name_when_only_a_positional_token_is_given() {
     let root = TestDir::new("adopt-plan-requires-name");
     let cwd = root.child("workspace");
@@ -350,8 +366,13 @@ fn seed_plain_openclaw_home(source_home: &std::path::Path) {
     fs::write(
         source_home.join("openclaw.json"),
         format!(
-            "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}}}}\n",
-            source_home.join("workspace").display()
+            "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}},\"externalProject\":\"{}\"}}\n",
+            source_home.join("workspace").display(),
+            source_home
+                .parent()
+                .unwrap()
+                .join("projects/unrelated")
+                .display()
         ),
     )
     .unwrap();
@@ -406,6 +427,16 @@ fn assert_imported_plain_openclaw_home(
 
     let config_text = fs::read_to_string(imported_state.join("openclaw.json")).unwrap();
     assert!(config_text.contains(&imported_state.join("workspace").display().to_string()));
+    assert!(
+        config_text.contains(
+            &source_home
+                .parent()
+                .unwrap()
+                .join("projects/unrelated")
+                .display()
+                .to_string()
+        )
+    );
     assert!(!config_text.contains(&source_home.display().to_string()));
 
     let session_text =
@@ -419,6 +450,253 @@ fn assert_imported_plain_openclaw_home(
     assert!(!log_text.contains(&source_home.display().to_string()));
     assert!(backup_text.contains(&imported_state.display().to_string()));
     assert!(!backup_text.contains(&source_home.display().to_string()));
+}
+
+#[test]
+fn migrate_rejects_a_target_nested_inside_the_source_before_creating_an_env() {
+    let root = TestDir::new("migrate-overlap-target-in-source");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let target_root = source_home.join("managed");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("migration source and target must not overlap"));
+    assert!(!root.child("ocm-home/envs.json").exists());
+    assert!(!target_root.exists());
+}
+
+#[test]
+fn migrate_rejects_a_target_that_contains_the_source_before_mutation() {
+    let root = TestDir::new("migrate-overlap-source-in-target");
+    let cwd = root.child("workspace");
+    let target_root = root.child("legacy-home");
+    let source_home = target_root.join(".openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("migration source and target must not overlap"));
+    assert!(!root.child("ocm-home/envs.json").exists());
+    assert!(source_home.join("workspace/notes.txt").exists());
+}
+
+#[test]
+fn migrate_normalizes_parent_components_before_checking_target_overlap() {
+    let root = TestDir::new("migrate-overlap-parent-components");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let target_root = root.child("missing/../legacy-home");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("migration source and target must not overlap"));
+    assert!(source_home.join("workspace/notes.txt").exists());
+    assert!(!root.child("ocm-home/envs.json").exists());
+}
+
+#[test]
+fn migrate_rejects_parent_traversal_through_a_file() {
+    let root = TestDir::new("migrate-parent-through-file");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let blocker = root.child("blocker");
+    let target_root = blocker.join("../managed");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    fs::write(&blocker, "not a directory\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("parent traversal crosses a non-directory"));
+    assert!(source_home.join("workspace/notes.txt").exists());
+    assert!(!root.child("managed").exists());
+    assert!(!root.child("ocm-home/envs.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn migrate_rejects_a_target_with_state_symlinked_to_the_source() {
+    let root = TestDir::new("migrate-overlap-symlinked-state");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let target_root = root.child("managed");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&target_root).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    std::os::unix::fs::symlink(&source_home, target_root.join(".openclaw")).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("migration source and target must not overlap"));
+    assert!(source_home.join("workspace/notes.txt").exists());
+    assert!(!root.child("ocm-home/envs.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn migrate_resolves_parent_components_after_following_symlinks() {
+    let root = TestDir::new("migrate-overlap-symlink-parent");
+    let cwd = root.child("workspace");
+    let real_root = root.child("real");
+    let source_home = real_root.join(".openclaw");
+    let linked_child = real_root.join("child");
+    let target_root = root.child("linked-child/../.openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&linked_child).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    std::os::unix::fs::symlink(&linked_child, root.child("linked-child")).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("migration source and target must not overlap"));
+    assert!(source_home.join("workspace/notes.txt").exists());
+    assert!(!root.child("ocm-home/envs.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn migrate_rejects_parent_traversal_through_a_symlink_to_a_file() {
+    let root = TestDir::new("migrate-parent-through-file-symlink");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let blocker = root.child("blocker");
+    let linked_blocker = root.child("linked-blocker");
+    let target_root = linked_blocker.join("../managed");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    fs::write(&blocker, "not a directory\n").unwrap();
+    std::os::unix::fs::symlink(&blocker, &linked_blocker).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("parent traversal crosses a non-directory"));
+    assert!(source_home.join("workspace/notes.txt").exists());
+    assert!(!root.child("managed").exists());
+    assert!(!root.child("ocm-home/envs.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn migrate_does_not_bind_a_non_executable_openclaw_file_from_path() {
+    let root = TestDir::new("migrate-non-executable-openclaw");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let bin_dir = root.child("bin");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    let openclaw = bin_dir.join("openclaw");
+    fs::write(&openclaw, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut permissions = fs::metadata(&openclaw).unwrap().permissions();
+    permissions.set_mode(0o000);
+    fs::set_permissions(&openclaw, permissions).unwrap();
+
+    let mut env = ocm_env(&root);
+    env.insert("PATH".to_string(), bin_dir.display().to_string());
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("\"defaultLauncher\": null"));
+    assert!(!root.child("ocm-home/launchers/mira.migrated.json").exists());
 }
 
 #[test]

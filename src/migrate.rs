@@ -1,15 +1,16 @@
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
 
 use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService};
 use crate::launcher::{AddLauncherOptions, LauncherService};
 use crate::store::{
-    copy_dir_recursive, default_env_root, derive_env_paths, display_path, get_environment,
-    prepare_migrated_runtime_state, resolve_absolute_path, resolve_user_home,
-    rewrite_openclaw_config_for_target, validate_name,
+    copy_dir_recursive, default_env_root, derive_env_paths, display_path, list_environments,
+    prepare_migrated_runtime_state, resolve_user_home, rewrite_openclaw_config_for_migration,
+    validate_name,
 };
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -85,15 +86,15 @@ pub fn plan_migration(
     cwd: &Path,
 ) -> Result<MigrationPlanSummary, String> {
     let env_name = validate_name(env_name, "Environment name")?;
-    let target_root = if let Some(root) = explicit_root {
-        resolve_absolute_path(root, env, cwd)?
-    } else {
-        default_env_root(&env_name, env, cwd)?
-    };
+    let target_root = resolve_migration_target_root(explicit_root, &env_name, env, cwd)?;
+
+    let env_exists = list_environments(env, cwd)?
+        .iter()
+        .any(|meta| meta.name == env_name);
 
     Ok(MigrationPlanSummary {
         source: inspect_migration_source(explicit_source_home, env),
-        env_exists: get_environment(&env_name, env, cwd).is_ok(),
+        env_exists,
         env_name,
         target_root: display_path(&target_root),
     })
@@ -113,7 +114,7 @@ fn migrate_plain_openclaw_home_inner(
     cwd: &Path,
 ) -> Result<(EnvImportSummary, Option<String>), String> {
     let service = EnvironmentService::new(env, cwd);
-    let migrated_launcher = preflight_migrated_launcher(&options.name, env, cwd)?;
+    let env_name = validate_name(&options.name, "Environment name")?;
     let source_home =
         resolve_migration_source_home(options.source_home.as_deref().map(Path::new), env);
     if !source_home.exists() {
@@ -122,10 +123,22 @@ fn migrate_plain_openclaw_home_inner(
             display_path(&source_home)
         ));
     }
+    let target_root = resolve_migration_target_root(options.root.as_deref(), &env_name, env, cwd)?;
+    let target_root_string = target_root
+        .to_str()
+        .ok_or_else(|| {
+            format!(
+                "migration target root must use valid UTF-8: {}",
+                display_path(&target_root)
+            )
+        })?
+        .to_string();
+    reject_overlapping_migration_paths(&source_home, &target_root)?;
+    let migrated_launcher = preflight_migrated_launcher(&env_name, env, cwd)?;
 
     let created = service.create(CreateEnvironmentOptions {
-        name: options.name.clone(),
-        root: options.root.clone(),
+        name: env_name,
+        root: Some(target_root_string),
         gateway_port: None,
         service_enabled: false,
         service_running: false,
@@ -147,8 +160,12 @@ fn migrate_plain_openclaw_home_inner(
     ) {
         Ok((created, created_launcher)) => (created, created_launcher),
         Err(error) => {
-            let _ = service.remove(&created_name, true);
-            return Err(error);
+            let rollback = service.remove(&created_name, true).map(|_| ());
+            return Err(with_rollback_error(
+                error,
+                "removing the partially imported environment",
+                rollback,
+            ));
         }
     };
 
@@ -170,9 +187,23 @@ fn rollback_migrated_launcher(
     launcher_name: Option<&str>,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) {
+) -> Result<(), String> {
     if let Some(name) = launcher_name {
-        let _ = LauncherService::new(env, cwd).remove(name);
+        LauncherService::new(env, cwd).remove(name)?;
+    }
+    Ok(())
+}
+
+fn with_rollback_error(
+    primary_error: String,
+    operation: &str,
+    rollback: Result<(), String>,
+) -> String {
+    match rollback {
+        Ok(()) => primary_error,
+        Err(rollback_error) => {
+            format!("{primary_error}\nrollback error while {operation}: {rollback_error}")
+        }
     }
 }
 
@@ -189,8 +220,7 @@ fn complete_migration_import(
     }
 
     copy_dir_recursive(source_home, &target_paths.state_dir)?;
-    let legacy_root = source_home.parent().unwrap_or(source_home);
-    rewrite_openclaw_config_for_target(target_paths, Some(legacy_root), created.gateway_port)?;
+    rewrite_openclaw_config_for_migration(target_paths, source_home, created.gateway_port)?;
     prepare_migrated_runtime_state(target_paths, source_home)?;
 
     let Some(launcher) = migrated_launcher else {
@@ -216,9 +246,254 @@ fn complete_migration_import(
     match EnvironmentService::new(env, cwd).set_launcher(&created.name, &launcher.name) {
         Ok(meta) => Ok((meta, created_launcher)),
         Err(error) => {
-            rollback_migrated_launcher(created_launcher.as_deref(), env, cwd);
-            Err(error)
+            let rollback = rollback_migrated_launcher(created_launcher.as_deref(), env, cwd);
+            Err(with_rollback_error(
+                error,
+                "removing the migrated launcher",
+                rollback,
+            ))
         }
+    }
+}
+
+fn reject_overlapping_migration_paths(
+    source_home: &Path,
+    target_root: &Path,
+) -> Result<(), String> {
+    let source_home = canonicalize_path_allow_missing(source_home)?;
+    let target_root = canonicalize_path_allow_missing(target_root)?;
+    let target_state_dir =
+        canonicalize_path_allow_missing(&derive_env_paths(&target_root).state_dir)?;
+    let overlapping_target = [&target_root, &target_state_dir]
+        .into_iter()
+        .find(|target| source_home.starts_with(target) || target.starts_with(&source_home));
+    if let Some(target) = overlapping_target {
+        return Err(format!(
+            "migration source and target must not overlap: source={} target={}",
+            display_path(&source_home),
+            display_path(target)
+        ));
+    }
+    reject_filesystem_aliases(&source_home, &[&target_root, &target_state_dir])?;
+    Ok(())
+}
+
+fn resolve_migration_target_root(
+    explicit_root: Option<&str>,
+    env_name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let unresolved = if let Some(input) = explicit_root {
+        let input = input.trim();
+        if input.is_empty() {
+            return Err("path is required".to_string());
+        }
+        match input {
+            "~" => resolve_user_home(env),
+            _ if input.starts_with("~/") || input.starts_with("~\\") => {
+                resolve_user_home(env).join(&input[2..])
+            }
+            _ => {
+                let path = Path::new(input);
+                if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    cwd.join(path)
+                }
+            }
+        }
+    } else {
+        default_env_root(env_name, env, cwd)?
+    };
+
+    normalize_migration_target_path(&unresolved)
+}
+
+fn normalize_migration_target_path(path: &Path) -> Result<PathBuf, String> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR)),
+            Component::CurDir => {}
+            Component::ParentDir => match fs::symlink_metadata(&normalized) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    normalized = fs::canonicalize(&normalized).map_err(|error| {
+                        format!(
+                            "failed to resolve migration path {}: {error}",
+                            display_path(path)
+                        )
+                    })?;
+                    let target_metadata = fs::metadata(&normalized).map_err(|error| {
+                        format!(
+                            "failed to inspect migration path {}: {error}",
+                            display_path(&normalized)
+                        )
+                    })?;
+                    if !target_metadata.is_dir() {
+                        return Err(format!(
+                            "migration target parent traversal crosses a non-directory: {}",
+                            display_path(&normalized)
+                        ));
+                    }
+                    normalized.pop();
+                }
+                Ok(metadata) if metadata.is_dir() => {
+                    normalized.pop();
+                }
+                Ok(_) => {
+                    return Err(format!(
+                        "migration target parent traversal crosses a non-directory: {}",
+                        display_path(&normalized)
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    normalized.pop();
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "failed to resolve migration path {}: {error}",
+                        display_path(path)
+                    ));
+                }
+            },
+            Component::Normal(name) => normalized.push(name),
+        }
+    }
+    Ok(normalized)
+}
+
+#[cfg(unix)]
+fn reject_filesystem_aliases(source_home: &Path, targets: &[&Path]) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let source_tree = collect_source_directory_identities(source_home)?;
+
+    // Canonical paths do not reveal bind-mount aliases. Map an existing target
+    // ancestor back to the matching source ancestor before checking overlap.
+    // Source descendants matter too because a target can sit below a bind mount
+    // of any directory in the tree that is about to be copied.
+    for target in targets {
+        for target_ancestor in target.ancestors().filter(|path| path.exists()) {
+            let target_suffix = target.strip_prefix(target_ancestor).map_err(|error| {
+                format!(
+                    "failed to resolve migration target {}: {error}",
+                    display_path(target)
+                )
+            })?;
+            let target_metadata = fs::metadata(target_ancestor).map_err(|error| {
+                format!(
+                    "failed to inspect migration target ancestor {}: {error}",
+                    display_path(target_ancestor)
+                )
+            })?;
+            let target_identity = (target_metadata.dev(), target_metadata.ino());
+            if source_tree.contains(&target_identity) {
+                return Err(format!(
+                    "migration source and target must not alias the same filesystem tree: source={} target={}",
+                    display_path(source_home),
+                    display_path(target)
+                ));
+            }
+
+            for source_ancestor in source_home.ancestors().skip(1) {
+                let source_metadata = fs::metadata(source_ancestor).map_err(|error| {
+                    format!(
+                        "failed to inspect migration source ancestor {}: {error}",
+                        display_path(source_ancestor)
+                    )
+                })?;
+                if source_metadata.dev() != target_metadata.dev()
+                    || source_metadata.ino() != target_metadata.ino()
+                {
+                    continue;
+                }
+
+                let mapped_target = source_ancestor.join(target_suffix);
+                if source_home.starts_with(&mapped_target) || mapped_target.starts_with(source_home)
+                {
+                    return Err(format!(
+                        "migration source and target must not alias the same filesystem tree: source={} target={}",
+                        display_path(source_home),
+                        display_path(target)
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn collect_source_directory_identities(
+    source_home: &Path,
+) -> Result<std::collections::HashSet<(u64, u64)>, String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut identities = std::collections::HashSet::new();
+    let mut pending = vec![source_home.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::metadata(&path).map_err(|error| {
+            format!(
+                "failed to inspect migration source directory {}: {error}",
+                display_path(&path)
+            )
+        })?;
+        if !metadata.is_dir() || !identities.insert((metadata.dev(), metadata.ino())) {
+            continue;
+        }
+
+        for entry in fs::read_dir(&path).map_err(|error| {
+            format!(
+                "failed to read migration source directory {}: {error}",
+                display_path(&path)
+            )
+        })? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let entry_metadata =
+                fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+            if entry_metadata.is_dir() && !entry_metadata.file_type().is_symlink() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(identities)
+}
+
+#[cfg(not(unix))]
+fn reject_filesystem_aliases(_source_home: &Path, _targets: &[&Path]) -> Result<(), String> {
+    Ok(())
+}
+
+fn canonicalize_path_allow_missing(path: &Path) -> Result<PathBuf, String> {
+    let mut existing = path;
+    let mut missing = Vec::<OsString>::new();
+    loop {
+        match fs::canonicalize(existing) {
+            Ok(mut resolved) => {
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = existing.file_name().ok_or_else(|| {
+                    format!("failed to resolve migration path: {}", display_path(path))
+                })?;
+                missing.push(name.to_os_string());
+                existing = existing.parent().ok_or_else(|| {
+                    format!("failed to resolve migration path: {}", display_path(path))
+                })?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to resolve migration path {}: {error}",
+                    display_path(path)
+                ));
+            }
+        };
     }
 }
 
@@ -255,12 +530,89 @@ fn preflight_migrated_launcher(
     }
 }
 
+#[cfg(not(windows))]
 fn resolve_executable_on_path(command: &str, env: &BTreeMap<String, String>) -> Option<String> {
     let path_value = env.get("PATH")?;
     std::env::split_paths(path_value)
         .map(|dir| dir.join(command))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| is_executable_file(candidate))
         .map(|candidate| display_path(&candidate))
+}
+
+#[cfg(windows)]
+fn resolve_executable_on_path(command: &str, env: &BTreeMap<String, String>) -> Option<String> {
+    let path_value = env.get("PATH")?;
+    let extensions = env
+        .get("PATHEXT")
+        .map(|value| {
+            value
+                .split(';')
+                .map(str::trim)
+                .filter(|extension| !extension.is_empty())
+                .map(|extension| {
+                    if extension.starts_with('.') {
+                        extension.to_string()
+                    } else {
+                        format!(".{extension}")
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|extensions| !extensions.is_empty())
+        .unwrap_or_else(|| {
+            [".COM", ".EXE", ".BAT", ".CMD"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        });
+
+    for dir in std::env::split_paths(path_value) {
+        if let Some(extension) = Path::new(command)
+            .extension()
+            .and_then(|value| value.to_str())
+        {
+            if extensions.iter().any(|candidate| {
+                candidate
+                    .trim_start_matches('.')
+                    .eq_ignore_ascii_case(extension)
+            }) {
+                let exact = dir.join(command);
+                if exact.is_file() {
+                    return Some(display_path(&exact));
+                }
+            }
+            continue;
+        }
+        for extension in &extensions {
+            let candidate = dir.join(format!("{command}{extension}"));
+            if candidate.is_file() {
+                return Some(display_path(&candidate));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+
+    // `access` applies the current process identity and the relevant owner,
+    // group, or other permission class instead of accepting any execute bit.
+    unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]
@@ -274,7 +626,8 @@ mod tests {
 
     use super::{
         MigrateHomeOptions, default_migration_source_home, inspect_migration_source,
-        migrate_plain_openclaw_home, plan_migration,
+        migrate_plain_openclaw_home, plan_migration, reject_filesystem_aliases,
+        with_rollback_error,
     };
 
     fn install_fake_openclaw_on_path(root: &Path, env: &mut BTreeMap<String, String>) {
@@ -333,6 +686,91 @@ mod tests {
         assert!(summary.workspace_exists);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rollback_errors_preserve_the_primary_failure_and_append_each_cleanup_failure() {
+        let error = with_rollback_error(
+            "failed to update imported environment".to_string(),
+            "removing the migrated launcher",
+            Err("launcher registry is read-only".to_string()),
+        );
+        let error = with_rollback_error(
+            error,
+            "removing the partially imported environment",
+            Err("environment root is busy".to_string()),
+        );
+
+        assert_eq!(
+            error,
+            "failed to update imported environment\n\
+             rollback error while removing the migrated launcher: launcher registry is read-only\n\
+             rollback error while removing the partially imported environment: environment root is busy"
+        );
+    }
+
+    #[test]
+    fn successful_rollback_keeps_the_primary_failure_unchanged() {
+        assert_eq!(
+            with_rollback_error(
+                "migration failed".to_string(),
+                "removing partial state",
+                Ok(())
+            ),
+            "migration failed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_alias_check_maps_missing_targets_from_an_existing_source_ancestor() {
+        let root = std::env::temp_dir().join("ocm-migrate-tests-filesystem-alias");
+        let source_home = root.join("source");
+        let target = source_home.join("existing-parent/nested/env");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(source_home.join("existing-parent")).unwrap();
+
+        let error = reject_filesystem_aliases(&source_home, &[&target]).unwrap_err();
+        assert!(error.contains("must not alias the same filesystem tree"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn migration_rejects_non_utf8_target_roots_before_mutation() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = std::env::temp_dir().join("ocm-migrate-tests-non-utf8-target");
+        let cwd = root.join(OsString::from_vec(b"cwd-\xff".to_vec()));
+        let source_home = root.join("source");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(source_home.join("workspace")).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), root.join("home").display().to_string());
+        env.insert(
+            "OCM_HOME".to_string(),
+            root.join("ocm-home").display().to_string(),
+        );
+        let error = migrate_plain_openclaw_home(
+            MigrateHomeOptions {
+                source_home: Some(source_home.display().to_string()),
+                name: "mira".to_string(),
+                root: Some("managed".to_string()),
+            },
+            &env,
+            &cwd,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("migration target root must use valid UTF-8"));
+        assert!(!root.join("ocm-home/envs.json").exists());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
