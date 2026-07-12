@@ -74,7 +74,8 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     assert!(paths.contains("set -euo pipefail"));
     assert!(paths.contains("status --porcelain"));
     assert!(paths.contains("rev-parse HEAD"));
-    assert!(paths.contains("ocm_bin="));
+    assert!(paths.contains("OCM_BIN="));
+    assert!(!paths.contains("ocm_bin="));
     assert!(paths.contains("export OCM_HOME="));
     assert!(paths.contains("run_root=\"$(mktemp -d"));
     assert!(paths.contains("run_id=\"${run_root##*/}\""));
@@ -95,6 +96,8 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     assert!(release_skill.contains("\"$OCM_BIN\" runtime verify"));
     assert!(release_skill.contains("\"$OCM_BIN\" runtime remove"));
     assert!(release_skill.contains("\"$OCM_BIN\" @<env> --"));
+    assert!(release_skill.contains("pnpm install --frozen-lockfile"));
+    assert!(release_skill.contains("git status --porcelain"));
     assert!(!release_skill.contains("`ocm "));
     assert!(!release_paths.contains("`ocm "));
     assert!(matrix.contains("OCM_BIN="));

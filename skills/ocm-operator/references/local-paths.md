@@ -72,7 +72,7 @@ set -euo pipefail
 
 source_repo=/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build
 ocm_repo=/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm
-ocm_bin="${ocm_repo}/target/debug/ocm"
+OCM_BIN="${ocm_repo}/target/debug/ocm"
 validation_root=/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/release-validation
 mkdir -p "$validation_root"
 run_root="$(mktemp -d "${validation_root}/run-XXXXXXXXXX")"
@@ -83,7 +83,7 @@ runtime="openclaw-${run_id}"
 export OCM_HOME="${run_root}/ocm-home"
 
 test "$(git -C "$source_repo" rev-parse --show-toplevel)" = "$source_repo"
-test -x "$ocm_bin"
+test -x "$OCM_BIN"
 source_remote="$(git -C "$source_repo" remote get-url origin)"
 mkdir -p "$OCM_HOME"
 git clone --no-checkout --single-branch --branch main \
@@ -101,10 +101,10 @@ pnpm build
 test -z "$(git -C "$worktree" status --porcelain)"
 
 cd "$ocm_repo"
-"$ocm_bin" runtime build-local "$runtime" --repo "$worktree" --force
-"$ocm_bin" runtime verify "$runtime"
-"$ocm_bin" runtime show "$runtime"
-runtime_bin="$("$ocm_bin" runtime which "$runtime" --raw)"
+"$OCM_BIN" runtime build-local "$runtime" --repo "$worktree" --force
+"$OCM_BIN" runtime verify "$runtime"
+"$OCM_BIN" runtime show "$runtime"
+runtime_bin="$("$OCM_BIN" runtime which "$runtime" --raw)"
 "$runtime_bin" --version
 
 test "$(git -C "$worktree" rev-parse HEAD)" = "$openclaw_sha"
@@ -114,7 +114,7 @@ test -z "$(git -C "$worktree" status --porcelain)"
 Keep `run_id`, `run_root`, `repo_store`, `worktree`, `runtime`, env names, and
 the report together. Cleanup must target only those names and must inspect
 worktree status before removal. Destroy dependent envs before running
-`"$ocm_bin" runtime remove "$runtime"`.
+`"$OCM_BIN" runtime remove "$runtime"`.
 
 ## Release Validation Cheatsheet
 

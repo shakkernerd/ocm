@@ -22,9 +22,12 @@ failed.
   run.
 - Do not use `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/openclaw`
   or `../openclaw`; that is an active working repo.
+- In the detached worktree, run `pnpm install --frozen-lockfile`,
+  `pnpm check`, and `pnpm build`, then require `git status --porcelain` to
+  remain empty.
 - Build a uniquely named package-shaped runtime with
   `"$OCM_BIN" runtime build-local` from the detached worktree. Use that runtime
-  for the matrix.
+  for the matrix, then verify the worktree is still clean.
 - Use the detached worktree's `openclaw.mjs` only for the S02 direct boot smoke.
 - Do not use `pnpm openclaw` as the main release-validation path.
 - Use the local built OCM binary, usually `<ocm>/target/debug/ocm`.

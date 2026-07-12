@@ -39,10 +39,13 @@ If repo-level AGENTS instructions are present, read and follow them first.
    dissociating the clone from it. Then resolve `origin/main` to an immutable
    commit and create a clean detached worktree for it. Record the commit
    before building.
-4. Build the primary validation target with
+4. In the detached worktree, run `pnpm install --frozen-lockfile`,
+   `pnpm check`, and `pnpm build`, then require `git status --porcelain` to
+   remain empty. Build the primary validation target with
    `"$OCM_BIN" runtime build-local <run-runtime> --repo <run-worktree>
-   --force`, then run `"$OCM_BIN" runtime verify <run-runtime>`. This
-   package-shaped runtime is the target for the matrix. Direct
+   --force`, then run
+   `"$OCM_BIN" runtime verify <run-runtime>` and recheck worktree cleanliness.
+   This package-shaped runtime is the target for the matrix. Direct
    `<run-worktree>/openclaw.mjs` execution is limited to the S02
    source-artifact boot smoke check.
 5. Review OCM command usage for the touched scenario using `README.md`,
