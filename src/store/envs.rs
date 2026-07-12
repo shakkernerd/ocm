@@ -166,8 +166,20 @@ fn normalize_environment(mut meta: EnvMeta) -> Result<EnvMeta, String> {
     Ok(meta)
 }
 
-fn upsert_environment(registry: &mut EnvRegistry, meta: EnvMeta) -> Result<EnvMeta, String> {
+fn upsert_environment(
+    registry: &mut EnvRegistry,
+    meta: EnvMeta,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
     let meta = normalize_environment(meta)?;
+    let existing_launcher =
+        find_environment(registry, &meta.name).and_then(|existing| existing.default_launcher);
+    if meta.default_launcher != existing_launcher
+        && let Some(launcher_name) = meta.default_launcher.as_deref()
+    {
+        super::launchers::get_launcher(launcher_name, env, cwd)?;
+    }
     registry.envs.retain(|entry| entry.name != meta.name);
     registry.envs.push(meta.clone());
     Ok(meta)
@@ -204,7 +216,7 @@ pub fn save_environment(
 ) -> Result<EnvMeta, String> {
     let _lock = lock_env_registry(env, cwd)?;
     let mut registry = load_env_registry(env, cwd)?;
-    meta = upsert_environment(&mut registry, meta)?;
+    meta = upsert_environment(&mut registry, meta, env, cwd)?;
     write_env_registry(&mut registry, env, cwd)?;
 
     Ok(meta)
@@ -268,7 +280,7 @@ pub fn create_environment(
         updated_at: created_at,
         last_used_at: None,
     };
-    let meta = upsert_environment(&mut registry, meta)?;
+    let meta = upsert_environment(&mut registry, meta, env, cwd)?;
     write_env_registry(&mut registry, env, cwd)?;
     Ok(meta)
 }
@@ -338,7 +350,7 @@ pub fn clone_environment(
             updated_at: created_at,
             last_used_at: None,
         };
-        let meta = upsert_environment(&mut registry, meta)?;
+        let meta = upsert_environment(&mut registry, meta, env, cwd)?;
         write_env_registry(&mut registry, env, cwd)?;
         Ok(meta)
     })();
@@ -523,7 +535,7 @@ pub fn import_environment(
                 updated_at: created_at,
                 last_used_at: None,
             };
-            let meta = upsert_environment(&mut registry, meta)?;
+            let meta = upsert_environment(&mut registry, meta, env, cwd)?;
             write_env_registry(&mut registry, env, cwd)?;
             Ok(meta)
         })();
@@ -581,6 +593,16 @@ pub fn remove_environment(
     write_env_registry(&mut registry, env, cwd)?;
 
     Ok(meta)
+}
+
+pub(super) fn with_locked_environments<T>(
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    action: impl FnOnce(&[EnvMeta]) -> Result<T, String>,
+) -> Result<T, String> {
+    let _lock = lock_env_registry(env, cwd)?;
+    let registry = load_env_registry(env, cwd)?;
+    action(&registry.envs)
 }
 
 fn import_staging_dir() -> PathBuf {

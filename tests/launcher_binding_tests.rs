@@ -1,8 +1,13 @@
 mod support;
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use crate::support::{TestDir, ocm_env, run_ocm, stderr, stdout};
+use fs2::FileExt;
+use ocm::store::env_registry_path;
 
 #[test]
 fn env_set_launcher_updates_and_clears_the_default_launcher() {
@@ -36,6 +41,102 @@ fn env_set_launcher_updates_and_clears_the_default_launcher() {
     let show_cleared = run_ocm(&cwd, &env, &["env", "show", "demo"]);
     assert!(show_cleared.status.success(), "{}", stderr(&show_cleared));
     assert!(!stdout(&show_cleared).contains("defaultLauncher:"));
+}
+
+#[test]
+fn launcher_bindings_require_an_existing_launcher() {
+    let root = TestDir::new("launcher-binding-missing");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "invalid", "--launcher", "missing"],
+    );
+    assert!(!create.status.success());
+    assert!(stderr(&create).contains("launcher \"missing\" does not exist"));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let bind = run_ocm(&cwd, &env, &["env", "set-launcher", "demo", "missing"]);
+    assert!(!bind.status.success());
+    assert!(stderr(&bind).contains("launcher \"missing\" does not exist"));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let environment: serde_json::Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert!(environment["defaultLauncher"].is_null());
+}
+
+#[test]
+fn launcher_binding_and_removal_share_the_environment_registry_lock() {
+    let root = TestDir::new("launcher-binding-remove-lock");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "stable", "--command", "sh"],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let lock_path = env_registry_path(&env, &cwd)
+        .unwrap()
+        .with_extension("lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+
+    let mut bind = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    bind.current_dir(&cwd)
+        .args(["env", "set-launcher", "demo", "stable"])
+        .env_clear()
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut bind = bind.spawn().unwrap();
+    thread::sleep(Duration::from_millis(100));
+
+    let mut remove = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    remove
+        .current_dir(&cwd)
+        .args(["launcher", "remove", "stable"])
+        .env_clear()
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut remove = remove.spawn().unwrap();
+    thread::sleep(Duration::from_millis(100));
+
+    assert!(bind.try_wait().unwrap().is_none());
+    assert!(remove.try_wait().unwrap().is_none());
+    FileExt::unlock(&lock).unwrap();
+
+    let bind = bind.wait_with_output().unwrap();
+    let remove = remove.wait_with_output().unwrap();
+    assert_ne!(bind.status.success(), remove.status.success());
+
+    let environment = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(environment.status.success(), "{}", stderr(&environment));
+    let environment: serde_json::Value = serde_json::from_str(&stdout(&environment)).unwrap();
+    let launcher = run_ocm(&cwd, &env, &["launcher", "show", "stable"]);
+    if bind.status.success() {
+        assert!(launcher.status.success(), "{}", stderr(&launcher));
+        assert_eq!(environment["defaultLauncher"], "stable");
+    } else {
+        assert!(!launcher.status.success());
+        assert!(environment["defaultLauncher"].is_null());
+    }
 }
 
 #[test]

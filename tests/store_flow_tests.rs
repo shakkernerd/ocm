@@ -1,6 +1,8 @@
 mod support;
 
+use std::collections::BTreeMap;
 use std::fs;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use ocm::env::{
@@ -22,12 +24,52 @@ use ocm::store::{
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
 
+fn add_test_launcher(name: &str, env: &BTreeMap<String, String>, cwd: &Path) {
+    add_launcher(
+        AddLauncherOptions {
+            name: name.to_string(),
+            command: "sh".to_string(),
+            cwd: None,
+            description: None,
+        },
+        env,
+        cwd,
+    )
+    .unwrap();
+}
+
+fn corrupt_environment_bindings(
+    name: &str,
+    default_runtime: Option<&str>,
+    default_launcher: Option<&str>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) {
+    let path = env_registry_path(env, cwd).unwrap();
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let meta = registry["envs"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|meta| meta["name"] == name)
+        .unwrap();
+    meta["defaultRuntime"] = default_runtime.into();
+    meta["defaultLauncher"] = default_launcher.into();
+    fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&registry).unwrap()),
+    )
+    .unwrap();
+}
+
 #[test]
 fn environment_store_round_trip_covers_create_read_list_and_remove() {
     let root = TestDir::new("store-env-flow");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("stable", &env, &cwd);
 
     let created = create_environment(
         CreateEnvironmentOptions {
@@ -263,6 +305,7 @@ fn environment_clone_copies_the_root_and_resets_identity_metadata() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("stable", &env, &cwd);
 
     let source = create_environment(
         CreateEnvironmentOptions {
@@ -361,6 +404,7 @@ fn clone_environment_assigns_a_new_port_when_the_source_port_was_auto_assigned()
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("stable", &env, &cwd);
 
     let source = create_environment(
         CreateEnvironmentOptions {
@@ -399,6 +443,7 @@ fn clone_environment_skips_the_global_openclaw_port_family() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("stable", &env, &cwd);
 
     let global_root = root.child("home/.openclaw");
     fs::create_dir_all(&global_root).unwrap();
@@ -446,6 +491,7 @@ fn clone_environment_rewrites_env_scoped_config_paths_and_ports() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("stable", &env, &cwd);
 
     let source = create_environment(
         CreateEnvironmentOptions {
@@ -520,6 +566,7 @@ fn clone_environment_clears_copied_runtime_state_outside_workspace_and_config() 
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("stable", &env, &cwd);
 
     let source = create_environment(
         CreateEnvironmentOptions {
@@ -600,6 +647,7 @@ fn environment_export_writes_a_portable_archive() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("shell", &env, &cwd);
 
     let created = create_environment(
         CreateEnvironmentOptions {
@@ -660,6 +708,7 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("shell", &env, &cwd);
 
     let created = create_environment(
         CreateEnvironmentOptions {
@@ -754,6 +803,7 @@ fn environment_import_clears_copied_runtime_state_outside_workspace_and_config()
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("shell", &env, &cwd);
 
     let created = create_environment(
         CreateEnvironmentOptions {
@@ -840,6 +890,7 @@ fn environment_snapshot_captures_a_named_point_in_time() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("shell", &env, &cwd);
 
     let created = create_environment(
         CreateEnvironmentOptions {
@@ -900,6 +951,7 @@ fn environment_snapshot_skips_legacy_plugin_dependency_state_and_preserves_symli
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("shell", &env, &cwd);
 
     let created = create_environment(
         CreateEnvironmentOptions {
@@ -1172,6 +1224,7 @@ fn environment_snapshot_restore_replaces_env_state_from_the_snapshot() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("shell", &env, &cwd);
 
     let created = create_environment(
         CreateEnvironmentOptions {
@@ -1272,6 +1325,7 @@ fn environment_snapshot_restore_clears_broken_foreign_runtime_state_but_keeps_ag
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let env = ocm_env(&root);
+    add_test_launcher("shell", &env, &cwd);
 
     let foreign = create_environment(
         CreateEnvironmentOptions {
@@ -1496,10 +1550,13 @@ fn environment_cleanup_preview_identifies_safe_repairs_without_mutating_state() 
     )
     .unwrap();
 
-    let mut drifted = get_environment("source", &env, &cwd).unwrap();
-    drifted.default_runtime = Some("ghost-runtime".to_string());
-    drifted.default_launcher = Some("ghost-launcher".to_string());
-    ocm::store::save_environment(drifted, &env, &cwd).unwrap();
+    corrupt_environment_bindings(
+        "source",
+        Some("ghost-runtime"),
+        Some("ghost-launcher"),
+        &env,
+        &cwd,
+    );
 
     let service = EnvironmentService::new(&env, &cwd);
     let preview = service.cleanup_preview("source").unwrap();
@@ -1538,10 +1595,13 @@ fn environment_cleanup_applies_binding_repairs() {
     )
     .unwrap();
 
-    let mut drifted = get_environment("source", &env, &cwd).unwrap();
-    drifted.default_runtime = Some("ghost-runtime".to_string());
-    drifted.default_launcher = Some("ghost-launcher".to_string());
-    ocm::store::save_environment(drifted, &env, &cwd).unwrap();
+    corrupt_environment_bindings(
+        "source",
+        Some("ghost-runtime"),
+        Some("ghost-launcher"),
+        &env,
+        &cwd,
+    );
 
     let service = EnvironmentService::new(&env, &cwd);
     let applied = service.cleanup("source").unwrap();
@@ -1602,9 +1662,7 @@ fn environment_cleanup_all_limits_results_to_envs_with_safe_repairs() {
     )
     .unwrap();
 
-    let mut broken = get_environment("broken", &env, &cwd).unwrap();
-    broken.default_launcher = Some("ghost-launcher".to_string());
-    ocm::store::save_environment(broken, &env, &cwd).unwrap();
+    corrupt_environment_bindings("broken", None, Some("ghost-launcher"), &env, &cwd);
 
     let service = EnvironmentService::new(&env, &cwd);
     let preview = service.cleanup_all_preview().unwrap();

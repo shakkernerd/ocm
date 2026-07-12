@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::launcher::{AddLauncherOptions, LauncherMeta};
 
 use super::common::{load_json_files, path_exists, read_json, write_json};
-use super::envs::list_environments;
+use super::envs::with_locked_environments;
 use super::layout::{display_path, launcher_meta_path, resolve_absolute_path, validate_name};
 use super::now_utc;
 
@@ -83,19 +83,21 @@ pub fn remove_launcher(
     cwd: &Path,
 ) -> Result<LauncherMeta, String> {
     let meta = get_launcher(name, env, cwd)?;
-    let bound_envs = list_environments(env, cwd)?
-        .into_iter()
-        .filter(|env| env.default_launcher.as_deref() == Some(meta.name.as_str()))
-        .map(|env| env.name)
-        .collect::<Vec<_>>();
-    if !bound_envs.is_empty() {
-        return Err(format!(
-            "launcher \"{}\" is still used by environment(s): {}; clear those bindings before removing it",
-            meta.name,
-            bound_envs.join(", ")
-        ));
-    }
-    let path = launcher_meta_path(&meta.name, env, cwd)?;
-    fs::remove_file(path).map_err(|error| error.to_string())?;
+    with_locked_environments(env, cwd, |envs| {
+        let bound_envs = envs
+            .iter()
+            .filter(|env| env.default_launcher.as_deref() == Some(meta.name.as_str()))
+            .map(|env| env.name.as_str())
+            .collect::<Vec<_>>();
+        if !bound_envs.is_empty() {
+            return Err(format!(
+                "launcher \"{}\" is still used by environment(s): {}; clear those bindings before removing it",
+                meta.name,
+                bound_envs.join(", ")
+            ));
+        }
+        let path = launcher_meta_path(&meta.name, env, cwd)?;
+        fs::remove_file(path).map_err(|error| error.to_string())
+    })?;
     Ok(meta)
 }
