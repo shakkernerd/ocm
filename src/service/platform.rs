@@ -270,17 +270,21 @@ fn validate_existing_service_owner(
             display_path(&definition.definition_path)
         )
     })?;
-    let owner_marker = match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => format!(
+    let owner_markers = match service_manager_kind(env) {
+        ServiceManagerKind::Launchd => vec![format!(
             "<key>OCM_HOME</key>\n      <string>{}</string>",
             plist_escape(ocm_home)
-        ),
-        ServiceManagerKind::SystemdUser => {
-            format!("Environment=\"OCM_HOME={}\"", systemd_escape(ocm_home))
-        }
+        )],
+        ServiceManagerKind::SystemdUser => vec![
+            format!("Environment=\"OCM_HOME={}\"", systemd_escape(ocm_home)),
+            format!(
+                "Environment=\"OCM_HOME={}\"",
+                systemd_legacy_escape(ocm_home)
+            ),
+        ],
         ServiceManagerKind::Unsupported => return Ok(()),
     };
-    if raw.contains(&owner_marker) {
+    if owner_markers.iter().any(|marker| raw.contains(marker)) {
         return Ok(());
     }
     Err(format!(
@@ -611,10 +615,11 @@ fn systemd_quote(value: &str) -> String {
 }
 
 fn systemd_escape(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('%', "%%")
+    systemd_legacy_escape(value).replace('%', "%%")
+}
+
+fn systemd_legacy_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn validate_systemd_value(label: &str, value: &str) -> Result<(), String> {
@@ -1043,6 +1048,45 @@ mod tests {
         let error = write_managed_service_definition(&other, &env).unwrap_err();
         assert!(error.contains("already bound to a different OCM_HOME"));
         assert_eq!(fs::read_to_string(&definition_path).unwrap(), original);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn stable_service_identity_accepts_legacy_systemd_percent_escaping() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ocm-platform-owner-percent-{unique}"));
+        fs::create_dir_all(root.join("home")).unwrap();
+        let store = root.join("store%1");
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), display_path(&root.join("home")));
+        env.insert("OCM_HOME".to_string(), display_path(&store));
+        env.insert(
+            "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+            "systemd-user".to_string(),
+        );
+        let definition = ManagedServiceDefinition {
+            label: OCM_SERVICE_LABEL.to_string(),
+            description: "percent store".to_string(),
+            definition_path: root.join("home/.config/systemd/user/ai.openclaw.ocm.service"),
+            program_arguments: vec!["/bin/true".to_string()],
+            working_directory: store.clone(),
+            stdout_path: store.join("logs/stdout.log"),
+            stderr_path: store.join("logs/stderr.log"),
+            environment: BTreeMap::from([("OCM_HOME".to_string(), display_path(&store))]),
+        };
+
+        write_managed_service_definition(&definition, &env).unwrap();
+        let current = fs::read_to_string(&definition.definition_path).unwrap();
+        let legacy = current.replace("store%%1", "store%1");
+        fs::write(&definition.definition_path, legacy).unwrap();
+
+        write_managed_service_definition(&definition, &env).unwrap();
+        let rewritten = fs::read_to_string(&definition.definition_path).unwrap();
+        assert!(rewritten.contains("store%%1"));
 
         fs::remove_dir_all(&root).unwrap();
     }
