@@ -409,7 +409,6 @@ fn build_systemd_unit(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SystemdOutputMode {
     Journal,
-    File,
     Append,
 }
 
@@ -439,7 +438,6 @@ fn systemd_version(stdout: &[u8]) -> Option<u32> {
 fn systemd_output_mode_for_version(version: Option<u32>) -> SystemdOutputMode {
     match version {
         Some(240..) => SystemdOutputMode::Append,
-        Some(236..=239) => SystemdOutputMode::File,
         _ => SystemdOutputMode::Journal,
     }
 }
@@ -447,7 +445,6 @@ fn systemd_output_mode_for_version(version: Option<u32>) -> SystemdOutputMode {
 fn systemd_output_target(path: &Path, mode: SystemdOutputMode) -> String {
     match mode {
         SystemdOutputMode::Journal => "journal".to_string(),
-        SystemdOutputMode::File => format!("file:{}", display_path(path)),
         SystemdOutputMode::Append => format!("append:{}", display_path(path)),
     }
 }
@@ -741,11 +738,11 @@ mod tests {
         );
         assert_eq!(
             systemd_output_mode_for_version(Some(236)),
-            super::SystemdOutputMode::File
+            super::SystemdOutputMode::Journal
         );
         assert_eq!(
             systemd_output_mode_for_version(Some(239)),
-            super::SystemdOutputMode::File
+            super::SystemdOutputMode::Journal
         );
         assert_eq!(
             systemd_output_mode_for_version(Some(240)),
