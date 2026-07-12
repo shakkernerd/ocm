@@ -236,6 +236,62 @@ pub(crate) fn save_environment_with_validated_launcher(
     Ok(meta)
 }
 
+pub(crate) fn set_environment_service_policy(
+    name: &str,
+    service_enabled: Option<bool>,
+    service_running: Option<bool>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
+    let safe_name = validate_name(name, "Environment name")?;
+    let _lock = lock_env_registry(env, cwd)?;
+    let mut registry = load_env_registry(env, cwd)?;
+    let meta = registry
+        .envs
+        .iter_mut()
+        .find(|meta| meta.name == safe_name)
+        .ok_or_else(|| format!("environment \"{safe_name}\" does not exist"))?;
+    if let Some(service_enabled) = service_enabled {
+        meta.service_enabled = service_enabled;
+    }
+    if let Some(service_running) = service_running {
+        meta.service_running = service_running;
+    }
+    meta.updated_at = now_utc();
+    let saved = meta.clone();
+    write_env_registry(&mut registry, env, cwd)?;
+    Ok(saved)
+}
+
+pub(crate) fn restore_environment_service_policy(
+    name: &str,
+    attempted_service_enabled: Option<bool>,
+    attempted_service_running: Option<bool>,
+    previous_service_enabled: bool,
+    previous_service_running: bool,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
+    let safe_name = validate_name(name, "Environment name")?;
+    let _lock = lock_env_registry(env, cwd)?;
+    let mut registry = load_env_registry(env, cwd)?;
+    let meta = registry
+        .envs
+        .iter_mut()
+        .find(|meta| meta.name == safe_name)
+        .ok_or_else(|| format!("environment \"{safe_name}\" does not exist"))?;
+    if attempted_service_enabled.is_some_and(|attempted| meta.service_enabled == attempted) {
+        meta.service_enabled = previous_service_enabled;
+    }
+    if attempted_service_running.is_some_and(|attempted| meta.service_running == attempted) {
+        meta.service_running = previous_service_running;
+    }
+    meta.updated_at = now_utc();
+    let restored = meta.clone();
+    write_env_registry(&mut registry, env, cwd)?;
+    Ok(restored)
+}
+
 pub fn create_environment(
     options: CreateEnvironmentOptions,
     env: &BTreeMap<String, String>,

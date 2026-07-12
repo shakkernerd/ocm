@@ -8,8 +8,8 @@ use serde::Serialize;
 use super::inspect::ServiceSummary;
 use super::service_backend_support_error;
 use crate::env::EnvironmentService;
-use crate::store::save_environment;
-use crate::supervisor::SupervisorService;
+use crate::store::{restore_environment_service_policy, set_environment_service_policy};
+use crate::supervisor::{SupervisorService, sync_supervisor_if_present};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -229,9 +229,18 @@ fn update_service(
     if let ServiceSupervisorPolicy::EnsureRunning = supervisor_policy {
         ensure_supervisor_running(env, cwd)?;
     }
-    if let Err(error) = env_service.set_service_policy(name, service_enabled, service_running) {
-        let rollback = save_environment(previous, env, cwd)
-            .and_then(|_| SupervisorService::new(env, cwd).sync().map(|_| ()));
+    set_environment_service_policy(name, service_enabled, service_running, env, cwd)?;
+    if let Err(error) = sync_supervisor_if_present(env, cwd) {
+        let rollback = restore_environment_service_policy(
+            name,
+            service_enabled,
+            service_running,
+            previous.service_enabled,
+            previous.service_running,
+            env,
+            cwd,
+        )
+        .and_then(|_| sync_supervisor_if_present(env, cwd).map(|_| ()));
         return match rollback {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(format!(

@@ -24,6 +24,7 @@ pub use envs::{
     clone_environment, create_environment, export_environment, get_environment, import_environment,
     list_environments, remove_environment, save_environment,
 };
+pub(crate) use envs::{restore_environment_service_policy, set_environment_service_policy};
 pub(crate) use gateway_ports::{
     openclaw_port_family_available, openclaw_port_family_range, resolve_config_gateway_port,
     resolve_effective_gateway_ports, resolve_env_gateway_port,
