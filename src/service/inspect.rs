@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use super::platform::{ServiceManagerKind, service_manager_kind};
+use super::platform::{ManagedServiceEnablement, ServiceManagerKind, service_manager_kind};
 use crate::cli::render::format_rfc3339;
 use crate::env::GatewayProcessSpec;
 use crate::env::{EnvMeta, EnvironmentService};
@@ -33,6 +33,7 @@ pub(crate) struct LaunchdJobStatus {
     pub(crate) installed: bool,
     pub(crate) loaded: bool,
     pub(crate) running: bool,
+    pub(crate) enablement: Option<ManagedServiceEnablement>,
     pub(crate) pid: Option<u32>,
     pub(crate) state: Option<String>,
     pub(crate) definition_path: Option<String>,
@@ -598,6 +599,12 @@ fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
         || unit_file_state
             .as_deref()
             .is_some_and(|value| !matches!(value, "not-found" | "masked"));
+    status.enablement = unit_file_state.as_deref().and_then(|value| match value {
+        "enabled" => Some(ManagedServiceEnablement::Enabled),
+        "enabled-runtime" => Some(ManagedServiceEnablement::EnabledRuntime),
+        "disabled" => Some(ManagedServiceEnablement::Disabled),
+        _ => None,
+    });
     status.running = active_state.as_deref() == Some("active");
     status.state = sub_state.or(active_state);
 }
@@ -605,6 +612,7 @@ fn parse_systemctl_show(raw: &str, status: &mut LaunchdJobStatus) {
 #[cfg(test)]
 mod service_issue_tests {
     use super::{ServiceIssueContext, service_issue, tcp_port_reachable};
+    use crate::service::platform::ManagedServiceEnablement;
     use crate::supervisor::SupervisorDaemonSummary;
     use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 
@@ -615,6 +623,7 @@ mod service_issue_tests {
             installed: true,
             loaded: true,
             running: true,
+            enablement: Some(ManagedServiceEnablement::Enabled),
             pid: Some(42),
             state: Some("active".to_string()),
             managed_label: "ai.openclaw.ocm".to_string(),

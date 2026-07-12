@@ -235,60 +235,90 @@ fn update_service(
     let _lifecycle_lock = supervisor.lock_daemon_lifecycle()?;
     supervisor.validate_daemon_owner_locked()?;
     let daemon_before = supervisor.daemon_status()?;
-    if let ServiceSupervisorPolicy::EnsureRunning = supervisor_policy {
-        if let Err(error) = ensure_supervisor_running_locked(&supervisor, env) {
-            return match supervisor.restore_daemon_state_locked(&daemon_before) {
-                Ok(()) => Err(error),
-                Err(rollback_error) => Err(format!(
-                    "{error}; failed to restore the previous daemon state: {rollback_error}"
-                )),
-            };
-        }
-    }
     let change =
         match set_environment_service_policy(name, service_enabled, service_running, env, cwd) {
             Ok(change) => change,
-            Err(error) => {
-                return match supervisor.restore_daemon_state_locked(&daemon_before) {
-                    Ok(()) => Err(error),
-                    Err(rollback_error) => Err(format!(
-                        "{error}; failed to restore the previous daemon state: {rollback_error}"
-                    )),
-                };
-            }
+            Err(error) => return Err(error),
         };
-    let update_result = sync_supervisor_if_present(env, cwd).and_then(|_| {
-        if matches!(update, ServiceUpdate::Stop | ServiceUpdate::Uninstall)
-            && !supervisor.has_desired_running_services()?
-        {
-            supervisor.uninstall_daemon_locked()?;
+    let update_result = match supervisor_policy {
+        ServiceSupervisorPolicy::EnsureRunning => {
+            ensure_supervisor_running_locked(&supervisor, env)
         }
-        Ok(())
-    });
+        ServiceSupervisorPolicy::LeaveAsIs => sync_supervisor_if_present(env, cwd).map(|_| ()),
+    };
     if let Err(error) = update_result {
-        let mut rollback_errors = Vec::new();
-        match restore_environment_service_policy(&change, env, cwd) {
-            Ok(restored) => {
-                if restored && let Err(rollback_error) = sync_supervisor_if_present(env, cwd) {
-                    rollback_errors.push(rollback_error);
+        return Err(rollback_service_update(
+            error,
+            &change,
+            &supervisor,
+            &daemon_before,
+            env,
+            cwd,
+        ));
+    }
+    let (mut summary, warnings) = wait_for_action_summary(name, action, env, cwd)?;
+    let should_remove_daemon =
+        if matches!(update, ServiceUpdate::Stop | ServiceUpdate::Uninstall) && !summary.running {
+            match supervisor.has_desired_running_services() {
+                Ok(has_desired_running_services) => !has_desired_running_services,
+                Err(error) => {
+                    return Err(rollback_service_update(
+                        error,
+                        &change,
+                        &supervisor,
+                        &daemon_before,
+                        env,
+                        cwd,
+                    ));
                 }
             }
-            Err(rollback_error) => rollback_errors.push(rollback_error),
-        }
-        if let Err(rollback_error) = supervisor.restore_daemon_state_locked(&daemon_before) {
-            rollback_errors.push(rollback_error);
-        }
-        return if rollback_errors.is_empty() {
-            Err(error)
         } else {
-            Err(format!(
-                "{error}; failed to restore the previous service state: {}",
-                rollback_errors.join("; ")
-            ))
+            false
         };
+    if should_remove_daemon {
+        if let Err(error) = supervisor.uninstall_daemon_locked() {
+            return Err(rollback_service_update(
+                error,
+                &change,
+                &supervisor,
+                &daemon_before,
+                env,
+                cwd,
+            ));
+        }
+        summary = super::inspect::service_status_fast(name, env, cwd)?;
     }
-    let (summary, warnings) = wait_for_action_summary(name, action, env, cwd)?;
     Ok(service_action_summary(action, summary, warnings))
+}
+
+fn rollback_service_update(
+    error: String,
+    change: &crate::store::EnvironmentServicePolicyChange,
+    supervisor: &SupervisorService<'_>,
+    daemon_before: &crate::supervisor::SupervisorDaemonSummary,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> String {
+    let mut rollback_errors = Vec::new();
+    match restore_environment_service_policy(change, env, cwd) {
+        Ok(restored) => {
+            if restored && let Err(rollback_error) = sync_supervisor_if_present(env, cwd) {
+                rollback_errors.push(rollback_error);
+            }
+        }
+        Err(rollback_error) => rollback_errors.push(rollback_error),
+    }
+    if let Err(rollback_error) = supervisor.restore_daemon_state_locked(daemon_before) {
+        rollback_errors.push(rollback_error);
+    }
+    if rollback_errors.is_empty() {
+        error
+    } else {
+        format!(
+            "{error}; failed to restore the previous service state: {}",
+            rollback_errors.join("; ")
+        )
+    }
 }
 
 fn wait_for_action_summary(

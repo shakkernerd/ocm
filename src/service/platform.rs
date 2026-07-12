@@ -7,6 +7,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use crate::store::{display_path, lock_file, resolve_user_home};
 
@@ -43,6 +45,13 @@ pub(crate) enum ServiceManagerKind {
     Launchd,
     SystemdUser,
     Unsupported,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ManagedServiceEnablement {
+    Enabled,
+    EnabledRuntime,
+    Disabled,
 }
 
 pub(crate) fn unsupported_service_manager_message() -> &'static str {
@@ -428,16 +437,151 @@ pub(crate) fn activate_managed_service(
     }
 }
 
-pub(crate) fn register_managed_service(
+pub(crate) fn restore_managed_service_registration(
     label: &str,
     definition_path: &Path,
+    running: bool,
+    enablement: Option<ManagedServiceEnablement>,
     env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     match service_manager_kind(env) {
-        ServiceManagerKind::Launchd => activate_launchd_service(label, definition_path, env),
-        ServiceManagerKind::SystemdUser => register_systemd_user_service(label, env),
+        ServiceManagerKind::Launchd => {
+            restore_launchd_service_registration(label, definition_path, running, enablement, env)
+        }
+        ServiceManagerKind::SystemdUser => {
+            restore_systemd_user_service_registration(label, running, enablement, env)
+        }
         ServiceManagerKind::Unsupported => Err(unsupported_service_manager_message().to_string()),
     }
+}
+
+pub(crate) fn managed_service_enablement(
+    label: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<ManagedServiceEnablement>, String> {
+    if service_manager_kind(env) != ServiceManagerKind::Launchd {
+        return Ok(None);
+    }
+    let domain = gui_domain(env)?;
+    let output = run_launchctl(env, ["print-disabled", domain.as_str()])?;
+    if !output.status.success() {
+        return Err(format!(
+            "launchctl print-disabled failed for {domain}: {}",
+            launchctl_detail(&output)
+        ));
+    }
+    let disabled = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_once("=>"))
+        .any(|(key, value)| {
+            key.trim().trim_matches('"') == label && value.trim().starts_with("true")
+        });
+    Ok(Some(if disabled {
+        ManagedServiceEnablement::Disabled
+    } else {
+        ManagedServiceEnablement::Enabled
+    }))
+}
+
+fn restore_launchd_service_registration(
+    label: &str,
+    definition_path: &Path,
+    running: bool,
+    enablement: Option<ManagedServiceEnablement>,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let previous_enablement =
+        enablement.ok_or_else(|| format!("failed to capture the enabled state for {label}"))?;
+    let domain = gui_domain(env)?;
+    let target = format!("{domain}/{label}");
+    set_launchd_service_enablement(&target, ManagedServiceEnablement::Enabled, env)?;
+    if let Err(error) = activate_launchd_service(label, definition_path, env) {
+        return match set_launchd_service_enablement(&target, previous_enablement, env) {
+            Ok(()) => Err(error),
+            Err(enablement_error) => Err(format!(
+                "{error}; failed to restore the previous launchd enabled state: {enablement_error}"
+            )),
+        };
+    }
+    if running {
+        return set_launchd_service_enablement(&target, previous_enablement, env);
+    }
+
+    set_launchd_service_enablement(&target, ManagedServiceEnablement::Disabled, env)?;
+    let stop_result = stop_launchd_job_for_restore(&target, env);
+    let enablement_result = set_launchd_service_enablement(&target, previous_enablement, env);
+    match (stop_result, enablement_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(enablement_error)) => Err(format!(
+            "{error}; failed to restore the previous launchd enabled state: {enablement_error}"
+        )),
+    }
+}
+
+fn stop_launchd_job_for_restore(
+    target: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    if !launchd_job_is_running(target, env)? {
+        return Ok(());
+    }
+    let terminate = run_launchctl(env, ["kill", "SIGTERM", target])?;
+    if !terminate.status.success() {
+        return Err(format!(
+            "launchctl kill failed while restoring {target}: {}",
+            launchctl_detail(&terminate)
+        ));
+    }
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        if !launchd_job_is_running(target, env)? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "launchctl kept {target} running while restoring its stopped state"
+            ));
+        }
+        sleep(Duration::from_millis(25));
+    }
+}
+
+fn set_launchd_service_enablement(
+    target: &str,
+    enablement: ManagedServiceEnablement,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let action = match enablement {
+        ManagedServiceEnablement::Enabled => "enable",
+        ManagedServiceEnablement::Disabled => "disable",
+        ManagedServiceEnablement::EnabledRuntime => {
+            return Err("launchd does not support runtime-only enablement".to_string());
+        }
+    };
+    let output = run_launchctl(env, [action, target])?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "launchctl {action} failed while restoring {target}: {}",
+            launchctl_detail(&output)
+        ))
+    }
+}
+
+fn launchd_job_is_running(target: &str, env: &BTreeMap<String, String>) -> Result<bool, String> {
+    let output = run_launchctl(env, ["print", target])?;
+    if !output.status.success() {
+        return Err(format!(
+            "launchctl lost {target} while restoring its stopped state: {}",
+            launchctl_detail(&output)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .any(|line| matches!(line, "state = running" | "state = active")))
 }
 
 fn build_launch_agent_plist(
@@ -742,6 +886,76 @@ fn register_systemd_user_service(
     Ok(())
 }
 
+fn restore_systemd_user_service_registration(
+    label: &str,
+    running: bool,
+    enablement: Option<ManagedServiceEnablement>,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let previous_enablement =
+        enablement.ok_or_else(|| format!("failed to capture the enabled state for {label}"))?;
+    let reload = run_systemctl(env, ["--user", "daemon-reload"])?;
+    if !reload.status.success() {
+        return Err(format!(
+            "systemctl --user daemon-reload failed: {}",
+            systemctl_detail(&reload)
+        ));
+    }
+    let running_result = if running {
+        let restart = run_systemctl(env, ["--user", "restart", label])?;
+        if restart.status.success() {
+            Ok(())
+        } else {
+            let start = run_systemctl(env, ["--user", "start", label])?;
+            if start.status.success() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "systemctl --user restart/start failed while restoring {label}: {}; {}",
+                    systemctl_detail(&restart),
+                    systemctl_detail(&start)
+                ))
+            }
+        }
+    } else {
+        Ok(())
+    };
+    let enablement_result = set_systemd_service_enablement(label, previous_enablement, env);
+    match (running_result, enablement_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(enablement_error)) => Err(format!(
+            "{error}; failed to restore the previous systemd enablement: {enablement_error}"
+        )),
+    }
+}
+
+fn set_systemd_service_enablement(
+    label: &str,
+    enablement: ManagedServiceEnablement,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let (action, output) = match enablement {
+        ManagedServiceEnablement::Enabled => {
+            ("enable", run_systemctl(env, ["--user", "enable", label])?)
+        }
+        ManagedServiceEnablement::EnabledRuntime => (
+            "enable --runtime",
+            run_systemctl(env, ["--user", "enable", "--runtime", label])?,
+        ),
+        ManagedServiceEnablement::Disabled => {
+            ("disable", run_systemctl(env, ["--user", "disable", label])?)
+        }
+    };
+    if !output.status.success() {
+        return Err(format!(
+            "systemctl --user {action} failed while restoring {label}: {}",
+            systemctl_detail(&output)
+        ));
+    }
+    Ok(())
+}
+
 fn gui_domain(env: &BTreeMap<String, String>) -> Result<String, String> {
     let id_bin = env
         .get(ID_BIN_OVERRIDE)
@@ -854,10 +1068,11 @@ mod tests {
     use crate::store::display_path;
 
     use super::{
-        ManagedServiceDefinition, ManagedServiceIdentity, OCM_SERVICE_LABEL, ServiceManagerKind,
-        gui_domain, managed_service_identity, managed_service_label, register_managed_service,
-        service_backend_support_error, service_definition_dir, service_manager_kind,
-        systemd_output_mode_for_version, write_managed_service_definition,
+        ManagedServiceDefinition, ManagedServiceEnablement, ManagedServiceIdentity,
+        OCM_SERVICE_LABEL, ServiceManagerKind, gui_domain, managed_service_identity,
+        managed_service_label, restore_managed_service_registration, service_backend_support_error,
+        service_definition_dir, service_manager_kind, systemd_output_mode_for_version,
+        write_managed_service_definition,
     };
 
     #[test]
@@ -925,11 +1140,92 @@ mod tests {
             ),
         ]);
 
-        register_managed_service("ai.openclaw.ocm", Path::new("/unused"), &env).unwrap();
+        restore_managed_service_registration(
+            "ai.openclaw.ocm",
+            Path::new("/unused"),
+            false,
+            Some(ManagedServiceEnablement::Enabled),
+            &env,
+        )
+        .unwrap();
 
         assert_eq!(
             fs::read_to_string(&log).unwrap(),
             "--user daemon-reload\n--user enable ai.openclaw.ocm\n"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restoring_stopped_launchd_service_keeps_it_loaded_without_running() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ocm-platform-restore-launchd-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        let launchctl = root.join("launchctl");
+        let log = root.join("launchctl.log");
+        let state = root.join("launchctl-state.txt");
+        let definition = root.join("ai.openclaw.ocm.plist");
+        fs::write(
+            &launchctl,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  bootout|unload) rm -f '{}';;\n  bootstrap) printf 'path = {}\\nstate = running\\npid = 42\\n' > '{}';;\n  kill) printf 'path = {}\\nstate = waiting\\n' > '{}';;\n  print) if [ -f '{}' ]; then cat '{}'; else printf 'Could not find service\\n' >&2; exit 1; fi;;\nesac\n",
+                display_path(&log),
+                display_path(&state),
+                display_path(&definition),
+                display_path(&state),
+                display_path(&definition),
+                display_path(&state),
+                display_path(&state),
+                display_path(&state),
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&launchctl, fs::Permissions::from_mode(0o755)).unwrap();
+        let env = BTreeMap::from([
+            (
+                "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+                "launchd".to_string(),
+            ),
+            (
+                "OCM_INTERNAL_LAUNCHCTL_BIN".to_string(),
+                display_path(&launchctl),
+            ),
+        ]);
+
+        restore_managed_service_registration(
+            "ai.openclaw.ocm",
+            &definition,
+            false,
+            Some(ManagedServiceEnablement::Enabled),
+            &env,
+        )
+        .unwrap();
+
+        assert!(
+            fs::read_to_string(&state)
+                .unwrap()
+                .contains("state = waiting")
+        );
+        let commands = fs::read_to_string(&log).unwrap();
+        assert!(
+            commands
+                .lines()
+                .any(|line| line.starts_with("disable gui/"))
+        );
+        assert!(
+            commands
+                .lines()
+                .any(|line| line.starts_with("kill SIGTERM gui/"))
+        );
+        assert!(
+            commands
+                .lines()
+                .last()
+                .is_some_and(|line| line.starts_with("enable gui/"))
         );
         fs::remove_dir_all(&root).unwrap();
     }

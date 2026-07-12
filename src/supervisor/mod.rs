@@ -19,10 +19,10 @@ use time::OffsetDateTime;
 use crate::env::EnvironmentService;
 use crate::service::inspect::inspect_job;
 use crate::service::platform::{
-    ManagedServiceDefinition, ServiceManagerKind, activate_managed_service,
-    deactivate_managed_service, ensure_service_definition_dir, managed_service_identity,
-    register_managed_service, service_manager_kind, validate_managed_service_owner,
-    write_managed_service_definition,
+    ManagedServiceDefinition, ManagedServiceEnablement, ServiceManagerKind,
+    activate_managed_service, deactivate_managed_service, ensure_service_definition_dir,
+    managed_service_enablement, managed_service_identity, restore_managed_service_registration,
+    service_manager_kind, validate_managed_service_owner, write_managed_service_definition,
 };
 use crate::store::{
     display_path, ensure_dir, ensure_store, list_environments, lock_file, now_utc,
@@ -138,6 +138,8 @@ pub struct SupervisorDaemonSummary {
     pub installed: bool,
     pub loaded: bool,
     pub running: bool,
+    #[serde(skip)]
+    pub(crate) enablement: Option<ManagedServiceEnablement>,
     pub pid: Option<u32>,
     pub state: Option<String>,
 }
@@ -354,16 +356,18 @@ impl<'a> SupervisorService<'a> {
         &self,
         before: &SupervisorDaemonSummary,
     ) -> Result<(), String> {
-        if before.running {
-            self.ensure_daemon_running_locked()?;
-            return Ok(());
-        }
         let definition = self.supervisor_daemon_definition()?;
         deactivate_managed_service(&definition, self.env)?;
         if before.installed {
             write_managed_service_definition(&definition, self.env)?;
             if before.loaded {
-                register_managed_service(&definition.label, &definition.definition_path, self.env)?;
+                restore_managed_service_registration(
+                    &definition.label,
+                    &definition.definition_path,
+                    before.running,
+                    before.enablement,
+                    self.env,
+                )?;
             }
         }
         Ok(())
@@ -579,6 +583,12 @@ impl<'a> SupervisorService<'a> {
         let stdout_path = logs_dir.join("daemon.stdout.log");
         let stderr_path = logs_dir.join("daemon.stderr.log");
         let status = inspect_job(&identity.label, &identity.definition_path, self.env);
+        let enablement =
+            if status.loaded && service_manager_kind(self.env) == ServiceManagerKind::Launchd {
+                managed_service_enablement(&identity.label, self.env)?
+            } else {
+                status.enablement
+            };
         let executable_path = self.supervisor_executable_path()?;
 
         Ok(SupervisorDaemonSummary {
@@ -593,6 +603,7 @@ impl<'a> SupervisorService<'a> {
             installed: status.installed,
             loaded: status.loaded,
             running: status.running,
+            enablement,
             pid: status.pid,
             state: status.state,
         })
