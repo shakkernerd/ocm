@@ -9,6 +9,7 @@ use crate::store::{
     get_environment, get_runtime_verified, import_environment, list_environments,
     lock_environment_operation, now_utc, remove_environment, resolve_config_gateway_port,
     resolve_effective_gateway_ports, resolve_env_gateway_port, save_environment,
+    set_environment_service_policy,
 };
 use crate::supervisor::sync_supervisor_if_present;
 
@@ -293,25 +294,15 @@ impl<'a> EnvironmentService<'a> {
         service_running: Option<bool>,
     ) -> Result<EnvMeta, String> {
         let _lock = self.lock_operation(name)?;
-        self.set_service_policy_locked(name, service_enabled, service_running)
-    }
-
-    pub(crate) fn set_service_policy_locked(
-        &self,
-        name: &str,
-        service_enabled: Option<bool>,
-        service_running: Option<bool>,
-    ) -> Result<EnvMeta, String> {
-        let mut meta = get_environment(name, self.env, self.cwd)?;
-        if let Some(service_enabled) = service_enabled {
-            meta.service_enabled = service_enabled;
-        }
-        if let Some(service_running) = service_running {
-            meta.service_running = service_running;
-        }
-        let saved = save_environment(meta, self.env, self.cwd)?;
+        let change = set_environment_service_policy(
+            name,
+            service_enabled,
+            service_running,
+            self.env,
+            self.cwd,
+        )?;
         sync_supervisor_if_present(self.env, self.cwd)?;
-        Ok(saved)
+        Ok(change.applied)
     }
 
     pub fn remove(&self, name: &str, force: bool) -> Result<EnvMeta, String> {

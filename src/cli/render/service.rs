@@ -460,7 +460,7 @@ fn service_action_next_steps(
 }
 
 fn service_action_raw(summary: &ServiceActionSummary, _command_example: &str) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         format!("envName: {}", summary.env_name),
         format!("action: {}", summary.action),
         format!("installed: {}", summary.installed),
@@ -481,7 +481,14 @@ fn service_action_raw(summary: &ServiceActionSummary, _command_example: &str) ->
                 .clone()
                 .unwrap_or_else(|| "none".to_string())
         ),
-    ]
+    ];
+    lines.extend(
+        summary
+            .warnings
+            .iter()
+            .map(|warning| format!("warning: {warning}")),
+    );
+    lines
 }
 
 fn action_title(summary: &ServiceActionSummary) -> String {
@@ -620,5 +627,34 @@ mod tests {
         );
         assert!(!lines.iter().any(|line| line.contains("/tmp/stdout.log")));
         assert!(!lines.iter().any(|line| line.contains("/tmp/stderr.log")));
+    }
+
+    #[test]
+    fn service_action_raw_preserves_operational_warnings() {
+        let mut summary = ServiceActionSummary {
+            env_name: "demo".to_string(),
+            service_kind: "gateway".to_string(),
+            action: "stop".to_string(),
+            installed: true,
+            loaded: true,
+            desired_running: false,
+            running: true,
+            gateway_port: 18789,
+            binding_kind: Some("runtime".to_string()),
+            binding_name: Some("stable".to_string()),
+            stdout_path: None,
+            stderr_path: None,
+            warnings: vec!["gateway is still shutting down".to_string()],
+        };
+        let lines = service_action(&summary, RenderProfile::raw(), "ocm");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "warning: gateway is still shutting down")
+        );
+
+        summary.warnings.clear();
+        let lines = service_action(&summary, RenderProfile::raw(), "ocm");
+        assert!(!lines.iter().any(|line| line.starts_with("warning:")));
     }
 }

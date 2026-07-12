@@ -1,7 +1,8 @@
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fs2::FileExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -11,6 +12,35 @@ pub(crate) fn path_exists(path: &Path) -> bool {
 
 pub(crate) fn ensure_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|error| error.to_string())
+}
+
+pub(crate) struct ExclusiveFileLock {
+    file: File,
+}
+
+impl Drop for ExclusiveFileLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
+pub(crate) fn lock_file(path: &Path, label: &str) -> Result<ExclusiveFileLock, String> {
+    if let Some(parent) = path.parent() {
+        ensure_dir(parent)?;
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| format!("failed to open {label} lock at {}: {error}", path.display()))?;
+    file.lock_exclusive().map_err(|error| {
+        format!(
+            "failed to acquire {label} lock at {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(ExclusiveFileLock { file })
 }
 
 pub(crate) fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
