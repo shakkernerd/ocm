@@ -13,10 +13,12 @@ failed.
 
 - Set `OCM_BIN=/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm/target/debug/ocm`,
   verify it is executable, and use `"$OCM_BIN"` for every OCM command.
-- Fetch from the OpenClaw source repo at
+- Read the `origin` URL from the OpenClaw source repo at
   `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`,
-  resolve one immutable `origin/main` commit, and create a unique detached
-  worktree for the run.
+  but do not fetch into or mutate that shared checkout. Create per-run Git
+  metadata from the remote, optionally using the source repo as a read-only
+  object cache, resolve one immutable `origin/main` commit, and create a unique
+  detached worktree for the run.
 - Do not use `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/openclaw`
   or `../openclaw`; that is an active working repo.
 - Build a uniquely named package-shaped runtime with
@@ -147,7 +149,8 @@ Pass evidence:
 
 What to test:
 
-- Fetch and resolve one immutable `origin/main` commit.
+- Create per-run Git metadata from the source remote and resolve one immutable
+  `origin/main` commit without updating the shared source checkout.
 - Create a clean detached per-run worktree at that commit.
 - Run the source-built executable directly with `--version` as a narrow smoke
   check.

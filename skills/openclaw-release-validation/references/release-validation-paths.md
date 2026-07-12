@@ -3,8 +3,10 @@
 Default paths for this machine:
 
 - OCM repo: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm`
-- OpenClaw source repo: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`
+- OpenClaw source repo and read-only object cache:
+  `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`
 - Per-run root: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/release-validation/<run-id>`
+- Per-run Git metadata: `<run-root>/repo`
 - Detached OpenClaw worktree: `<run-root>/openclaw`
 - Do not use active OpenClaw repo: `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/openclaw`
 - Existing user source env: `/Users/shakker/.ocm/envs/Violet`

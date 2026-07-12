@@ -33,9 +33,11 @@ If repo-level AGENTS instructions are present, read and follow them first.
 2. Create a unique run id. Derive the worktree, runtime, env, report, and
    cleanup names from that id so concurrent validations cannot share mutable
    resources.
-3. Fetch the OpenClaw source repo once, resolve `origin/main` to an immutable
-   commit, and create a clean detached worktree for that commit. Record the
-   commit before building.
+3. Read the OpenClaw source repo's `origin` URL without fetching or changing
+   that shared checkout. Create per-run Git metadata from that remote, using
+   the source repo only as a read-only object cache, then resolve `origin/main`
+   to an immutable commit and create a clean detached worktree for it. Record
+   the commit before building.
 4. Build the primary validation target with
    `"$OCM_BIN" runtime build-local <run-runtime> --repo <run-worktree>
    --force`, then run `"$OCM_BIN" runtime verify <run-runtime>`. This

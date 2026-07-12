@@ -75,16 +75,19 @@ ocm_repo=/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/ocm
 ocm_bin="${ocm_repo}/target/debug/ocm"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 run_root="/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/release-validation/${run_id}"
+repo_store="${run_root}/repo"
 worktree="${run_root}/openclaw"
 runtime="openclaw-${run_id}"
 export OCM_HOME="${run_root}/ocm-home"
 
 test "$(git -C "$source_repo" rev-parse --show-toplevel)" = "$source_repo"
 test -x "$ocm_bin"
-git -C "$source_repo" fetch origin main --prune
-openclaw_sha="$(git -C "$source_repo" rev-parse origin/main)"
+source_remote="$(git -C "$source_repo" remote get-url origin)"
 mkdir -p "$run_root" "$OCM_HOME"
-git -C "$source_repo" worktree add --detach "$worktree" "$openclaw_sha"
+git clone --no-checkout --single-branch --branch main \
+  --reference-if-able "$source_repo" "$source_remote" "$repo_store"
+openclaw_sha="$(git -C "$repo_store" rev-parse origin/main)"
+git -C "$repo_store" worktree add --detach "$worktree" "$openclaw_sha"
 test "$(git -C "$worktree" rev-parse HEAD)" = "$openclaw_sha"
 test -z "$(git -C "$worktree" status --porcelain)"
 
@@ -103,10 +106,10 @@ runtime_bin="$("$ocm_bin" runtime which "$runtime" --raw)"
 test "$(git -C "$worktree" rev-parse HEAD)" = "$openclaw_sha"
 ```
 
-Keep `run_id`, `run_root`, `worktree`, `runtime`, env names, and the report
-together. Cleanup must target only those names and must inspect worktree status
-before removal. Destroy dependent envs before running `"$ocm_bin" runtime
-remove "$runtime"`.
+Keep `run_id`, `run_root`, `repo_store`, `worktree`, `runtime`, env names, and
+the report together. Cleanup must target only those names and must inspect
+worktree status before removal. Destroy dependent envs before running
+`"$ocm_bin" runtime remove "$runtime"`.
 
 ## Release Validation Cheatsheet
 
