@@ -10,8 +10,10 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
 #[cfg(windows)]
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::{io::AsRawHandle, process::CommandExt as _};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -733,13 +735,17 @@ impl Cli {
             command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
         }
 
-        let process_guard = SourceWatchProcessGuard::new()?;
+        let mut process_guard = SourceWatchProcessGuard::new()?;
+        process_guard.configure_command(&mut command)?;
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
-        if let Err(error) = process_guard.assign(&child) {
-            let _ = stop_source_watch_child(&mut child);
-            return Err(error);
+        if let Err(error) = process_guard.assign_and_start(&child) {
+            return Err(stop_source_watch_after_error(
+                &mut child,
+                &process_guard,
+                error,
+            ));
         }
         let source_watch = match self
             .environment_service()
@@ -753,25 +759,34 @@ impl Cli {
             ) {
             Ok(source_watch) => source_watch,
             Err(error) => {
-                let _ = stop_source_watch_child(&mut child);
-                return Err(error);
+                return Err(stop_source_watch_after_error(
+                    &mut child,
+                    &process_guard,
+                    error,
+                ));
             }
         };
         let mut tee_threads = Vec::new();
         if let Some(log_files) = log_files.take() {
             let Some(stdout) = child.stdout.take() else {
-                let _ = stop_source_watch_child(&mut child);
                 let _ = self
                     .environment_service()
                     .clear_source_watch_override(&meta.name, &source_watch.token);
-                return Err("failed to capture source watch stdout".to_string());
+                return Err(stop_source_watch_after_error(
+                    &mut child,
+                    &process_guard,
+                    "failed to capture source watch stdout".to_string(),
+                ));
             };
             let Some(stderr) = child.stderr.take() else {
-                let _ = stop_source_watch_child(&mut child);
                 let _ = self
                     .environment_service()
                     .clear_source_watch_override(&meta.name, &source_watch.token);
-                return Err("failed to capture source watch stderr".to_string());
+                return Err(stop_source_watch_after_error(
+                    &mut child,
+                    &process_guard,
+                    "failed to capture source watch stderr".to_string(),
+                ));
             };
             tee_threads.push(spawn_tee_thread(
                 stdout,
@@ -788,11 +803,17 @@ impl Cli {
         }
 
         let status_result =
-            wait_for_source_watch_child(&mut child, &stop_requested).map_err(|error| {
-                let _ = stop_source_watch_child(&mut child);
-                error
-            });
-        let tee_result = wait_for_tee_threads(tee_threads);
+            wait_for_source_watch_child(&mut child, &stop_requested, &process_guard)
+                .map_err(|error| stop_source_watch_after_error(&mut child, &process_guard, error));
+        let tee_result = if status_result
+            .as_ref()
+            .is_err_and(|error| error.starts_with(SOURCE_WATCH_TREE_ACTIVE_ERROR))
+        {
+            drop(tee_threads);
+            Ok(())
+        } else {
+            wait_for_tee_threads(tee_threads)
+        };
         let clear_result = self
             .environment_service()
             .clear_source_watch_override(&meta.name, &source_watch.token)
@@ -889,28 +910,58 @@ fn combine_source_watch_cleanup_results(
 fn wait_for_source_watch_child(
     child: &mut std::process::Child,
     stop_requested: &AtomicBool,
+    process_guard: &SourceWatchProcessGuard,
 ) -> Result<std::process::ExitStatus, String> {
     loop {
         if let Some(status) = child
             .try_wait()
             .map_err(|error| format!("failed waiting for source watch: {error}"))?
         {
+            process_guard.stop_remaining(child.id())?;
             return Ok(status);
         }
         if stop_requested.load(Ordering::SeqCst) {
-            return stop_source_watch_child(child);
+            return stop_source_watch_child(child, process_guard);
         }
         thread::sleep(Duration::from_millis(50));
     }
 }
 
 struct SourceWatchProcessGuard {
+    #[cfg(unix)]
+    _pty_master: File,
+    #[cfg(unix)]
+    pty_slave: Option<File>,
     #[cfg(windows)]
     job: windows_sys::Win32::Foundation::HANDLE,
 }
 
 impl SourceWatchProcessGuard {
     fn new() -> Result<Self, String> {
+        #[cfg(unix)]
+        {
+            let mut master = -1;
+            let mut slave = -1;
+            let opened = unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if opened == -1 {
+                return Err(format!(
+                    "failed creating source watch terminal: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+            return Ok(Self {
+                _pty_master: unsafe { File::from_raw_fd(master) },
+                pty_slave: Some(unsafe { File::from_raw_fd(slave) }),
+            });
+        }
         #[cfg(windows)]
         {
             use windows_sys::Win32::System::JobObjects::{
@@ -945,15 +996,33 @@ impl SourceWatchProcessGuard {
                     io::Error::last_os_error()
                 ));
             }
-            Ok(Self { job })
+            return Ok(Self { job });
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(unix, windows)))]
         {
             Ok(Self {})
         }
     }
 
-    fn assign(&self, child: &std::process::Child) -> Result<(), String> {
+    fn configure_command(&mut self, command: &mut Command) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let slave = self
+                .pty_slave
+                .take()
+                .ok_or_else(|| "source watch terminal was already assigned".to_string())?;
+            // watch-node keeps its runner in the same process group when stdin
+            // is a TTY, so the group remains an enforceable ownership boundary.
+            command.stdin(Stdio::from(slave));
+        }
+        #[cfg(windows)]
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
+        #[cfg(not(any(unix, windows)))]
+        let _ = command;
+        Ok(())
+    }
+
+    fn assign_and_start(&self, child: &std::process::Child) -> Result<(), String> {
         #[cfg(windows)]
         {
             let assigned = unsafe {
@@ -968,10 +1037,77 @@ impl SourceWatchProcessGuard {
                     io::Error::last_os_error()
                 ));
             }
+            resume_windows_process(child.id())?;
         }
         #[cfg(not(windows))]
         let _ = child;
         Ok(())
+    }
+
+    fn stop_remaining(&self, root_pid: u32) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            if !unix_process_group_is_alive(root_pid) {
+                return Ok(());
+            }
+            let _ = signal_unix_process_group(root_pid, "KILL");
+            return wait_for_unix_process_group_to_stop(root_pid);
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+
+            if unsafe { TerminateJobObject(self.job, 1) } == 0 {
+                return Err(format!(
+                    "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; failed terminating the process job: {}; the background service was not restored",
+                    io::Error::last_os_error()
+                ));
+            }
+            return self.wait_for_windows_job_to_stop();
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = root_pid;
+            Ok(())
+        }
+    }
+
+    #[cfg(windows)]
+    fn wait_for_windows_job_to_stop(&self) -> Result<(), String> {
+        use windows_sys::Win32::System::JobObjects::{
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+            QueryInformationJobObject,
+        };
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            let queried = unsafe {
+                QueryInformationJobObject(
+                    self.job,
+                    JobObjectBasicAccountingInformation,
+                    std::ptr::from_mut(&mut info).cast(),
+                    std::mem::size_of_val(&info) as u32,
+                    std::ptr::null_mut(),
+                )
+            };
+            if queried == 0 {
+                return Err(format!(
+                    "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; failed querying the process job: {}; the background service was not restored",
+                    io::Error::last_os_error()
+                ));
+            }
+            if info.ActiveProcesses == 0 {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; the Windows process job still has {} active processes; the background service was not restored",
+                    info.ActiveProcesses
+                ));
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 }
 
@@ -986,13 +1122,13 @@ impl Drop for SourceWatchProcessGuard {
 
 fn stop_source_watch_child(
     child: &mut std::process::Child,
+    process_guard: &SourceWatchProcessGuard,
 ) -> Result<std::process::ExitStatus, String> {
     #[cfg(unix)]
     {
-        let tracked_processes = unix_descendant_processes(child.id()).unwrap_or_default();
         let pid = child.id().to_string();
-        // OpenClaw's watch-node handler forwards TERM to its detached gateway
-        // process group; allow its shutdown grace before forcing the wrapper down.
+        // watch-node forwards TERM to its runner; allow that grace before
+        // enforcing the process-group ownership boundary.
         let signal = Command::new("kill")
             .args(["-TERM", &pid])
             .stdin(Stdio::null())
@@ -1006,13 +1142,14 @@ fn stop_source_watch_child(
                     .try_wait()
                     .map_err(|error| format!("failed waiting for source watch shutdown: {error}"))?
                 {
-                    stop_tracked_unix_processes(&tracked_processes)?;
+                    process_guard.stop_remaining(child.id())?;
                     return Ok(status);
                 }
                 thread::sleep(Duration::from_millis(50));
             }
         }
-        force_stop_unix_process_tree(child.id(), &tracked_processes)?;
+        let _ = signal_unix_process_group(child.id(), "STOP");
+        process_guard.stop_remaining(child.id())?;
         return child
             .wait()
             .map_err(|error| format!("failed waiting for stopped source watch: {error}"));
@@ -1020,28 +1157,7 @@ fn stop_source_watch_child(
 
     #[cfg(windows)]
     {
-        let pid = child.id().to_string();
-        let result = Command::new("taskkill")
-            .args(["/PID", &pid, "/T", "/F"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if !result.as_ref().is_ok_and(|status| status.success())
-            && child
-                .try_wait()
-                .map_err(|error| format!("failed checking source watch shutdown: {error}"))?
-                .is_none()
-        {
-            return Err(match result {
-                Ok(status) => format!(
-                    "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; taskkill failed with {status}, so the background service was not restored"
-                ),
-                Err(error) => format!(
-                    "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; taskkill failed: {error}; the background service was not restored"
-                ),
-            });
-        }
+        process_guard.stop_remaining(child.id())?;
         return child
             .wait()
             .map_err(|error| format!("failed waiting for stopped source watch: {error}"));
@@ -1059,134 +1175,19 @@ fn stop_source_watch_child(
 }
 
 #[cfg(unix)]
-fn unix_descendant_processes(root_pid: u32) -> Result<Vec<(u32, u32)>, String> {
-    let output = Command::new("ps")
-        .args(["-axo", "pid=,ppid=,pgid="])
-        .output()
-        .map_err(|error| format!("failed listing source watch process tree: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed listing source watch process tree: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let processes = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let pid = fields.next()?.parse::<u32>().ok()?;
-            let parent_pid = fields.next()?.parse::<u32>().ok()?;
-            let process_group = fields.next()?.parse::<u32>().ok()?;
-            Some((pid, parent_pid, process_group))
-        })
-        .collect::<Vec<_>>();
-    let mut tree = BTreeSet::from([root_pid]);
-    loop {
-        let before = tree.len();
-        for (pid, parent_pid, _) in &processes {
-            if tree.contains(parent_pid) {
-                tree.insert(*pid);
-            }
-        }
-        if tree.len() == before {
-            break;
-        }
-    }
-    Ok(processes
-        .into_iter()
-        .filter_map(|(pid, _, process_group)| {
-            (pid != root_pid && tree.contains(&pid)).then_some((pid, process_group))
-        })
-        .collect())
-}
-
-#[cfg(unix)]
-fn force_stop_unix_process_tree(
-    root_pid: u32,
-    tracked_processes: &[(u32, u32)],
-) -> Result<(), String> {
-    let _ = signal_unix_process(root_pid, "STOP");
-    let mut processes = tracked_processes.to_vec();
-    if let Ok(current_processes) = unix_descendant_processes(root_pid) {
-        for process in current_processes {
-            if !processes.contains(&process) {
-                processes.push(process);
-            }
-        }
-    }
-    let mut process_groups = processes
-        .iter()
-        .map(|(_, process_group)| *process_group)
-        .collect::<BTreeSet<_>>();
-    process_groups.insert(root_pid);
-    for process_group in process_groups {
-        let _ = signal_unix_process_group(process_group, "KILL");
-    }
-    for (pid, _) in &processes {
-        let _ = signal_unix_process(*pid, "KILL");
-    }
-    let _ = signal_unix_process(root_pid, "KILL");
-    wait_for_unix_processes_to_stop(&processes)
-}
-
-#[cfg(unix)]
-fn stop_tracked_unix_processes(processes: &[(u32, u32)]) -> Result<(), String> {
-    let alive = processes
-        .iter()
-        .copied()
-        .filter(|(pid, _)| unix_process_is_alive(*pid))
-        .collect::<Vec<_>>();
-    if alive.is_empty() {
-        return Ok(());
-    }
-    for process_group in alive
-        .iter()
-        .map(|(_, process_group)| *process_group)
-        .collect::<BTreeSet<_>>()
-    {
-        let _ = signal_unix_process_group(process_group, "KILL");
-    }
-    for (pid, _) in &alive {
-        let _ = signal_unix_process(*pid, "KILL");
-    }
-    wait_for_unix_processes_to_stop(&alive)
-}
-
-#[cfg(unix)]
-fn wait_for_unix_processes_to_stop(processes: &[(u32, u32)]) -> Result<(), String> {
+fn wait_for_unix_process_group_to_stop(process_group: u32) -> Result<(), String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
-        let alive = processes
-            .iter()
-            .map(|(pid, _)| *pid)
-            .filter(|pid| unix_process_is_alive(*pid))
-            .collect::<Vec<_>>();
-        if alive.is_empty() {
+        if !unix_process_group_is_alive(process_group) {
             return Ok(());
         }
         if std::time::Instant::now() >= deadline {
             return Err(format!(
-                "{SOURCE_WATCH_TREE_ACTIVE_ERROR}: {}; the background service was not restored",
-                alive
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                "{SOURCE_WATCH_TREE_ACTIVE_ERROR}: process group {process_group}; the background service was not restored"
             ));
         }
         thread::sleep(Duration::from_millis(25));
     }
-}
-
-#[cfg(unix)]
-fn signal_unix_process(pid: u32, signal: &str) -> bool {
-    Command::new("kill")
-        .args([&format!("-{signal}"), &pid.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 #[cfg(unix)]
@@ -1201,8 +1202,72 @@ fn signal_unix_process_group(process_group: u32, signal: &str) -> bool {
 }
 
 #[cfg(unix)]
-fn unix_process_is_alive(pid: u32) -> bool {
-    signal_unix_process(pid, "0")
+fn unix_process_group_is_alive(process_group: u32) -> bool {
+    signal_unix_process_group(process_group, "0")
+}
+
+#[cfg(windows)]
+fn resume_windows_process(pid: u32) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(format!(
+            "failed listing suspended source watch threads: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    let mut entry = THREADENTRY32 {
+        dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+        ..Default::default()
+    };
+    let mut found = unsafe { Thread32First(snapshot, &mut entry) } != 0;
+    let mut resumed = false;
+    while found {
+        if entry.th32OwnerProcessID == pid {
+            let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+            if !thread.is_null() {
+                let result = unsafe { ResumeThread(thread) };
+                unsafe {
+                    CloseHandle(thread);
+                }
+                resumed = result != u32::MAX;
+                break;
+            }
+        }
+        found = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
+    }
+    unsafe {
+        CloseHandle(snapshot);
+    }
+    if resumed {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed resuming suspended source watch process {pid}: {}",
+            io::Error::last_os_error()
+        ))
+    }
+}
+
+fn stop_source_watch_after_error(
+    child: &mut std::process::Child,
+    process_guard: &SourceWatchProcessGuard,
+    primary_error: String,
+) -> String {
+    match stop_source_watch_child(child, process_guard) {
+        Ok(_) => primary_error,
+        Err(cleanup_error) if cleanup_error.starts_with(SOURCE_WATCH_TREE_ACTIVE_ERROR) => {
+            format!("{cleanup_error}; setup also failed: {primary_error}")
+        }
+        Err(cleanup_error) => {
+            format!("{primary_error}; also failed stopping source watch: {cleanup_error}")
+        }
+    }
 }
 
 fn source_watch_exit_code(status_code: Option<i32>, stop_requested: bool) -> i32 {

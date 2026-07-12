@@ -344,6 +344,23 @@ fn install_stubborn_fake_dev_runners(
     (started, descendant_pid)
 }
 
+#[cfg(unix)]
+fn install_orphaning_fake_dev_runners(
+    root: &TestDir,
+    env: &mut std::collections::BTreeMap<String, String>,
+) -> (PathBuf, PathBuf) {
+    install_fake_dev_runners(root, env);
+    let started = root.child("source-watch.started");
+    let descendant_pid = root.child("source-watch-descendant.pid");
+    let node = format!(
+        "#!/bin/sh\n/bin/sleep 300 &\nprintf '%s\\n' \"$!\" > \"{}\"\nprintf 'ready\\n' > \"{}\"\nexit 23\n",
+        path_string(&descendant_pid),
+        path_string(&started),
+    );
+    write_executable_script(&root.child("fake-dev-bin/node"), &node);
+    (started, descendant_pid)
+}
+
 fn wait_for_path(path: &Path, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -1553,6 +1570,43 @@ fn dev_watch_force_stops_the_entire_stubborn_process_tree() {
     assert!(
         wait_for_process_exit(descendant_pid, Duration::from_secs(3)),
         "source watch descendant {descendant_pid} survived forced shutdown"
+    );
+    assert!(!source_watch_override_path(&root, "demo").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_watch_stops_descendants_when_the_wrapper_exits_first() {
+    let root = TestDir::new("dev-command-watch-wrapper-exit");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    let (started, descendant_pid_path) = install_orphaning_fake_dev_runners(&root, &mut env);
+
+    let watch = run_ocm(
+        &cwd,
+        &env,
+        &["dev", "demo", "--repo", &path_string(&repo), "--watch"],
+    );
+    assert!(
+        wait_for_path(&started, Duration::from_secs(30)),
+        "source watch did not start"
+    );
+    assert!(
+        wait_for_path(&descendant_pid_path, Duration::from_secs(30)),
+        "source watch descendant did not start"
+    );
+    let descendant_pid = fs::read_to_string(&descendant_pid_path)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+
+    assert_eq!(watch.status.code(), Some(23), "{}", stderr(&watch));
+    assert!(
+        wait_for_process_exit(descendant_pid, Duration::from_secs(3)),
+        "source watch descendant {descendant_pid} survived wrapper exit"
     );
     assert!(!source_watch_override_path(&root, "demo").exists());
 }
