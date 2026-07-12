@@ -15,7 +15,10 @@ use serde_json::Value;
 
 use super::Cli;
 use super::render::RenderProfile;
-use crate::env::{CreateEnvironmentOptions, EnvDevMeta, EnvMeta, SourceWatchLease};
+use crate::env::{
+    CreateEnvironmentOptions, CreateSourceWatchOverrideOptions, EnvDevMeta, EnvMeta,
+    SourceWatchLease,
+};
 use crate::infra::process::run_direct;
 use crate::infra::shell::{build_openclaw_dev_source_env, build_openclaw_env};
 use crate::infra::terminal::{Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table};
@@ -680,7 +683,7 @@ impl Cli {
         meta: &EnvMeta,
         repo_root: &Path,
         tee_to_env_logs: bool,
-        source_watch_lease: &SourceWatchLease,
+        _source_watch_lease: &SourceWatchLease,
     ) -> Result<i32, String> {
         let args = vec![
             "scripts/watch-node.mjs".to_string(),
@@ -720,9 +723,11 @@ impl Cli {
             .spawn()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
         let source_watch = match self.environment_service().create_source_watch_override(
-            source_watch_lease,
-            repo_root,
-            child.id(),
+            CreateSourceWatchOverrideOptions {
+                env_name: meta.name.clone(),
+                repo_root: repo_root.to_path_buf(),
+                watch_pid: child.id(),
+            },
         ) {
             Ok(source_watch) => source_watch,
             Err(error) => {

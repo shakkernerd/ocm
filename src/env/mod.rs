@@ -29,7 +29,7 @@ pub use snapshots::{
     select_snapshot_prune_candidates,
 };
 pub(crate) use source_watch::SourceWatchLease;
-pub use source_watch::SourceWatchOverride;
+pub use source_watch::{CreateSourceWatchOverrideOptions, SourceWatchOverride};
 
 pub struct EnvironmentService<'a> {
     env: &'a BTreeMap<String, String>,

@@ -27,9 +27,15 @@ pub struct SourceWatchOverride {
     pub started_at: OffsetDateTime,
 }
 
+#[derive(Clone, Debug)]
+pub struct CreateSourceWatchOverrideOptions {
+    pub env_name: String,
+    pub repo_root: PathBuf,
+    pub watch_pid: u32,
+}
+
 #[derive(Debug)]
 pub(crate) struct SourceWatchLease {
-    env_name: String,
     lock_file: File,
 }
 
@@ -102,28 +108,24 @@ impl<'a> EnvironmentService<'a> {
                     display_path(&lock_path)
                 )
             })?;
-        Ok(SourceWatchLease {
-            env_name,
-            lock_file,
-        })
+        Ok(SourceWatchLease { lock_file })
     }
 
-    pub(crate) fn create_source_watch_override(
+    pub fn create_source_watch_override(
         &self,
-        lease: &SourceWatchLease,
-        repo_root: &Path,
-        watch_pid: u32,
+        options: CreateSourceWatchOverrideOptions,
     ) -> Result<SourceWatchOverride, String> {
-        let path = source_watch_override_path(&lease.env_name, self.env, self.cwd)?;
+        let env_name = validate_name(&options.env_name, "Environment name")?;
+        let path = source_watch_override_path(&env_name, self.env, self.cwd)?;
         if let Some(parent) = path.parent() {
             ensure_dir(parent)?;
         }
-        let token = format!("{watch_pid}-{}", now_utc().unix_timestamp_nanos());
+        let token = format!("{}-{}", options.watch_pid, now_utc().unix_timestamp_nanos());
         let meta = SourceWatchOverride {
             kind: SOURCE_WATCH_OVERRIDE_KIND.to_string(),
-            env_name: lease.env_name.clone(),
-            repo_root: display_path(repo_root),
-            watch_pid,
+            env_name,
+            repo_root: display_path(&options.repo_root),
+            watch_pid: options.watch_pid,
             token,
             started_at: now_utc(),
         };
