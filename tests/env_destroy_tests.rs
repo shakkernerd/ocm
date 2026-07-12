@@ -583,7 +583,9 @@ fn env_destroy_yes_terminates_live_listener_processes() {
 
     let server = root.child("listener.py");
     let ready = root.child("listener-ready.txt");
+    let second_ready = root.child("listener-ready-2.txt");
     let listener_log = root.child("listener.log");
+    let second_listener_log = root.child("listener-2.log");
     fs::write(
         &server,
         r#"import argparse, socket, time
@@ -614,15 +616,55 @@ time.sleep(60)
         .stderr(Stdio::from(listener_error))
         .spawn()
         .unwrap();
+    let second_listener_output = fs::File::create(&second_listener_log).unwrap();
+    let second_listener_error = second_listener_output.try_clone().unwrap();
+    let mut second_child = Command::new("python3")
+        .current_dir(root.child("ocm-home/envs/demo"))
+        .arg(&server)
+        .arg("--ready")
+        .arg(&second_ready)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(second_listener_output))
+        .stderr(Stdio::from(second_listener_error))
+        .spawn()
+        .unwrap();
 
     let port = wait_for_listener_port(&ready, &mut child, &listener_log);
+    let second_port =
+        wait_for_listener_port(&second_ready, &mut second_child, &second_listener_log);
 
-    let destroy = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--yes"]);
+    let preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
+    assert!(preview.status.success(), "{}", stderr(&preview));
+    let preview_json: serde_json::Value = serde_json::from_str(&stdout(&preview)).unwrap();
+    assert!(
+        preview_json["processCount"]
+            .as_u64()
+            .is_some_and(|count| count >= 2)
+    );
+    assert!(preview_json.get("processCandidates").is_none());
+    let guard = preview_json["stateToken"].as_str().unwrap();
+    let second_preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
+    assert!(
+        second_preview.status.success(),
+        "{}",
+        stderr(&second_preview)
+    );
+    let second_preview_json: serde_json::Value =
+        serde_json::from_str(&stdout(&second_preview)).unwrap();
+    assert_eq!(
+        second_preview_json["stateToken"],
+        preview_json["stateToken"]
+    );
+    let destroy = run_ocm(
+        &cwd,
+        &env,
+        &["env", "destroy", "demo", "--yes", "--if-state-token", guard],
+    );
     assert!(destroy.status.success(), "{}", stderr(&destroy));
 
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
-        if child.try_wait().unwrap().is_some() {
+        if child.try_wait().unwrap().is_some() && second_child.try_wait().unwrap().is_some() {
             break;
         }
         sleep(Duration::from_millis(50));
@@ -632,7 +674,214 @@ time.sleep(60)
         "listener should exit after destroy"
     );
     assert!(
+        second_child.try_wait().unwrap().is_some(),
+        "second listener should exit after destroy"
+    );
+    assert!(
         TcpStream::connect(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).is_err(),
         "listener port should be closed after destroy"
     );
+    assert!(
+        TcpStream::connect(SocketAddrV4::new(Ipv4Addr::LOCALHOST, second_port)).is_err(),
+        "second listener port should be closed after destroy"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn env_destroy_partial_apply_preserves_completed_process_count() {
+    let root = TestDir::new("env-destroy-partial-process-count");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let mut first = Command::new("python3")
+        .current_dir(root.child("ocm-home/envs/demo"))
+        .args(["-c", "import time; time.sleep(60)"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut second = Command::new("python3")
+        .current_dir(root.child("ocm-home/envs/demo"))
+        .args(["-c", "import time; time.sleep(60)"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    sleep(Duration::from_millis(100));
+
+    let preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
+    assert!(preview.status.success(), "{}", stderr(&preview));
+    let preview_json: serde_json::Value = serde_json::from_str(&stdout(&preview)).unwrap();
+    assert_eq!(preview_json["processCount"], 2);
+    let guard = preview_json["stateToken"].as_str().unwrap();
+
+    let bin_dir = root.child("selective-kill-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let kill_script = format!(
+        "#!/bin/sh\nif [ \"$2\" = \"{}\" ]; then exit 0; fi\nexec /bin/kill \"$@\"\n",
+        second.id()
+    );
+    write_executable_script(&bin_dir.join("kill"), &kill_script);
+    prepend_fake_bin(&mut env, &bin_dir);
+
+    let destroy = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "destroy",
+            "demo",
+            "--yes",
+            "--if-state-token",
+            guard,
+            "--json",
+        ],
+    );
+    assert!(!destroy.status.success());
+    let destroy_json: serde_json::Value = serde_json::from_str(&stdout(&destroy)).unwrap();
+    assert_eq!(destroy_json["code"], "partial_apply");
+    assert_eq!(destroy_json["processesTerminated"], 1);
+    let _ = first.wait();
+    assert!(first.try_wait().unwrap().is_some());
+    assert!(second.try_wait().unwrap().is_none());
+
+    let _ = Command::new("/bin/kill")
+        .args(["-KILL", &second.id().to_string()])
+        .status();
+    let _ = second.wait();
+    let cleanup = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--yes"]);
+    assert!(cleanup.status.success(), "{}", stderr(&cleanup));
+}
+
+#[cfg(unix)]
+#[test]
+fn env_destroy_reports_partial_apply_when_process_state_changes_during_teardown() {
+    let root = TestDir::new("env-destroy-partial-process-change");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_launchd_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let helper = root.child("replace-on-term.py");
+    let ready = root.child("replace-ready.txt");
+    let replacement_pid = root.child("replacement-pid.txt");
+    let helper_log = root.child("replace-on-term.log");
+    fs::write(
+        &helper,
+        r#"import os, signal, subprocess, sys, time
+ready_path, replacement_pid_path = sys.argv[1:3]
+def replace(_signum, _frame):
+    replacement = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        cwd=os.getcwd(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    with open(replacement_pid_path, "w", encoding="utf-8") as output:
+        output.write(str(replacement.pid))
+        output.flush()
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, replace)
+with open(ready_path, "w", encoding="utf-8") as output:
+    output.write("ready")
+    output.flush()
+while True:
+    time.sleep(1)
+"#,
+    )
+    .unwrap();
+    let output = fs::File::create(&helper_log).unwrap();
+    let error = output.try_clone().unwrap();
+    let mut child = Command::new("python3")
+        .current_dir(root.child("ocm-home/envs/demo"))
+        .arg(&helper)
+        .arg(&ready)
+        .arg(&replacement_pid)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::from(error))
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ready.exists() && Instant::now() < deadline {
+        if let Some(status) = child.try_wait().unwrap() {
+            let log = fs::read_to_string(&helper_log).unwrap_or_default();
+            panic!("replacement helper exited before becoming ready: {status}; {log}");
+        }
+        sleep(Duration::from_millis(50));
+    }
+    assert!(ready.exists(), "replacement helper did not become ready");
+
+    let preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
+    assert!(preview.status.success(), "{}", stderr(&preview));
+    let preview_json: serde_json::Value = serde_json::from_str(&stdout(&preview)).unwrap();
+    let guard = preview_json["stateToken"].as_str().unwrap();
+    let destroy = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "destroy",
+            "demo",
+            "--yes",
+            "--if-state-token",
+            guard,
+            "--json",
+        ],
+    );
+    assert!(!destroy.status.success());
+    assert!(stderr(&destroy).is_empty(), "{}", stderr(&destroy));
+    let destroy_json: serde_json::Value = serde_json::from_str(&stdout(&destroy)).unwrap();
+    assert_eq!(destroy_json["code"], "partial_apply");
+    assert_eq!(destroy_json["removed"], false);
+    assert_eq!(destroy_json["processesTerminated"], 1);
+    assert!(
+        destroy_json["blockers"]
+            .as_array()
+            .is_some_and(|blockers| blockers.iter().any(|blocker| blocker
+                .as_str()
+                .is_some_and(|message| message.contains("teardown began"))))
+    );
+
+    let replacement_pid = fs::read_to_string(&replacement_pid)
+        .unwrap()
+        .trim()
+        .to_string();
+    let _ = Command::new("kill")
+        .args(["-KILL", &replacement_pid])
+        .status();
+    let cleanup = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--yes"]);
+    assert!(cleanup.status.success(), "{}", stderr(&cleanup));
+}
+
+#[test]
+fn env_destroy_refuses_to_issue_a_guard_when_process_inspection_fails() {
+    let root = TestDir::new("env-destroy-process-inspection-failure");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_launchd_env(&root);
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+
+    let bin_dir = root.child("failing-ps-bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_executable_script(&bin_dir.join("ps"), "#!/bin/sh\nexit 1\n");
+    prepend_fake_bin(&mut env, &bin_dir);
+
+    let preview = run_ocm(&cwd, &env, &["env", "destroy", "demo", "--json"]);
+    assert!(!preview.status.success());
+    assert!(stdout(&preview).is_empty());
+    assert!(stderr(&preview).contains("failed to inspect running processes"));
 }

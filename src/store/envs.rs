@@ -97,6 +97,8 @@ pub(crate) fn lock_environment_operation(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvironmentOperationLock, String> {
+    // Every env binding, service, snapshot, and guarded-destroy mutation shares
+    // this lock. Bypassing it can make an accepted destroy token stale.
     let safe_name = validate_name(name, "Environment name")?;
     let lock_dir = resolve_store_paths(env, cwd)?
         .home
