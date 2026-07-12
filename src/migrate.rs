@@ -273,6 +273,62 @@ fn reject_overlapping_migration_paths(
             display_path(target)
         ));
     }
+    reject_filesystem_alias(&source_home, &target_root)?;
+    reject_filesystem_alias(&source_home, &target_state_dir)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn reject_filesystem_alias(source_home: &Path, target: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    // Canonical paths do not reveal bind-mount aliases. Map an existing target
+    // ancestor back to the matching source ancestor before checking overlap.
+    // Every target ancestor matters because the closest one can be a descendant
+    // beneath a higher bind mount that aliases the source tree.
+    for target_ancestor in target.ancestors().filter(|path| path.exists()) {
+        let target_suffix = target.strip_prefix(target_ancestor).map_err(|error| {
+            format!(
+                "failed to resolve migration target {}: {error}",
+                display_path(target)
+            )
+        })?;
+        let target_metadata = fs::metadata(target_ancestor).map_err(|error| {
+            format!(
+                "failed to inspect migration target ancestor {}: {error}",
+                display_path(target_ancestor)
+            )
+        })?;
+
+        for source_ancestor in source_home.ancestors() {
+            let source_metadata = fs::metadata(source_ancestor).map_err(|error| {
+                format!(
+                    "failed to inspect migration source ancestor {}: {error}",
+                    display_path(source_ancestor)
+                )
+            })?;
+            if source_metadata.dev() != target_metadata.dev()
+                || source_metadata.ino() != target_metadata.ino()
+            {
+                continue;
+            }
+
+            let mapped_target = source_ancestor.join(target_suffix);
+            if source_home.starts_with(&mapped_target) || mapped_target.starts_with(source_home) {
+                return Err(format!(
+                    "migration source and target must not alias the same filesystem tree: source={} target={}",
+                    display_path(source_home),
+                    display_path(target)
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn reject_filesystem_alias(_source_home: &Path, _target: &Path) -> Result<(), String> {
     Ok(())
 }
 
@@ -375,7 +431,7 @@ mod tests {
 
     use super::{
         MigrateHomeOptions, default_migration_source_home, inspect_migration_source,
-        migrate_plain_openclaw_home, plan_migration, with_rollback_error,
+        migrate_plain_openclaw_home, plan_migration, reject_filesystem_alias, with_rollback_error,
     };
 
     fn install_fake_openclaw_on_path(root: &Path, env: &mut BTreeMap<String, String>) {
@@ -467,6 +523,21 @@ mod tests {
             ),
             "migration failed"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_alias_check_maps_missing_targets_from_an_existing_source_ancestor() {
+        let root = std::env::temp_dir().join("ocm-migrate-tests-filesystem-alias");
+        let source_home = root.join("source");
+        let target = source_home.join("existing-parent/nested/env");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(source_home.join("existing-parent")).unwrap();
+
+        let error = reject_filesystem_alias(&source_home, &target).unwrap_err();
+        assert!(error.contains("must not alias the same filesystem tree"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
