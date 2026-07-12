@@ -31,3 +31,4 @@ All notable changes to OCM are documented here.
 - Write private service definitions, preserve existing service-directory modes, escape systemd specifiers, reject directive injection, and fail closed on unknown launchd users or cross-store service ownership.
 - Serialize supervisor restart requests, restore service policy after failed reconciliation, preserve raw warnings, and fail upgrades when a gateway restart cannot be observed.
 - Preserve every recognized npm release channel when multiple dist-tags point to the same OpenClaw version.
+- Make release-validation runs package-shaped, commit-pinned, concurrency-safe, credential-aware, and explicit about session-preserving fixtures and owned cleanup.

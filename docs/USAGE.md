@@ -291,7 +291,7 @@ Use `service install` when you want a background service for an environment that
 
 ```bash
 ocm logs mira --tail 50
-ocm logs mira --stderr
+ocm logs mira --stream error
 ocm logs mira --follow
 ```
 

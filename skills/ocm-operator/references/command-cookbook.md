@@ -146,14 +146,23 @@ ocm upgrade simulate <env> --to /path/to/openclaw --scenario all --keep-simulati
 
 ## Existing-User Test Flow
 
-Clone first:
+Clone first when the test does not need sessions, logs, or backups. A clone
+retains durable auth/settings and is therefore secret-bearing. Keep its service
+stopped until credentials are replaced with mocks or dedicated test accounts,
+or the user explicitly authorizes real external access.
 
 ```sh
-ocm env clone Violet <test-env>
-ocm start <test-env>
+ocm env clone <existing-env> <test-env>
+ocm start <test-env> --no-service
 ocm service status <test-env>
 ocm logs <test-env> --tail 100
 ```
+
+For session/history validation, copy the source env's `.openclaw` directory to
+a task-owned temporary path and use `ocm adopt import --name <test-env>
+<copied-openclaw-home>`. Assert the expected session fixture exists before the
+upgrade. Do not use `ocm env clone` for that case because clone intentionally
+clears sessions, logs, and backups.
 
 Exercise:
 
