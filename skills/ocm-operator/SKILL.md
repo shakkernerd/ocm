@@ -81,6 +81,11 @@ ocm help upgrade
 
 - Treat important user envs such as `Violet` and `Shaks` as durable state.
   Clone first for testing unless the user explicitly asks to mutate them.
+- Clones retain durable auth and settings. Treat them as secret-bearing, keep
+  services stopped by default, and require explicit authorization before
+  provider, channel, webhook, browser, or other external calls.
+- Use a credential-free fresh env for untrusted plugins or authentication
+  tests. Never export, publish, or attach an unsanitized clone.
 - Remove envs with `ocm env destroy`.
 - Manage OCM env gateway lifecycle with `ocm service`.
 - Remember OCM injects `OPENCLAW_SERVICE_REPAIR_POLICY=external` for env-run
