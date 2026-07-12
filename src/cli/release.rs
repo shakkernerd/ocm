@@ -76,6 +76,7 @@ impl Cli {
             &release,
             profile,
             &self.command_example(),
+            channel.as_deref(),
         )?);
         Ok(0)
     }
