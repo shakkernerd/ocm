@@ -385,6 +385,7 @@ dependencies = [
  "flate2",
  "fs2",
  "indicatif",
+ "libc",
  "semver",
  "serde",
  "serde_json",

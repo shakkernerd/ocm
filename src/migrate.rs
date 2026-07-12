@@ -261,11 +261,16 @@ fn reject_overlapping_migration_paths(
 ) -> Result<(), String> {
     let source_home = canonicalize_path_allow_missing(source_home)?;
     let target_root = canonicalize_path_allow_missing(target_root)?;
-    if source_home.starts_with(&target_root) || target_root.starts_with(&source_home) {
+    let target_state_dir =
+        canonicalize_path_allow_missing(&derive_env_paths(&target_root).state_dir)?;
+    let overlapping_target = [&target_root, &target_state_dir]
+        .into_iter()
+        .find(|target| source_home.starts_with(target) || target.starts_with(&source_home));
+    if let Some(target) = overlapping_target {
         return Err(format!(
             "migration source and target must not overlap: source={} target={}",
             display_path(&source_home),
-            display_path(&target_root)
+            display_path(target)
         ));
     }
     Ok(())
@@ -339,11 +344,19 @@ fn resolve_executable_on_path(command: &str, env: &BTreeMap<String, String>) -> 
 
 #[cfg(unix)]
 fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
 
-    fs::metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+
+    // `access` applies the current process identity and the relevant owner,
+    // group, or other permission class instead of accepting any execute bit.
+    unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
 }
 
 #[cfg(not(unix))]
