@@ -8,8 +8,8 @@ use serde::Serialize;
 use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService};
 use crate::launcher::{AddLauncherOptions, LauncherService};
 use crate::store::{
-    copy_dir_recursive, default_env_root, derive_env_paths, display_path, list_environments,
-    prepare_migrated_runtime_state, resolve_absolute_path, resolve_user_home,
+    clean_path, copy_dir_recursive, default_env_root, derive_env_paths, display_path,
+    list_environments, prepare_migrated_runtime_state, resolve_absolute_path, resolve_user_home,
     rewrite_openclaw_config_for_migration, validate_name,
 };
 
@@ -132,12 +132,21 @@ fn migrate_plain_openclaw_home_inner(
     } else {
         default_env_root(&env_name, env, cwd)?
     };
+    let target_root_string = target_root
+        .to_str()
+        .ok_or_else(|| {
+            format!(
+                "migration target root must use valid UTF-8: {}",
+                display_path(&target_root)
+            )
+        })?
+        .to_string();
     reject_overlapping_migration_paths(&source_home, &target_root)?;
     let migrated_launcher = preflight_migrated_launcher(&env_name, env, cwd)?;
 
     let created = service.create(CreateEnvironmentOptions {
         name: env_name,
-        root: Some(display_path(&target_root)),
+        root: Some(target_root_string),
         gateway_port: None,
         service_enabled: false,
         service_running: false,
@@ -273,53 +282,65 @@ fn reject_overlapping_migration_paths(
             display_path(target)
         ));
     }
-    reject_filesystem_alias(&source_home, &target_root)?;
-    reject_filesystem_alias(&source_home, &target_state_dir)?;
+    reject_filesystem_aliases(&source_home, &[&target_root, &target_state_dir])?;
     Ok(())
 }
 
 #[cfg(unix)]
-fn reject_filesystem_alias(source_home: &Path, target: &Path) -> Result<(), String> {
+fn reject_filesystem_aliases(source_home: &Path, targets: &[&Path]) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
+
+    let source_tree = collect_source_directory_identities(source_home)?;
 
     // Canonical paths do not reveal bind-mount aliases. Map an existing target
     // ancestor back to the matching source ancestor before checking overlap.
-    // Every target ancestor matters because the closest one can be a descendant
-    // beneath a higher bind mount that aliases the source tree.
-    for target_ancestor in target.ancestors().filter(|path| path.exists()) {
-        let target_suffix = target.strip_prefix(target_ancestor).map_err(|error| {
-            format!(
-                "failed to resolve migration target {}: {error}",
-                display_path(target)
-            )
-        })?;
-        let target_metadata = fs::metadata(target_ancestor).map_err(|error| {
-            format!(
-                "failed to inspect migration target ancestor {}: {error}",
-                display_path(target_ancestor)
-            )
-        })?;
-
-        for source_ancestor in source_home.ancestors() {
-            let source_metadata = fs::metadata(source_ancestor).map_err(|error| {
+    // Source descendants matter too because a target can sit below a bind mount
+    // of any directory in the tree that is about to be copied.
+    for target in targets {
+        for target_ancestor in target.ancestors().filter(|path| path.exists()) {
+            let target_suffix = target.strip_prefix(target_ancestor).map_err(|error| {
                 format!(
-                    "failed to inspect migration source ancestor {}: {error}",
-                    display_path(source_ancestor)
+                    "failed to resolve migration target {}: {error}",
+                    display_path(target)
                 )
             })?;
-            if source_metadata.dev() != target_metadata.dev()
-                || source_metadata.ino() != target_metadata.ino()
-            {
-                continue;
-            }
-
-            let mapped_target = source_ancestor.join(target_suffix);
-            if source_home.starts_with(&mapped_target) || mapped_target.starts_with(source_home) {
+            let target_metadata = fs::metadata(target_ancestor).map_err(|error| {
+                format!(
+                    "failed to inspect migration target ancestor {}: {error}",
+                    display_path(target_ancestor)
+                )
+            })?;
+            let target_identity = (target_metadata.dev(), target_metadata.ino());
+            if source_tree.contains(&target_identity) {
                 return Err(format!(
                     "migration source and target must not alias the same filesystem tree: source={} target={}",
                     display_path(source_home),
                     display_path(target)
                 ));
+            }
+
+            for source_ancestor in source_home.ancestors().skip(1) {
+                let source_metadata = fs::metadata(source_ancestor).map_err(|error| {
+                    format!(
+                        "failed to inspect migration source ancestor {}: {error}",
+                        display_path(source_ancestor)
+                    )
+                })?;
+                if source_metadata.dev() != target_metadata.dev()
+                    || source_metadata.ino() != target_metadata.ino()
+                {
+                    continue;
+                }
+
+                let mapped_target = source_ancestor.join(target_suffix);
+                if source_home.starts_with(&mapped_target) || mapped_target.starts_with(source_home)
+                {
+                    return Err(format!(
+                        "migration source and target must not alias the same filesystem tree: source={} target={}",
+                        display_path(source_home),
+                        display_path(target)
+                    ));
+                }
             }
         }
     }
@@ -327,12 +348,50 @@ fn reject_filesystem_alias(source_home: &Path, target: &Path) -> Result<(), Stri
     Ok(())
 }
 
+#[cfg(unix)]
+fn collect_source_directory_identities(
+    source_home: &Path,
+) -> Result<std::collections::HashSet<(u64, u64)>, String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut identities = std::collections::HashSet::new();
+    let mut pending = vec![source_home.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::metadata(&path).map_err(|error| {
+            format!(
+                "failed to inspect migration source directory {}: {error}",
+                display_path(&path)
+            )
+        })?;
+        if !metadata.is_dir() || !identities.insert((metadata.dev(), metadata.ino())) {
+            continue;
+        }
+
+        for entry in fs::read_dir(&path).map_err(|error| {
+            format!(
+                "failed to read migration source directory {}: {error}",
+                display_path(&path)
+            )
+        })? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let entry_metadata =
+                fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+            if entry_metadata.is_dir() && !entry_metadata.file_type().is_symlink() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(identities)
+}
+
 #[cfg(not(unix))]
-fn reject_filesystem_alias(_source_home: &Path, _target: &Path) -> Result<(), String> {
+fn reject_filesystem_aliases(_source_home: &Path, _targets: &[&Path]) -> Result<(), String> {
     Ok(())
 }
 
 fn canonicalize_path_allow_missing(path: &Path) -> Result<PathBuf, String> {
+    let path = clean_path(path);
+    let path = path.as_path();
     let mut existing = path;
     let mut missing = Vec::<OsString>::new();
     while !existing.exists() {
@@ -431,7 +490,8 @@ mod tests {
 
     use super::{
         MigrateHomeOptions, default_migration_source_home, inspect_migration_source,
-        migrate_plain_openclaw_home, plan_migration, reject_filesystem_alias, with_rollback_error,
+        migrate_plain_openclaw_home, plan_migration, reject_filesystem_aliases,
+        with_rollback_error,
     };
 
     fn install_fake_openclaw_on_path(root: &Path, env: &mut BTreeMap<String, String>) {
@@ -534,8 +594,45 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(source_home.join("existing-parent")).unwrap();
 
-        let error = reject_filesystem_alias(&source_home, &target).unwrap_err();
+        let error = reject_filesystem_aliases(&source_home, &[&target]).unwrap_err();
         assert!(error.contains("must not alias the same filesystem tree"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn migration_rejects_non_utf8_target_roots_before_mutation() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = std::env::temp_dir().join("ocm-migrate-tests-non-utf8-target");
+        let cwd = root.join(OsString::from_vec(b"cwd-\xff".to_vec()));
+        let source_home = root.join("source");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(source_home.join("workspace")).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+        fs::write(source_home.join("openclaw.json"), "{}\n").unwrap();
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".to_string(), root.join("home").display().to_string());
+        env.insert(
+            "OCM_HOME".to_string(),
+            root.join("ocm-home").display().to_string(),
+        );
+        let error = migrate_plain_openclaw_home(
+            MigrateHomeOptions {
+                source_home: Some(source_home.display().to_string()),
+                name: "mira".to_string(),
+                root: Some("managed".to_string()),
+            },
+            &env,
+            &cwd,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("migration target root must use valid UTF-8"));
+        assert!(!root.join("ocm-home/envs.json").exists());
 
         fs::remove_dir_all(root).unwrap();
     }
