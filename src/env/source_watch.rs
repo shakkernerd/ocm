@@ -37,10 +37,10 @@ pub struct SourceWatchOverride {
 }
 
 #[derive(Clone, Debug)]
-pub struct CreateSourceWatchOverrideOptions {
-    pub env_name: String,
-    pub repo_root: PathBuf,
-    pub watch_pid: u32,
+pub(crate) struct CreateSourceWatchOverrideOptions {
+    pub(crate) env_name: String,
+    pub(crate) repo_root: PathBuf,
+    pub(crate) watch_pid: u32,
 }
 
 #[derive(Debug)]
@@ -212,13 +212,6 @@ impl<'a> EnvironmentService<'a> {
         })
     }
 
-    pub fn create_source_watch_override(
-        &self,
-        options: CreateSourceWatchOverrideOptions,
-    ) -> Result<SourceWatchOverride, String> {
-        self.write_source_watch_override(options, None)
-    }
-
     pub(crate) fn create_source_watch_override_with_lease(
         &self,
         options: CreateSourceWatchOverrideOptions,
@@ -230,27 +223,24 @@ impl<'a> EnvironmentService<'a> {
                 lease.env_name, options.env_name
             ));
         }
-        self.write_source_watch_override(options, Some(&lease.lease_id))
+        self.write_source_watch_override(options, &lease.lease_id)
     }
 
     fn write_source_watch_override(
         &self,
         options: CreateSourceWatchOverrideOptions,
-        lease_id: Option<&str>,
+        lease_id: &str,
     ) -> Result<SourceWatchOverride, String> {
         let env_name = validate_name(&options.env_name, "Environment name")?;
         let path = source_watch_override_path(&env_name, self.env, self.cwd)?;
         if let Some(parent) = path.parent() {
             ensure_dir(parent)?;
         }
-        let token = match lease_id {
-            Some(lease_id) => format!(
-                "lease:{lease_id}:{}-{}",
-                options.watch_pid,
-                now_utc().unix_timestamp_nanos()
-            ),
-            None => format!("{}-{}", options.watch_pid, now_utc().unix_timestamp_nanos()),
-        };
+        let token = format!(
+            "lease:{lease_id}:{}-{}",
+            options.watch_pid,
+            now_utc().unix_timestamp_nanos()
+        );
         let meta = SourceWatchOverride {
             kind: SOURCE_WATCH_OVERRIDE_KIND.to_string(),
             env_name,
