@@ -10,6 +10,8 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(windows)]
 use std::os::windows::{io::AsRawHandle, process::CommandExt as _};
 
@@ -36,6 +38,32 @@ use crate::store::{
 
 const DEV_PREFERENCES_KIND: &str = "ocm-dev-preferences";
 const SOURCE_WATCH_TREE_ACTIVE_ERROR: &str = "source watch process tree is still active";
+
+type SourceWatchResult<T> = Result<T, SourceWatchError>;
+
+#[derive(Debug)]
+struct SourceWatchError {
+    message: String,
+    cleanup_verified: bool,
+}
+
+impl SourceWatchError {
+    fn unverified(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            cleanup_verified: false,
+        }
+    }
+}
+
+impl From<String> for SourceWatchError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            cleanup_verified: true,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -678,7 +706,7 @@ impl Cli {
         &self,
         meta: &EnvMeta,
         source_watch_lease: &SourceWatchLease,
-    ) -> Result<i32, String> {
+    ) -> SourceWatchResult<i32> {
         let dev = meta
             .dev
             .as_ref()
@@ -697,7 +725,7 @@ impl Cli {
         repo_root: &Path,
         tee_to_env_logs: bool,
         _source_watch_lease: &SourceWatchLease,
-    ) -> Result<i32, String> {
+    ) -> SourceWatchResult<i32> {
         let args = vec![
             "scripts/watch-node.mjs".to_string(),
             "gateway".to_string(),
@@ -715,7 +743,6 @@ impl Cli {
         let mut command = Command::new("node");
         command
             .args(&args)
-            .stdin(Stdio::inherit())
             .env_clear()
             .envs(build_openclaw_dev_source_env(meta, &self.env, repo_root))
             .current_dir(repo_root);
@@ -814,12 +841,15 @@ impl Cli {
         }
 
         let status_result =
-            wait_for_source_watch_child(&mut child, &stop_requested, &process_guard)
-                .map_err(|error| stop_source_watch_after_error(&mut child, &process_guard, error));
-        let tee_result = if status_result
-            .as_ref()
-            .is_err_and(|error| error.starts_with(SOURCE_WATCH_TREE_ACTIVE_ERROR))
-        {
+            match wait_for_source_watch_child(&mut child, &stop_requested, &process_guard) {
+                Ok(status) => Ok(status),
+                Err(error) => Err(stop_source_watch_after_error(
+                    &mut child,
+                    &process_guard,
+                    error.message,
+                )),
+            };
+        let tee_result = if !source_watch_allows_service_restore(&status_result) {
             drop(tee_threads);
             Ok(())
         } else {
@@ -879,32 +909,35 @@ fn source_watch_stop_timeout_error(summary: &crate::service::ServiceActionSummar
 }
 
 fn combine_watch_and_restore_results(
-    watch_result: Result<i32, String>,
+    watch_result: SourceWatchResult<i32>,
     restore_result: Result<(), String>,
     env_name: &str,
 ) -> Result<i32, String> {
     match (watch_result, restore_result) {
         (Ok(code), Ok(())) => Ok(code),
-        (Err(watch_error), Ok(())) => Err(watch_error),
+        (Err(watch_error), Ok(())) => Err(watch_error.message),
         (Ok(_), Err(restore_error)) => Err(format!(
             "source watch ended, but failed restoring background service for {env_name}: {restore_error}"
         )),
         (Err(watch_error), Err(restore_error)) => Err(format!(
-            "{watch_error}; also failed restoring background service for {env_name}: {restore_error}"
+            "{}; also failed restoring background service for {env_name}: {restore_error}",
+            watch_error.message
         )),
     }
 }
 
 fn combine_source_watch_cleanup_results(
-    status_result: Result<std::process::ExitStatus, String>,
+    status_result: SourceWatchResult<std::process::ExitStatus>,
     tee_result: Result<(), String>,
     clear_result: Result<(), String>,
-) -> Result<std::process::ExitStatus, String> {
+) -> SourceWatchResult<std::process::ExitStatus> {
     let mut errors = Vec::new();
+    let mut cleanup_verified = true;
     let status = match status_result {
         Ok(status) => Some(status),
         Err(error) => {
-            errors.push(error);
+            cleanup_verified = error.cleanup_verified;
+            errors.push(error.message);
             None
         }
     };
@@ -915,9 +948,14 @@ fn combine_source_watch_cleanup_results(
         errors.push(error);
     }
     if errors.is_empty() {
-        status.ok_or_else(|| "source watch ended without an exit status".to_string())
+        status.ok_or_else(|| {
+            SourceWatchError::from("source watch ended without an exit status".to_string())
+        })
     } else {
-        Err(errors.join("; "))
+        Err(SourceWatchError {
+            message: errors.join("; "),
+            cleanup_verified,
+        })
     }
 }
 
@@ -925,45 +963,64 @@ fn wait_for_source_watch_child(
     child: &mut std::process::Child,
     stop_requested: &AtomicBool,
     process_guard: &SourceWatchProcessGuard,
-) -> Result<std::process::ExitStatus, String> {
-    let mut tracked_processes = Vec::new();
-    #[cfg(unix)]
-    let track_descendants = source_watch_needs_descendant_tracking();
-    #[cfg(unix)]
-    let tracking_started = std::time::Instant::now();
-    #[cfg(unix)]
-    let mut next_tracking_refresh = tracking_started;
+) -> SourceWatchResult<std::process::ExitStatus> {
     loop {
-        #[cfg(unix)]
-        if track_descendants && std::time::Instant::now() >= next_tracking_refresh {
-            // Non-TTY watch-node runners detach into their own process group. Sample quickly
-            // during startup, then throttle native process snapshots for long-running watches.
-            tracked_processes = refresh_tracked_unix_processes(child.id(), &tracked_processes)
-                .map_err(source_watch_tree_discovery_error)?;
-            let refresh_interval = if tracking_started.elapsed() < Duration::from_secs(2) {
-                Duration::from_millis(50)
-            } else {
-                Duration::from_secs(2)
-            };
-            next_tracking_refresh = std::time::Instant::now() + refresh_interval;
-        }
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("failed waiting for source watch: {error}"))?
-        {
-            #[cfg(unix)]
-            stop_tracked_unix_processes(child.id(), &tracked_processes)?;
-            process_guard.stop_remaining(child.id())?;
+        if let Some(status) = child.try_wait().map_err(|error| {
+            SourceWatchError::unverified(format!("failed waiting for source watch: {error}"))
+        })? {
+            process_guard
+                .stop_remaining(child.id())
+                .map_err(SourceWatchError::unverified)?;
             return Ok(status);
         }
         if stop_requested.load(Ordering::SeqCst) {
-            return stop_source_watch_child(child, process_guard, &tracked_processes);
+            return stop_source_watch_child(child, process_guard);
         }
         thread::sleep(Duration::from_millis(50));
     }
 }
 
+#[cfg(unix)]
+fn open_source_watch_pty() -> Result<(File, File), String> {
+    let mut master_fd = -1;
+    let mut slave_fd = -1;
+    if unsafe {
+        libc::openpty(
+            &mut master_fd,
+            &mut slave_fd,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } != 0
+    {
+        return Err(format!(
+            "failed creating source watch terminal: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    for file in [&master, &slave] {
+        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
+        if flags == -1
+            || unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) }
+                == -1
+        {
+            return Err(format!(
+                "failed configuring source watch terminal: {}",
+                io::Error::last_os_error()
+            ));
+        }
+    }
+    Ok((master, slave))
+}
+
 struct SourceWatchProcessGuard {
+    #[cfg(unix)]
+    stdin_pty_master: Option<File>,
+    #[cfg(unix)]
+    stdin_pty_slave: Option<File>,
     #[cfg(windows)]
     job: windows_sys::Win32::Foundation::HANDLE,
 }
@@ -1008,14 +1065,44 @@ impl SourceWatchProcessGuard {
         }
         #[cfg(not(windows))]
         {
+            #[cfg(unix)]
+            {
+                let (stdin_pty_master, stdin_pty_slave) =
+                    if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 {
+                        (None, None)
+                    } else {
+                        // watch-node detaches its runner when stdin is not a TTY. Keep an inert
+                        // PTY open so every runner remains in OCM's owned process group.
+                        let (master, slave) = open_source_watch_pty()?;
+                        (Some(master), Some(slave))
+                    };
+                return Ok(Self {
+                    stdin_pty_master,
+                    stdin_pty_slave,
+                });
+            }
+            #[cfg(not(unix))]
             Ok(Self {})
         }
     }
 
     fn configure_command(&mut self, command: &mut Command) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            if let Some(slave) = self.stdin_pty_slave.take() {
+                command.stdin(Stdio::from(slave));
+            } else {
+                command.stdin(Stdio::inherit());
+            }
+            let _ = &self.stdin_pty_master;
+        }
         #[cfg(windows)]
-        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
-        #[cfg(not(windows))]
+        {
+            command
+                .stdin(Stdio::inherit())
+                .creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
+        }
+        #[cfg(not(any(unix, windows)))]
         let _ = command;
         Ok(())
     }
@@ -1055,11 +1142,15 @@ impl SourceWatchProcessGuard {
             }
             return self.wait_for_windows_job_to_stop();
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         {
-            let _ = root_pid;
-            Ok(())
+            let _ = signal_unix_process_group(root_pid, libc::SIGKILL)?;
+            return wait_for_unix_process_group_to_stop(root_pid);
         }
+        #[cfg(not(any(unix, windows)))]
+        let _ = root_pid;
+        #[cfg(not(any(unix, windows)))]
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -1113,149 +1204,96 @@ impl Drop for SourceWatchProcessGuard {
 fn stop_source_watch_child(
     child: &mut std::process::Child,
     process_guard: &SourceWatchProcessGuard,
-    tracked_processes: &[UnixProcessIdentity],
-) -> Result<std::process::ExitStatus, String> {
-    #[cfg(not(windows))]
-    let _ = process_guard;
+) -> SourceWatchResult<std::process::ExitStatus> {
     #[cfg(unix)]
     {
-        let mut tracked_processes = tracked_processes.to_vec();
-        let track_descendants = source_watch_needs_descendant_tracking();
-        if track_descendants {
-            tracked_processes = refresh_tracked_unix_processes(child.id(), &tracked_processes)
-                .map_err(source_watch_tree_discovery_error)?;
-        }
         // watch-node forwards TERM to its runner; allow that grace before
         // enforcing the process-group ownership boundary.
-        if signal_unix_process(child.id(), libc::SIGTERM)? {
+        if signal_unix_process(child.id(), libc::SIGTERM).map_err(SourceWatchError::unverified)? {
             let deadline = std::time::Instant::now() + Duration::from_secs(7);
             while std::time::Instant::now() < deadline {
-                if let Some(status) = child
-                    .try_wait()
-                    .map_err(|error| format!("failed waiting for source watch shutdown: {error}"))?
-                {
-                    stop_tracked_unix_processes(child.id(), &tracked_processes)?;
+                if let Some(status) = child.try_wait().map_err(|error| {
+                    SourceWatchError::unverified(format!(
+                        "failed waiting for source watch shutdown: {error}"
+                    ))
+                })? {
+                    process_guard
+                        .stop_remaining(child.id())
+                        .map_err(SourceWatchError::unverified)?;
                     return Ok(status);
-                }
-                if track_descendants {
-                    tracked_processes =
-                        refresh_tracked_unix_processes(child.id(), &tracked_processes)
-                            .map_err(source_watch_tree_discovery_error)?;
                 }
                 thread::sleep(Duration::from_millis(50));
             }
         }
-        signal_unix_process_group(child.id(), libc::SIGSTOP)?;
-        if track_descendants {
-            tracked_processes = refresh_tracked_unix_processes(child.id(), &tracked_processes)
-                .map_err(source_watch_tree_discovery_error)?;
-        }
-        kill_tracked_unix_processes(child.id(), true, &tracked_processes)?;
-        let status = child
-            .wait()
-            .map_err(|error| format!("failed waiting for stopped source watch: {error}"))?;
-        wait_for_unix_processes_to_stop(&tracked_processes)?;
+        signal_unix_process_group(child.id(), libc::SIGSTOP)
+            .map_err(SourceWatchError::unverified)?;
+        signal_unix_process_group(child.id(), libc::SIGKILL)
+            .map_err(SourceWatchError::unverified)?;
+        let status = child.wait().map_err(|error| {
+            SourceWatchError::unverified(format!(
+                "failed waiting for stopped source watch: {error}"
+            ))
+        })?;
+        wait_for_unix_process_group_to_stop(child.id()).map_err(SourceWatchError::unverified)?;
         return Ok(status);
     }
 
     #[cfg(windows)]
     {
-        process_guard.stop_remaining(child.id())?;
-        return child
-            .wait()
-            .map_err(|error| format!("failed waiting for stopped source watch: {error}"));
+        process_guard
+            .stop_remaining(child.id())
+            .map_err(SourceWatchError::unverified)?;
+        return child.wait().map_err(|error| {
+            SourceWatchError::unverified(format!(
+                "failed waiting for stopped source watch: {error}"
+            ))
+        });
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        child
-            .kill()
-            .map_err(|error| format!("failed stopping source watch: {error}"))?;
-        child
-            .wait()
-            .map_err(|error| format!("failed waiting for stopped source watch: {error}"))
-    }
-}
-
-#[cfg(unix)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct UnixProcessIdentity {
-    pid: u32,
-    parent_pid: u32,
-    process_group: u32,
-    start_id: u64,
-}
-
-#[cfg(not(unix))]
-type UnixProcessIdentity = ();
-
-#[cfg(unix)]
-fn refresh_tracked_unix_processes(
-    root_pid: u32,
-    tracked_processes: &[UnixProcessIdentity],
-) -> Result<Vec<UnixProcessIdentity>, String> {
-    let snapshot = unix_process_snapshot()?;
-    let tracked_identities = tracked_processes
-        .iter()
-        .map(|process| (process.pid, process.start_id))
-        .collect::<BTreeSet<_>>();
-    let descendants = unix_descendant_processes_from_snapshot(root_pid, snapshot.clone())
-        .into_iter()
-        .map(|process| (process.pid, process.start_id))
-        .collect::<BTreeSet<_>>();
-    Ok(snapshot
-        .into_iter()
-        .filter(|process| {
-            let identity = (process.pid, process.start_id);
-            descendants.contains(&identity) || tracked_identities.contains(&identity)
+        child.kill().map_err(|error| {
+            SourceWatchError::unverified(format!("failed stopping source watch: {error}"))
+        })?;
+        child.wait().map_err(|error| {
+            SourceWatchError::unverified(format!(
+                "failed waiting for stopped source watch: {error}"
+            ))
         })
-        .collect())
-}
-
-#[cfg(unix)]
-fn unix_descendant_processes_from_snapshot(
-    root_pid: u32,
-    processes: Vec<UnixProcessIdentity>,
-) -> Vec<UnixProcessIdentity> {
-    let mut tree = BTreeSet::from([root_pid]);
-    loop {
-        let before = tree.len();
-        for process in &processes {
-            if tree.contains(&process.parent_pid) {
-                tree.insert(process.pid);
-            }
-        }
-        if tree.len() == before {
-            break;
-        }
     }
-    processes
-        .into_iter()
-        .filter(|process| process.pid != root_pid && tree.contains(&process.pid))
-        .collect()
 }
 
 #[cfg(unix)]
-fn source_watch_needs_descendant_tracking() -> bool {
-    unsafe { libc::isatty(libc::STDIN_FILENO) != 1 }
+fn wait_for_unix_process_group_to_stop(process_group: u32) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if !unix_process_group_has_live_members(process_group)? {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; process group {process_group} is still active; the background service was not restored"
+            ));
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn unix_process_snapshot() -> Result<Vec<UnixProcessIdentity>, String> {
-    let mut processes = Vec::new();
+fn unix_process_group_has_live_members(process_group: u32) -> Result<bool, String> {
     for entry in fs::read_dir("/proc")
         .map_err(|error| format!("failed reading /proc for source watch processes: {error}"))?
     {
         let entry = entry.map_err(|error| {
             format!("failed reading /proc entry for source watch processes: {error}")
         })?;
-        let Some(pid) = entry
+        if !entry
             .file_name()
             .to_str()
-            .and_then(|name| name.parse::<u32>().ok())
-        else {
+            .is_some_and(|name| name.bytes().all(|byte| byte.is_ascii_digit()))
+        {
             continue;
-        };
+        }
         let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
             continue;
         };
@@ -1263,27 +1301,18 @@ fn unix_process_snapshot() -> Result<Vec<UnixProcessIdentity>, String> {
             continue;
         };
         let fields = fields.split_whitespace().collect::<Vec<_>>();
-        let Some(parent_pid) = fields.get(1).and_then(|value| value.parse::<u32>().ok()) else {
-            continue;
-        };
-        let Some(process_group) = fields.get(2).and_then(|value| value.parse::<u32>().ok()) else {
-            continue;
-        };
-        let Some(start_id) = fields.get(19).and_then(|value| value.parse::<u64>().ok()) else {
-            continue;
-        };
-        processes.push(UnixProcessIdentity {
-            pid,
-            parent_pid,
-            process_group,
-            start_id,
-        });
+        let is_zombie = matches!(fields.first().copied(), Some("Z" | "X"));
+        let in_group =
+            fields.get(2).and_then(|value| value.parse::<u32>().ok()) == Some(process_group);
+        if in_group && !is_zombie {
+            return Ok(true);
+        }
     }
-    Ok(processes)
+    Ok(false)
 }
 
 #[cfg(target_os = "macos")]
-fn unix_process_snapshot() -> Result<Vec<UnixProcessIdentity>, String> {
+fn unix_process_group_has_live_members(process_group: u32) -> Result<bool, String> {
     let capacity = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     if capacity <= 0 {
         return Err(format!(
@@ -1304,7 +1333,6 @@ fn unix_process_snapshot() -> Result<Vec<UnixProcessIdentity>, String> {
             io::Error::last_os_error()
         ));
     }
-    let mut processes = Vec::new();
     for pid in pids.into_iter().take(count as usize).filter(|pid| *pid > 0) {
         let mut info = unsafe { std::mem::zeroed::<libc::proc_bsdinfo>() };
         let read = unsafe {
@@ -1316,106 +1344,19 @@ fn unix_process_snapshot() -> Result<Vec<UnixProcessIdentity>, String> {
                 std::mem::size_of_val(&info) as i32,
             )
         };
-        if read == std::mem::size_of_val(&info) as i32 {
-            processes.push(UnixProcessIdentity {
-                pid: info.pbi_pid,
-                parent_pid: info.pbi_ppid,
-                process_group: info.pbi_pgid,
-                start_id: ((info.pbi_start_tvsec as u64) << 32) | info.pbi_start_tvusec as u64,
-            });
+        if read == std::mem::size_of_val(&info) as i32
+            && info.pbi_pgid == process_group
+            && info.pbi_status != libc::SZOMB
+        {
+            return Ok(true);
         }
     }
-    Ok(processes)
+    Ok(false)
 }
 
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-fn unix_process_snapshot() -> Result<Vec<UnixProcessIdentity>, String> {
-    Err("source watch process discovery is unsupported on this Unix platform".to_string())
-}
-
-#[cfg(unix)]
-fn current_tracked_unix_processes(
-    tracked_processes: &[UnixProcessIdentity],
-) -> Result<Vec<UnixProcessIdentity>, String> {
-    Ok(tracked_unix_processes_from_snapshot(
-        tracked_processes,
-        unix_process_snapshot()?,
-    ))
-}
-
-#[cfg(unix)]
-fn tracked_unix_processes_from_snapshot(
-    tracked_processes: &[UnixProcessIdentity],
-    snapshot: Vec<UnixProcessIdentity>,
-) -> Vec<UnixProcessIdentity> {
-    let tracked_identities = tracked_processes
-        .iter()
-        .map(|process| (process.pid, process.start_id))
-        .collect::<BTreeSet<_>>();
-    snapshot
-        .into_iter()
-        .filter(|current| tracked_identities.contains(&(current.pid, current.start_id)))
-        .collect()
-}
-
-#[cfg(unix)]
-fn kill_tracked_unix_processes(
-    root_pid: u32,
-    root_is_alive: bool,
-    tracked_processes: &[UnixProcessIdentity],
-) -> Result<(), String> {
-    let current_processes = current_tracked_unix_processes(tracked_processes)?;
-    let mut process_groups = current_processes
-        .iter()
-        .map(|process| process.process_group)
-        .collect::<BTreeSet<_>>();
-    // configure_child creates this group before exec. It remains our ownership boundary
-    // after the wrapper exits, including descendants that escaped the first snapshot.
-    process_groups.insert(root_pid);
-    for process_group in process_groups {
-        let _ = signal_unix_process_group(process_group, libc::SIGKILL)?;
-    }
-    for process in current_processes {
-        let _ = signal_unix_process(process.pid, libc::SIGKILL)?;
-    }
-    if root_is_alive {
-        let _ = signal_unix_process(root_pid, libc::SIGKILL)?;
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn stop_tracked_unix_processes(
-    root_pid: u32,
-    processes: &[UnixProcessIdentity],
-) -> Result<(), String> {
-    kill_tracked_unix_processes(root_pid, false, processes)?;
-    wait_for_unix_processes_to_stop(processes)
-}
-
-#[cfg(unix)]
-fn wait_for_unix_processes_to_stop(processes: &[UnixProcessIdentity]) -> Result<(), String> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    loop {
-        let alive = current_tracked_unix_processes(processes)?
-            .iter()
-            .map(|process| process.pid)
-            .collect::<Vec<_>>();
-        if alive.is_empty() {
-            return Ok(());
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(format!(
-                "{SOURCE_WATCH_TREE_ACTIVE_ERROR}: {}; the background service was not restored",
-                alive
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
+fn unix_process_group_has_live_members(process_group: u32) -> Result<bool, String> {
+    signal_unix_process_group(process_group, 0)
 }
 
 #[cfg(unix)]
@@ -1441,12 +1382,6 @@ fn signal_unix_target(target: i32, signal: i32) -> Result<bool, String> {
             "failed signaling source watch process target {target}: {error}"
         ))
     }
-}
-
-fn source_watch_tree_discovery_error(error: String) -> String {
-    format!(
-        "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; unable to verify the process tree: {error}; the background service was not restored"
-    )
 }
 
 #[cfg(windows)]
@@ -1501,15 +1436,13 @@ fn stop_source_watch_after_error(
     child: &mut std::process::Child,
     process_guard: &SourceWatchProcessGuard,
     primary_error: String,
-) -> String {
-    match stop_source_watch_child(child, process_guard, &[]) {
-        Ok(_) => primary_error,
-        Err(cleanup_error) if cleanup_error.starts_with(SOURCE_WATCH_TREE_ACTIVE_ERROR) => {
-            format!("{cleanup_error}; setup also failed: {primary_error}")
-        }
-        Err(cleanup_error) => {
-            format!("{primary_error}; also failed stopping source watch: {cleanup_error}")
-        }
+) -> SourceWatchError {
+    match stop_source_watch_child(child, process_guard) {
+        Ok(_) => SourceWatchError::from(primary_error),
+        Err(cleanup_error) => SourceWatchError::unverified(format!(
+            "{}; setup also failed: {primary_error}",
+            cleanup_error.message
+        )),
     }
 }
 
@@ -1517,17 +1450,17 @@ fn stop_source_watch_after_error(
 fn stop_suspended_source_watch_after_error(
     child: &mut std::process::Child,
     primary_error: String,
-) -> String {
+) -> SourceWatchError {
     if let Err(error) = child.kill() {
-        return format!(
+        return SourceWatchError::unverified(format!(
             "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; failed terminating a suspended watcher: {error}; setup also failed: {primary_error}"
-        );
+        ));
     }
     match child.wait() {
-        Ok(_) => primary_error,
-        Err(error) => format!(
+        Ok(_) => SourceWatchError::from(primary_error),
+        Err(error) => SourceWatchError::unverified(format!(
             "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; failed reaping a suspended watcher: {error}; setup also failed: {primary_error}"
-        ),
+        )),
     }
 }
 
@@ -1539,20 +1472,17 @@ fn source_watch_exit_code(status_code: Option<i32>, stop_requested: bool) -> i32
     }
 }
 
-fn source_watch_allows_service_restore(watch_result: &Result<i32, String>) -> bool {
-    !matches!(
-        watch_result,
-        Err(error) if error.starts_with(SOURCE_WATCH_TREE_ACTIVE_ERROR)
-    )
+fn source_watch_allows_service_restore<T>(watch_result: &SourceWatchResult<T>) -> bool {
+    match watch_result {
+        Ok(_) => true,
+        Err(error) => error.cleanup_verified,
+    }
 }
 
 fn source_watch_allows_override_clear(
-    watch_result: &Result<std::process::ExitStatus, String>,
+    watch_result: &SourceWatchResult<std::process::ExitStatus>,
 ) -> bool {
-    !matches!(
-        watch_result,
-        Err(error) if error.starts_with(SOURCE_WATCH_TREE_ACTIVE_ERROR)
-    )
+    source_watch_allows_service_restore(watch_result)
 }
 
 fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<String> {
@@ -2207,12 +2137,10 @@ fn render_dev_status_list(summaries: &[DevStatusSummary], profile: RenderProfile
 #[cfg(test)]
 mod tests {
     use super::{
-        DevStatusSummary, RenderProfile, combine_watch_and_restore_results, render_dev_status,
-        source_watch_allows_service_restore, source_watch_exit_code,
+        DevStatusSummary, RenderProfile, SourceWatchError, combine_watch_and_restore_results,
+        render_dev_status, source_watch_allows_service_restore, source_watch_exit_code,
         source_watch_stop_timeout_error,
     };
-    #[cfg(unix)]
-    use super::{UnixProcessIdentity, tracked_unix_processes_from_snapshot};
     use crate::service::ServiceActionSummary;
 
     fn sample_summary() -> DevStatusSummary {
@@ -2285,7 +2213,7 @@ mod tests {
     #[test]
     fn source_watch_reports_watch_and_restore_failures_together() {
         let result = combine_watch_and_restore_results(
-            Err("watch failed".to_string()),
+            Err(SourceWatchError::from("watch failed".to_string())),
             Err("restore failed".to_string()),
             "demo",
         );
@@ -2308,33 +2236,15 @@ mod tests {
 
     #[test]
     fn source_watch_does_not_restore_over_a_live_process_tree() {
-        assert!(source_watch_allows_service_restore(&Ok(0)));
-        assert!(source_watch_allows_service_restore(&Err(
-            "source watch failed".to_string()
+        assert!(source_watch_allows_service_restore(&Ok::<
+            _,
+            SourceWatchError,
+        >(0)));
+        assert!(source_watch_allows_service_restore(&Err::<i32, _>(
+            SourceWatchError::from("source watch failed".to_string())
         )));
-        assert!(!source_watch_allows_service_restore(&Err(
-            "source watch process tree is still active: 123".to_string()
+        assert!(!source_watch_allows_service_restore(&Err::<i32, _>(
+            SourceWatchError::unverified("source watch process tree is still active: 123")
         )));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn source_watch_tracking_rejects_reused_process_ids() {
-        let tracked = UnixProcessIdentity {
-            pid: 42,
-            parent_pid: 10,
-            process_group: 42,
-            start_id: 100,
-        };
-        let reused = UnixProcessIdentity {
-            start_id: 101,
-            ..tracked
-        };
-
-        assert!(tracked_unix_processes_from_snapshot(&[tracked], vec![reused]).is_empty());
-        assert_eq!(
-            tracked_unix_processes_from_snapshot(&[tracked], vec![tracked]),
-            vec![tracked]
-        );
     }
 }
