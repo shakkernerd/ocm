@@ -1,0 +1,10 @@
+# Changelog
+
+All notable changes to OCM are documented here.
+
+## Unreleased
+
+### Fixed
+
+- Keep automatically assigned gateway ports stable across create, show, list, and status output.
+- Give cloned and imported environments independent service state and collision-free gateway ports.

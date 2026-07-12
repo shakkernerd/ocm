@@ -317,7 +317,7 @@ fn clone_environment_skips_busy_ports_when_assigning_a_new_identity() {
 }
 
 #[test]
-fn clone_environment_assigns_a_new_port_when_the_source_only_had_a_computed_port() {
+fn clone_environment_assigns_a_new_port_when_the_source_port_was_auto_assigned() {
     let root = TestDir::new("store-env-clone-computed-port");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -396,7 +396,7 @@ fn clone_environment_skips_the_global_openclaw_port_family() {
         &cwd,
     )
     .unwrap();
-    assert_eq!(source.gateway_port, None);
+    assert!(source.gateway_port.unwrap() >= 18_900);
     assert!(cloned.gateway_port.unwrap() >= 19_011);
 }
 
@@ -626,8 +626,8 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
             name: "source".to_string(),
             root: None,
             gateway_port: Some(19789),
-            service_enabled: false,
-            service_running: false,
+            service_enabled: true,
+            service_running: true,
             default_runtime: Some("stable".to_string()),
             default_launcher: Some("shell".to_string()),
             dev: None,
@@ -681,6 +681,9 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
     assert_eq!(imported_meta.default_launcher.as_deref(), Some("shell"));
     assert!(imported_meta.protected);
     assert!(imported_meta.last_used_at.is_none());
+    assert!(!imported_meta.service_enabled);
+    assert!(!imported_meta.service_running);
+    assert_ne!(imported_meta.gateway_port, Some(19_789));
     assert_eq!(
         fs::read_to_string(
             root.child("workspace/imports/target-root/.openclaw/workspace/notes.txt")
@@ -702,7 +705,7 @@ fn environment_import_restores_a_portable_archive_with_a_new_identity() {
         .unwrap()
         .join(".openclaw/workspace");
     assert_eq!(actual_workspace, expected_workspace);
-    assert_eq!(imported_config["gateway"]["port"].as_u64(), Some(19789));
+    assert_ne!(imported_config["gateway"]["port"].as_u64(), Some(19_789));
 }
 
 #[test]

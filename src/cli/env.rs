@@ -295,6 +295,11 @@ impl Cli {
                 "env create",
             )?
         };
+        let gateway_port_source = if gateway_port.is_some() {
+            "metadata"
+        } else {
+            "computed"
+        };
         let meta = self
             .environment_service()
             .create(CreateEnvironmentOptions {
@@ -309,17 +314,15 @@ impl Cli {
                 protected: protect,
             })?;
 
+        let meta = self
+            .environment_service()
+            .apply_effective_gateway_port(meta)?;
         if json_flag {
             self.print_json(&summarize_env(&meta))?;
             return Ok(0);
         }
 
-        let (gateway_port, gateway_port_source) = self
-            .environment_service()
-            .resolve_effective_gateway_port(&meta)?;
-        let mut display_meta = meta.clone();
-        display_meta.gateway_port = Some(gateway_port);
-        let summary = summarize_env(&display_meta);
+        let summary = summarize_env(&meta);
         self.stdout_lines(render::env::env_created(
             &summary,
             Some(gateway_port_source),
@@ -522,7 +525,9 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let meta = self.environment_service().get(name)?;
+        let meta = self
+            .environment_service()
+            .apply_effective_gateway_port(self.environment_service().get(name)?)?;
         let summary = summarize_env(&meta);
         if json_flag {
             self.print_json(&summary)?;

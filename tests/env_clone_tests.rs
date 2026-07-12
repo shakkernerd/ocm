@@ -42,6 +42,8 @@ fn env_clone_copies_state_into_a_new_environment() {
     assert_ne!(gateway_port, 19_789);
     assert!(gateway_port >= 19_790);
     assert!(show_stdout.contains("\"protected\": true"));
+    assert_eq!(show_json["serviceEnabled"], false);
+    assert_eq!(show_json["serviceRunning"], false);
 
     assert_eq!(
         fs::read_to_string(root.child("ocm-home/envs/target/.openclaw/workspace/notes.txt"))

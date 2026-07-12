@@ -152,12 +152,23 @@ pub fn create_environment(
     ensure_dir(&paths.state_dir)?;
     ensure_dir(&paths.workspace_dir)?;
 
+    let gateway_port = match options.gateway_port {
+        Some(port) => Some(port),
+        None => {
+            let envs = list_environments(env, cwd)?;
+            Some(choose_available_gateway_port(
+                DEFAULT_GATEWAY_PORT,
+                &envs,
+                env,
+            ))
+        }
+    };
     let created_at = now_utc();
     let meta = EnvMeta {
         kind: "ocm-env".to_string(),
         name,
         root: display_path(&paths.root),
-        gateway_port: options.gateway_port,
+        gateway_port,
         service_enabled: options.service_enabled,
         service_running: options.service_running,
         default_runtime: options.default_runtime,
@@ -221,8 +232,8 @@ pub fn clone_environment(
             name,
             root: display_path(&target_paths.root),
             gateway_port: Some(gateway_port),
-            service_enabled: source.service_enabled,
-            service_running: source.service_running,
+            service_enabled: false,
+            service_running: false,
             default_runtime: source.default_runtime,
             default_launcher: source.default_launcher,
             dev: None,
@@ -380,11 +391,18 @@ pub fn import_environment(
             return Err("archive is missing root/".to_string());
         }
         let imported = (|| {
+            let envs = list_environments(env, cwd)?;
+            let preferred_gateway_port = extracted
+                .metadata
+                .env
+                .gateway_port
+                .unwrap_or(DEFAULT_GATEWAY_PORT);
+            let gateway_port = choose_available_gateway_port(preferred_gateway_port, &envs, env);
             copy_dir_recursive(&extracted.root_dir, &target_paths.root)?;
             rewrite_openclaw_config_for_target(
                 &target_paths,
                 extracted.metadata.env.source_root.as_deref().map(Path::new),
-                extracted.metadata.env.gateway_port,
+                Some(gateway_port),
             )?;
             clear_nonportable_runtime_state(&target_paths)?;
 
@@ -393,9 +411,9 @@ pub fn import_environment(
                 kind: "ocm-env".to_string(),
                 name: name.clone(),
                 root: display_path(&target_paths.root),
-                gateway_port: extracted.metadata.env.gateway_port,
-                service_enabled: extracted.metadata.env.service_enabled,
-                service_running: extracted.metadata.env.service_running,
+                gateway_port: Some(gateway_port),
+                service_enabled: false,
+                service_running: false,
                 default_runtime: extracted.metadata.env.default_runtime.clone(),
                 default_launcher: extracted.metadata.env.default_launcher.clone(),
                 dev: None,
