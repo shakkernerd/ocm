@@ -109,6 +109,7 @@ mod tests {
         assert!(tokenize_simple_command("FOO=bar openclaw").is_none());
         assert!(tokenize_simple_command("pnpm openclaw | tee log").is_none());
         assert!(tokenize_simple_command("openclaw 'gateway run'").is_none());
+        assert!(tokenize_simple_command("openclaw gateway\nopenclaw status").is_none());
         assert!(tokenize_simple_command(r"openclaw foo\ bar").is_none());
         assert!(tokenize_simple_command("openclaw --config ~/openclaw.json").is_none());
         assert!(tokenize_simple_command("openclaw plugins/*.mjs").is_none());
