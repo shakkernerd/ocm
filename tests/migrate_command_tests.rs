@@ -536,6 +536,37 @@ fn migrate_normalizes_parent_components_before_checking_target_overlap() {
     assert!(!root.child("ocm-home/envs.json").exists());
 }
 
+#[test]
+fn migrate_rejects_parent_traversal_through_a_file() {
+    let root = TestDir::new("migrate-parent-through-file");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let blocker = root.child("blocker");
+    let target_root = blocker.join("../managed");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    fs::write(&blocker, "not a directory\n").unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("parent traversal crosses a non-directory"));
+    assert!(source_home.join("workspace/notes.txt").exists());
+    assert!(!root.child("managed").exists());
+    assert!(!root.child("ocm-home/envs.json").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn migrate_rejects_a_target_with_state_symlinked_to_the_source() {
@@ -597,6 +628,40 @@ fn migrate_resolves_parent_components_after_following_symlinks() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("migration source and target must not overlap"));
     assert!(source_home.join("workspace/notes.txt").exists());
+    assert!(!root.child("ocm-home/envs.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn migrate_rejects_parent_traversal_through_a_symlink_to_a_file() {
+    let root = TestDir::new("migrate-parent-through-file-symlink");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let blocker = root.child("blocker");
+    let linked_blocker = root.child("linked-blocker");
+    let target_root = linked_blocker.join("../managed");
+    fs::create_dir_all(&cwd).unwrap();
+    seed_plain_openclaw_home(&source_home);
+    fs::write(&blocker, "not a directory\n").unwrap();
+    std::os::unix::fs::symlink(&blocker, &linked_blocker).unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "mira",
+            source_home.to_string_lossy().as_ref(),
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("parent traversal crosses a non-directory"));
+    assert!(source_home.join("workspace/notes.txt").exists());
+    assert!(!root.child("managed").exists());
     assert!(!root.child("ocm-home/envs.json").exists());
 }
 

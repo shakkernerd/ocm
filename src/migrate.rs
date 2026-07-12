@@ -325,10 +325,28 @@ fn normalize_migration_target_path(path: &Path) -> Result<PathBuf, String> {
                             display_path(path)
                         )
                     })?;
+                    let target_metadata = fs::metadata(&normalized).map_err(|error| {
+                        format!(
+                            "failed to inspect migration path {}: {error}",
+                            display_path(&normalized)
+                        )
+                    })?;
+                    if !target_metadata.is_dir() {
+                        return Err(format!(
+                            "migration target parent traversal crosses a non-directory: {}",
+                            display_path(&normalized)
+                        ));
+                    }
+                    normalized.pop();
+                }
+                Ok(metadata) if metadata.is_dir() => {
                     normalized.pop();
                 }
                 Ok(_) => {
-                    normalized.pop();
+                    return Err(format!(
+                        "migration target parent traversal crosses a non-directory: {}",
+                        display_path(&normalized)
+                    ));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     normalized.pop();
