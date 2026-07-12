@@ -290,3 +290,39 @@ fn official_openclaw_release_queries_support_version_and_channel() {
     assert_eq!(by_version.len(), 1);
     assert_eq!(by_version[0].channel.as_deref(), Some("beta"));
 }
+
+#[test]
+fn official_openclaw_release_channels_preserve_overlapping_dist_tags() {
+    let server = TestHttpServer::serve_bytes(
+        "/openclaw",
+        "application/json",
+        json!({
+            "dist-tags": {
+                "latest": "2026.3.24",
+                "beta": "2026.3.24"
+            },
+            "versions": {
+                "2026.3.24": {
+                    "version": "2026.3.24",
+                    "dist": {
+                        "tarball": "https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"
+                    }
+                }
+            }
+        })
+        .to_string()
+        .as_bytes(),
+    );
+
+    let releases = load_official_openclaw_releases(&server.url()).unwrap();
+    assert_eq!(releases[0].channel.as_deref(), Some("stable"));
+    assert_eq!(releases[0].channels, ["stable", "beta"]);
+
+    let stable = select_official_openclaw_release_by_channel(&releases, "latest").unwrap();
+    assert_eq!(stable.version, "2026.3.24");
+    assert_eq!(stable.channel.as_deref(), Some("stable"));
+
+    let beta = select_official_openclaw_release_by_channel(&releases, "beta").unwrap();
+    assert_eq!(beta.version, "2026.3.24");
+    assert_eq!(beta.channel.as_deref(), Some("beta"));
+}
