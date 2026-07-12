@@ -78,6 +78,7 @@ impl<'a> EnvironmentService<'a> {
     }
 
     pub fn cleanup(&self, name: &str) -> Result<EnvCleanupSummary, String> {
+        let _operation_lock = self.lock_operation(name)?;
         let mut env = self.get(name)?;
         let config_audit = audit_openclaw_config(&env, &self.list()?);
         let state_audit = audit_openclaw_state(&env, &self.list()?);
