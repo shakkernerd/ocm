@@ -1,7 +1,12 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -40,10 +45,29 @@ pub(crate) struct SourceWatchLease {
     lock_file: File,
 }
 
-impl Drop for SourceWatchLease {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.lock_file);
+impl SourceWatchLease {
+    #[cfg(unix)]
+    pub(crate) fn configure_child(&self, command: &mut Command) {
+        let lock_fd = self.lock_file.as_raw_fd();
+        command.process_group(0);
+        // The watcher inherits the lease so an OCM crash cannot release
+        // exclusivity while the source gateway remains alive.
+        unsafe {
+            command.pre_exec(move || {
+                let flags = libc::fcntl(lock_fd, libc::F_GETFD);
+                if flags == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::fcntl(lock_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
+
+    #[cfg(not(unix))]
+    pub(crate) fn configure_child(&self, _command: &mut Command) {}
 }
 
 impl SourceWatchOverride {
@@ -68,8 +92,8 @@ impl<'a> EnvironmentService<'a> {
         let env_name = validate_name(env_name, "Environment name")?;
         let override_path = source_watch_override_path(&env_name, self.env, self.cwd)?;
         let lock_path = override_path.with_extension("lock");
-        if !lock_path.exists()
-            && let Ok(meta) = read_json::<SourceWatchOverride>(&override_path)
+        if let Ok(meta) = read_json::<SourceWatchOverride>(&override_path)
+            && !is_leased_source_watch(&meta)
             && is_valid_source_watch_metadata(&meta, &env_name)
             && is_legacy_source_watch_process(&meta)
         {
@@ -129,7 +153,7 @@ impl<'a> EnvironmentService<'a> {
         &self,
         options: CreateSourceWatchOverrideOptions,
     ) -> Result<SourceWatchOverride, String> {
-        self.write_source_watch_override(options)
+        self.write_source_watch_override(options, false)
     }
 
     pub(crate) fn create_source_watch_override_with_lease(
@@ -143,19 +167,25 @@ impl<'a> EnvironmentService<'a> {
                 lease.env_name, options.env_name
             ));
         }
-        self.write_source_watch_override(options)
+        self.write_source_watch_override(options, true)
     }
 
     fn write_source_watch_override(
         &self,
         options: CreateSourceWatchOverrideOptions,
+        leased: bool,
     ) -> Result<SourceWatchOverride, String> {
         let env_name = validate_name(&options.env_name, "Environment name")?;
         let path = source_watch_override_path(&env_name, self.env, self.cwd)?;
         if let Some(parent) = path.parent() {
             ensure_dir(parent)?;
         }
-        let token = format!("{}-{}", options.watch_pid, now_utc().unix_timestamp_nanos());
+        let token_prefix = if leased { "lease-" } else { "" };
+        let token = format!(
+            "{token_prefix}{}-{}",
+            options.watch_pid,
+            now_utc().unix_timestamp_nanos()
+        );
         let meta = SourceWatchOverride {
             kind: SOURCE_WATCH_OVERRIDE_KIND.to_string(),
             env_name,
@@ -198,19 +228,20 @@ impl<'a> EnvironmentService<'a> {
         if !path.exists() {
             return Ok(None);
         }
-        if !lock_path.exists() {
-            let meta = match read_json::<SourceWatchOverride>(&path) {
-                Ok(meta) => meta,
-                Err(_) => {
-                    remove_file_if_present(&path)?;
-                    return Ok(None);
-                }
-            };
-            if is_valid_source_watch_metadata(&meta, &env_name)
-                && is_legacy_source_watch_process(&meta)
-            {
-                return Ok(Some(meta));
+        let meta = match read_json::<SourceWatchOverride>(&path) {
+            Ok(meta) => meta,
+            Err(_) => {
+                remove_file_if_present(&path)?;
+                return Ok(None);
             }
+        };
+        if !is_leased_source_watch(&meta)
+            && is_valid_source_watch_metadata(&meta, &env_name)
+            && is_legacy_source_watch_process(&meta)
+        {
+            return Ok(Some(meta));
+        }
+        if !lock_path.exists() {
             remove_file_if_present(&path)?;
             return Ok(None);
         }
@@ -228,12 +259,6 @@ impl<'a> EnvironmentService<'a> {
                 Ok(None)
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                let meta = read_json::<SourceWatchOverride>(&path).map_err(|error| {
-                    format!(
-                        "failed reading active source watch override {}: {error}",
-                        display_path(&path)
-                    )
-                })?;
                 if is_valid_source_watch_metadata(&meta, &env_name) {
                     Ok(Some(meta))
                 } else {
@@ -246,6 +271,10 @@ impl<'a> EnvironmentService<'a> {
             )),
         }
     }
+}
+
+fn is_leased_source_watch(meta: &SourceWatchOverride) -> bool {
+    meta.token.starts_with("lease-")
 }
 
 fn is_valid_source_watch_metadata(meta: &SourceWatchOverride, env_name: &str) -> bool {

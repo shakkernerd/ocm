@@ -216,6 +216,7 @@ fn source_watch_override_with_a_live_reused_pid_is_removed_without_its_lease() {
     let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
     let override_path = root.child("ocm-home/source-watch/demo.json");
     fs::create_dir_all(override_path.parent().unwrap()).unwrap();
+    fs::write(root.child("ocm-home/source-watch/demo.lock"), "stale\n").unwrap();
     fs::write(
         &override_path,
         json!({
@@ -290,6 +291,7 @@ fn live_legacy_source_watch_remains_active_until_its_process_exits() {
 
     let override_path = root.child("ocm-home/source-watch/demo.json");
     fs::create_dir_all(override_path.parent().unwrap()).unwrap();
+    fs::write(root.child("ocm-home/source-watch/demo.lock"), "stale\n").unwrap();
     fs::write(
         &override_path,
         json!({

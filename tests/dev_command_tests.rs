@@ -327,6 +327,23 @@ fn install_failing_fake_dev_runners(
     started
 }
 
+#[cfg(unix)]
+fn install_stubborn_fake_dev_runners(
+    root: &TestDir,
+    env: &mut std::collections::BTreeMap<String, String>,
+) -> (PathBuf, PathBuf) {
+    install_fake_dev_runners(root, env);
+    let started = root.child("source-watch.started");
+    let descendant_pid = root.child("source-watch-descendant.pid");
+    let node = format!(
+        "#!/bin/sh\ntrap '' TERM\n/bin/sleep 300 &\nprintf '%s\\n' \"$!\" > \"{}\"\nprintf 'ready\\n' > \"{}\"\nwhile :; do /bin/sleep 1; done\n",
+        path_string(&descendant_pid),
+        path_string(&started),
+    );
+    write_executable_script(&root.child("fake-dev-bin/node"), &node);
+    (started, descendant_pid)
+}
+
 fn wait_for_path(path: &Path, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -336,6 +353,28 @@ fn wait_for_path(path: &Path, timeout: Duration) -> bool {
         thread::sleep(Duration::from_millis(25));
     }
     path.exists()
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
+fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !process_is_alive(pid) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    !process_is_alive(pid)
 }
 
 fn service_env(root: &TestDir) -> std::collections::BTreeMap<String, String> {
@@ -1384,6 +1423,138 @@ fn dev_watch_rejects_overlap_and_reclaims_the_released_lock() {
     assert!(after_release.status.success(), "{}", stderr(&after_release));
     let starts = fs::read_to_string(watch_log).unwrap();
     assert_eq!(starts.lines().count(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_watch_lease_survives_parent_crash_until_the_watcher_exits() {
+    let root = TestDir::new("dev-command-watch-parent-crash");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    let (started, release, watch_log) = install_blocking_fake_dev_runners(&root, &mut env);
+
+    let mut first = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    first
+        .current_dir(&cwd)
+        .args(["dev", "demo", "--repo", &path_string(&repo), "--watch"])
+        .env_clear()
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut first = first.spawn().unwrap();
+    assert!(
+        wait_for_path(&started, Duration::from_secs(30)),
+        "source watch did not start"
+    );
+    let override_path = source_watch_override_path(&root, "demo");
+    assert!(
+        wait_for_path(&override_path, Duration::from_secs(30)),
+        "source watch did not publish its override"
+    );
+    let source_watch: Value =
+        serde_json::from_str(&fs::read_to_string(&override_path).unwrap()).unwrap();
+    let watcher_pid = source_watch["watchPid"].as_u64().unwrap() as u32;
+
+    let killed = Command::new("kill")
+        .args(["-KILL", &first.id().to_string()])
+        .output()
+        .unwrap();
+    assert!(killed.status.success(), "{}", stderr(&killed));
+    assert!(!first.wait().unwrap().success());
+    assert!(process_is_alive(watcher_pid));
+
+    let mut overlap = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    overlap
+        .current_dir(&cwd)
+        .args(["dev", "demo", "--watch"])
+        .env_clear()
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut overlap = overlap.spawn().unwrap();
+    let overlap_deadline = Instant::now() + Duration::from_secs(5);
+    let overlap_exited = loop {
+        if overlap.try_wait().unwrap().is_some() {
+            break true;
+        }
+        if Instant::now() >= overlap_deadline {
+            break false;
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    if !overlap_exited {
+        fs::write(&release, "release\n").unwrap();
+        let _ = overlap.kill();
+    }
+    let overlap = overlap.wait_with_output().unwrap();
+    assert!(
+        overlap_exited,
+        "overlapping source watch blocked instead of rejecting the live lease"
+    );
+    assert!(!overlap.status.success());
+    assert!(
+        stderr(&overlap).contains("source watch for env \"demo\" is already active or starting"),
+        "{}",
+        stderr(&overlap)
+    );
+
+    fs::write(&release, "release\n").unwrap();
+    assert!(wait_for_process_exit(watcher_pid, Duration::from_secs(10)));
+
+    let after_release = run_ocm(&cwd, &env, &["dev", "demo", "--watch"]);
+    assert!(after_release.status.success(), "{}", stderr(&after_release));
+    let starts = fs::read_to_string(watch_log).unwrap();
+    assert_eq!(starts.lines().count(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_watch_force_stops_the_entire_stubborn_process_tree() {
+    let root = TestDir::new("dev-command-watch-force-tree");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    let (started, descendant_pid_path) = install_stubborn_fake_dev_runners(&root, &mut env);
+
+    let mut watch = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    watch
+        .current_dir(&cwd)
+        .args(["dev", "demo", "--repo", &path_string(&repo), "--watch"])
+        .env_clear()
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let watch = watch.spawn().unwrap();
+    assert!(
+        wait_for_path(&started, Duration::from_secs(30)),
+        "source watch did not start"
+    );
+    assert!(
+        wait_for_path(&descendant_pid_path, Duration::from_secs(30)),
+        "source watch descendant did not start"
+    );
+    let descendant_pid = fs::read_to_string(&descendant_pid_path)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+
+    let signal = Command::new("kill")
+        .args(["-INT", &watch.id().to_string()])
+        .output()
+        .unwrap();
+    assert!(signal.status.success(), "{}", stderr(&signal));
+    let watch = watch.wait_with_output().unwrap();
+
+    assert_eq!(watch.status.code(), Some(130), "{}", stderr(&watch));
+    assert!(
+        wait_for_process_exit(descendant_pid, Duration::from_secs(3)),
+        "source watch descendant {descendant_pid} survived forced shutdown"
+    );
+    assert!(!source_watch_override_path(&root, "demo").exists());
 }
 
 #[test]

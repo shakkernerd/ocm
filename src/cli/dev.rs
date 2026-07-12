@@ -10,6 +10,9 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -32,6 +35,7 @@ use crate::store::{
 };
 
 const DEV_PREFERENCES_KIND: &str = "ocm-dev-preferences";
+const SOURCE_WATCH_TREE_ACTIVE_ERROR: &str = "source watch process tree is still active";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -251,22 +255,23 @@ impl Cli {
                     .as_ref()
                     .ok_or_else(|| "source watch lease is missing".to_string())?,
             );
-            let restore_result = if watch_takes_over_service {
-                self.stderr_lines(render_dev_run_step(
-                    "Restore",
-                    format!("Starting background service for {}", meta.name),
-                    stderr_profile,
-                ));
-                self.service_service().start(&meta.name).map(|_| {
-                    self.stdout_lines(render_dev_service_restored(
-                        &meta,
-                        &self.command_example(),
-                        self.dev_stdout_profile(),
+            let restore_result =
+                if watch_takes_over_service && source_watch_allows_service_restore(&watch_result) {
+                    self.stderr_lines(render_dev_run_step(
+                        "Restore",
+                        format!("Starting background service for {}", meta.name),
+                        stderr_profile,
                     ));
-                })
-            } else {
-                Ok(())
-            };
+                    self.service_service().start(&meta.name).map(|_| {
+                        self.stdout_lines(render_dev_service_restored(
+                            &meta,
+                            &self.command_example(),
+                            self.dev_stdout_profile(),
+                        ));
+                    })
+                } else {
+                    Ok(())
+                };
             return combine_watch_and_restore_results(watch_result, restore_result, &meta.name);
         }
 
@@ -368,23 +373,24 @@ impl Cli {
         let watch_result =
             self.run_source_gateway_watch(&meta, &repo_root, true, &source_watch_lease);
 
-        let restore_result = if restore_service {
-            self.stderr_lines(render_dev_run_step(
-                "Restore",
-                format!("Starting background service for {}", meta.name),
-                stderr_profile,
-            ));
-            self.service_service().start(&meta.name).map(|_| {
-                self.stdout_lines(render_source_watch_service_restored(
-                    &meta,
-                    &repo_root,
-                    &self.command_example(),
-                    self.dev_stdout_profile(),
+        let restore_result =
+            if restore_service && source_watch_allows_service_restore(&watch_result) {
+                self.stderr_lines(render_dev_run_step(
+                    "Restore",
+                    format!("Starting background service for {}", meta.name),
+                    stderr_profile,
                 ));
-            })
-        } else {
-            Ok(())
-        };
+                self.service_service().start(&meta.name).map(|_| {
+                    self.stdout_lines(render_source_watch_service_restored(
+                        &meta,
+                        &repo_root,
+                        &self.command_example(),
+                        self.dev_stdout_profile(),
+                    ));
+                })
+            } else {
+                Ok(())
+            };
 
         combine_watch_and_restore_results(watch_result, restore_result, &meta.name)
     }
@@ -713,6 +719,7 @@ impl Cli {
             .env_clear()
             .envs(build_openclaw_dev_source_env(meta, &self.env, repo_root))
             .current_dir(repo_root);
+        _source_watch_lease.configure_child(&mut command);
 
         let mut log_files = if tee_to_env_logs {
             Some(open_source_watch_log_files(meta)?)
@@ -726,9 +733,14 @@ impl Cli {
             command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
         }
 
+        let process_guard = SourceWatchProcessGuard::new()?;
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to run \"node\": {error}"))?;
+        if let Err(error) = process_guard.assign(&child) {
+            let _ = stop_source_watch_child(&mut child);
+            return Err(error);
+        }
         let source_watch = match self
             .environment_service()
             .create_source_watch_override_with_lease(
@@ -787,11 +799,10 @@ impl Cli {
             .map(|_| ());
 
         let status = combine_source_watch_cleanup_results(status_result, tee_result, clear_result)?;
-        Ok(match status.code() {
-            Some(code) => code,
-            None if stop_requested.load(Ordering::SeqCst) => 130,
-            None => 1,
-        })
+        Ok(source_watch_exit_code(
+            status.code(),
+            stop_requested.load(Ordering::SeqCst),
+        ))
     }
 
     fn build_dev_status_summary(&self, meta: EnvMeta) -> Result<Option<DevStatusSummary>, String> {
@@ -893,11 +904,92 @@ fn wait_for_source_watch_child(
     }
 }
 
+struct SourceWatchProcessGuard {
+    #[cfg(windows)]
+    job: windows_sys::Win32::Foundation::HANDLE,
+}
+
+impl SourceWatchProcessGuard {
+    fn new() -> Result<Self, String> {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::JobObjects::{
+                CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            };
+
+            let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if job.is_null() {
+                return Err(format!(
+                    "failed creating source watch process job: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let configured = unsafe {
+                SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    std::ptr::from_ref(&info).cast(),
+                    std::mem::size_of_val(&info) as u32,
+                )
+            };
+            if configured == 0 {
+                unsafe {
+                    windows_sys::Win32::Foundation::CloseHandle(job);
+                }
+                return Err(format!(
+                    "failed configuring source watch process job: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+            Ok(Self { job })
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(Self {})
+        }
+    }
+
+    fn assign(&self, child: &std::process::Child) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            let assigned = unsafe {
+                windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(
+                    self.job,
+                    child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE,
+                )
+            };
+            if assigned == 0 {
+                return Err(format!(
+                    "failed assigning source watch to process job: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = child;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for SourceWatchProcessGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.job);
+        }
+    }
+}
+
 fn stop_source_watch_child(
     child: &mut std::process::Child,
 ) -> Result<std::process::ExitStatus, String> {
     #[cfg(unix)]
     {
+        let tracked_processes = unix_descendant_processes(child.id()).unwrap_or_default();
         let pid = child.id().to_string();
         // OpenClaw's watch-node handler forwards TERM to its detached gateway
         // process group; allow its shutdown grace before forcing the wrapper down.
@@ -914,19 +1006,218 @@ fn stop_source_watch_child(
                     .try_wait()
                     .map_err(|error| format!("failed waiting for source watch shutdown: {error}"))?
                 {
+                    stop_tracked_unix_processes(&tracked_processes)?;
                     return Ok(status);
                 }
                 thread::sleep(Duration::from_millis(50));
             }
         }
+        force_stop_unix_process_tree(child.id(), &tracked_processes)?;
+        return child
+            .wait()
+            .map_err(|error| format!("failed waiting for stopped source watch: {error}"));
     }
 
-    child
-        .kill()
-        .map_err(|error| format!("failed stopping source watch: {error}"))?;
-    child
-        .wait()
-        .map_err(|error| format!("failed waiting for stopped source watch: {error}"))
+    #[cfg(windows)]
+    {
+        let pid = child.id().to_string();
+        let result = Command::new("taskkill")
+            .args(["/PID", &pid, "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if !result.as_ref().is_ok_and(|status| status.success())
+            && child
+                .try_wait()
+                .map_err(|error| format!("failed checking source watch shutdown: {error}"))?
+                .is_none()
+        {
+            return Err(match result {
+                Ok(status) => format!(
+                    "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; taskkill failed with {status}, so the background service was not restored"
+                ),
+                Err(error) => format!(
+                    "{SOURCE_WATCH_TREE_ACTIVE_ERROR}; taskkill failed: {error}; the background service was not restored"
+                ),
+            });
+        }
+        return child
+            .wait()
+            .map_err(|error| format!("failed waiting for stopped source watch: {error}"));
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        child
+            .kill()
+            .map_err(|error| format!("failed stopping source watch: {error}"))?;
+        child
+            .wait()
+            .map_err(|error| format!("failed waiting for stopped source watch: {error}"))
+    }
+}
+
+#[cfg(unix)]
+fn unix_descendant_processes(root_pid: u32) -> Result<Vec<(u32, u32)>, String> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,pgid="])
+        .output()
+        .map_err(|error| format!("failed listing source watch process tree: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed listing source watch process tree: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let processes = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse::<u32>().ok()?;
+            let parent_pid = fields.next()?.parse::<u32>().ok()?;
+            let process_group = fields.next()?.parse::<u32>().ok()?;
+            Some((pid, parent_pid, process_group))
+        })
+        .collect::<Vec<_>>();
+    let mut tree = BTreeSet::from([root_pid]);
+    loop {
+        let before = tree.len();
+        for (pid, parent_pid, _) in &processes {
+            if tree.contains(parent_pid) {
+                tree.insert(*pid);
+            }
+        }
+        if tree.len() == before {
+            break;
+        }
+    }
+    Ok(processes
+        .into_iter()
+        .filter_map(|(pid, _, process_group)| {
+            (pid != root_pid && tree.contains(&pid)).then_some((pid, process_group))
+        })
+        .collect())
+}
+
+#[cfg(unix)]
+fn force_stop_unix_process_tree(
+    root_pid: u32,
+    tracked_processes: &[(u32, u32)],
+) -> Result<(), String> {
+    let _ = signal_unix_process(root_pid, "STOP");
+    let mut processes = tracked_processes.to_vec();
+    if let Ok(current_processes) = unix_descendant_processes(root_pid) {
+        for process in current_processes {
+            if !processes.contains(&process) {
+                processes.push(process);
+            }
+        }
+    }
+    let mut process_groups = processes
+        .iter()
+        .map(|(_, process_group)| *process_group)
+        .collect::<BTreeSet<_>>();
+    process_groups.insert(root_pid);
+    for process_group in process_groups {
+        let _ = signal_unix_process_group(process_group, "KILL");
+    }
+    for (pid, _) in &processes {
+        let _ = signal_unix_process(*pid, "KILL");
+    }
+    let _ = signal_unix_process(root_pid, "KILL");
+    wait_for_unix_processes_to_stop(&processes)
+}
+
+#[cfg(unix)]
+fn stop_tracked_unix_processes(processes: &[(u32, u32)]) -> Result<(), String> {
+    let alive = processes
+        .iter()
+        .copied()
+        .filter(|(pid, _)| unix_process_is_alive(*pid))
+        .collect::<Vec<_>>();
+    if alive.is_empty() {
+        return Ok(());
+    }
+    for process_group in alive
+        .iter()
+        .map(|(_, process_group)| *process_group)
+        .collect::<BTreeSet<_>>()
+    {
+        let _ = signal_unix_process_group(process_group, "KILL");
+    }
+    for (pid, _) in &alive {
+        let _ = signal_unix_process(*pid, "KILL");
+    }
+    wait_for_unix_processes_to_stop(&alive)
+}
+
+#[cfg(unix)]
+fn wait_for_unix_processes_to_stop(processes: &[(u32, u32)]) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let alive = processes
+            .iter()
+            .map(|(pid, _)| *pid)
+            .filter(|pid| unix_process_is_alive(*pid))
+            .collect::<Vec<_>>();
+        if alive.is_empty() {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "{SOURCE_WATCH_TREE_ACTIVE_ERROR}: {}; the background service was not restored",
+                alive
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
+fn signal_unix_process(pid: u32, signal: &str) -> bool {
+    Command::new("kill")
+        .args([&format!("-{signal}"), &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
+fn signal_unix_process_group(process_group: u32, signal: &str) -> bool {
+    Command::new("kill")
+        .args([&format!("-{signal}"), &format!("-{process_group}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(unix)]
+fn unix_process_is_alive(pid: u32) -> bool {
+    signal_unix_process(pid, "0")
+}
+
+fn source_watch_exit_code(status_code: Option<i32>, stop_requested: bool) -> i32 {
+    if stop_requested {
+        130
+    } else {
+        status_code.unwrap_or(1)
+    }
+}
+
+fn source_watch_allows_service_restore(watch_result: &Result<i32, String>) -> bool {
+    !matches!(
+        watch_result,
+        Err(error) if error.starts_with(SOURCE_WATCH_TREE_ACTIVE_ERROR)
+    )
 }
 
 fn render_dev_status(summary: &DevStatusSummary, profile: RenderProfile) -> Vec<String> {
@@ -1582,6 +1873,7 @@ fn render_dev_status_list(summaries: &[DevStatusSummary], profile: RenderProfile
 mod tests {
     use super::{
         DevStatusSummary, RenderProfile, combine_watch_and_restore_results, render_dev_status,
+        source_watch_allows_service_restore, source_watch_exit_code,
         source_watch_stop_timeout_error,
     };
     use crate::service::ServiceActionSummary;
@@ -1668,5 +1960,23 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn source_watch_preserves_the_original_interrupt_exit_code() {
+        assert_eq!(source_watch_exit_code(Some(143), true), 130);
+        assert_eq!(source_watch_exit_code(Some(23), false), 23);
+        assert_eq!(source_watch_exit_code(None, false), 1);
+    }
+
+    #[test]
+    fn source_watch_does_not_restore_over_a_live_process_tree() {
+        assert!(source_watch_allows_service_restore(&Ok(0)));
+        assert!(source_watch_allows_service_restore(&Err(
+            "source watch failed".to_string()
+        )));
+        assert!(!source_watch_allows_service_restore(&Err(
+            "source watch process tree is still active: 123".to_string()
+        )));
     }
 }
