@@ -86,6 +86,7 @@ fn operator_recipes_use_current_cli_and_safe_cleanup_contracts() {
     );
     assert!(paths.contains("git clone --no-checkout"));
     assert!(paths.contains("--reference-if-able"));
+    assert!(paths.contains("--dissociate"));
     assert!(!paths.contains("git -C \"$source_repo\" fetch"));
     assert!(paths.contains("runtime which"));
     assert!(!paths.contains("$HOME/.ocm/runtimes"));

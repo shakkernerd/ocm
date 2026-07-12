@@ -87,7 +87,8 @@ test -x "$ocm_bin"
 source_remote="$(git -C "$source_repo" remote get-url origin)"
 mkdir -p "$OCM_HOME"
 git clone --no-checkout --single-branch --branch main \
-  --reference-if-able "$source_repo" "$source_remote" "$repo_store"
+  --reference-if-able "$source_repo" --dissociate \
+  "$source_remote" "$repo_store"
 openclaw_sha="$(git -C "$repo_store" rev-parse origin/main)"
 git -C "$repo_store" worktree add --detach "$worktree" "$openclaw_sha"
 test "$(git -C "$worktree" rev-parse HEAD)" = "$openclaw_sha"

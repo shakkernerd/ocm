@@ -35,9 +35,10 @@ If repo-level AGENTS instructions are present, read and follow them first.
    resources.
 3. Read the OpenClaw source repo's `origin` URL without fetching or changing
    that shared checkout. Create per-run Git metadata from that remote, using
-   the source repo only as a read-only object cache, then resolve `origin/main`
-   to an immutable commit and create a clean detached worktree for it. Record
-   the commit before building.
+   the source repo only as a clone-time read-only object cache and
+   dissociating the clone from it. Then resolve `origin/main` to an immutable
+   commit and create a clean detached worktree for it. Record the commit
+   before building.
 4. Build the primary validation target with
    `"$OCM_BIN" runtime build-local <run-runtime> --repo <run-worktree>
    --force`, then run `"$OCM_BIN" runtime verify <run-runtime>`. This

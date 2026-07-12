@@ -16,9 +16,10 @@ failed.
 - Read the `origin` URL from the OpenClaw source repo at
   `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/temp/test-build`,
   but do not fetch into or mutate that shared checkout. Create per-run Git
-  metadata from the remote, optionally using the source repo as a read-only
-  object cache, resolve one immutable `origin/main` commit, and create a unique
-  detached worktree for the run.
+  metadata from the remote, optionally using the source repo as a clone-time
+  read-only object cache and dissociating the clone from it. Resolve one
+  immutable `origin/main` commit and create a unique detached worktree for the
+  run.
 - Do not use `/Users/shakker/WorkSpace/ShakkerNerd/OpenSource/OpenClaw/openclaw`
   or `../openclaw`; that is an active working repo.
 - Build a uniquely named package-shaped runtime with
