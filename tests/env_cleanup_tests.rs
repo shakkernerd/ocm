@@ -49,6 +49,55 @@ fn env_cleanup_yes_repairs_env_scoped_config_drift() {
     assert!(repaired.contains("\"port\": 19790"));
 }
 
+#[cfg(unix)]
+#[test]
+fn env_cleanup_replaces_a_drifted_config_symlink_without_rewriting_its_target() {
+    let root = TestDir::new("env-cleanup-config-symlink");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let source = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(source.status.success(), "{}", stderr(&source));
+    let target = run_ocm(&cwd, &env, &["env", "create", "target", "--port", "19790"]);
+    assert!(target.status.success(), "{}", stderr(&target));
+
+    let source_root = root.child("ocm-home/envs/source");
+    let target_config = root.child("ocm-home/envs/target/.openclaw/openclaw.json");
+    let external_config = root.child("external/openclaw.json");
+    let external_raw = format!(
+        "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}},\"gateway\":{{\"port\":19789}}}}\n",
+        source_root.join(".openclaw/workspace").display()
+    );
+    fs::create_dir_all(external_config.parent().unwrap()).unwrap();
+    fs::write(&external_config, &external_raw).unwrap();
+    if target_config.exists() {
+        fs::remove_file(&target_config).unwrap();
+    }
+    std::os::unix::fs::symlink(&external_config, &target_config).unwrap();
+
+    let cleanup = run_ocm(&cwd, &env, &["env", "cleanup", "target", "--yes"]);
+
+    assert!(cleanup.status.success(), "{}", stderr(&cleanup));
+    assert_eq!(fs::read_to_string(&external_config).unwrap(), external_raw);
+    assert!(
+        fs::symlink_metadata(&target_config)
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    let repaired = fs::read_to_string(target_config).unwrap();
+    assert!(
+        repaired.contains(
+            &root
+                .child("ocm-home/envs/target/.openclaw/workspace")
+                .display()
+                .to_string()
+        )
+    );
+    assert!(repaired.contains("\"port\": 19790"));
+}
+
 #[test]
 fn env_cleanup_yes_repairs_inferred_env_scoped_config_drift() {
     let root = TestDir::new("env-cleanup-inferred-config-repair");
