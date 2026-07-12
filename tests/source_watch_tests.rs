@@ -1,9 +1,10 @@
 mod support;
 
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
 use serde_json::{Value, json};
 
 use crate::support::{
@@ -84,9 +85,27 @@ fn create_runtime_backed_env(
     runtime_path
 }
 
-fn write_active_source_watch_override(root: &TestDir, source_repo: &Path) {
+struct SourceWatchFixture {
+    lock_file: File,
+}
+
+impl Drop for SourceWatchFixture {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.lock_file);
+    }
+}
+
+fn write_active_source_watch_override(root: &TestDir, source_repo: &Path) -> SourceWatchFixture {
     let path = root.child("ocm-home/source-watch/demo.json");
+    let lock_path = root.child("ocm-home/source-watch/demo.lock");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(lock_path)
+        .unwrap();
+    FileExt::lock_exclusive(&lock_file).unwrap();
     fs::write(
         path,
         json!({
@@ -94,12 +113,13 @@ fn write_active_source_watch_override(root: &TestDir, source_repo: &Path) {
             "envName": "demo",
             "repoRoot": path_string(source_repo),
             "watchPid": std::process::id(),
-            "token": "test-source-watch",
+            "token": "<redacted>",
             "startedAt": "2026-06-17T00:00:00Z"
         })
         .to_string(),
     )
     .unwrap();
+    SourceWatchFixture { lock_file }
 }
 
 #[test]
@@ -111,7 +131,7 @@ fn source_watch_override_takes_precedence_for_resolve_and_run() {
     let mut env = ocm_env(&root);
     let node_log = install_fake_node(&root, &mut env);
     let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
-    write_active_source_watch_override(&root, &source_repo);
+    let _source_watch = write_active_source_watch_override(&root, &source_repo);
 
     let entry = source_repo.join("openclaw.mjs");
     let resolve = run_ocm(
@@ -168,6 +188,42 @@ fn source_watch_override_takes_precedence_for_resolve_and_run() {
 }
 
 #[test]
+fn source_watch_override_with_a_live_reused_pid_is_removed_without_its_lease() {
+    let root = TestDir::new("source-watch-stale-pid");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let source_repo = create_source_repo(&root);
+    let env = ocm_env(&root);
+    let runtime_path = create_runtime_backed_env(&root, &cwd, &env);
+    let override_path = root.child("ocm-home/source-watch/demo.json");
+    fs::create_dir_all(override_path.parent().unwrap()).unwrap();
+    fs::write(
+        &override_path,
+        json!({
+            "kind": "ocm-source-watch-override",
+            "envName": "demo",
+            "repoRoot": path_string(&source_repo),
+            "watchPid": std::process::id(),
+            "token": "<redacted>",
+            "startedAt": "2026-06-17T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let resolve = run_ocm(
+        &cwd,
+        &env,
+        &["env", "resolve", "demo", "--json", "--", "status"],
+    );
+    assert!(resolve.status.success(), "{}", stderr(&resolve));
+    let resolved: Value = serde_json::from_str(&stdout(&resolve)).unwrap();
+    assert_eq!(resolved["bindingKind"], "runtime");
+    assert_eq!(resolved["binaryPath"], path_string(&runtime_path));
+    assert!(!override_path.exists());
+}
+
+#[test]
 fn source_watch_override_flows_to_env_exec_and_status_surfaces() {
     let root = TestDir::new("source-watch-exec-status");
     let cwd = root.child("workspace");
@@ -177,7 +233,7 @@ fn source_watch_override_flows_to_env_exec_and_status_surfaces() {
     install_fake_service_manager(&root, &mut env);
     let node_log = install_fake_node(&root, &mut env);
     create_runtime_backed_env(&root, &cwd, &env);
-    write_active_source_watch_override(&root, &source_repo);
+    let _source_watch = write_active_source_watch_override(&root, &source_repo);
 
     let entry = source_repo.join("openclaw.mjs");
     let exec = run_ocm(

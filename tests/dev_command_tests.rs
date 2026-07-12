@@ -2,8 +2,12 @@ mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use ocm::store::{now_utc, supervisor_runtime_path};
+use ocm::supervisor::{SupervisorRuntimeChild, SupervisorRuntimeService, SupervisorRuntimeState};
 use serde_json::Value;
 
 use crate::support::{
@@ -283,6 +287,55 @@ fn install_fake_dev_runners(root: &TestDir, env: &mut std::collections::BTreeMap
 
 fn source_watch_override_path(root: &TestDir, name: &str) -> PathBuf {
     root.child(format!("ocm-home/source-watch/{name}.json"))
+}
+
+fn source_watch_lock_path(root: &TestDir, name: &str) -> PathBuf {
+    root.child(format!("ocm-home/source-watch/{name}.lock"))
+}
+
+#[cfg(unix)]
+fn install_blocking_fake_dev_runners(
+    root: &TestDir,
+    env: &mut std::collections::BTreeMap<String, String>,
+) -> (PathBuf, PathBuf, PathBuf) {
+    install_fake_dev_runners(root, env);
+    let started = root.child("source-watch.started");
+    let release = root.child("source-watch.release");
+    let log = root.child("source-watch.log");
+    let node = format!(
+        "#!/bin/sh\nprintf 'started\\n' >> \"{}\"\nprintf 'ready\\n' > \"{}\"\nwhile [ ! -f \"{}\" ]; do /bin/sleep 0.05; done\n",
+        path_string(&log),
+        path_string(&started),
+        path_string(&release),
+    );
+    write_executable_script(&root.child("fake-dev-bin/node"), &node);
+    (started, release, log)
+}
+
+#[cfg(unix)]
+fn install_failing_fake_dev_runners(
+    root: &TestDir,
+    env: &mut std::collections::BTreeMap<String, String>,
+) -> PathBuf {
+    install_fake_dev_runners(root, env);
+    let started = root.child("source-watch.started");
+    let node = format!(
+        "#!/bin/sh\nprintf 'ready\\n' > \"{}\"\nexit 23\n",
+        path_string(&started),
+    );
+    write_executable_script(&root.child("fake-dev-bin/node"), &node);
+    started
+}
+
+fn wait_for_path(path: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    path.exists()
 }
 
 fn service_env(root: &TestDir) -> std::collections::BTreeMap<String, String> {
@@ -1273,6 +1326,233 @@ fn dev_watch_force_restores_runtime_service_when_source_watch_cannot_spawn() {
     assert_eq!(show_json["defaultRuntime"], "stable");
     assert_eq!(show_json["serviceEnabled"], true);
     assert_eq!(show_json["serviceRunning"], true);
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_watch_rejects_overlap_and_reclaims_the_released_lock() {
+    let root = TestDir::new("dev-command-watch-overlap");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    let (started, release, watch_log) = install_blocking_fake_dev_runners(&root, &mut env);
+
+    let mut first = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    first
+        .current_dir(&cwd)
+        .args(["dev", "demo", "--repo", &path_string(&repo), "--watch"])
+        .env_clear()
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let first = first.spawn().unwrap();
+    let did_start = wait_for_path(&started, Duration::from_secs(30));
+
+    let overlap = run_ocm(&cwd, &env, &["dev", "demo", "--watch"]);
+    fs::write(&release, "release\n").unwrap();
+    let first_output = first.wait_with_output().unwrap();
+
+    assert!(
+        did_start,
+        "first source watch did not start: {}",
+        stderr(&first_output)
+    );
+    assert!(
+        !overlap.status.success(),
+        "overlapping source watch unexpectedly succeeded"
+    );
+    assert!(
+        stderr(&overlap).contains("source watch for env \"demo\" is already active or starting"),
+        "{}",
+        stderr(&overlap)
+    );
+    assert!(first_output.status.success(), "{}", stderr(&first_output));
+    assert!(source_watch_lock_path(&root, "demo").exists());
+    assert!(!source_watch_override_path(&root, "demo").exists());
+
+    let after_release = run_ocm(&cwd, &env, &["dev", "demo", "--watch"]);
+    assert!(after_release.status.success(), "{}", stderr(&after_release));
+    let starts = fs::read_to_string(watch_log).unwrap();
+    assert_eq!(starts.lines().count(), 2);
+}
+
+#[test]
+fn dev_watch_aborts_and_restores_policy_when_service_stop_times_out() {
+    let root = TestDir::new("dev-command-watch-stop-timeout");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = service_env(&root);
+    install_fake_dev_runners(&root, &mut env);
+    create_runtime_backed_env(&cwd, &env);
+
+    let start = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let runtime_path = supervisor_runtime_path(&env, &cwd).unwrap();
+    fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
+    let stdout_path = path_string(&root.child("demo.stdout.log"));
+    let stderr_path = path_string(&root.child("demo.stderr.log"));
+    let runtime = SupervisorRuntimeState {
+        kind: "ocm-supervisor-runtime".to_string(),
+        ocm_home: path_string(&root.child("ocm-home")),
+        updated_at: now_utc(),
+        services: vec![SupervisorRuntimeService {
+            env_name: "demo".to_string(),
+            binding_kind: "runtime".to_string(),
+            binding_name: "stable".to_string(),
+            gateway_state: "running".to_string(),
+            restart_count: 0,
+            child_port: 21901,
+            pid: Some(std::process::id()),
+            stdout_path: stdout_path.clone(),
+            stderr_path: stderr_path.clone(),
+            last_exit_code: None,
+            last_error: None,
+            last_event_at: None,
+            next_retry_at: None,
+        }],
+        children: vec![SupervisorRuntimeChild {
+            env_name: "demo".to_string(),
+            binding_kind: "runtime".to_string(),
+            binding_name: "stable".to_string(),
+            pid: std::process::id(),
+            restart_count: 0,
+            child_port: 21901,
+            stdout_path,
+            stderr_path,
+        }],
+    };
+    fs::write(&runtime_path, serde_json::to_vec(&runtime).unwrap()).unwrap();
+
+    let watch = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "dev",
+            "demo",
+            "--repo",
+            &path_string(&repo),
+            "--watch",
+            "--force",
+        ],
+    );
+    assert!(!watch.status.success());
+    assert!(
+        stderr(&watch)
+            .contains("background service for demo is still running after the stop request"),
+        "{}",
+        stderr(&watch)
+    );
+    assert!(
+        stderr(&watch)
+            .contains("restored the background service policy and did not start source watch"),
+        "{}",
+        stderr(&watch)
+    );
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["serviceRunning"], true);
+    assert!(!root.child("node.log").exists());
+    assert!(!source_watch_override_path(&root, "demo").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_watch_signal_stops_the_child_and_restores_the_service() {
+    let root = TestDir::new("dev-command-watch-signal");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = service_env(&root);
+    let (started, release, _) = install_blocking_fake_dev_runners(&root, &mut env);
+    create_runtime_backed_env(&cwd, &env);
+
+    let start = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let mut watch = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    watch
+        .current_dir(&cwd)
+        .args([
+            "dev",
+            "demo",
+            "--repo",
+            &path_string(&repo),
+            "--watch",
+            "--force",
+        ])
+        .env_clear()
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut watch = watch.spawn().unwrap();
+    let did_start = wait_for_path(&started, Duration::from_secs(30));
+    let signal = Command::new("kill")
+        .args(["-INT", &watch.id().to_string()])
+        .output()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut stopped_from_signal = false;
+    while Instant::now() < deadline {
+        if watch.try_wait().unwrap().is_some() {
+            stopped_from_signal = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    if !stopped_from_signal {
+        fs::write(&release, "release\n").unwrap();
+    }
+    let watch = watch.wait_with_output().unwrap();
+
+    assert!(did_start, "source watch did not start: {}", stderr(&watch));
+    assert!(signal.status.success(), "{}", stderr(&signal));
+    assert!(stopped_from_signal, "source watch ignored SIGINT");
+    assert_eq!(watch.status.code(), Some(130), "{}", stderr(&watch));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["serviceRunning"], true);
+    assert!(!source_watch_override_path(&root, "demo").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_watch_nonzero_child_exit_restores_the_service() {
+    let root = TestDir::new("dev-command-watch-child-failure");
+    let repo = init_openclaw_repo(&root);
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = service_env(&root);
+    let started = install_failing_fake_dev_runners(&root, &mut env);
+    create_runtime_backed_env(&cwd, &env);
+
+    let start = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let watch = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "dev",
+            "demo",
+            "--repo",
+            &path_string(&repo),
+            "--watch",
+            "--force",
+        ],
+    );
+    assert!(started.exists());
+    assert_eq!(watch.status.code(), Some(23), "{}", stderr(&watch));
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let show_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(show_json["serviceRunning"], true);
+    assert!(!source_watch_override_path(&root, "demo").exists());
 }
 
 #[test]
