@@ -1,23 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-timestamp() {
-  date '+%H:%M:%S'
-}
-
-log_step() {
-  printf '[%s] %s\n' "$(timestamp)" "$*" >&2
-}
-
-run_step() {
-  local description="$1"
-  shift
-  local started_at="$SECONDS"
-  log_step "$description"
-  "$@"
-  log_step "done: ${description} ($((SECONDS - started_at))s)"
-}
-
 usage() {
   cat <<'EOF'
 Update the ocm package version safely.
@@ -57,7 +40,7 @@ fi
 
 export OCM_NEW_VERSION="$new_version"
 
-log_step "Updating Cargo.toml and Cargo.lock from ${current_version} to ${new_version}"
+echo "Updating Cargo.toml and Cargo.lock from ${current_version} to ${new_version}" >&2
 
 backup_dir="$(mktemp -d)"
 cp Cargo.toml "${backup_dir}/Cargo.toml"
@@ -85,8 +68,6 @@ if [[ "$updated_toml_version" != "$new_version" || "$updated_lock_version" != "$
   echo "error: version files did not update cleanly" >&2
   exit 1
 fi
-
-run_step "Verifying the version bump with cargo check --locked" cargo check --locked --quiet
 
 committed=1
 rm -rf "$backup_dir"

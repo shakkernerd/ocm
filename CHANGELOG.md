@@ -4,6 +4,11 @@ All notable changes to OCM are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- Prepare release versions through squash pull requests before tagging protected `main`, and start publication automatically from the signed tag push.
+- Run release validation once and move pinned CI actions to their current Node 24 runtimes.
+
 ## 0.2.27 - 2026-07-12
 
 ### Fixed

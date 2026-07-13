@@ -412,11 +412,13 @@ fn workflows_pin_actions_lock_dependencies_and_gate_the_msrv() {
     assert!(release.contains("scripts/verify-release-tag.sh"));
     assert!(release.contains("scripts/publish-release.sh"));
     assert!(release.contains("cp ./install.sh ./dist/install.sh"));
-    assert!(release.contains("repository_dispatch:"));
-    assert!(release.contains("github.event.client_payload.tag"));
-    assert!(release.contains("group: release-${{ github.event.client_payload.tag }}"));
+    assert!(release.contains("tags:"));
+    assert!(release.contains("- \"v*\""));
+    assert!(release.contains("github.ref_name"));
+    assert!(release.contains("group: release-${{ github.ref_name }}"));
+    assert!(!release.contains("repository_dispatch:"));
+    assert!(!release.contains("github.event.client_payload.tag"));
     assert!(!release.contains("workflow_dispatch:"));
-    assert!(!release.contains("github.ref_name"));
     assert!(release.contains("os: macos-15-intel"));
     assert!(!release.contains("os: macos-13"));
 }
