@@ -10,17 +10,16 @@ struct ReleaseRepo {
     _root: TestDir,
     repo: PathBuf,
     remote: PathBuf,
-    env_path: String,
     home: PathBuf,
+    env_path: String,
     git: String,
+    ghx: PathBuf,
 }
 
 impl ReleaseRepo {
     fn apply_toolchain_env(&self, command: &mut Command) {
-        for name in ["RUSTUP_TOOLCHAIN"] {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
+        if let Some(value) = std::env::var_os("RUSTUP_TOOLCHAIN") {
+            command.env("RUSTUP_TOOLCHAIN", value);
         }
         let host_home = PathBuf::from(std::env::var_os("HOME").unwrap());
         command.env(
@@ -33,43 +32,41 @@ impl ReleaseRepo {
         );
     }
 
-    fn script_path(&self) -> PathBuf {
-        self.repo.join("scripts/release.sh")
-    }
-
     fn run_release(&self, version: &str) -> Output {
-        let mut command = Command::new(self.script_path());
-        command.current_dir(&self.repo);
-        command.arg(version);
-        command.arg("--remote");
-        command.arg("fake");
-        command.arg("--skip-checks");
-        command.env_clear();
-        command.env("HOME", &self.home);
-        command.env("PATH", &self.env_path);
+        let mut command = Command::new(self.repo.join("scripts/release.sh"));
+        command
+            .current_dir(&self.repo)
+            .args([version, "--remote", "fake", "--skip-checks"])
+            .env_clear()
+            .env("HOME", &self.home)
+            .env("PATH", &self.env_path)
+            .env("OCM_GH_BIN", &self.ghx)
+            .env("OCM_GITHUB_REPOSITORY", "example/ocm");
         self.apply_toolchain_env(&mut command);
         command.output().unwrap()
     }
 
     fn run_update_version(&self, version: &str) -> Output {
         let mut command = Command::new(self.repo.join("scripts/update-version.sh"));
-        command.current_dir(&self.repo);
-        command.arg(version);
-        command.env_clear();
-        command.env("HOME", &self.home);
-        command.env("PATH", &self.env_path);
+        command
+            .current_dir(&self.repo)
+            .arg(version)
+            .env_clear()
+            .env("HOME", &self.home)
+            .env("PATH", &self.env_path);
         self.apply_toolchain_env(&mut command);
         command.output().unwrap()
     }
 
     fn git_output(&self, args: &[&str]) -> Output {
-        let mut command = Command::new(&self.git);
-        command.current_dir(&self.repo);
-        command.args(args);
-        command.env_clear();
-        command.env("HOME", &self.home);
-        command.env("PATH", &self.env_path);
-        command.output().unwrap()
+        Command::new("git")
+            .current_dir(&self.repo)
+            .args(args)
+            .env_clear()
+            .env("HOME", &self.home)
+            .env("PATH", &self.env_path)
+            .output()
+            .unwrap()
     }
 
     fn git_stdout(&self, args: &[&str]) -> String {
@@ -78,56 +75,36 @@ impl ReleaseRepo {
         stdout(&output)
     }
 
-    fn remote_ls_remote(&self, pattern: &str) -> String {
-        let mut command = Command::new(&self.git);
-        command.arg("ls-remote");
-        command.arg(&self.remote);
-        command.arg(pattern);
-        command.env_clear();
-        command.env("HOME", &self.home);
-        command.env("PATH", &self.env_path);
-        let output = command.output().unwrap();
+    fn remote_ref(&self, reference: &str) -> String {
+        let output = Command::new(&self.git)
+            .args(["ls-remote", &path_string(&self.remote), reference])
+            .env_clear()
+            .env("HOME", &self.home)
+            .env("PATH", &self.env_path)
+            .output()
+            .unwrap();
         assert!(output.status.success(), "{}", stderr(&output));
         stdout(&output)
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_string()
     }
 
-    fn remote_tag_commit(&self, tag: &str) -> String {
-        let mut command = Command::new(&self.git);
-        command.arg("ls-remote");
-        command.arg(&self.remote);
-        command.arg(format!("refs/tags/{tag}^{{}}"));
-        command.arg(format!("refs/tags/{tag}"));
-        command.env_clear();
-        command.env("HOME", &self.home);
-        command.env("PATH", &self.env_path);
-        let output = command.output().unwrap();
-        assert!(output.status.success(), "{}", stderr(&output));
-        let listing = stdout(&output);
-        let mut fallback = None;
-        for line in listing.lines() {
-            let mut parts = line.split_whitespace();
-            let Some(sha) = parts.next() else {
-                continue;
-            };
-            let Some(reference) = parts.next() else {
-                continue;
-            };
-            if reference.ends_with("^{}") {
-                return sha.to_string();
-            }
-            if fallback.is_none() {
-                fallback = Some(sha.to_string());
-            }
-        }
-        fallback.unwrap_or_default()
-    }
-
-    fn mark_tag_signed(&self, tag: &str) {
-        fs::write(
-            self.repo.join(".git").join(format!("test-signed-{tag}")),
-            "",
-        )
-        .unwrap();
+    fn merge_release_pr(&self, version: &str) -> String {
+        let branch = format!("release/v{version}");
+        assert!(
+            self.git_output(&["switch", "main"]).status.success(),
+            "failed to switch to main"
+        );
+        let merge = self.git_output(&["merge", "--squash", &branch]);
+        assert!(merge.status.success(), "{}", stderr(&merge));
+        let title = format!("chore(release): bump version to {version} (#42)");
+        let commit = self.git_output(&["commit", "-m", &title]);
+        assert!(commit.status.success(), "{}", stderr(&commit));
+        let push = self.git_output(&["push", "fake", "main"]);
+        assert!(push.status.success(), "{}", stderr(&push));
+        self.git_stdout(&["rev-parse", "HEAD"]).trim().to_string()
     }
 }
 
@@ -171,13 +148,7 @@ fn copy_script(repo: &Path, relative: &str) {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).unwrap();
     }
-    let contents = fs::read_to_string(source).unwrap();
-    write_executable_script(&destination, &contents);
-}
-
-fn replace_version(path: &Path, from: &str, to: &str) {
-    let original = fs::read_to_string(path).unwrap();
-    fs::write(path, original.replace(from, to)).unwrap();
+    write_executable_script(&destination, &fs::read_to_string(source).unwrap());
 }
 
 fn init_release_repo(label: &str) -> ReleaseRepo {
@@ -191,56 +162,89 @@ fn init_release_repo(label: &str) -> ReleaseRepo {
     fs::create_dir_all(&fake_bin).unwrap();
 
     write_release_fixture(&repo);
-    copy_script(&repo, "scripts/release.sh");
-    copy_script(&repo, "scripts/update-version.sh");
-    copy_script(&repo, "scripts/validate-version.sh");
+    for script in [
+        "scripts/release.sh",
+        "scripts/update-version.sh",
+        "scripts/validate-version.sh",
+    ] {
+        copy_script(&repo, script);
+    }
 
-    let git = std::process::Command::new("sh")
-        .arg("-lc")
-        .arg("command -v git")
+    let git_lookup = Command::new("sh")
+        .args(["-lc", "command -v git"])
         .output()
         .unwrap();
-    assert!(git.status.success(), "{}", stderr(&git));
-    let real_git = stdout(&git).trim().to_string();
+    assert!(git_lookup.status.success(), "{}", stderr(&git_lookup));
+    let real_git = stdout(&git_lookup).trim().to_string();
 
-    let git_wrapper = fake_bin.join("git");
     write_executable_script(
-        &git_wrapper,
+        &fake_bin.join("git"),
         &format!(
-            "#!/usr/bin/env bash\nset -euo pipefail\nreal_git=\"{}\"\nif [[ \"${{1:-}}\" == \"-c\" && \"${{2:-}}\" == \"tag.gpgSign=true\" && \"${{3:-}}\" == \"tag\" ]]; then\n  shift 2\n  \"$real_git\" \"$@\"\n  touch \".git/test-signed-${{3}}\"\n  exit 0\nfi\nif [[ \"${{1:-}}\" == \"cat-file\" && \"${{2:-}}\" == \"-p\" && -n \"${{3:-}}\" && -f \".git/test-signed-${{3}}\" ]]; then\n  printf '%s\\n' '-----BEGIN SSH SIGNATURE-----'\n  exit 0\nfi\nif [[ \"${{1:-}}\" == \"verify-tag\" ]]; then\n  [[ -n \"${{2:-}}\" && -f \".git/test-signed-${{2}}\" ]]\n  exit\nfi\nif [[ \"${{1:-}}\" == \"push\" && -f .git/test-push-fails-after-success ]]; then\n  \"$real_git\" \"$@\"\n  exit 1\nfi\nif [[ \"${{1:-}}\" == \"push\" && -f .git/test-probe-fails-after-push ]]; then\n  touch .git/test-remote-probes-fail\n  exit 1\nfi\nif [[ \"${{1:-}}\" == \"ls-remote\" && -f .git/test-remote-probes-fail ]]; then\n  exit 1\nfi\nexec \"$real_git\" \"$@\"\n",
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+real_git="{}"
+if [[ "${{1:-}}" == "-c" && "${{2:-}}" == "tag.gpgSign=true" && "${{3:-}}" == "tag" ]]; then
+  shift 2
+  "$real_git" "$@"
+  touch ".git/test-signed-${{3}}"
+  exit 0
+fi
+if [[ "${{1:-}}" == "cat-file" && "${{2:-}}" == "-p" && -n "${{3:-}}" && -f ".git/test-signed-${{3}}" ]]; then
+  printf '%s\n' '-----BEGIN SSH SIGNATURE-----'
+  exit 0
+fi
+if [[ "${{1:-}}" == "verify-tag" ]]; then
+  [[ -n "${{2:-}}" && -f ".git/test-signed-${{2}}" ]]
+  exit
+fi
+exec "$real_git" "$@"
+"#,
             real_git
         ),
     );
 
-    let env_path = if let Ok(existing) = std::env::var("PATH") {
-        format!("{}:{existing}", path_string(&fake_bin))
-    } else {
-        path_string(&fake_bin)
-    };
+    let ghx = fake_bin.join("ghx");
+    write_executable_script(
+        &ghx,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>.git/test-ghx-commands
+case "${1:-} ${2:-}" in
+  "pr view")
+    [[ -f .git/test-pr-url ]] || exit 1
+    [[ ! -f .git/test-pr-invalid ]] || exit 0
+    cat .git/test-pr-url
+    ;;
+  "pr create")
+    [[ ! -f .git/test-ghx-create-fails ]] || exit 1
+    printf '%s\n' 'https://github.com/example/ocm/pull/42' | tee .git/test-pr-url
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+"#,
+    );
 
-    let init = Command::new(&real_git)
-        .current_dir(&repo)
-        .args(["init"])
-        .env_clear()
-        .env("HOME", &home)
-        .env("PATH", &env_path)
-        .output()
-        .unwrap();
-    assert!(init.status.success(), "{}", stderr(&init));
-
-    let checkout = Command::new(&real_git)
-        .current_dir(&repo)
-        .args(["checkout", "-B", "main"])
-        .env_clear()
-        .env("HOME", &home)
-        .env("PATH", &env_path)
-        .output()
-        .unwrap();
-    assert!(checkout.status.success(), "{}", stderr(&checkout));
+    let env_path = format!(
+        "{}:{}",
+        path_string(&fake_bin),
+        std::env::var("PATH").unwrap()
+    );
 
     for args in [
-        ["config", "user.name", "Test User"].as_slice(),
-        ["config", "user.email", "test@example.com"].as_slice(),
+        vec!["init".to_string()],
+        vec!["checkout".to_string(), "-B".to_string(), "main".to_string()],
+        vec![
+            "config".to_string(),
+            "user.name".to_string(),
+            "Test User".to_string(),
+        ],
+        vec![
+            "config".to_string(),
+            "user.email".to_string(),
+            "test@example.com".to_string(),
+        ],
     ] {
         let output = Command::new(&real_git)
             .current_dir(&repo)
@@ -255,21 +259,13 @@ fn init_release_repo(label: &str) -> ReleaseRepo {
 
     let add = Command::new(&real_git)
         .current_dir(&repo)
-        .args([
-            "add",
-            "Cargo.toml",
-            "Cargo.lock",
-            "README.md",
-            "src",
-            "scripts",
-        ])
+        .args(["add", "."])
         .env_clear()
         .env("HOME", &home)
         .env("PATH", &env_path)
         .output()
         .unwrap();
     assert!(add.status.success(), "{}", stderr(&add));
-
     let commit = Command::new(&real_git)
         .current_dir(&repo)
         .args(["commit", "-m", "chore: seed release fixture"])
@@ -279,18 +275,14 @@ fn init_release_repo(label: &str) -> ReleaseRepo {
         .output()
         .unwrap();
     assert!(commit.status.success(), "{}", stderr(&commit));
-
     let remote_init = Command::new(&real_git)
-        .arg("init")
-        .arg("--bare")
-        .arg(&remote)
+        .args(["init", "--bare", &path_string(&remote)])
         .env_clear()
         .env("HOME", &home)
         .env("PATH", &env_path)
         .output()
         .unwrap();
     assert!(remote_init.status.success(), "{}", stderr(&remote_init));
-
     let remote_add = Command::new(&real_git)
         .current_dir(&repo)
         .args(["remote", "add", "fake", &path_string(&remote)])
@@ -300,254 +292,173 @@ fn init_release_repo(label: &str) -> ReleaseRepo {
         .output()
         .unwrap();
     assert!(remote_add.status.success(), "{}", stderr(&remote_add));
+    let push = Command::new(&real_git)
+        .current_dir(&repo)
+        .args(["push", "-u", "fake", "main"])
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", &env_path)
+        .output()
+        .unwrap();
+    assert!(push.status.success(), "{}", stderr(&push));
 
     ReleaseRepo {
         _root: root,
         repo,
         remote,
-        env_path,
         home,
+        env_path,
         git: real_git,
+        ghx,
     }
 }
 
 #[test]
-fn release_script_resumes_after_uncommitted_version_bump() {
-    let repo = init_release_repo("release-script-resume-version-files");
-    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
-    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
+fn release_script_prepares_a_pull_request_without_mutating_remote_main() {
+    let repo = init_release_repo("release-pr-prepare");
+    let original_main = repo.remote_ref("refs/heads/main");
 
     let output = repo.run_release("0.2.8");
     assert!(output.status.success(), "{}", stderr(&output));
-
-    let stderr_output = stderr(&output);
-    assert!(stderr_output.contains("resume state: version files already updated to 0.2.8"));
-    assert!(stderr_output.contains("skip: version files are already set to 0.2.8"));
-
+    assert!(stdout(&output).contains("https://github.com/example/ocm/pull/42"));
+    assert_eq!(
+        repo.git_stdout(&["branch", "--show-current"]).trim(),
+        "release/v0.2.8"
+    );
     assert_eq!(
         repo.git_stdout(&["log", "-1", "--pretty=%s"]).trim(),
-        "chore: bump version to 0.2.8"
+        "chore(release): bump version to 0.2.8"
     );
-    let head_sha = repo.git_stdout(&["rev-parse", "HEAD"]);
-    let tag_sha = repo.git_stdout(&["rev-list", "-n1", "v0.2.8"]);
-    assert_eq!(head_sha.trim(), tag_sha.trim());
+    assert_eq!(repo.remote_ref("refs/heads/main"), original_main);
+    assert_eq!(
+        repo.remote_ref("refs/heads/release/v0.2.8"),
+        repo.git_stdout(&["rev-parse", "HEAD"]).trim()
+    );
+    assert!(repo.remote_ref("refs/tags/v0.2.8").is_empty());
     assert!(
-        repo.remote_ls_remote("refs/heads/main")
-            .contains(head_sha.trim())
-    );
-    assert_eq!(repo.remote_tag_commit("v0.2.8"), head_sha.trim());
-}
-
-#[test]
-fn release_script_resumes_after_local_tag_creation() {
-    let repo = init_release_repo("release-script-resume-local-tag");
-    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
-    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
-
-    let add = repo.git_output(&["add", "Cargo.toml", "Cargo.lock"]);
-    assert!(add.status.success(), "{}", stderr(&add));
-    let commit = repo.git_output(&["commit", "-m", "chore: bump version to 0.2.8"]);
-    assert!(commit.status.success(), "{}", stderr(&commit));
-    let tag = repo.git_output(&["tag", "-a", "v0.2.8", "-m", "v0.2.8"]);
-    assert!(tag.status.success(), "{}", stderr(&tag));
-    repo.mark_tag_signed("v0.2.8");
-
-    let output = repo.run_release("0.2.8");
-    assert!(output.status.success(), "{}", stderr(&output));
-
-    let stderr_output = stderr(&output);
-    assert!(stderr_output.contains("resume state: release commit already exists"));
-    assert!(stderr_output.contains("skip: release commit already exists"));
-    assert!(stderr_output.contains("skip: local tag v0.2.8 already exists"));
-
-    let head_sha = repo.git_stdout(&["rev-parse", "HEAD"]);
-    assert!(
-        repo.remote_ls_remote("refs/heads/main")
-            .contains(head_sha.trim())
-    );
-    assert_eq!(repo.remote_tag_commit("v0.2.8"), head_sha.trim());
-}
-
-#[test]
-fn release_script_fetches_the_existing_remote_tag_object() {
-    let repo = init_release_repo("release-script-resume-remote-tag");
-    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
-    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
-
-    let add = repo.git_output(&["add", "Cargo.toml", "Cargo.lock"]);
-    assert!(add.status.success(), "{}", stderr(&add));
-    let commit = repo.git_output(&["commit", "-m", "chore: bump version to 0.2.8"]);
-    assert!(commit.status.success(), "{}", stderr(&commit));
-    let tag = repo.git_output(&["tag", "-a", "v0.2.8", "-m", "v0.2.8"]);
-    assert!(tag.status.success(), "{}", stderr(&tag));
-    repo.mark_tag_signed("v0.2.8");
-    let tag_object = repo.git_stdout(&["rev-parse", "v0.2.8^{tag}"]);
-    let push = repo.git_output(&["push", "fake", "v0.2.8"]);
-    assert!(push.status.success(), "{}", stderr(&push));
-    let delete = repo.git_output(&["tag", "-d", "v0.2.8"]);
-    assert!(delete.status.success(), "{}", stderr(&delete));
-
-    let output = repo.run_release("0.2.8");
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stderr(&output).contains("Fetching existing tag v0.2.8 from fake"));
-    assert_eq!(repo.git_stdout(&["rev-parse", "v0.2.8^{tag}"]), tag_object);
-}
-
-#[test]
-fn release_script_rejects_unsigned_existing_tag() {
-    let repo = init_release_repo("release-script-rejects-unsigned-tag");
-    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
-    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
-
-    assert!(
-        repo.git_output(&["add", "Cargo.toml", "Cargo.lock"])
-            .status
-            .success()
-    );
-    assert!(
-        repo.git_output(&["commit", "-m", "chore: bump version to 0.2.8"])
-            .status
-            .success()
-    );
-    assert!(repo.git_output(&["tag", "v0.2.8"]).status.success());
-
-    let output = repo.run_release("0.2.8");
-    assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("must be an annotated tag"));
-    assert!(repo.remote_ls_remote("refs/tags/v0.2.8").is_empty());
-}
-
-#[test]
-fn release_script_rolls_back_when_atomic_push_is_rejected() {
-    let repo = init_release_repo("release-script-atomic-push-rollback");
-    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
-    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
-    let starting_head = repo.git_stdout(&["rev-parse", "HEAD"]);
-
-    let hook = repo.remote.join("hooks/update");
-    write_executable_script(
-        &hook,
-        "#!/usr/bin/env bash\n[[ \"$1\" != \"refs/heads/main\" ]]\n",
-    );
-
-    let output = repo.run_release("0.2.8");
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("Rolling back local release preparation"));
-    assert!(repo.remote_ls_remote("refs/heads/main").is_empty());
-    assert!(repo.remote_ls_remote("refs/tags/v0.2.8").is_empty());
-    assert_eq!(repo.git_stdout(&["rev-parse", "HEAD"]), starting_head);
-    assert!(
-        !repo
-            .git_output(&["show-ref", "--verify", "refs/tags/v0.2.8"])
-            .status
-            .success()
-    );
-    assert!(
-        fs::read_to_string(repo.repo.join("Cargo.toml"))
+        fs::read_to_string(repo.repo.join(".git/test-ghx-commands"))
             .unwrap()
-            .contains("version = \"0.2.8\"")
+            .contains("pr create --repo example/ocm")
     );
 }
 
 #[test]
-fn release_script_keeps_local_state_when_push_succeeds_but_reports_failure() {
-    let repo = init_release_repo("release-script-ambiguous-push");
-    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
-    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
-    fs::write(repo.repo.join(".git/test-push-fails-after-success"), "").unwrap();
+fn release_script_resumes_the_release_branch_without_repeating_checks_or_commits() {
+    let repo = init_release_repo("release-pr-resume");
+    assert!(repo.run_release("0.2.8").status.success());
+    let release_head = repo.git_stdout(&["rev-parse", "HEAD"]);
 
     let output = repo.run_release("0.2.8");
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stderr(&output).contains("push reported failure"));
-    let head_sha = repo.git_stdout(&["rev-parse", "HEAD"]);
+    assert!(stderr(&output).contains("skipping completed checks"));
+    assert_eq!(repo.git_stdout(&["rev-parse", "HEAD"]), release_head);
+    let commands = fs::read_to_string(repo.repo.join(".git/test-ghx-commands")).unwrap();
+    assert!(commands.contains("pr view release/v0.2.8"));
+}
+
+#[test]
+fn release_script_tags_only_after_the_release_pr_is_squash_merged() {
+    let repo = init_release_repo("release-pr-tag");
+    assert!(repo.run_release("0.2.8").status.success());
+    let merged_head = repo.merge_release_pr("0.2.8");
+
+    let output = repo.run_release("0.2.8");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("tag-push workflow"));
+    assert_eq!(repo.remote_ref("refs/heads/main"), merged_head);
+    assert_eq!(repo.remote_ref("refs/tags/v0.2.8^{}"), merged_head);
+}
+
+#[test]
+fn release_script_retries_a_previously_created_local_tag() {
+    let repo = init_release_repo("release-local-tag-resume");
+    assert!(repo.run_release("0.2.8").status.success());
+    let merged_head = repo.merge_release_pr("0.2.8");
+    let tag = repo.git_output(&[
+        "-c",
+        "tag.gpgSign=true",
+        "tag",
+        "-a",
+        "v0.2.8",
+        "-m",
+        "v0.2.8",
+    ]);
+    assert!(tag.status.success(), "{}", stderr(&tag));
+
+    let output = repo.run_release("0.2.8");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("Using existing local tag v0.2.8"));
+    assert_eq!(repo.remote_ref("refs/tags/v0.2.8^{}"), merged_head);
+}
+
+#[test]
+fn release_script_accepts_an_already_pushed_verified_tag() {
+    let repo = init_release_repo("release-tag-idempotent");
+    assert!(repo.run_release("0.2.8").status.success());
+    repo.merge_release_pr("0.2.8");
+    assert!(repo.run_release("0.2.8").status.success());
+
+    let output = repo.run_release("0.2.8");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("already published from verified commit"));
+}
+
+#[test]
+fn release_script_fails_when_the_pull_request_cannot_be_created() {
+    let repo = init_release_repo("release-pr-create-failure");
+    fs::write(repo.repo.join(".git/test-ghx-create-fails"), "").unwrap();
+
+    let output = repo.run_release("0.2.8");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("failed to create the release pull request"));
+    assert!(!stdout(&output).contains("Release pull request ready"));
+}
+
+#[test]
+fn release_script_replaces_an_unsuitable_existing_pull_request() {
+    let repo = init_release_repo("release-pr-replace-invalid");
+    assert!(repo.run_release("0.2.8").status.success());
+    fs::write(repo.repo.join(".git/test-pr-invalid"), "").unwrap();
+
+    let output = repo.run_release("0.2.8");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let commands = fs::read_to_string(repo.repo.join(".git/test-ghx-commands")).unwrap();
     assert_eq!(
-        repo.git_stdout(&["log", "-1", "--pretty=%s"]).trim(),
-        "chore: bump version to 0.2.8"
-    );
-    assert_eq!(repo.remote_tag_commit("v0.2.8"), head_sha.trim());
-    assert!(
-        repo.remote_ls_remote("refs/heads/main")
-            .contains(head_sha.trim())
+        commands
+            .lines()
+            .filter(|line| line.starts_with("pr create"))
+            .count(),
+        2
     );
 }
 
 #[test]
-fn release_script_keeps_local_state_when_remote_push_state_is_unknown() {
-    let repo = init_release_repo("release-script-unknown-push-state");
-    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
-    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
-    fs::write(repo.repo.join(".git/test-probe-fails-after-push"), "").unwrap();
+fn release_script_refuses_unrelated_dirty_changes() {
+    let repo = init_release_repo("release-refuses-dirty");
+    fs::write(repo.repo.join("README.md"), "dirty\n").unwrap();
 
     let output = repo.run_release("0.2.8");
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("remote state could not be determined"));
-    assert_eq!(
-        repo.git_stdout(&["log", "-1", "--pretty=%s"]).trim(),
-        "chore: bump version to 0.2.8"
-    );
-    assert!(
-        repo.git_output(&["show-ref", "--verify", "refs/tags/v0.2.8"])
-            .status
-            .success()
-    );
-}
-
-#[test]
-fn release_script_rejects_a_different_remote_tag_object() {
-    let repo = init_release_repo("release-script-remote-tag-mismatch");
-    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
-    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
-    assert!(
-        repo.git_output(&["add", "Cargo.toml", "Cargo.lock"])
-            .status
-            .success()
-    );
-    assert!(
-        repo.git_output(&["commit", "-m", "chore: bump version to 0.2.8"])
-            .status
-            .success()
-    );
-    assert!(
-        repo.git_output(&["tag", "-a", "v0.2.8", "-m", "v0.2.8"])
-            .status
-            .success()
-    );
-    repo.mark_tag_signed("v0.2.8");
-    assert!(repo.git_output(&["push", "fake", "main"]).status.success());
-    let head_sha = repo.git_stdout(&["rev-parse", "HEAD"]);
-    let remote_tag = Command::new(&repo.git)
-        .args([
-            "--git-dir",
-            &path_string(&repo.remote),
-            "update-ref",
-            "refs/tags/v0.2.8",
-            head_sha.trim(),
-        ])
-        .output()
-        .unwrap();
-    assert!(remote_tag.status.success(), "{}", stderr(&remote_tag));
-
-    let output = repo.run_release("0.2.8");
-    assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("differs from the verified local signed tag"));
+    assert!(stderr(&output).contains("tracked changes are present"));
+    assert!(repo.remote_ref("refs/heads/release/v0.2.8").is_empty());
 }
 
 #[test]
 fn update_version_rejects_invalid_semver_without_mutating_files() {
-    let repo = init_release_repo("update-version-invalid-semver");
-    let cargo_toml = fs::read(repo.repo.join("Cargo.toml")).unwrap();
-    let cargo_lock = fs::read(repo.repo.join("Cargo.lock")).unwrap();
+    let repo = init_release_repo("update-version-invalid");
+    let manifest = fs::read(repo.repo.join("Cargo.toml")).unwrap();
+    let lockfile = fs::read(repo.repo.join("Cargo.lock")).unwrap();
 
     let output = repo.run_update_version("0.2.8..1");
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("invalid semantic version"));
-    assert_eq!(fs::read(repo.repo.join("Cargo.toml")).unwrap(), cargo_toml);
-    assert_eq!(fs::read(repo.repo.join("Cargo.lock")).unwrap(), cargo_lock);
+    assert_eq!(fs::read(repo.repo.join("Cargo.toml")).unwrap(), manifest);
+    assert_eq!(fs::read(repo.repo.join("Cargo.lock")).unwrap(), lockfile);
 }
 
 #[test]
-fn update_version_accepts_semver_build_metadata() {
-    let repo = init_release_repo("update-version-build-metadata");
+fn update_version_accepts_semver_build_metadata_without_running_cargo() {
+    let repo = init_release_repo("update-version-metadata");
     let output = repo.run_update_version("0.2.8+build.1");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
@@ -555,21 +466,4 @@ fn update_version_accepts_semver_build_metadata() {
             .unwrap()
             .contains("version = \"0.2.8+build.1\"")
     );
-    assert!(
-        fs::read_to_string(repo.repo.join("Cargo.lock"))
-            .unwrap()
-            .contains("version = \"0.2.8+build.1\"")
-    );
-}
-
-#[test]
-fn release_script_still_refuses_unrelated_dirty_changes() {
-    let repo = init_release_repo("release-script-refuses-unrelated-dirty");
-    replace_version(&repo.repo.join("Cargo.toml"), "0.2.7", "0.2.8");
-    replace_version(&repo.repo.join("Cargo.lock"), "0.2.7", "0.2.8");
-    fs::write(repo.repo.join("README.md"), "dirty change\n").unwrap();
-
-    let output = repo.run_release("0.2.8");
-    assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("tracked changes are present"));
 }
