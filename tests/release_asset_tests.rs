@@ -207,7 +207,6 @@ esac
 fn verify_release_tag_requires_a_verified_annotated_tag_matching_the_package() {
     let root = TestDir::new("verify-release-tag");
     let fake_bin = root.child("bin");
-    let package_tag = format!("v{}", env!("CARGO_PKG_VERSION"));
     fs::create_dir_all(&fake_bin).unwrap();
     let expected_commit_output = Command::new("git")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -219,6 +218,21 @@ fn verify_release_tag_requires_a_verified_annotated_tag_matching_the_package() {
         .unwrap()
         .trim()
         .to_string();
+    let committed_manifest_output = Command::new("git")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(["show", &format!("{expected_commit}:Cargo.toml")])
+        .output()
+        .unwrap();
+    assert!(committed_manifest_output.status.success());
+    let committed_manifest = String::from_utf8(committed_manifest_output.stdout).unwrap();
+    let committed_version = committed_manifest
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("version = \"")
+                .and_then(|value| value.strip_suffix('"'))
+        })
+        .unwrap();
+    let package_tag = format!("v{committed_version}");
     let tag_object = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     write_executable_script(
         &fake_bin.join("gh"),
