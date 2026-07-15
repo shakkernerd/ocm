@@ -366,16 +366,8 @@ fn service_state_plans_runnable_children_and_skips_disabled_envs() {
     );
     assert_eq!(demo["processEnv"]["OPENCLAW_SERVICE_MARKER"], "openclaw");
     assert_eq!(demo["processEnv"]["OPENCLAW_SERVICE_KIND"], "gateway");
-    #[cfg(target_os = "macos")]
-    assert_eq!(
-        demo["processEnv"]["OPENCLAW_LAUNCHD_LABEL"],
-        "ai.openclaw.ocm"
-    );
-    #[cfg(target_os = "linux")]
-    assert_eq!(
-        demo["processEnv"]["OPENCLAW_SYSTEMD_UNIT"],
-        "ai.openclaw.ocm.service"
-    );
+    assert!(demo["processEnv"].get("OPENCLAW_LAUNCHD_LABEL").is_none());
+    assert!(demo["processEnv"].get("OPENCLAW_SYSTEMD_UNIT").is_none());
 
     let prod = children
         .iter()

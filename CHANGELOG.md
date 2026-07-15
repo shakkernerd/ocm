@@ -6,6 +6,7 @@ All notable changes to OCM are documented here.
 
 ### Fixed
 
+- Keep OpenClaw commands inside supervised gateways from inheriting the shared OCM service identity and controlling the parent supervisor.
 - Prepare release versions through squash pull requests before tagging protected `main`, and start publication automatically from the signed tag push.
 - Run release validation once and move pinned CI actions to their current Node 24 runtimes.
 
