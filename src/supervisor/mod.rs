@@ -59,6 +59,11 @@ const SERVICE_EXECUTABLE_IDENTITY_BUSY_ATTEMPTS: usize = 5;
 const SERVICE_EXECUTABLE_IDENTITY_BUSY_RETRY_MS: u64 = 20;
 const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
 const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
+const OPENCLAW_NATIVE_SERVICE_IDENTITY_KEYS: [&str; 3] = [
+    "OPENCLAW_LAUNCHD_LABEL",
+    "OPENCLAW_SYSTEMD_UNIT",
+    "OPENCLAW_WINDOWS_TASK_NAME",
+];
 const OPENCLAW_RESTART_HANDOFF_FILE: &str = "gateway-supervisor-restart-handoff.json";
 const OPENCLAW_RESTART_HANDOFF_KIND: &str = "gateway-supervisor-restart-handoff";
 const OPENCLAW_RESTART_HANDOFF_TTL_MS: u64 = 60_000;
@@ -471,8 +476,6 @@ impl<'a> SupervisorService<'a> {
         ensure_store(self.env, self.cwd)?;
         let ocm_home = resolve_ocm_home(self.env, self.cwd)?;
         let logs_dir = supervisor_logs_dir(self.env, self.cwd)?;
-        let identity = managed_service_identity(self.env, self.cwd)?;
-        let service_manager = service_manager_kind(self.env);
         let env_service = EnvironmentService::new(self.env, self.cwd);
         let mut envs = list_environments(self.env, self.cwd)?;
         envs.sort_by(|left, right| left.name.cmp(&right.name));
@@ -505,11 +508,7 @@ impl<'a> SupervisorService<'a> {
                         .ok_or_else(|| format!("failed to resolve child port for env \"{name}\""))?
                         .parse::<u32>()
                         .map_err(|_| format!("failed to parse child port for env \"{name}\""))?;
-                    let process_env = build_supervised_openclaw_env(
-                        process.process_env,
-                        &identity.label,
-                        service_manager,
-                    );
+                    let process_env = build_supervised_openclaw_env(process.process_env);
                     children.push(SupervisorChildSpec {
                         env_name: name,
                         binding_kind: process.binding_kind,
@@ -2091,10 +2090,11 @@ fn is_cargo_test_executable(path: &Path) -> bool {
 
 fn build_supervised_openclaw_env(
     process_env: BTreeMap<String, String>,
-    service_label: &str,
-    service_manager: ServiceManagerKind,
 ) -> BTreeMap<String, String> {
     let mut process_env = stable_supervised_child_env(process_env);
+    for key in OPENCLAW_NATIVE_SERVICE_IDENTITY_KEYS {
+        process_env.remove(key);
+    }
     process_env.insert(
         "OPENCLAW_SERVICE_MARKER".to_string(),
         OPENCLAW_SERVICE_MARKER.to_string(),
@@ -2103,21 +2103,6 @@ fn build_supervised_openclaw_env(
         "OPENCLAW_SERVICE_KIND".to_string(),
         OPENCLAW_GATEWAY_SERVICE_KIND.to_string(),
     );
-    match service_manager {
-        ServiceManagerKind::Launchd => {
-            process_env.insert(
-                "OPENCLAW_LAUNCHD_LABEL".to_string(),
-                service_label.to_string(),
-            );
-        }
-        ServiceManagerKind::SystemdUser => {
-            process_env.insert(
-                "OPENCLAW_SYSTEMD_UNIT".to_string(),
-                format!("{service_label}.service"),
-            );
-        }
-        ServiceManagerKind::Unsupported => {}
-    }
     process_env
 }
 
@@ -2780,12 +2765,21 @@ mod tests {
     }
 
     #[test]
-    fn supervised_child_env_sets_openclaw_service_hints() {
-        let process_env = build_supervised_openclaw_env(
-            BTreeMap::new(),
-            "ai.openclaw.ocm",
-            ServiceManagerKind::Launchd,
-        );
+    fn supervised_child_env_does_not_expose_the_shared_supervisor_identity() {
+        let process_env = build_supervised_openclaw_env(BTreeMap::from([
+            (
+                "OPENCLAW_LAUNCHD_LABEL".to_string(),
+                "ai.openclaw.ocm".to_string(),
+            ),
+            (
+                "OPENCLAW_SYSTEMD_UNIT".to_string(),
+                "ai.openclaw.ocm.service".to_string(),
+            ),
+            (
+                "OPENCLAW_WINDOWS_TASK_NAME".to_string(),
+                "OCM Supervisor".to_string(),
+            ),
+        ]));
 
         assert_eq!(
             process_env
@@ -2797,39 +2791,32 @@ mod tests {
             process_env.get("OPENCLAW_SERVICE_KIND").map(String::as_str),
             Some("gateway")
         );
-        assert_eq!(
-            process_env
-                .get("OPENCLAW_LAUNCHD_LABEL")
-                .map(String::as_str),
-            Some("ai.openclaw.ocm")
-        );
+        assert!(!process_env.contains_key("OPENCLAW_LAUNCHD_LABEL"));
+        assert!(!process_env.contains_key("OPENCLAW_SYSTEMD_UNIT"));
+        assert!(!process_env.contains_key("OPENCLAW_WINDOWS_TASK_NAME"));
     }
 
     #[test]
     fn supervised_child_env_drops_volatile_caller_context() {
-        let process_env = build_supervised_openclaw_env(
-            BTreeMap::from([
-                ("HOME".to_string(), "/Users/demo".to_string()),
-                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
-                ("TMPDIR".to_string(), "/tmp/demo".to_string()),
-                ("OCM_HOME".to_string(), "/Users/demo/.ocm".to_string()),
-                ("OCM_ACTIVE_ENV".to_string(), "rescue".to_string()),
-                (
-                    "OPENCLAW_HOME".to_string(),
-                    "/Users/demo/.ocm/envs/rescue/.openclaw".to_string(),
-                ),
-                ("HTTPS_PROXY".to_string(), "http://proxy".to_string()),
-                ("GH_TOKEN".to_string(), "caller-token".to_string()),
-                ("PWD".to_string(), "/tmp/caller-workspace".to_string()),
-                (
-                    "XPC_SERVICE_NAME".to_string(),
-                    "agent-heartbeat".to_string(),
-                ),
-                ("CODEX_SESSION_ID".to_string(), "session-123".to_string()),
-            ]),
-            "ai.openclaw.ocm",
-            ServiceManagerKind::Launchd,
-        );
+        let process_env = build_supervised_openclaw_env(BTreeMap::from([
+            ("HOME".to_string(), "/Users/demo".to_string()),
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("TMPDIR".to_string(), "/tmp/demo".to_string()),
+            ("OCM_HOME".to_string(), "/Users/demo/.ocm".to_string()),
+            ("OCM_ACTIVE_ENV".to_string(), "rescue".to_string()),
+            (
+                "OPENCLAW_HOME".to_string(),
+                "/Users/demo/.ocm/envs/rescue/.openclaw".to_string(),
+            ),
+            ("HTTPS_PROXY".to_string(), "http://proxy".to_string()),
+            ("GH_TOKEN".to_string(), "caller-token".to_string()),
+            ("PWD".to_string(), "/tmp/caller-workspace".to_string()),
+            (
+                "XPC_SERVICE_NAME".to_string(),
+                "agent-heartbeat".to_string(),
+            ),
+            ("CODEX_SESSION_ID".to_string(), "session-123".to_string()),
+        ]));
 
         assert_eq!(
             process_env.get("HOME").map(String::as_str),
@@ -2859,8 +2846,7 @@ mod tests {
 
     #[test]
     fn supervised_child_env_sanitizes_volatile_path_entries() {
-        let process_env = build_supervised_openclaw_env(
-            BTreeMap::from([
+        let process_env = build_supervised_openclaw_env(BTreeMap::from([
                 ("HOME".to_string(), "/Users/demo".to_string()),
                 (
                     "PATH".to_string(),
@@ -2878,10 +2864,7 @@ mod tests {
                     ]
                     .join(":"),
                 ),
-            ]),
-            "ai.openclaw.ocm",
-            ServiceManagerKind::Launchd,
-        );
+            ]));
 
         assert_eq!(
             process_env.get("PATH").map(String::as_str),
@@ -2893,32 +2876,28 @@ mod tests {
 
     #[test]
     fn supervised_child_env_preserves_stable_runtime_tool_env() {
-        let process_env = build_supervised_openclaw_env(
-            BTreeMap::from([
-                (
-                    "NODE_OPTIONS".to_string(),
-                    "--max-old-space-size=4096".to_string(),
-                ),
-                ("NODE_ENV".to_string(), "production".to_string()),
-                (
-                    "NPM_CONFIG_REGISTRY".to_string(),
-                    "https://registry.example".to_string(),
-                ),
-                ("npm_config_cache".to_string(), "/tmp/npm-cache".to_string()),
-                (
-                    "COREPACK_HOME".to_string(),
-                    "/Users/demo/.cache/corepack".to_string(),
-                ),
-                (
-                    "PNPM_HOME".to_string(),
-                    "/Users/demo/.local/share/pnpm".to_string(),
-                ),
-                ("GH_TOKEN".to_string(), "caller-token".to_string()),
-                ("PWD".to_string(), "/tmp/caller-workspace".to_string()),
-            ]),
-            "ai.openclaw.ocm",
-            ServiceManagerKind::Launchd,
-        );
+        let process_env = build_supervised_openclaw_env(BTreeMap::from([
+            (
+                "NODE_OPTIONS".to_string(),
+                "--max-old-space-size=4096".to_string(),
+            ),
+            ("NODE_ENV".to_string(), "production".to_string()),
+            (
+                "NPM_CONFIG_REGISTRY".to_string(),
+                "https://registry.example".to_string(),
+            ),
+            ("npm_config_cache".to_string(), "/tmp/npm-cache".to_string()),
+            (
+                "COREPACK_HOME".to_string(),
+                "/Users/demo/.cache/corepack".to_string(),
+            ),
+            (
+                "PNPM_HOME".to_string(),
+                "/Users/demo/.local/share/pnpm".to_string(),
+            ),
+            ("GH_TOKEN".to_string(), "caller-token".to_string()),
+            ("PWD".to_string(), "/tmp/caller-workspace".to_string()),
+        ]));
 
         assert_eq!(
             process_env.get("NODE_OPTIONS").map(String::as_str),
