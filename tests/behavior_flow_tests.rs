@@ -3,8 +3,12 @@ mod support;
 use std::fs;
 use std::process::Command;
 
-use crate::support::{TestDir, ocm_env, path_string, run_ocm, stderr, stdout, write_text};
-use ocm::store::clean_path;
+use crate::support::{
+    TestDir, install_fake_launchctl, ocm_env, path_string, run_ocm, stderr, stdout,
+    write_executable_script, write_text,
+};
+use ocm::store::{clean_path, now_utc, supervisor_runtime_path};
+use ocm::supervisor::{SupervisorRuntimeService, SupervisorRuntimeState};
 use serde_json::Value;
 
 fn exported_gateway_port(output: &std::process::Output) -> u32 {
@@ -157,6 +161,103 @@ fn env_run_uses_the_registered_launcher_and_its_cwd() {
     assert_eq!(
         stdout(&run_output),
         format!("{}|{}", expected_run_dir.display(), env_root.display())
+    );
+}
+
+#[test]
+fn supervised_gateway_restart_requires_negotiated_external_handoff() {
+    let root = TestDir::new("behavior-supervised-gateway-restart");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    install_fake_launchctl(&root, &mut env);
+
+    let invocation_log = root.child("gateway-restart.log");
+    let launcher = root.child("openclaw");
+    write_executable_script(
+        &launcher,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nprintf '%s|%s|%s|%s|%s' \"${{OPENCLAW_SUPERVISOR_MODE-unset}}\" \"${{OPENCLAW_SERVICE_MARKER-unset}}\" \"${{OPENCLAW_SERVICE_KIND-unset}}\" \"${{OPENCLAW_NO_RESPAWN-unset}}\" \"${{OPENCLAW_LAUNCHD_LABEL-unset}}\"\n",
+            path_string(&invocation_log)
+        ),
+    );
+
+    let add_launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "stable",
+            "--command",
+            &path_string(&launcher),
+        ],
+    );
+    assert!(add_launcher.status.success(), "{}", stderr(&add_launcher));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+    let start = run_ocm(&cwd, &env, &["service", "start", "demo"]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let runtime_path = supervisor_runtime_path(&env, &cwd).unwrap();
+    fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
+    let runtime_state = |restart_handoff: &str| SupervisorRuntimeState {
+        kind: "ocm-supervisor-runtime".to_string(),
+        ocm_home: path_string(&root.child("ocm-home")),
+        updated_at: now_utc(),
+        services: vec![SupervisorRuntimeService {
+            env_name: "demo".to_string(),
+            binding_kind: "launcher".to_string(),
+            binding_name: "stable".to_string(),
+            gateway_state: "running".to_string(),
+            restart_handoff: Some(restart_handoff.to_string()),
+            restart_count: 0,
+            child_port: 18789,
+            pid: Some(4242),
+            stdout_path: path_string(&root.child("demo.stdout.log")),
+            stderr_path: path_string(&root.child("demo.stderr.log")),
+            last_exit_code: None,
+            last_error: None,
+            last_event_at: None,
+            next_retry_at: None,
+        }],
+        children: Vec::new(),
+    };
+    fs::write(
+        &runtime_path,
+        serde_json::to_vec(&runtime_state("protocol-v1")).unwrap(),
+    )
+    .unwrap();
+
+    let restart = run_ocm(&cwd, &env, &["@demo", "--", "gateway", "restart"]);
+    assert!(restart.status.success(), "{}", stderr(&restart));
+    assert_eq!(stdout(&restart), "external|openclaw|unset|1|unset");
+    assert_eq!(
+        fs::read_to_string(&invocation_log).unwrap(),
+        "gateway restart\n"
+    );
+
+    fs::write(
+        &runtime_path,
+        serde_json::to_vec(&runtime_state("legacy")).unwrap(),
+    )
+    .unwrap();
+    let legacy_restart = run_ocm(&cwd, &env, &["@demo", "--", "gateway", "restart"]);
+    assert!(!legacy_restart.status.success());
+    assert!(
+        stderr(&legacy_restart).contains("has not negotiated external restart handoff protocol v1")
+    );
+    assert_eq!(
+        fs::read_to_string(&invocation_log).unwrap(),
+        "gateway restart\n"
     );
 }
 

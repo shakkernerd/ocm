@@ -43,6 +43,19 @@ pub(crate) struct EnvDestroyProcessIdentity {
     started_at: String,
 }
 
+fn managed_gateway_lifecycle_action(args: &[String]) -> Option<&str> {
+    let command = args.first()?.as_str();
+    let action = args.get(1)?.as_str();
+    if !matches!(command, "gateway" | "daemon") {
+        return None;
+    }
+    matches!(
+        action,
+        "install" | "uninstall" | "start" | "stop" | "restart"
+    )
+    .then_some(action)
+}
+
 #[derive(Debug)]
 struct ProcessTerminationError {
     terminated: usize,
@@ -1068,6 +1081,17 @@ impl Cli {
         let meta = self
             .environment_service()
             .apply_effective_gateway_port(self.environment_service().touch(name)?)?;
+        if meta.service_enabled
+            && meta.service_running
+            && after.first().is_some_and(|command| command == "openclaw")
+            && managed_gateway_lifecycle_action(&after[1..]).is_some()
+        {
+            let command = self.command_example();
+            return Err(format!(
+                "env exec cannot safely run OpenClaw gateway lifecycle commands for supervised env \"{}\"; use \"{command} @{} -- gateway restart\" or \"{command} service restart {}\"",
+                meta.name, meta.name, meta.name
+            ));
+        }
         if let Some(source) = self
             .environment_service()
             .active_source_watch_override(&meta.name)?
@@ -1132,8 +1156,40 @@ impl Cli {
         };
         Self::assert_command_separator(&before, "env run requires -- before OpenClaw arguments")?;
 
+        let meta = self.environment_service().get(name)?;
+        if meta.service_enabled
+            && meta.service_running
+            && let Some(action) = managed_gateway_lifecycle_action(&after)
+        {
+            let command = self.command_example();
+            if action != "restart" {
+                return Err(format!(
+                    "OpenClaw cannot {action} the gateway service for supervised env \"{}\"; use \"{command} service {action} {}\"",
+                    meta.name, meta.name
+                ));
+            }
+            if runtime_override.is_some() || launcher_override.is_some() {
+                return Err(format!(
+                    "gateway restart for supervised env \"{}\" must use its active binding; use \"{command} service restart {}\"",
+                    meta.name, meta.name
+                ));
+            }
+            let inspection =
+                crate::supervisor::SupervisorService::new(&self.env, &self.cwd).inspect()?;
+            let restart_handoff = inspection
+                .runtime_services
+                .iter()
+                .find(|service| service.env_name == meta.name)
+                .and_then(|service| service.restart_handoff.as_deref());
+            if restart_handoff != Some("protocol-v1") {
+                return Err(format!(
+                    "env \"{}\" has not negotiated external restart handoff protocol v1; use \"{command} service restart {}\" or upgrade its OpenClaw runtime",
+                    meta.name, meta.name
+                ));
+            }
+        }
+
         if should_clear_skip_bootstrap_for_openclaw_args(&after) {
-            let meta = self.environment_service().get(name)?;
             clear_skip_bootstrap_for_openclaw_onboarding(&derive_env_paths(Path::new(&meta.root)))?;
         }
 
