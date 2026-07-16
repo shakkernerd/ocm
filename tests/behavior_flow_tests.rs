@@ -255,6 +255,35 @@ fn supervised_gateway_restart_requires_negotiated_external_handoff() {
     assert!(
         stderr(&legacy_restart).contains("has not negotiated external restart handoff protocol v1")
     );
+    let profiled_legacy_restart = run_ocm(
+        &cwd,
+        &env,
+        &["@demo", "--", "--profile", "work", "gateway", "restart"],
+    );
+    assert!(!profiled_legacy_restart.status.success());
+    assert!(
+        stderr(&profiled_legacy_restart)
+            .contains("has not negotiated external restart handoff protocol v1")
+    );
+    let exec_lifecycle = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "exec",
+            "demo",
+            "--",
+            "openclaw",
+            "--no-color",
+            "gateway",
+            "stop",
+        ],
+    );
+    assert!(!exec_lifecycle.status.success());
+    assert!(
+        stderr(&exec_lifecycle)
+            .contains("env exec cannot safely run OpenClaw gateway lifecycle commands")
+    );
     assert_eq!(
         fs::read_to_string(&invocation_log).unwrap(),
         "gateway restart\n"
