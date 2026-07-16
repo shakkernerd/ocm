@@ -175,6 +175,18 @@ fi
     )
 }
 
+fn write_legacy_openclaw_script(path: &Path, contents: &str) {
+    let body = contents
+        .strip_prefix("#!/bin/sh\n")
+        .expect("fake OpenClaw script must use the expected shell shebang");
+    write_executable_script(
+        path,
+        &format!(
+            "#!/bin/sh\nif [ \"${{1:-}}\" = 'gateway' ] && [ \"${{2:-}}\" = 'restart-handoff' ]; then exit 64; fi\n{body}"
+        ),
+    );
+}
+
 fn read_persisted_service_state(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
@@ -232,7 +244,7 @@ fn setup_service_fixture(
     assert!(launcher.status.success(), "{}", stderr(&launcher));
 
     let runtime_path = root.child("bin/openclaw");
-    write_executable_script(&runtime_path, "#!/bin/sh\nexit 0\n");
+    write_legacy_openclaw_script(&runtime_path, "#!/bin/sh\nexit 0\n");
     let runtime = run_ocm(
         &cwd,
         &env,
@@ -292,7 +304,7 @@ fn setup_daemon_run_fixture_with_child_sleep(
     let runtime_marker = root.child("runtime-ran.txt");
 
     let launcher_script = root.child("bin/launcher-openclaw");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &launcher_script,
         &format!(
             "#!/bin/sh\nprintf 'launcher\\n' > '{}'\nprintf 'launcher stdout\\n'\nprintf 'launcher stderr\\n' >&2\nsleep {}\n",
@@ -301,7 +313,7 @@ fn setup_daemon_run_fixture_with_child_sleep(
         ),
     );
     let runtime_script = root.child("bin/runtime-openclaw");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &runtime_script,
         &format!(
             "#!/bin/sh\nprintf 'runtime\\n' > '{}'\nprintf 'runtime stdout\\n'\nprintf 'runtime stderr\\n' >&2\nsleep {}\n",
@@ -384,7 +396,9 @@ fn service_state_plans_runnable_children_and_skips_disabled_envs() {
             .contains("/envs/demo")
     );
     assert_eq!(demo["processEnv"]["OPENCLAW_SERVICE_MARKER"], "openclaw");
-    assert_eq!(demo["processEnv"]["OPENCLAW_SERVICE_KIND"], "gateway");
+    assert!(demo["processEnv"].get("OPENCLAW_SERVICE_KIND").is_none());
+    assert_eq!(demo["processEnv"]["OPENCLAW_SUPERVISOR_MODE"], "external");
+    assert_eq!(demo["processEnv"]["OPENCLAW_NO_RESPAWN"], "1");
     assert!(demo["processEnv"].get("OPENCLAW_LAUNCHD_LABEL").is_none());
     assert!(demo["processEnv"].get("OPENCLAW_SYSTEMD_UNIT").is_none());
 
@@ -677,7 +691,7 @@ fn daemon_run_reloads_children_after_binding_changes() {
     let new_started = root.child("new-started.txt");
 
     let old_script = root.child("bin/launcher-old");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &old_script,
         &format!(
             "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'printf \"stopped\\n\" >> \"{}\"; exit 0' TERM INT\nwhile :; do sleep 1; done\n",
@@ -686,7 +700,7 @@ fn daemon_run_reloads_children_after_binding_changes() {
         ),
     );
     let new_script = root.child("bin/launcher-new");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &new_script,
         &format!(
             "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
@@ -753,7 +767,7 @@ fn service_restart_restarts_only_the_target_child() {
     let main_stopped = root.child("main-stopped.txt");
     let rescue_script = root.child("bin/rescue-openclaw");
     let main_script = root.child("bin/main-openclaw");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &rescue_script,
         &format!(
             "#!/bin/sh\nprintf '%s\\n' \"$$\" >> '{}'\ntrap 'printf \"%s\\n\" \"$$\" >> \"{}\"; exit 0' TERM INT\nwhile :; do sleep 1; done\n",
@@ -761,7 +775,7 @@ fn service_restart_restarts_only_the_target_child() {
             path_string(&rescue_stopped),
         ),
     );
-    write_executable_script(
+    write_legacy_openclaw_script(
         &main_script,
         &format!(
             "#!/bin/sh\nprintf '%s\\n' \"$$\" >> '{}'\ntrap 'printf \"%s\\n\" \"$$\" >> \"{}\"; exit 0' TERM INT\nwhile :; do sleep 1; done\n",
@@ -867,7 +881,7 @@ fn service_restart_requeues_a_stopped_desired_child() {
     let started = root.child("started.txt");
     let script = root.child("bin/openclaw");
     fs::write(&exit_once, "1\n").unwrap();
-    write_executable_script(
+    write_legacy_openclaw_script(
         &script,
         &format!(
             "#!/bin/sh\nif [ -f '{}' ]; then rm -f '{}'; exit 0; fi\nprintf '%s\\n' \"$$\" >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
@@ -922,7 +936,7 @@ fn daemon_keeps_running_when_one_env_fails_to_spawn() {
     let missing_cwd = root.child("missing-cwd");
 
     let good_script = root.child("bin/good-openclaw");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &good_script,
         &format!(
             "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
@@ -930,7 +944,7 @@ fn daemon_keeps_running_when_one_env_fails_to_spawn() {
         ),
     );
     let bad_script = root.child("bin/bad-openclaw");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &bad_script,
         &format!(
             "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
@@ -1006,7 +1020,7 @@ fn daemon_stops_a_running_child_after_service_stop() {
     let started = root.child("started.txt");
     let stopped = root.child("stopped.txt");
     let script = root.child("bin/openclaw");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &script,
         &format!(
             "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'printf \"stopped\\n\" >> \"{}\"; exit 0' TERM INT\nwhile :; do sleep 1; done\n",
@@ -1057,7 +1071,7 @@ fn daemon_stops_the_full_dev_process_tree_after_service_stop() {
     let stopped = root.child("stopped.txt");
     let child_pid_file = root.child("child.pid");
     let script = root.child("bin/openclaw");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &script,
         &format!(
             "#!/bin/sh\nsh -c 'echo $$ > \"{}\"; trap \"exit 0\" TERM INT; while :; do sleep 1; done' &\nprintf 'started\\n' >> '{}'\ntrap 'printf \"stopped\\n\" >> \"{}\"; exit 0' TERM INT\nwhile :; do sleep 1; done\n",
@@ -1344,7 +1358,7 @@ fn live_runtime_changes_recreate_missing_supervisor_state() {
     let first_started = root.child("first-started.txt");
     let second_started = root.child("second-started.txt");
     let first_script = root.child("bin/first-openclaw");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &first_script,
         &format!(
             "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
@@ -1352,7 +1366,7 @@ fn live_runtime_changes_recreate_missing_supervisor_state() {
         ),
     );
     let second_script = root.child("bin/second-openclaw");
-    write_executable_script(
+    write_legacy_openclaw_script(
         &second_script,
         &format!(
             "#!/bin/sh\nprintf 'started\\n' >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
