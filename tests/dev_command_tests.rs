@@ -1929,6 +1929,7 @@ fn dev_watch_aborts_and_restores_policy_when_service_stop_times_out() {
             binding_kind: "runtime".to_string(),
             binding_name: "stable".to_string(),
             gateway_state: "running".to_string(),
+            restart_handoff: Some("protocol-v1".to_string()),
             restart_count: 0,
             child_port: 21901,
             pid: Some(std::process::id()),

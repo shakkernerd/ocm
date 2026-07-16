@@ -186,6 +186,9 @@ pub fn service_status(
     if let Some(runtime) = compact_runtime_label(summary) {
         summary_rows.push(KeyValueRow::plain("Runtime", runtime));
     }
+    if let Some(restart_handoff) = restart_handoff_label(summary) {
+        summary_rows.push(KeyValueRow::plain("Restart handoff", restart_handoff));
+    }
     lines.extend(render_key_value_card(
         "Status",
         &summary_rows,
@@ -283,6 +286,13 @@ fn service_status_raw(summary: &ServiceSummary) -> Vec<String> {
         format!("desiredRunning: {}", summary.desired_running),
         format!("running: {}", summary.running),
         format!("gatewayState: {}", gateway_state(summary)),
+        format!(
+            "restartHandoff: {}",
+            summary
+                .restart_handoff
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
         format!("ocmService: {daemon}"),
         format!(
             "childPid: {}",
@@ -380,6 +390,14 @@ fn compact_runtime_label(summary: &ServiceSummary) -> Option<String> {
     ) {
         (Some("runtime"), Some(name), Some(version)) => Some(format!("{name} ({version})")),
         (Some("runtime"), Some(name), None) => Some(name.to_string()),
+        _ => None,
+    }
+}
+
+fn restart_handoff_label(summary: &ServiceSummary) -> Option<&'static str> {
+    match summary.restart_handoff.as_deref() {
+        Some("protocol-v1") => Some("protocol v1"),
+        Some("legacy") => Some("legacy compatibility"),
         _ => None,
     }
 }
@@ -537,6 +555,7 @@ mod tests {
             loaded: true,
             running: true,
             gateway_state: "running".to_string(),
+            restart_handoff: Some("protocol-v1".to_string()),
             desired_running: true,
             ocm_service_installed: true,
             ocm_service_loaded: true,
@@ -592,6 +611,11 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line.contains("http://127.0.0.1:18789"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Restart handoff") && line.contains("protocol v1"))
         );
         assert!(!lines.iter().any(|line| line.contains("/tmp/openclaw")));
         assert!(!lines.iter().any(|line| line.contains("/tmp/stdout.log")));
