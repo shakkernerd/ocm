@@ -4,6 +4,8 @@ All notable changes to OCM are documented here.
 
 ## Unreleased
 
+## 0.2.28 - 2026-07-16
+
 ### Fixed
 
 - Run directly supervised gateways through OpenClaw's external restart-handoff contract, keep wrapper-backed and legacy runtimes in no-respawn compatibility mode, and prevent child commands from inheriting the shared OCM service identity.
