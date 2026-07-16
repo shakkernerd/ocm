@@ -1138,7 +1138,7 @@ fn daemon_restarts_quick_clean_exit_with_openclaw_handoff() {
     let starts = root.child("starts.txt");
     let child_env = root.child("child-env.txt");
     let intent = root.child("restart-intent.txt");
-    let script = root.child("bin/openclaw");
+    let script = root.child("bin/openclaw.mjs");
     write_executable_script(
         &script,
         &format!(
@@ -1176,7 +1176,7 @@ fn daemon_restarts_quick_clean_exit_with_openclaw_handoff() {
 }
 
 #[test]
-fn daemon_keeps_legacy_runtime_in_safe_no_respawn_mode() {
+fn daemon_keeps_protocol_capable_wrapper_in_safe_no_respawn_mode() {
     let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-run-legacy-no-respawn");
     let cwd = root.child("workspace");
@@ -1186,11 +1186,13 @@ fn daemon_keeps_legacy_runtime_in_safe_no_respawn_mode() {
     let runtime_path = root.child("ocm-home/supervisor/runtime.json");
 
     let child_env = root.child("child-env.txt");
+    let intent = root.child("restart-intent.txt");
     let script = root.child("bin/openclaw");
     write_executable_script(
         &script,
         &format!(
-            "#!/bin/sh\nif [ \"${{1:-}}\" = 'gateway' ] && [ \"${{2:-}}\" = 'restart-handoff' ]; then exit 64; fi\nprintf '%s|%s|%s|%s|%s|%s\\n' \"${{OPENCLAW_SUPERVISOR_MODE:-unset}}\" \"${{OPENCLAW_SERVICE_MARKER:-unset}}\" \"${{OPENCLAW_SERVICE_KIND:-unset}}\" \"${{OPENCLAW_NO_RESPAWN:-unset}}\" \"${{OPENCLAW_WINDOWS_TASK_NAME:-unset}}\" \"${{OPENCLAW_SYSTEMD_UNIT:-unset}}\" > '{child_env}'\nexit 0\n",
+            "#!/bin/sh\n{protocol}printf '%s|%s|%s|%s|%s|%s\\n' \"${{OPENCLAW_SUPERVISOR_MODE:-unset}}\" \"${{OPENCLAW_SERVICE_MARKER:-unset}}\" \"${{OPENCLAW_SERVICE_KIND:-unset}}\" \"${{OPENCLAW_NO_RESPAWN:-unset}}\" \"${{OPENCLAW_WINDOWS_TASK_NAME:-unset}}\" \"${{OPENCLAW_SYSTEMD_UNIT:-unset}}\" > '{child_env}'\nexit 0\n",
+            protocol = restart_handoff_protocol_shell_snippet(&intent),
             child_env = path_string(&child_env),
         ),
     );
@@ -1220,10 +1222,10 @@ fn daemon_keeps_legacy_runtime_in_safe_no_respawn_mode() {
     let mut daemon = spawn_daemon_process(&cwd, &env);
     let service_state =
         wait_for_runtime_service_state(&runtime_path, "demo", "stopped", Duration::from_secs(6))
-            .expect("daemon runtime state did not stop after the legacy quick clean exit");
+            .expect("daemon runtime state did not stop after the wrapper quick clean exit");
     let last_error = service_state["lastError"].as_str().unwrap();
-    assert!(last_error.contains("does not support external restart handoff"));
-    assert!(last_error.contains("upgrade the runtime"));
+    assert!(last_error.contains("does not support a PID-safe external restart handoff"));
+    assert!(last_error.contains("does not preserve the supervised gateway PID"));
     assert_eq!(
         fs::read_to_string(&child_env).unwrap().trim(),
         "unset|openclaw|unset|1|unset|unset"
@@ -1245,7 +1247,7 @@ fn daemon_stops_quick_clean_exit_without_restart_handoff() {
 
     let started = root.child("started.txt");
     let intent = root.child("restart-intent.txt");
-    let script = root.child("bin/openclaw");
+    let script = root.child("bin/openclaw.mjs");
     write_executable_script(
         &script,
         &format!(
@@ -1300,7 +1302,7 @@ fn daemon_stops_repeated_quick_clean_exit_after_restart_handoff() {
 
     let started = root.child("started.txt");
     let intent = root.child("restart-intent.txt");
-    let script = root.child("bin/openclaw");
+    let script = root.child("bin/openclaw.mjs");
     write_executable_script(
         &script,
         &format!(

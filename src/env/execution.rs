@@ -268,6 +268,36 @@ impl GatewayProcessSpec {
             (None, None) => Vec::new(),
         }
     }
+
+    pub fn restart_handoff_pid_bound(&self) -> bool {
+        let Some(binary_path) = self.binary_path.as_deref() else {
+            return false;
+        };
+        if is_openclaw_entrypoint(binary_path) {
+            return true;
+        }
+
+        let Some(openclaw_entrypoint) = self.args.first().map(String::as_str) else {
+            return false;
+        };
+        is_openclaw_entrypoint(openclaw_entrypoint)
+            && self.binding_kind == "runtime"
+            && self.runtime_source_kind.as_deref() == Some("installed")
+            && is_node_binary(binary_path)
+    }
+}
+
+fn is_openclaw_entrypoint(path: &str) -> bool {
+    Path::new(path).file_name().and_then(|name| name.to_str()) == Some("openclaw.mjs")
+}
+
+fn is_node_binary(binary_path: &str) -> bool {
+    matches!(
+        Path::new(binary_path)
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("node" | "node.exe")
+    )
 }
 
 impl<'a> EnvironmentService<'a> {

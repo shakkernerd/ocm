@@ -77,6 +77,11 @@ struct CommandOutput {
 }
 
 pub(super) fn probe_restart_handoff_support(spec: &SupervisorChildSpec) -> RestartHandoffSupport {
+    if !spec.restart_handoff_pid_bound {
+        return RestartHandoffSupport::Unsupported(
+            "resolved command does not preserve the supervised gateway PID".to_string(),
+        );
+    }
     let probe_spec = prepare_supervisor_child_spec(
         spec,
         &RestartHandoffSupport::Unsupported("capability probe pending".to_string()),
@@ -400,8 +405,9 @@ mod tests {
             env_name: "demo".to_string(),
             binding_kind: "runtime".to_string(),
             binding_name: "local".to_string(),
+            restart_handoff_pid_bound: true,
             command: None,
-            binary_path: Some("/runtime/openclaw".to_string()),
+            binary_path: Some("/runtime/node_modules/openclaw/openclaw.mjs".to_string()),
             runtime_source_kind: Some("installed".to_string()),
             runtime_release_version: None,
             runtime_release_channel: None,
@@ -456,7 +462,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "/runtime/openclaw",
+                "/runtime/node_modules/openclaw/openclaw.mjs",
                 "--profile",
                 "demo",
                 "gateway",
@@ -466,6 +472,20 @@ mod tests {
                 "42",
                 "--json",
             ]
+        );
+    }
+
+    #[test]
+    fn wrapper_binding_skips_restart_handoff_capability_probe() {
+        let mut spec = direct_spec();
+        spec.restart_handoff_pid_bound = false;
+        spec.binary_path = Some("/missing/pnpm".to_string());
+
+        assert_eq!(
+            probe_restart_handoff_support(&spec),
+            RestartHandoffSupport::Unsupported(
+                "resolved command does not preserve the supervised gateway PID".to_string()
+            )
         );
     }
 

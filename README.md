@@ -189,12 +189,14 @@ ocm logs mira --tail 50
 ocm logs mira -f
 ```
 
-OCM negotiates fresh-process restart support with each gateway's exact runtime
-or launcher. `ocm service status <env>` reports `protocol v1` when OpenClaw can
-hand restart intent back to OCM atomically. Older runtimes run in legacy
-compatibility mode without OCM's native service identity or detached respawn;
-use `ocm service restart <env>` or upgrade the runtime for gateway-initiated
-fresh-process restarts.
+OCM negotiates fresh-process restart support only when it executes an
+`openclaw.mjs` entrypoint directly or through OCM's managed Node.js toolchain,
+so the gateway PID is the process OCM owns. `ocm service status <env>` reports
+`protocol v1` when OpenClaw can hand restart intent back to OCM atomically.
+Package-manager, shell, host-Node, and other wrapper-backed bindings run in
+legacy compatibility mode without OCM's native service identity or detached
+respawn; use `ocm service restart <env>` or bind a directly invoked OpenClaw
+runtime for gateway-initiated fresh-process restarts.
 
 ## Why not just run OpenClaw directly?
 

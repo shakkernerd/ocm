@@ -6,7 +6,7 @@ All notable changes to OCM are documented here.
 
 ### Fixed
 
-- Run supervised gateways through OpenClaw's external restart-handoff contract, keep legacy runtimes in no-respawn compatibility mode, and prevent child commands from inheriting the shared OCM service identity.
+- Run directly supervised gateways through OpenClaw's external restart-handoff contract, keep wrapper-backed and legacy runtimes in no-respawn compatibility mode, and prevent child commands from inheriting the shared OCM service identity.
 - Prepare release versions through squash pull requests before tagging protected `main`, and start publication automatically from the signed tag push.
 - Run release validation once and move pinned CI actions to their current Node 24 runtimes.
 
