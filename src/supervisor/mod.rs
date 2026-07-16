@@ -2543,7 +2543,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_runtime_clean_exit_reports_upgrade_guidance() {
+    fn unsupported_binding_clean_exit_reports_safe_restart_guidance() {
         let decision = exited_child_restart_decision(
             &exited_child_with_handoff_result(
                 Some(0),
@@ -2560,8 +2560,9 @@ mod tests {
 
         assert!(!decision.should_restart);
         let error = decision.last_error.unwrap();
-        assert!(error.contains("does not support external restart handoff"));
-        assert!(error.contains("upgrade the runtime"));
+        assert!(error.contains("does not support a PID-safe external restart handoff"));
+        assert!(error.contains("bind a direct openclaw.mjs runtime"));
+        assert!(error.contains("upgrade OpenClaw"));
         assert!(error.contains("ocm service restart"));
     }
 
