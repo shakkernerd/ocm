@@ -146,14 +146,33 @@ fn wait_for_runtime_child_pid_change(
     None
 }
 
-fn restart_handoff_shell_snippet() -> &'static str {
-    r#"mkdir -p "$OPENCLAW_STATE_DIR"
-now=$(( $(date +%s) * 1000 ))
-expires=$((now + 60000))
-cat > "$OPENCLAW_STATE_DIR/gateway-supervisor-restart-handoff.json" <<JSON
-{"kind":"gateway-supervisor-restart-handoff","version":1,"intentId":"test-intent-1","pid":$$,"createdAt":$now,"expiresAt":$expires,"source":"plugin-change","restartKind":"full-process","supervisorMode":"external"}
-JSON
-"#
+fn restart_handoff_protocol_shell_snippet(intent_path: &Path) -> String {
+    format!(
+        r#"if [ "${{1:-}}" = "gateway" ] && [ "${{2:-}}" = "restart-handoff" ]; then
+  case "${{3:-}}" in
+    capabilities)
+      printf '%s\n' '{{"ok":true,"protocol":"openclaw.gateway.restart-handoff","protocolVersion":1,"operations":["consume"]}}'
+      exit 0
+      ;;
+    consume)
+      if [ ! -f '{intent_path}' ]; then
+        printf '%s\n' '{{"ok":true,"protocol":"openclaw.gateway.restart-handoff","protocolVersion":1,"status":"none","reason":"missing"}}'
+        exit 0
+      fi
+      intent_pid=$(cat '{intent_path}')
+      if [ "$intent_pid" != "${{5:-}}" ]; then
+        printf '{{"ok":true,"protocol":"openclaw.gateway.restart-handoff","protocolVersion":1,"status":"rejected","reason":"pid-mismatch","handoffPid":%s}}\n' "$intent_pid"
+        exit 0
+      fi
+      rm -f '{intent_path}'
+      printf '{{"ok":true,"protocol":"openclaw.gateway.restart-handoff","protocolVersion":1,"status":"accepted","handoff":{{"pid":%s,"supervisorMode":"external"}}}}\n' "$intent_pid"
+      exit 0
+      ;;
+  esac
+fi
+"#,
+        intent_path = path_string(intent_path),
+    )
 }
 
 fn read_persisted_service_state(path: &Path) -> Value {
@@ -1103,13 +1122,17 @@ fn daemon_restarts_quick_clean_exit_with_openclaw_handoff() {
     let runtime_path = root.child("ocm-home/supervisor/runtime.json");
 
     let starts = root.child("starts.txt");
+    let child_env = root.child("child-env.txt");
+    let intent = root.child("restart-intent.txt");
     let script = root.child("bin/openclaw");
     write_executable_script(
         &script,
         &format!(
-            "#!/bin/sh\ncount=0\nif [ -f '{starts}' ]; then count=$(cat '{starts}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{starts}'\nif [ \"$count\" -eq 1 ]; then\n{handoff}exit 0\nfi\nsleep 10\n",
+            "#!/bin/sh\n{protocol}printf '%s|%s|%s|%s|%s|%s\\n' \"${{OPENCLAW_SUPERVISOR_MODE:-unset}}\" \"${{OPENCLAW_SERVICE_MARKER:-unset}}\" \"${{OPENCLAW_SERVICE_KIND:-unset}}\" \"${{OPENCLAW_NO_RESPAWN:-unset}}\" \"${{OPENCLAW_LAUNCHD_LABEL:-unset}}\" \"${{OPENCLAW_SYSTEMD_UNIT:-unset}}\" > '{child_env}'\ncount=0\nif [ -f '{starts}' ]; then count=$(cat '{starts}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{starts}'\nif [ \"$count\" -eq 1 ]; then\nprintf '%s\\n' \"$$\" > '{intent}'\nexit 0\nfi\nsleep 10\n",
+            protocol = restart_handoff_protocol_shell_snippet(&intent),
+            child_env = path_string(&child_env),
             starts = path_string(&starts),
-            handoff = restart_handoff_shell_snippet(),
+            intent = path_string(&intent),
         ),
     );
 
@@ -1130,6 +1153,68 @@ fn daemon_restarts_quick_clean_exit_with_openclaw_handoff() {
     let runtime = wait_for_runtime_children(&runtime_path, 1, Some("demo"), Duration::from_secs(5))
         .expect("daemon runtime state did not report the restarted child");
     assert!(runtime["children"][0]["restartCount"].as_u64().unwrap() >= 1);
+    assert_eq!(
+        fs::read_to_string(&child_env).unwrap().trim(),
+        "external|openclaw|gateway|unset|unset|unset"
+    );
+
+    stop_process(&mut daemon);
+}
+
+#[test]
+fn daemon_keeps_legacy_runtime_in_safe_no_respawn_mode() {
+    let _guard = daemon_runtime_test_lock();
+    let root = TestDir::new("daemon-run-legacy-no-respawn");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+
+    let child_env = root.child("child-env.txt");
+    let script = root.child("bin/openclaw");
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nif [ \"${{1:-}}\" = 'gateway' ] && [ \"${{2:-}}\" = 'restart-handoff' ]; then exit 64; fi\nprintf '%s|%s|%s|%s|%s|%s\\n' \"${{OPENCLAW_SUPERVISOR_MODE:-unset}}\" \"${{OPENCLAW_SERVICE_MARKER:-unset}}\" \"${{OPENCLAW_SERVICE_KIND:-unset}}\" \"${{OPENCLAW_NO_RESPAWN:-unset}}\" \"${{OPENCLAW_WINDOWS_TASK_NAME:-unset}}\" \"${{OPENCLAW_SYSTEMD_UNIT:-unset}}\" > '{child_env}'\nexit 0\n",
+            child_env = path_string(&child_env),
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "launcher",
+            "add",
+            "legacy",
+            "--command",
+            &path_string(&script),
+        ],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--launcher", "legacy"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+    set_service_enabled(&cwd, &env, "demo", true);
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    let service_state =
+        wait_for_runtime_service_state(&runtime_path, "demo", "stopped", Duration::from_secs(6))
+            .expect("daemon runtime state did not stop after the legacy quick clean exit");
+    let last_error = service_state["lastError"].as_str().unwrap();
+    assert!(last_error.contains("does not support external restart handoff"));
+    assert!(last_error.contains("upgrade the runtime"));
+    assert_eq!(
+        fs::read_to_string(&child_env).unwrap().trim(),
+        "unset|openclaw|unset|1|unset|unset"
+    );
+    assert!(daemon.try_wait().unwrap().is_none());
 
     stop_process(&mut daemon);
 }
@@ -1145,11 +1230,13 @@ fn daemon_stops_quick_clean_exit_without_restart_handoff() {
     let runtime_path = root.child("ocm-home/supervisor/runtime.json");
 
     let started = root.child("started.txt");
+    let intent = root.child("restart-intent.txt");
     let script = root.child("bin/openclaw");
     write_executable_script(
         &script,
         &format!(
-            "#!/bin/sh\ncount=0\nif [ -f '{started}' ]; then count=$(cat '{started}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{started}'\nexit 0\n",
+            "#!/bin/sh\n{protocol}count=0\nif [ -f '{started}' ]; then count=$(cat '{started}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{started}'\nexit 0\n",
+            protocol = restart_handoff_protocol_shell_snippet(&intent),
             started = path_string(&started),
         ),
     );
@@ -1176,7 +1263,7 @@ fn daemon_stops_quick_clean_exit_without_restart_handoff() {
         service_state["lastError"]
             .as_str()
             .unwrap()
-            .contains("without OpenClaw restart handoff")
+            .contains("without an accepted OpenClaw restart handoff")
     );
 
     sleep(Duration::from_secs(2));
@@ -1198,13 +1285,15 @@ fn daemon_stops_repeated_quick_clean_exit_after_restart_handoff() {
     let runtime_path = root.child("ocm-home/supervisor/runtime.json");
 
     let started = root.child("started.txt");
+    let intent = root.child("restart-intent.txt");
     let script = root.child("bin/openclaw");
     write_executable_script(
         &script,
         &format!(
-            "#!/bin/sh\ncount=0\nif [ -f '{started}' ]; then count=$(cat '{started}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{started}'\n{handoff}exit 0\n",
+            "#!/bin/sh\n{protocol}count=0\nif [ -f '{started}' ]; then count=$(cat '{started}'); fi\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{started}'\nprintf '%s\\n' \"$$\" > '{intent}'\nexit 0\n",
+            protocol = restart_handoff_protocol_shell_snippet(&intent),
             started = path_string(&started),
-            handoff = restart_handoff_shell_snippet(),
+            intent = path_string(&intent),
         ),
     );
 
