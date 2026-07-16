@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::env::EnvironmentService;
+use crate::infra::shell::apply_external_supervision_hint;
 use crate::service::inspect::inspect_job;
 use crate::service::platform::{
     ManagedServiceDefinition, ManagedServiceEnablement, ServiceManagerKind,
@@ -64,14 +65,6 @@ pub(crate) const SERVICE_EXECUTABLE_IDENTITY: &str = "ocm-service-supervisor";
 const SERVICE_EXECUTABLE_IDENTITY_TIMEOUT_MS: u64 = 1_000;
 const SERVICE_EXECUTABLE_IDENTITY_BUSY_ATTEMPTS: usize = 5;
 const SERVICE_EXECUTABLE_IDENTITY_BUSY_RETRY_MS: u64 = 20;
-const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
-const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
-const OPENCLAW_NATIVE_SERVICE_IDENTITY_KEYS: [&str; 3] = [
-    "OPENCLAW_LAUNCHD_LABEL",
-    "OPENCLAW_SYSTEMD_UNIT",
-    "OPENCLAW_WINDOWS_TASK_NAME",
-];
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SupervisorChildSpec {
@@ -1271,9 +1264,7 @@ fn collect_exited_children(
             )
         })? {
             let ran_for = running_child.started_at.elapsed();
-            let restart_handoff = if status.code() == Some(0)
-                && ran_for < Duration::from_millis(SUPERVISOR_STABLE_RUN_MS)
-            {
+            let restart_handoff = if status.code() == Some(0) {
                 consume_restart_handoff(
                     &running_child.spec,
                     &running_child.restart_handoff_support,
@@ -1446,9 +1437,7 @@ fn exited_child_restart_decision(
         };
     }
 
-    let quick_clean_exit = exited_child.exit_code == Some(0)
-        && exited_child.ran_for < Duration::from_millis(SUPERVISOR_STABLE_RUN_MS);
-    if quick_clean_exit {
+    if exited_child.exit_code == Some(0) {
         if let RestartHandoffConsumeResult::Unsupported(reason) = &exited_child.restart_handoff {
             return ExitedSupervisorChildDecision {
                 should_restart: false,
@@ -1491,10 +1480,12 @@ fn exited_child_restart_decision(
             };
         }
 
-        if !same_desired_child || exited_child.quick_clean_restart_count == 0 {
+        let quick_clean_exit =
+            exited_child.ran_for < Duration::from_millis(SUPERVISOR_STABLE_RUN_MS);
+        if !same_desired_child || !quick_clean_exit || exited_child.quick_clean_restart_count == 0 {
             return ExitedSupervisorChildDecision {
                 should_restart: true,
-                quick_clean_handoff: true,
+                quick_clean_handoff: quick_clean_exit,
                 log_action: "OpenClaw restart handoff, retrying after backoff",
                 last_error: Some(
                     "OpenClaw requested supervisor restart handoff; retrying after backoff"
@@ -2061,17 +2052,7 @@ fn build_supervised_openclaw_env(
     process_env: BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut process_env = stable_supervised_child_env(process_env);
-    for key in OPENCLAW_NATIVE_SERVICE_IDENTITY_KEYS {
-        process_env.remove(key);
-    }
-    process_env.insert(
-        "OPENCLAW_SERVICE_MARKER".to_string(),
-        OPENCLAW_SERVICE_MARKER.to_string(),
-    );
-    process_env.insert(
-        "OPENCLAW_SERVICE_KIND".to_string(),
-        OPENCLAW_GATEWAY_SERVICE_KIND.to_string(),
-    );
+    apply_external_supervision_hint(&mut process_env);
     process_env
 }
 
@@ -2525,6 +2506,24 @@ mod tests {
     }
 
     #[test]
+    fn desired_stable_clean_exit_with_handoff_restarts() {
+        let decision = exited_child_restart_decision(
+            &exited_child_with_handoff_result(
+                Some(0),
+                0,
+                1,
+                RestartHandoffConsumeResult::Accepted,
+                Duration::from_millis(SUPERVISOR_STABLE_RUN_MS + 1),
+            ),
+            true,
+            true,
+        );
+
+        assert!(decision.should_restart);
+        assert!(!decision.quick_clean_handoff);
+    }
+
+    #[test]
     fn desired_quick_clean_exit_without_accepted_handoff_stays_stopped() {
         let decision = exited_child_restart_decision(
             &exited_child(Some(0), 0, Duration::from_millis(50)),
@@ -2542,7 +2541,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_runtime_quick_clean_exit_reports_upgrade_guidance() {
+    fn legacy_runtime_clean_exit_reports_upgrade_guidance() {
         let decision = exited_child_restart_decision(
             &exited_child_with_handoff_result(
                 Some(0),
@@ -2551,7 +2550,7 @@ mod tests {
                 RestartHandoffConsumeResult::Unsupported(
                     "runtime does not advertise protocol version 1".to_string(),
                 ),
-                Duration::from_millis(50),
+                Duration::from_millis(SUPERVISOR_STABLE_RUN_MS + 1),
             ),
             true,
             true,
@@ -2774,9 +2773,16 @@ mod tests {
                 .map(String::as_str),
             Some("openclaw")
         );
+        assert!(!process_env.contains_key("OPENCLAW_SERVICE_KIND"));
         assert_eq!(
-            process_env.get("OPENCLAW_SERVICE_KIND").map(String::as_str),
-            Some("gateway")
+            process_env
+                .get("OPENCLAW_SUPERVISOR_MODE")
+                .map(String::as_str),
+            Some("external")
+        );
+        assert_eq!(
+            process_env.get("OPENCLAW_NO_RESPAWN").map(String::as_str),
+            Some("1")
         );
         assert!(!process_env.contains_key("OPENCLAW_LAUNCHD_LABEL"));
         assert!(!process_env.contains_key("OPENCLAW_SYSTEMD_UNIT"));

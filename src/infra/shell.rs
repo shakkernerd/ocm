@@ -4,6 +4,15 @@ use std::path::Path;
 use crate::env::EnvMeta;
 use crate::store::derive_env_paths;
 
+pub const OPENCLAW_NATIVE_SERVICE_IDENTITY_KEYS: [&str; 3] = [
+    "OPENCLAW_LAUNCHD_LABEL",
+    "OPENCLAW_SYSTEMD_UNIT",
+    "OPENCLAW_WINDOWS_TASK_NAME",
+];
+
+const OPENCLAW_SERVICE_MARKER: &str = "openclaw";
+const OPENCLAW_GATEWAY_SERVICE_KIND: &str = "gateway";
+
 pub fn quote_posix(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
@@ -76,6 +85,9 @@ pub fn build_openclaw_env(
         "OPENCLAW_SERVICE_REPAIR_POLICY".to_string(),
         "external".to_string(),
     );
+    if meta.service_enabled && meta.service_running {
+        apply_external_supervision_hint(&mut next);
+    }
     next.insert("OCM_ACTIVE_ENV".to_string(), meta.name.clone());
     next.insert(
         "OCM_ACTIVE_ENV_ROOT".to_string(),
@@ -90,6 +102,40 @@ pub fn build_openclaw_env(
 
     next.remove("OPENCLAW_PROFILE");
     next
+}
+
+pub fn apply_external_supervision_hint(env: &mut BTreeMap<String, String>) {
+    scrub_native_service_identity(env);
+    env.insert(
+        "OPENCLAW_SERVICE_MARKER".to_string(),
+        OPENCLAW_SERVICE_MARKER.to_string(),
+    );
+    env.remove("OPENCLAW_SERVICE_KIND");
+    env.insert(
+        "OPENCLAW_SUPERVISOR_MODE".to_string(),
+        "external".to_string(),
+    );
+    env.insert("OPENCLAW_NO_RESPAWN".to_string(), "1".to_string());
+}
+
+pub fn apply_external_supervision_protocol_v1(env: &mut BTreeMap<String, String>) {
+    apply_external_supervision_hint(env);
+    env.insert(
+        "OPENCLAW_SERVICE_KIND".to_string(),
+        OPENCLAW_GATEWAY_SERVICE_KIND.to_string(),
+    );
+    env.remove("OPENCLAW_NO_RESPAWN");
+}
+
+pub fn apply_legacy_supervision(env: &mut BTreeMap<String, String>) {
+    apply_external_supervision_hint(env);
+    env.remove("OPENCLAW_SUPERVISOR_MODE");
+}
+
+fn scrub_native_service_identity(env: &mut BTreeMap<String, String>) {
+    for key in OPENCLAW_NATIVE_SERVICE_IDENTITY_KEYS {
+        env.remove(key);
+    }
 }
 
 pub fn build_openclaw_dev_source_env(
@@ -141,7 +187,6 @@ pub fn render_use_script(
     shell: &str,
     base_env: &BTreeMap<String, String>,
 ) -> String {
-    let paths = derive_env_paths(Path::new(&meta.root));
     let mut unset_keys = base_env
         .keys()
         .filter(|key| {
@@ -157,6 +202,13 @@ pub fn render_use_script(
             "OPENCLAW_GATEWAY_PORT",
             "OPENCLAW_DEV_SOURCE_ROOT",
             "OPENCLAW_BUNDLED_PLUGINS_DIR",
+            "OPENCLAW_SERVICE_MARKER",
+            "OPENCLAW_SERVICE_KIND",
+            "OPENCLAW_SUPERVISOR_MODE",
+            "OPENCLAW_NO_RESPAWN",
+            "OPENCLAW_LAUNCHD_LABEL",
+            "OPENCLAW_SYSTEMD_UNIT",
+            "OPENCLAW_WINDOWS_TASK_NAME",
         ]
         .into_iter()
         .map(str::to_string),
@@ -168,33 +220,23 @@ pub fn render_use_script(
         .into_iter()
         .map(|key| render_unset(shell, &key))
         .collect::<Vec<_>>();
-    lines.extend([
-        render_assignment(
-            shell,
-            "OPENCLAW_HOME",
-            &paths.openclaw_home.to_string_lossy(),
-        ),
-        render_assignment(
-            shell,
-            "OPENCLAW_STATE_DIR",
-            &paths.state_dir.to_string_lossy(),
-        ),
-        render_assignment(
-            shell,
-            "OPENCLAW_CONFIG_PATH",
-            &paths.config_path.to_string_lossy(),
-        ),
-        render_assignment(shell, "OPENCLAW_SERVICE_REPAIR_POLICY", "external"),
-        render_assignment(shell, "OCM_ACTIVE_ENV", &meta.name),
-        render_assignment(shell, "OCM_ACTIVE_ENV_ROOT", &paths.root.to_string_lossy()),
-    ]);
-
-    if let Some(port) = meta.gateway_port {
-        lines.push(render_assignment(
-            shell,
-            "OPENCLAW_GATEWAY_PORT",
-            &port.to_string(),
-        ));
+    let target_env = build_openclaw_env(meta, base_env);
+    for key in [
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_SERVICE_REPAIR_POLICY",
+        "OPENCLAW_SERVICE_MARKER",
+        "OPENCLAW_SERVICE_KIND",
+        "OPENCLAW_SUPERVISOR_MODE",
+        "OPENCLAW_NO_RESPAWN",
+        "OCM_ACTIVE_ENV",
+        "OCM_ACTIVE_ENV_ROOT",
+        "OPENCLAW_GATEWAY_PORT",
+    ] {
+        if let Some(value) = target_env.get(key) {
+            lines.push(render_assignment(shell, key, value));
+        }
     }
 
     format!("{}\n", lines.join("\n"))
@@ -268,6 +310,10 @@ mod tests {
                 "OPENCLAW_RANDOM_USER_VALUE".to_string(),
                 "strip-me".to_string(),
             ),
+            (
+                "OPENCLAW_LAUNCHD_LABEL".to_string(),
+                "ai.openclaw.gateway".to_string(),
+            ),
             ("OCM_ACTIVE_ENV".to_string(), "wrong".to_string()),
         ]);
 
@@ -305,6 +351,20 @@ mod tests {
             Some("1")
         );
         assert_eq!(env.get("OCM_ACTIVE_ENV").map(String::as_str), Some("demo"));
+        assert_eq!(
+            env.get("OPENCLAW_SERVICE_MARKER").map(String::as_str),
+            Some("openclaw")
+        );
+        assert_eq!(
+            env.get("OPENCLAW_SUPERVISOR_MODE").map(String::as_str),
+            Some("external")
+        );
+        assert_eq!(
+            env.get("OPENCLAW_NO_RESPAWN").map(String::as_str),
+            Some("1")
+        );
+        assert!(!env.contains_key("OPENCLAW_SERVICE_KIND"));
+        assert!(!env.contains_key("OPENCLAW_LAUNCHD_LABEL"));
         assert!(!env.contains_key("OPENCLAW_PROFILE"));
         assert!(!env.contains_key("OPENCLAW_RANDOM_USER_VALUE"));
     }

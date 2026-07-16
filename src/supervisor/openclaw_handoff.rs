@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -9,11 +8,12 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use super::{
-    OPENCLAW_GATEWAY_SERVICE_KIND, OPENCLAW_NATIVE_SERVICE_IDENTITY_KEYS, OPENCLAW_SERVICE_MARKER,
-    SupervisorChildSpec,
+use super::SupervisorChildSpec;
+#[cfg(test)]
+use crate::infra::shell::OPENCLAW_NATIVE_SERVICE_IDENTITY_KEYS;
+use crate::infra::shell::{
+    apply_external_supervision_protocol_v1, apply_legacy_supervision, quote_posix,
 };
-use crate::infra::shell::quote_posix;
 
 const PROTOCOL: &str = "openclaw.gateway.restart-handoff";
 const PROTOCOL_VERSION: u8 = 1;
@@ -120,29 +120,12 @@ pub(super) fn prepare_supervisor_child_spec(
     support: &RestartHandoffSupport,
 ) -> SupervisorChildSpec {
     let mut prepared = spec.clone();
-    scrub_native_service_identity(&mut prepared.process_env);
-    prepared.process_env.insert(
-        "OPENCLAW_SERVICE_MARKER".to_string(),
-        OPENCLAW_SERVICE_MARKER.to_string(),
-    );
     match support {
         RestartHandoffSupport::ProtocolV1 => {
-            prepared.process_env.insert(
-                "OPENCLAW_SERVICE_KIND".to_string(),
-                OPENCLAW_GATEWAY_SERVICE_KIND.to_string(),
-            );
-            prepared.process_env.insert(
-                "OPENCLAW_SUPERVISOR_MODE".to_string(),
-                "external".to_string(),
-            );
-            prepared.process_env.remove("OPENCLAW_NO_RESPAWN");
+            apply_external_supervision_protocol_v1(&mut prepared.process_env);
         }
         RestartHandoffSupport::Unsupported(_) => {
-            prepared.process_env.remove("OPENCLAW_SERVICE_KIND");
-            prepared.process_env.remove("OPENCLAW_SUPERVISOR_MODE");
-            prepared
-                .process_env
-                .insert("OPENCLAW_NO_RESPAWN".to_string(), "1".to_string());
+            apply_legacy_supervision(&mut prepared.process_env);
         }
     }
     prepared
@@ -211,12 +194,6 @@ pub(super) fn consume_restart_handoff(
         status => RestartHandoffConsumeResult::Failed(format!(
             "unknown consume response status \"{status}\""
         )),
-    }
-}
-
-fn scrub_native_service_identity(env: &mut BTreeMap<String, String>) {
-    for key in OPENCLAW_NATIVE_SERVICE_IDENTITY_KEYS {
-        env.remove(key);
     }
 }
 
@@ -414,6 +391,8 @@ fn command_failure_detail(status: ExitStatus) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     fn direct_spec() -> SupervisorChildSpec {
