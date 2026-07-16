@@ -203,6 +203,8 @@ pub struct SupervisorRuntimeService {
     pub binding_kind: String,
     pub binding_name: String,
     pub gateway_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_handoff: Option<String>,
     pub restart_count: usize,
     pub child_port: u32,
     pub pid: Option<u32>,
@@ -796,6 +798,7 @@ struct RunningSupervisorChild {
 #[derive(Clone)]
 struct PendingSupervisorChild {
     spec: SupervisorChildSpec,
+    restart_handoff: Option<String>,
     restart_count: usize,
     quick_clean_restart_count: usize,
     retry_at: Instant,
@@ -825,6 +828,7 @@ struct ExitedSupervisorChildDecision {
 struct InactiveSupervisorChild {
     spec: SupervisorChildSpec,
     gateway_state: String,
+    restart_handoff: Option<String>,
     restart_count: usize,
     last_exit_code: Option<i32>,
     last_error: Option<String>,
@@ -1084,7 +1088,7 @@ fn reconcile_running_children(
                 if should_replace {
                     pending.insert(
                         env_name,
-                        pending_supervisor_child(next_spec.clone(), 0, 0, 0, None, None),
+                        pending_supervisor_child(next_spec.clone(), None, 0, 0, 0, None, None),
                     );
                 }
             }
@@ -1125,7 +1129,7 @@ fn reconcile_running_children(
             stop_supervisor_child(&mut existing);
             pending.insert(
                 env_name,
-                pending_supervisor_child(next_spec.clone(), 0, 0, 0, None, None),
+                pending_supervisor_child(next_spec.clone(), None, 0, 0, 0, None, None),
             );
             inactive.remove(&existing.spec.env_name);
             runtime_dirty = true;
@@ -1163,7 +1167,7 @@ fn reconcile_restart_requests(
             stop_supervisor_child(&mut existing);
             pending.insert(
                 request.env_name.clone(),
-                pending_supervisor_child(next_spec, restart_count, 0, 0, None, None),
+                pending_supervisor_child(next_spec, None, restart_count, 0, 0, None, None),
             );
             inactive.remove(&request.env_name);
             runtime_dirty = true;
@@ -1183,7 +1187,7 @@ fn reconcile_restart_requests(
 
         pending.insert(
             request.env_name.clone(),
-            pending_supervisor_child(next_spec, 0, 0, 0, None, None),
+            pending_supervisor_child(next_spec, None, 0, 0, 0, None, None),
         );
         inactive.remove(&request.env_name);
         runtime_dirty = true;
@@ -1365,6 +1369,12 @@ fn process_exited_children(
                 exited_child.env_name.clone(),
                 pending_supervisor_child(
                     next_spec.clone(),
+                    Some(
+                        previous_child
+                            .restart_handoff_support
+                            .status_label()
+                            .to_string(),
+                    ),
                     next_restart_count,
                     next_quick_clean_restart_count,
                     restart_delay_ms(next_restart_count),
@@ -1377,6 +1387,12 @@ fn process_exited_children(
                 inactive_supervisor_child(
                     next_spec,
                     "backoff",
+                    Some(
+                        previous_child
+                            .restart_handoff_support
+                            .status_label()
+                            .to_string(),
+                    ),
                     next_restart_count,
                     exited_child.exit_code,
                     issue,
@@ -1392,6 +1408,12 @@ fn process_exited_children(
                 inactive_supervisor_child(
                     previous_child.spec.clone(),
                     "stopped",
+                    Some(
+                        previous_child
+                            .restart_handoff_support
+                            .status_label()
+                            .to_string(),
+                    ),
                     exited_child.restart_count,
                     exited_child.exit_code,
                     decision.last_error.clone(),
@@ -1528,6 +1550,7 @@ fn queue_missing_children(
             next_spec.env_name.clone(),
             PendingSupervisorChild {
                 spec: next_spec.clone(),
+                restart_handoff: None,
                 restart_count,
                 quick_clean_restart_count: 0,
                 retry_at,
@@ -1683,6 +1706,7 @@ fn filter_conflicting_supervisor_children(
 
 fn pending_supervisor_child(
     spec: SupervisorChildSpec,
+    restart_handoff: Option<String>,
     restart_count: usize,
     quick_clean_restart_count: usize,
     delay_ms: u64,
@@ -1691,6 +1715,7 @@ fn pending_supervisor_child(
 ) -> PendingSupervisorChild {
     PendingSupervisorChild {
         spec,
+        restart_handoff,
         restart_count,
         quick_clean_restart_count,
         retry_at: Instant::now() + Duration::from_millis(delay_ms),
@@ -1704,6 +1729,7 @@ fn pending_supervisor_child(
 fn inactive_supervisor_child(
     spec: SupervisorChildSpec,
     gateway_state: &str,
+    restart_handoff: Option<String>,
     restart_count: usize,
     last_exit_code: Option<i32>,
     last_error: Option<String>,
@@ -1713,6 +1739,7 @@ fn inactive_supervisor_child(
     InactiveSupervisorChild {
         spec,
         gateway_state: gateway_state.to_string(),
+        restart_handoff,
         restart_count,
         last_exit_code,
         last_error,
@@ -1728,6 +1755,7 @@ fn inactive_from_pending(
     InactiveSupervisorChild {
         spec: pending_child.spec.clone(),
         gateway_state: gateway_state.to_string(),
+        restart_handoff: pending_child.restart_handoff.clone(),
         restart_count: pending_child.restart_count,
         last_exit_code: pending_child.last_exit_code,
         last_error: pending_child.last_error.clone(),
@@ -2169,6 +2197,12 @@ fn supervisor_runtime_service_running(
         binding_kind: running_child.spec.binding_kind.clone(),
         binding_name: running_child.spec.binding_name.clone(),
         gateway_state: "running".to_string(),
+        restart_handoff: Some(
+            running_child
+                .restart_handoff_support
+                .status_label()
+                .to_string(),
+        ),
         restart_count: running_child.restart_count,
         child_port: running_child.spec.child_port,
         pid: Some(running_child.child.id()),
@@ -2189,6 +2223,7 @@ fn supervisor_runtime_service_inactive(
         binding_kind: inactive_child.spec.binding_kind.clone(),
         binding_name: inactive_child.spec.binding_name.clone(),
         gateway_state: inactive_child.gateway_state.clone(),
+        restart_handoff: inactive_child.restart_handoff.clone(),
         restart_count: inactive_child.restart_count,
         child_port: inactive_child.spec.child_port,
         pid: None,
@@ -2676,6 +2711,7 @@ mod tests {
                 "main".to_string(),
                 pending_supervisor_child(
                     main.clone(),
+                    Some("protocol-v1".to_string()),
                     7,
                     0,
                     30_000,
@@ -2687,6 +2723,7 @@ mod tests {
                 "rescue".to_string(),
                 pending_supervisor_child(
                     child_spec("rescue", 11111),
+                    Some("legacy".to_string()),
                     5,
                     0,
                     30_000,

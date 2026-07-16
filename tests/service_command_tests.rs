@@ -985,6 +985,7 @@ fn service_status_reports_clean_backoff_as_restarting_without_issue() {
             binding_kind: "launcher".to_string(),
             binding_name: "stable".to_string(),
             gateway_state: "backoff".to_string(),
+            restart_handoff: Some("protocol-v1".to_string()),
             restart_count: 1,
             child_port: 18789,
             pid: None,
@@ -1004,6 +1005,7 @@ fn service_status_reports_clean_backoff_as_restarting_without_issue() {
     let body = json_output(&output);
     assert_eq!(body["running"], false);
     assert_eq!(body["gatewayState"], "restarting");
+    assert_eq!(body["restartHandoff"], "protocol-v1");
     assert_eq!(body["lastExitCode"], 0);
     assert_eq!(body["issue"], Value::Null);
 }
@@ -1030,6 +1032,7 @@ fn service_status_keeps_failed_backoff_as_issue() {
             binding_kind: "launcher".to_string(),
             binding_name: "stable".to_string(),
             gateway_state: "backoff".to_string(),
+            restart_handoff: Some("legacy".to_string()),
             restart_count: 1,
             child_port: 18789,
             pid: None,
@@ -1049,6 +1052,7 @@ fn service_status_keeps_failed_backoff_as_issue() {
     let body = json_output(&output);
     assert_eq!(body["running"], false);
     assert_eq!(body["gatewayState"], "backoff");
+    assert_eq!(body["restartHandoff"], "legacy");
     assert_eq!(
         body["issue"],
         "process exited with 1; retrying after backoff"

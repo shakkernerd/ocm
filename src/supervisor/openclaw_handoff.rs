@@ -26,6 +26,15 @@ pub(super) enum RestartHandoffSupport {
     Unsupported(String),
 }
 
+impl RestartHandoffSupport {
+    pub(super) fn status_label(&self) -> &'static str {
+        match self {
+            Self::ProtocolV1 => "protocol-v1",
+            Self::Unsupported(_) => "legacy",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum RestartHandoffConsumeResult {
     Accepted,
