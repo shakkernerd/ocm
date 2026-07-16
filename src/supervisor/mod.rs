@@ -1387,7 +1387,6 @@ fn process_exited_children(
                     next_restart_count,
                     exited_child.exit_code,
                     issue,
-                    now_utc(),
                     pending
                         .get(&previous_child.spec.env_name)
                         .map(|child| child.retry_at_utc),
@@ -1408,7 +1407,6 @@ fn process_exited_children(
                     exited_child.restart_count,
                     exited_child.exit_code,
                     decision.last_error.clone(),
-                    now_utc(),
                     None,
                 ),
             );
@@ -1724,7 +1722,6 @@ fn inactive_supervisor_child(
     restart_count: usize,
     last_exit_code: Option<i32>,
     last_error: Option<String>,
-    last_event_at: OffsetDateTime,
     next_retry_at: Option<OffsetDateTime>,
 ) -> InactiveSupervisorChild {
     InactiveSupervisorChild {
@@ -1734,7 +1731,7 @@ fn inactive_supervisor_child(
         restart_count,
         last_exit_code,
         last_error,
-        last_event_at: Some(last_event_at),
+        last_event_at: Some(now_utc()),
         next_retry_at,
     }
 }
