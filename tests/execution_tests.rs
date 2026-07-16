@@ -190,7 +190,7 @@ fn gateway_process_spec_direct_arguments_preserve_the_binary_and_args() {
         binding_kind: "runtime".to_string(),
         binding_name: "managed".to_string(),
         command: None,
-        binary_path: Some("/tmp/runtime/openclaw".to_string()),
+        binary_path: Some("/tmp/runtime/node_modules/openclaw/openclaw.mjs".to_string()),
         runtime_source_kind: Some("official".to_string()),
         runtime_release_version: Some("1.2.3".to_string()),
         runtime_release_channel: Some("stable".to_string()),
@@ -207,13 +207,42 @@ fn gateway_process_spec_direct_arguments_preserve_the_binary_and_args() {
     assert_eq!(
         spec.program_arguments(),
         vec![
-            "/tmp/runtime/openclaw".to_string(),
+            "/tmp/runtime/node_modules/openclaw/openclaw.mjs".to_string(),
             "gateway".to_string(),
             "run".to_string(),
             "--port".to_string(),
             "18789".to_string()
         ]
     );
+    assert!(spec.restart_handoff_pid_bound());
+}
+
+#[test]
+fn gateway_process_spec_accepts_only_ocm_managed_node_for_indirect_entrypoints() {
+    let mut spec = GatewayProcessSpec {
+        env_name: "demo".to_string(),
+        binding_kind: "runtime".to_string(),
+        binding_name: "managed".to_string(),
+        command: None,
+        binary_path: Some("/tmp/ocm/toolchains/node/v22/bin/node".to_string()),
+        runtime_source_kind: Some("installed".to_string()),
+        runtime_release_version: Some("1.2.3".to_string()),
+        runtime_release_channel: Some("stable".to_string()),
+        args: vec![
+            "/tmp/runtime/node_modules/openclaw/openclaw.mjs".to_string(),
+            "gateway".to_string(),
+            "run".to_string(),
+            "--port".to_string(),
+            "18789".to_string(),
+        ],
+        run_dir: PathBuf::from("/tmp/demo"),
+        process_env: BTreeMap::new(),
+    };
+
+    assert!(spec.restart_handoff_pid_bound());
+
+    spec.runtime_source_kind = Some("registered".to_string());
+    assert!(!spec.restart_handoff_pid_bound());
 }
 
 #[test]
@@ -249,4 +278,5 @@ fn gateway_process_spec_prefers_direct_program_arguments_when_both_shapes_exist(
             "18900".to_string()
         ]
     );
+    assert!(!spec.restart_handoff_pid_bound());
 }

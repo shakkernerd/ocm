@@ -71,6 +71,8 @@ pub struct SupervisorChildSpec {
     pub env_name: String,
     pub binding_kind: String,
     pub binding_name: String,
+    #[serde(default)]
+    pub restart_handoff_pid_bound: bool,
     pub command: Option<String>,
     pub binary_path: Option<String>,
     pub runtime_source_kind: Option<String>,
@@ -498,6 +500,7 @@ impl<'a> SupervisorService<'a> {
             }
             match env_service.resolve_gateway_process(&env_meta.name, false) {
                 Ok(process) => {
+                    let restart_handoff_pid_bound = process.restart_handoff_pid_bound();
                     let args = process.args.clone();
                     let child_port = process
                         .process_env
@@ -510,6 +513,7 @@ impl<'a> SupervisorService<'a> {
                         env_name: name,
                         binding_kind: process.binding_kind,
                         binding_name: process.binding_name,
+                        restart_handoff_pid_bound,
                         command: process.command,
                         binary_path: process.binary_path,
                         runtime_source_kind: process.runtime_source_kind,
@@ -1440,9 +1444,9 @@ fn exited_child_restart_decision(
             return ExitedSupervisorChildDecision {
                 should_restart: false,
                 quick_clean_handoff: false,
-                log_action: "leaving stopped because runtime lacks external restart handoff",
+                log_action: "leaving stopped because binding lacks PID-safe external restart handoff",
                 last_error: Some(format!(
-                    "process exited cleanly but its OpenClaw runtime does not support external restart handoff ({reason}); upgrade the runtime or use ocm service restart"
+                    "process exited cleanly but its binding does not support a PID-safe external restart handoff ({reason}); use ocm service restart, bind a direct openclaw.mjs runtime, or upgrade OpenClaw"
                 )),
             };
         }
@@ -2226,6 +2230,7 @@ mod tests {
             env_name: name.to_string(),
             binding_kind: "runtime".to_string(),
             binding_name: "stable".to_string(),
+            restart_handoff_pid_bound: true,
             command: None,
             binary_path: Some("/usr/bin/true".to_string()),
             runtime_source_kind: Some("managed".to_string()),
