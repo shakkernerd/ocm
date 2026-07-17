@@ -269,6 +269,57 @@ fn env_snapshot_restore_reverts_state_from_the_selected_snapshot() {
 }
 
 #[test]
+fn env_snapshot_restore_preserves_secondary_agent_workspaces() {
+    let root = TestDir::new("env-snapshot-secondary-workspaces");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    write_text(
+        &source_state.join("workspace-clawforce/skills/social/SKILL.md"),
+        "clawforce skill before upgrade\n",
+    );
+    write_text(
+        &source_state.join("workspace-clawdred/IDENTITY.md"),
+        "Clawd Red before upgrade\n",
+    );
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    fs::remove_dir_all(source_state.join("workspace-clawforce")).unwrap();
+    fs::remove_dir_all(source_state.join("workspace-clawdred")).unwrap();
+
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "restore", "source", &snapshot_id],
+    );
+    assert!(restore.status.success(), "{}", stderr(&restore));
+    assert_eq!(
+        fs::read_to_string(source_state.join("workspace-clawforce/skills/social/SKILL.md"))
+            .unwrap(),
+        "clawforce skill before upgrade\n"
+    );
+    assert_eq!(
+        fs::read_to_string(source_state.join("workspace-clawdred/IDENTITY.md")).unwrap(),
+        "Clawd Red before upgrade\n"
+    );
+}
+
+#[test]
 fn env_snapshot_restore_json_reports_the_restored_binding_shape() {
     let root = TestDir::new("env-snapshot-restore-json");
     let cwd = root.child("workspace");

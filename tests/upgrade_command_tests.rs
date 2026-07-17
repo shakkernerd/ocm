@@ -1560,6 +1560,11 @@ fn upgrade_rolls_back_runtime_binding_when_update_finalization_fails() {
     );
     assert!(create.status.success(), "{}", stderr(&create));
 
+    let secondary_skill =
+        root.child("ocm-home/envs/demo/.openclaw/workspace-clawforce/skills/social/SKILL.md");
+    fs::create_dir_all(secondary_skill.parent().unwrap()).unwrap();
+    fs::write(&secondary_skill, "skill before upgrade\n").unwrap();
+
     env.insert("OCM_TEST_FAIL_UPDATE_FINALIZE".to_string(), "1".to_string());
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--runtime", "new-local"]);
     assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
@@ -1575,6 +1580,10 @@ fn upgrade_rolls_back_runtime_binding_when_update_finalization_fails() {
     assert!(show.status.success(), "{}", stderr(&show));
     let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
     assert_eq!(env_json["defaultRuntime"], "old-local");
+    assert_eq!(
+        fs::read_to_string(secondary_skill).unwrap(),
+        "skill before upgrade\n"
+    );
 }
 
 #[test]
