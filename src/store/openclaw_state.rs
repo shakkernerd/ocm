@@ -75,6 +75,7 @@ pub(crate) fn repair_openclaw_runtime_state(meta: &EnvMeta) -> Result<bool, Stri
 pub(crate) fn openclaw_env_archive_options() -> EnvArchiveOptions {
     EnvArchiveOptions {
         should_skip_path: should_skip_openclaw_env_archive_path,
+        ..EnvArchiveOptions::default()
     }
 }
 
