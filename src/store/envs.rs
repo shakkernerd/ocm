@@ -1044,16 +1044,25 @@ mod tests {
         .unwrap();
         fs::write(
             include_dir.join("base.json"),
-            serde_json::to_string_pretty(&json!({
-                "gateway": {"port": 19789},
-                "agents": {"defaults": {"workspace": source_paths.workspace_dir}},
-                "mcp": {"apps": {
-                    "sandboxPort": 19790,
-                    "sandboxOrigin": "https://source.example.test"
+            format!(
+                r#"{{
+                  // OpenClaw include files support JSON5.
+                  gateway: {{ port: 19789 }},
+                  agents: {{ defaults: {{ workspace: "{}" }} }},
+                  mcp: {{ apps: {{
+                    sandboxPort: 19790,
+                    sandboxOrigin: "https://source.example.test",
+                  }} }},
+                  nested: {{ $include: "./nested.json5" }},
                 }}
-            }))
-            .unwrap()
-                + "\n",
+"#,
+                source_paths.workspace_dir.display()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            include_dir.join("nested.json5"),
+            "{\n  // Nested JSON5 includes must be preserved.\n  enabled: true,\n}\n",
         )
         .unwrap();
         fs::create_dir_all(source_paths.state_dir.join("run")).unwrap();
@@ -1097,6 +1106,7 @@ mod tests {
             format!("http://127.0.0.1:{}", gateway_port + 1)
         );
         assert!(target_paths.state_dir.join("config/base.json").exists());
+        assert!(target_paths.state_dir.join("config/nested.json5").exists());
         assert!(!target_paths.state_dir.join("run").exists());
         assert!(!target_paths.state_dir.join("agents/main/sessions").exists());
         assert!(!target_paths.state_dir.join("logs").exists());

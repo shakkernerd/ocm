@@ -240,7 +240,7 @@ fn collect_config_include_paths(
                         )
                     })?;
                     if raw.contains("$include") {
-                        let included: Value = serde_json::from_str(&raw).map_err(|error| {
+                        let included: Value = json5::from_str(&raw).map_err(|error| {
                             format!(
                                 "cannot preserve nested OpenClaw includes from {}: {error}",
                                 display_path(&resolved)
