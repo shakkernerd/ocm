@@ -13,6 +13,28 @@ use crate::env::{default_service_enabled, default_service_running};
 
 pub const ENV_ARCHIVE_METADATA_PATH: &str = "meta/env.json";
 pub const ENV_ARCHIVE_ROOT_DIR: &str = "root";
+const MAX_ENV_ARCHIVE_WRITE_ATTEMPTS: usize = 2;
+
+enum EnvArchiveWriteError {
+    EntryDisappeared(String),
+    Fatal(String),
+}
+
+impl EnvArchiveWriteError {
+    fn from_entry_io(error: io::Error) -> Self {
+        if error.kind() == io::ErrorKind::NotFound {
+            Self::EntryDisappeared(error.to_string())
+        } else {
+            Self::Fatal(error.to_string())
+        }
+    }
+
+    fn into_message(self) -> String {
+        match self {
+            Self::EntryDisappeared(message) | Self::Fatal(message) => message,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,15 +119,34 @@ pub fn write_env_archive_with_options<T: Serialize>(
     output_path: &Path,
     options: EnvArchiveOptions,
 ) -> Result<(), String> {
+    for attempt in 0..MAX_ENV_ARCHIVE_WRITE_ATTEMPTS {
+        match write_env_archive_attempt(metadata, source_root, output_path, options) {
+            Ok(()) => return Ok(()),
+            Err(EnvArchiveWriteError::EntryDisappeared(_))
+                if attempt + 1 < MAX_ENV_ARCHIVE_WRITE_ATTEMPTS => {}
+            Err(error) => return Err(error.into_message()),
+        }
+    }
+    unreachable!("archive write attempts are non-zero")
+}
+
+fn write_env_archive_attempt<T: Serialize>(
+    metadata: &T,
+    source_root: &Path,
+    output_path: &Path,
+    options: EnvArchiveOptions,
+) -> Result<(), EnvArchiveWriteError> {
     if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        fs::create_dir_all(parent)
+            .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))?;
     }
 
-    let file = File::create(output_path).map_err(|error| error.to_string())?;
+    let file = File::create(output_path)
+        .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))?;
     let mut builder = Builder::new(file);
     builder.follow_symlinks(false);
-    let mut metadata_raw =
-        serde_json::to_string_pretty(metadata).map_err(|error| error.to_string())?;
+    let mut metadata_raw = serde_json::to_string_pretty(metadata)
+        .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))?;
     metadata_raw.push('\n');
     let metadata_bytes = metadata_raw.into_bytes();
     let mut header = Header::new_gnu();
@@ -118,30 +159,41 @@ pub fn write_env_archive_with_options<T: Serialize>(
             ENV_ARCHIVE_METADATA_PATH,
             Cursor::new(metadata_bytes),
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))?;
     append_env_root(&mut builder, source_root, options)?;
-    builder.finish().map_err(|error| error.to_string())
+    builder
+        .finish()
+        .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))
 }
 
 fn append_env_root(
     builder: &mut Builder<File>,
     source_root: &Path,
     options: EnvArchiveOptions,
-) -> Result<(), String> {
+) -> Result<(), EnvArchiveWriteError> {
     builder
         .append_dir(ENV_ARCHIVE_ROOT_DIR, source_root)
-        .map_err(|error| format!("failed to archive {}: {error}", source_root.display()))?;
+        .map_err(|error| {
+            EnvArchiveWriteError::Fatal(format!(
+                "failed to archive {}: {error}",
+                source_root.display()
+            ))
+        })?;
 
-    let mut stack = sorted_child_paths(source_root)?;
+    let mut stack = sorted_child_paths(source_root)
+        .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))?;
     while let Some(path) = stack.pop() {
         let relative_path = path.strip_prefix(source_root).map_err(|error| {
-            format!(
+            EnvArchiveWriteError::Fatal(format!(
                 "failed to resolve archive path for {}: {error}",
                 path.display()
-            )
+            ))
         })?;
         let metadata = fs::symlink_metadata(&path).map_err(|error| {
-            format!("failed to inspect {} for archive: {error}", path.display())
+            EnvArchiveWriteError::from_entry_io(io_error_with_context(
+                error,
+                format!("failed to inspect {} for archive", path.display()),
+            ))
         })?;
         let entry_kind = env_archive_entry_kind(&metadata);
         if (options.should_skip_path)(relative_path, entry_kind) {
@@ -150,39 +202,58 @@ fn append_env_root(
 
         let archive_path = Path::new(ENV_ARCHIVE_ROOT_DIR).join(relative_path);
         if metadata.is_dir() {
-            builder
-                .append_dir(&archive_path, &path)
-                .map_err(|error| format!("failed to archive {}: {error}", path.display()))?;
-            let mut children = sorted_child_paths(&path)?;
+            builder.append_dir(&archive_path, &path).map_err(|error| {
+                EnvArchiveWriteError::from_entry_io(io_error_with_context(
+                    error,
+                    format!("failed to archive {}", path.display()),
+                ))
+            })?;
+            let mut children =
+                sorted_child_paths(&path).map_err(EnvArchiveWriteError::from_entry_io)?;
             stack.append(&mut children);
             continue;
         }
 
         builder
             .append_path_with_name(&path, &archive_path)
-            .map_err(|error| format!("failed to archive {}: {error}", path.display()))?;
+            .map_err(|error| {
+                EnvArchiveWriteError::from_entry_io(io_error_with_context(
+                    error,
+                    format!("failed to archive {}", path.display()),
+                ))
+            })?;
     }
 
     Ok(())
 }
 
-fn sorted_child_paths(path: &Path) -> Result<Vec<PathBuf>, String> {
+fn sorted_child_paths(path: &Path) -> io::Result<Vec<PathBuf>> {
     let mut children = fs::read_dir(path)
         .map_err(|error| {
-            format!(
-                "failed to read directory {} for archive: {error}",
-                path.display()
+            io_error_with_context(
+                error,
+                format!("failed to read directory {} for archive", path.display()),
             )
         })?
         .map(|entry| {
-            entry
-                .map(|entry| entry.path())
-                .map_err(|error| error.to_string())
+            entry.map(|entry| entry.path()).map_err(|error| {
+                io_error_with_context(
+                    error,
+                    format!(
+                        "failed to read a directory entry in {} for archive",
+                        path.display()
+                    ),
+                )
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
     children.sort();
     children.reverse();
     Ok(children)
+}
+
+fn io_error_with_context(error: io::Error, context: String) -> io::Error {
+    io::Error::new(error.kind(), format!("{context}: {error}"))
 }
 
 fn env_archive_entry_kind(metadata: &fs::Metadata) -> EnvArchiveEntryKind {
@@ -275,19 +346,119 @@ pub fn extract_zip(archive_path: &Path, destination_dir: &Path) -> Result<(), St
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::path::{Path, PathBuf};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    };
+    use std::{fs, io};
 
-    use super::{ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive};
+    use super::{
+        ArchivedEnvMeta, EnvArchiveEntryKind, EnvArchiveMetadata, EnvArchiveOptions,
+        EnvArchiveWriteError, extract_env_archive, write_env_archive,
+        write_env_archive_with_options,
+    };
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    static DISAPPEARING_TEST_LOCK: Mutex<()> = Mutex::new(());
+    static PATHS_TO_REMOVE_BEFORE_ARCHIVE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
     fn temp_path(label: &str) -> PathBuf {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir()
             .join("ocm-archive-tests")
             .join(format!("{label}-{}-{id}", std::process::id()))
+    }
+
+    fn remove_configured_path_before_archive(
+        relative_path: &Path,
+        _kind: EnvArchiveEntryKind,
+    ) -> bool {
+        let mut paths = PATHS_TO_REMOVE_BEFORE_ARCHIVE.lock().unwrap();
+        if let Some(index) = paths.iter().position(|path| path.ends_with(relative_path)) {
+            let path = paths.remove(index);
+            fs::remove_file(&path).unwrap();
+            if relative_path == Path::new("transient.db-shm") {
+                fs::write(path.with_file_name("stable.txt"), "contents after retry").unwrap();
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn env_archive_retries_when_entry_disappears_before_archive_insertion() {
+        let _test_guard = DISAPPEARING_TEST_LOCK.lock().unwrap();
+        let source_root = temp_path("disappearing-source-root");
+        let archive_path = temp_path("disappearing-archives").join("demo.ocm-env.tar");
+        let extract_dir = temp_path("disappearing-extract");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::write(source_root.join("stable.txt"), "stable contents").unwrap();
+        let transient_path = source_root.join("transient.db-shm");
+        fs::write(&transient_path, "transient contents").unwrap();
+        *PATHS_TO_REMOVE_BEFORE_ARCHIVE.lock().unwrap() = vec![transient_path];
+
+        write_env_archive_with_options(
+            &serde_json::json!({ "kind": "test-archive" }),
+            &source_root,
+            &archive_path,
+            EnvArchiveOptions {
+                should_skip_path: remove_configured_path_before_archive,
+            },
+        )
+        .unwrap();
+
+        let extracted =
+            extract_env_archive::<serde_json::Value>(&archive_path, &extract_dir).unwrap();
+        assert_eq!(
+            fs::read_to_string(extracted.root_dir.join("stable.txt")).unwrap(),
+            "contents after retry"
+        );
+        assert!(!extracted.root_dir.join("transient.db-shm").exists());
+
+        let _ = fs::remove_dir_all(source_root);
+        let _ = fs::remove_dir_all(extract_dir);
+        let _ = fs::remove_file(archive_path);
+    }
+
+    #[test]
+    fn env_archive_keeps_repeated_disappearances_fatal() {
+        let _test_guard = DISAPPEARING_TEST_LOCK.lock().unwrap();
+        let source_root = temp_path("repeated-disappearing-source-root");
+        let archive_path = temp_path("repeated-disappearing-archives").join("demo.ocm-env.tar");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::write(source_root.join("stable.txt"), "stable contents").unwrap();
+        let first_transient = source_root.join("transient-a.db-shm");
+        let second_transient = source_root.join("transient-b.db-shm");
+        fs::write(&first_transient, "first transient contents").unwrap();
+        fs::write(&second_transient, "second transient contents").unwrap();
+        // One configured disappearance is consumed per archive attempt.
+        *PATHS_TO_REMOVE_BEFORE_ARCHIVE.lock().unwrap() = vec![first_transient, second_transient];
+
+        let error = write_env_archive_with_options(
+            &serde_json::json!({ "kind": "test-archive" }),
+            &source_root,
+            &archive_path,
+            EnvArchiveOptions {
+                should_skip_path: remove_configured_path_before_archive,
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("failed to archive"), "{error}");
+        assert!(PATHS_TO_REMOVE_BEFORE_ARCHIVE.lock().unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(source_root);
+        let _ = fs::remove_file(archive_path);
+    }
+
+    #[test]
+    fn archive_entry_errors_other_than_not_found_are_fatal() {
+        let error = EnvArchiveWriteError::from_entry_io(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "permission denied",
+        ));
+
+        assert!(matches!(error, EnvArchiveWriteError::Fatal(_)));
     }
 
     #[test]
