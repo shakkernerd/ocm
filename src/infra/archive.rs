@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
@@ -83,16 +84,29 @@ pub enum EnvArchiveEntryKind {
     Other,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct EnvArchiveOptions {
     pub should_skip_path: fn(&Path, EnvArchiveEntryKind) -> bool,
+    pub included_path_roots: BTreeSet<PathBuf>,
 }
 
 impl Default for EnvArchiveOptions {
     fn default() -> Self {
         Self {
             should_skip_path: include_env_archive_path,
+            included_path_roots: BTreeSet::new(),
         }
+    }
+}
+
+impl EnvArchiveOptions {
+    fn should_skip(&self, relative_path: &Path, kind: EnvArchiveEntryKind) -> bool {
+        let explicitly_included = self.included_path_roots.iter().any(|root| {
+            relative_path == root
+                || relative_path.starts_with(root)
+                || root.starts_with(relative_path)
+        });
+        !explicitly_included && (self.should_skip_path)(relative_path, kind)
     }
 }
 
@@ -120,7 +134,7 @@ pub fn write_env_archive_with_options<T: Serialize>(
     options: EnvArchiveOptions,
 ) -> Result<(), String> {
     for attempt in 0..MAX_ENV_ARCHIVE_WRITE_ATTEMPTS {
-        match write_env_archive_attempt(metadata, source_root, output_path, options) {
+        match write_env_archive_attempt(metadata, source_root, output_path, options.clone()) {
             Ok(()) => return Ok(()),
             Err(EnvArchiveWriteError::EntryDisappeared(_))
                 if attempt + 1 < MAX_ENV_ARCHIVE_WRITE_ATTEMPTS => {}
@@ -160,7 +174,7 @@ fn write_env_archive_attempt<T: Serialize>(
             Cursor::new(metadata_bytes),
         )
         .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))?;
-    append_env_root(&mut builder, source_root, options)?;
+    append_env_root(&mut builder, source_root, &options)?;
     builder
         .finish()
         .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))
@@ -169,7 +183,7 @@ fn write_env_archive_attempt<T: Serialize>(
 fn append_env_root(
     builder: &mut Builder<File>,
     source_root: &Path,
-    options: EnvArchiveOptions,
+    options: &EnvArchiveOptions,
 ) -> Result<(), EnvArchiveWriteError> {
     builder
         .append_dir(ENV_ARCHIVE_ROOT_DIR, source_root)
@@ -196,7 +210,7 @@ fn append_env_root(
             ))
         })?;
         let entry_kind = env_archive_entry_kind(&metadata);
-        if (options.should_skip_path)(relative_path, entry_kind) {
+        if options.should_skip(relative_path, entry_kind) {
             continue;
         }
 
@@ -346,6 +360,7 @@ pub fn extract_zip(archive_path: &Path, destination_dir: &Path) -> Result<(), St
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
     use std::sync::{
         Mutex,
@@ -385,6 +400,34 @@ mod tests {
         false
     }
 
+    fn skip_openclaw_paths(relative_path: &Path, _kind: EnvArchiveEntryKind) -> bool {
+        relative_path.starts_with(".openclaw")
+    }
+
+    #[test]
+    fn archive_options_include_only_the_selected_path_branch() {
+        let options = EnvArchiveOptions {
+            should_skip_path: skip_openclaw_paths,
+            included_path_roots: BTreeSet::from([PathBuf::from(".openclaw/team/ops")]),
+        };
+
+        for path in [
+            ".openclaw",
+            ".openclaw/team",
+            ".openclaw/team/ops",
+            ".openclaw/team/ops/notes.md",
+        ] {
+            assert!(
+                !options.should_skip(Path::new(path), EnvArchiveEntryKind::File),
+                "{path} should be traversed"
+            );
+        }
+        assert!(options.should_skip(
+            Path::new(".openclaw/team/cache"),
+            EnvArchiveEntryKind::Directory
+        ));
+    }
+
     #[test]
     fn env_archive_retries_when_entry_disappears_before_archive_insertion() {
         let _test_guard = DISAPPEARING_TEST_LOCK.lock().unwrap();
@@ -403,6 +446,7 @@ mod tests {
             &archive_path,
             EnvArchiveOptions {
                 should_skip_path: remove_configured_path_before_archive,
+                ..EnvArchiveOptions::default()
             },
         )
         .unwrap();
@@ -440,6 +484,7 @@ mod tests {
             &archive_path,
             EnvArchiveOptions {
                 should_skip_path: remove_configured_path_before_archive,
+                ..EnvArchiveOptions::default()
             },
         )
         .unwrap_err();
