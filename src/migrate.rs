@@ -623,6 +623,7 @@ mod tests {
 
     use serde_json::Value;
 
+    use crate::env::{CreateEnvironmentOptions, EnvironmentService};
     use crate::launcher::{AddLauncherOptions, LauncherService};
     use crate::store::derive_env_paths;
 
@@ -817,6 +818,7 @@ mod tests {
                     "\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}},",
                     "\"gateway\":{{\"port\":18789}},",
                     "\"mcp\":{{\"apps\":{{",
+                    "\"sandboxPort\":18790,",
                     "\"sandboxOrigin\":\"https://node.example.test:18790\"",
                     "}}}}",
                     "}}\n"
@@ -860,6 +862,19 @@ mod tests {
             root.join("ocm-home").display().to_string(),
         );
         install_fake_openclaw_on_path(&root, &mut env);
+        EnvironmentService::new(&env, &cwd)
+            .create(CreateEnvironmentOptions {
+                name: "occupied".to_string(),
+                root: None,
+                gateway_port: Some(18_789),
+                service_enabled: false,
+                service_running: false,
+                default_runtime: None,
+                default_launcher: None,
+                dev: None,
+                protected: false,
+            })
+            .unwrap();
 
         let summary = migrate_plain_openclaw_home(
             MigrateHomeOptions {
@@ -888,8 +903,12 @@ mod tests {
         let migrated_gateway_port = config["gateway"]["port"].as_u64().unwrap();
         assert_ne!(migrated_gateway_port, 18_789);
         assert_eq!(
+            config["mcp"]["apps"]["sandboxPort"].as_u64(),
+            Some(migrated_gateway_port + 1)
+        );
+        assert_eq!(
             config["mcp"]["apps"]["sandboxOrigin"].as_str(),
-            Some(format!("https://node.example.test:{}", migrated_gateway_port + 1).as_str())
+            Some("https://node.example.test:18790")
         );
         assert!(target_paths.workspace_dir.join("notes.txt").exists());
         assert!(

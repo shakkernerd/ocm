@@ -4,6 +4,10 @@ All notable changes to OCM are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- Keep MCP App sandbox listener ports aligned when environment lifecycle operations reassign gateway ports without rewriting user-managed public sandbox origins.
+
 ## 0.2.28 - 2026-07-16
 
 ### Fixed

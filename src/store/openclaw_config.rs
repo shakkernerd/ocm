@@ -605,13 +605,14 @@ fn rewrite_gateway_port(value: &mut Value, gateway_port: u32) -> bool {
 
 fn rewrite_gateway_port_family(value: &mut Value, gateway_port: u32) -> bool {
     let source_gateway_port = read_gateway_port(value);
-    let mut changed = source_gateway_port
-        .is_some_and(|source| rewrite_port_coupled_mcp_app_sandbox(value, source, gateway_port));
+    let mut changed = source_gateway_port.is_some_and(|source| {
+        rewrite_port_coupled_mcp_app_sandbox_port(value, source, gateway_port)
+    });
     changed |= rewrite_gateway_port(value, gateway_port);
     changed
 }
 
-fn rewrite_port_coupled_mcp_app_sandbox(
+fn rewrite_port_coupled_mcp_app_sandbox_port(
     value: &mut Value,
     source_gateway_port: u32,
     target_gateway_port: u32,
@@ -637,48 +638,11 @@ fn rewrite_port_coupled_mcp_app_sandbox(
         return false;
     };
 
-    let mut changed = false;
     if apps.get("sandboxPort").and_then(Value::as_u64) == Some(source_sandbox_port as u64) {
         apps.insert("sandboxPort".to_string(), Value::from(target_sandbox_port));
-        changed = true;
+        return true;
     }
-    if let Some(Value::String(origin)) = apps.get_mut("sandboxOrigin") {
-        changed |= rewrite_http_origin_port(origin, source_sandbox_port, target_sandbox_port);
-    }
-    changed
-}
-
-fn rewrite_http_origin_port(origin: &mut String, source_port: u32, target_port: u32) -> bool {
-    let (without_trailing_slash, trailing_slash) = origin
-        .strip_suffix('/')
-        .map_or((origin.as_str(), ""), |value| (value, "/"));
-    let Some(authority) = without_trailing_slash
-        .strip_prefix("https://")
-        .or_else(|| without_trailing_slash.strip_prefix("http://"))
-    else {
-        return false;
-    };
-    if authority.is_empty()
-        || authority.contains('/')
-        || authority.contains('?')
-        || authority.contains('#')
-        || authority.contains('@')
-    {
-        return false;
-    }
-    let Some((host, port)) = authority.rsplit_once(':') else {
-        return false;
-    };
-    if host.is_empty() || port.parse::<u32>().ok() != Some(source_port) {
-        return false;
-    }
-
-    let source_suffix = format!(":{source_port}{trailing_slash}");
-    let Some(prefix) = origin.strip_suffix(&source_suffix) else {
-        return false;
-    };
-    *origin = format!("{prefix}:{target_port}{trailing_slash}");
-    true
+    false
 }
 
 fn looks_env_scoped_workspace(path: &Path) -> bool {
@@ -778,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn gateway_port_rewrite_updates_default_coupled_mcp_app_sandbox_fields() {
+    fn gateway_port_rewrite_updates_coupled_sandbox_port_and_preserves_public_origin() {
         let mut value = json!({
             "gateway": {"port": 19789},
             "mcp": {
@@ -794,7 +758,7 @@ mod tests {
         assert_eq!(value["mcp"]["apps"]["sandboxPort"], 19901);
         assert_eq!(
             value["mcp"]["apps"]["sandboxOrigin"],
-            "https://node.example.test:19901/"
+            "https://node.example.test:19790/"
         );
     }
 
@@ -816,6 +780,26 @@ mod tests {
         assert_eq!(
             value["mcp"]["apps"]["sandboxOrigin"],
             "https://mcp-apps.example.test"
+        );
+    }
+
+    #[test]
+    fn gateway_port_rewrite_leaves_explicit_origin_without_sandbox_port_unchanged() {
+        let mut value = json!({
+            "gateway": {"port": 19789},
+            "mcp": {
+                "apps": {
+                    "sandboxOrigin": "https://node.example.test:19790"
+                }
+            }
+        });
+
+        assert!(rewrite_gateway_port_family(&mut value, 19900));
+        assert_eq!(value["gateway"]["port"], 19900);
+        assert!(value["mcp"]["apps"]["sandboxPort"].is_null());
+        assert_eq!(
+            value["mcp"]["apps"]["sandboxOrigin"],
+            "https://node.example.test:19790"
         );
     }
 }
