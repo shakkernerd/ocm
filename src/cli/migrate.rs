@@ -2,7 +2,8 @@ use std::path::Path;
 
 use super::{Cli, render};
 use crate::migrate::{
-    MigrateHomeOptions, inspect_migration_source, migrate_plain_openclaw_home, plan_migration,
+    MigrateHomeOptions, inspect_migration_source, migrate_plain_openclaw_home_with_sandbox_origin,
+    plan_migration,
 };
 
 impl Cli {
@@ -34,7 +35,11 @@ impl Cli {
                 index += 2;
                 continue;
             }
-            if arg.starts_with("--root=") {
+            if arg == "--sandbox-origin" {
+                index += 2;
+                continue;
+            }
+            if arg.starts_with("--root=") || arg.starts_with("--sandbox-origin=") {
                 index += 1;
                 continue;
             }
@@ -51,12 +56,15 @@ impl Cli {
         let mut saw_frontdoor_flag = false;
         while index < args.len() {
             let arg = &args[index];
-            if matches!(arg.as_str(), "--root" | "--name") {
+            if matches!(arg.as_str(), "--root" | "--name" | "--sandbox-origin") {
                 saw_frontdoor_flag = true;
                 index += 2;
                 continue;
             }
-            if arg.starts_with("--root=") || arg.starts_with("--name=") {
+            if arg.starts_with("--root=")
+                || arg.starts_with("--name=")
+                || arg.starts_with("--sandbox-origin=")
+            {
                 saw_frontdoor_flag = true;
                 index += 1;
                 continue;
@@ -136,22 +144,30 @@ impl Cli {
 
         let (args, root_value) = Self::consume_option(args, "--root")?;
         let root_value = Self::require_option_value(root_value, "--root")?;
+        let (args, sandbox_origin) = Self::consume_option(args, "--sandbox-origin")?;
+        let sandbox_origin = Self::require_option_value(sandbox_origin, "--sandbox-origin")?;
         let name_follows_positional = Self::migration_name_option_follows_positional(&args);
         let (args, name_value) = Self::consume_option(args, "--name")?;
         let name_value = Self::require_option_value(name_value, "--name")?;
         let (env_name, source_home) =
             Self::parse_migrate_target(args, name_value, name_follows_positional)?;
-        let summary = self.with_progress("Migrating existing OpenClaw into OCM", || {
-            migrate_plain_openclaw_home(
+        let result = self.with_progress("Migrating existing OpenClaw into OCM", || {
+            migrate_plain_openclaw_home_with_sandbox_origin(
                 MigrateHomeOptions {
                     source_home,
                     name: env_name.clone(),
                     root: root_value.clone(),
                 },
+                sandbox_origin.as_deref(),
                 &self.env,
                 &self.cwd,
             )
         })?;
+        self.warn_migration_sandbox_origin_reset(
+            &result.summary,
+            result.cleared_sandbox_origin.as_deref(),
+        )?;
+        let summary = result.summary;
 
         if json_flag {
             self.print_json(&summary)?;
@@ -170,20 +186,28 @@ impl Cli {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "adopt import")?;
         let (args, root_value) = Self::consume_option(args, "--root")?;
         let root_value = Self::require_option_value(root_value, "--root")?;
+        let (args, sandbox_origin) = Self::consume_option(args, "--sandbox-origin")?;
+        let sandbox_origin = Self::require_option_value(sandbox_origin, "--sandbox-origin")?;
         let (args, name_value) = Self::consume_option(args, "--name")?;
         let name_value = Self::require_option_value(name_value, "--name")?;
         let (env_name, source_home) = Self::parse_adopt_target(args, name_value)?;
-        let summary = self.with_progress("Migrating plain OpenClaw home", || {
-            migrate_plain_openclaw_home(
+        let result = self.with_progress("Migrating plain OpenClaw home", || {
+            migrate_plain_openclaw_home_with_sandbox_origin(
                 MigrateHomeOptions {
                     source_home,
                     name: env_name.clone(),
                     root: root_value.clone(),
                 },
+                sandbox_origin.as_deref(),
                 &self.env,
                 &self.cwd,
             )
         })?;
+        self.warn_migration_sandbox_origin_reset(
+            &result.summary,
+            result.cleared_sandbox_origin.as_deref(),
+        )?;
+        let summary = result.summary;
 
         if json_flag {
             self.print_json(&summary)?;
@@ -196,6 +220,22 @@ impl Cli {
             profile,
         ));
         Ok(0)
+    }
+
+    fn warn_migration_sandbox_origin_reset(
+        &self,
+        summary: &crate::env::EnvImportSummary,
+        cleared_sandbox_origin: Option<&str>,
+    ) -> Result<(), String> {
+        if cleared_sandbox_origin.is_none() {
+            return Ok(());
+        }
+        let meta = self.environment_service().get(&summary.name)?;
+        let (gateway_port, _) = self
+            .environment_service()
+            .resolve_effective_gateway_port(&meta)?;
+        self.warn_cleared_sandbox_origin(&summary.name, cleared_sandbox_origin, gateway_port);
+        Ok(())
     }
 
     fn handle_adopt_inspect(&self, args: Vec<String>) -> Result<i32, String> {

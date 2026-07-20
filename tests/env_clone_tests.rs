@@ -102,7 +102,7 @@ fn env_clone_rewrites_openclaw_config_for_the_new_env_root() {
 }
 
 #[test]
-fn env_clone_rewrites_coupled_sandbox_port_and_preserves_public_origin() {
+fn env_clone_rewrites_coupled_sandbox_port_and_clears_public_origin() {
     let root = TestDir::new("env-clone-mcp-app-sandbox-rewrite");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -139,10 +139,116 @@ fn env_clone_rewrites_coupled_sandbox_port_and_preserves_public_origin() {
         config["mcp"]["apps"]["sandboxPort"].as_u64(),
         Some(expected_sandbox_port)
     );
+    assert!(config["mcp"]["apps"]["sandboxOrigin"].is_null());
+    let warning = stderr(&clone);
+    assert!(
+        warning.contains(
+            "removed copied MCP app sandbox origin https://node.example.test:19790 from env target"
+        ),
+        "{warning}"
+    );
+    assert!(
+        warning.contains(&format!("sandbox port {expected_sandbox_port}")),
+        "{warning}"
+    );
+
+    let source_config_raw =
+        fs::read_to_string(root.child("ocm-home/envs/source/.openclaw/openclaw.json")).unwrap();
+    let source_config: Value = serde_json::from_str(&source_config_raw).unwrap();
     assert_eq!(
-        config["mcp"]["apps"]["sandboxOrigin"].as_str(),
+        source_config["mcp"]["apps"]["sandboxOrigin"].as_str(),
         Some("https://node.example.test:19790")
     );
+}
+
+#[test]
+fn env_clone_accepts_an_explicit_target_sandbox_origin() {
+    let root = TestDir::new("env-clone-explicit-mcp-app-origin");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
+        concat!(
+            "{\n",
+            "  \"gateway\": { \"port\": 19789 },\n",
+            "  \"mcp\": {\n",
+            "    \"apps\": {\n",
+            "      \"enabled\": true,\n",
+            "      \"sandboxPort\": 19790,\n",
+            "      \"sandboxOrigin\": \"https://source.example.test:19790\"\n",
+            "    }\n",
+            "  }\n",
+            "}\n"
+        ),
+    );
+
+    let clone = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "clone",
+            "source",
+            "target",
+            "--sandbox-origin",
+            "HTTPS://target.example.test:443/",
+        ],
+    );
+    assert!(clone.status.success(), "{}", stderr(&clone));
+    assert!(!stderr(&clone).contains("removed copied MCP app sandbox origin"));
+
+    let config_raw =
+        fs::read_to_string(root.child("ocm-home/envs/target/.openclaw/openclaw.json")).unwrap();
+    let config: Value = serde_json::from_str(&config_raw).unwrap();
+    let cloned_gateway_port = config["gateway"]["port"].as_u64().unwrap();
+    assert_eq!(
+        config["mcp"]["apps"]["sandboxPort"].as_u64(),
+        Some(cloned_gateway_port + 1)
+    );
+    assert_eq!(
+        config["mcp"]["apps"]["sandboxOrigin"].as_str(),
+        Some("https://target.example.test")
+    );
+}
+
+#[test]
+fn env_clone_rejects_an_invalid_target_sandbox_origin_without_leaving_a_clone() {
+    let root = TestDir::new("env-clone-invalid-mcp-app-origin");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let clone = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "clone",
+            "source",
+            "target",
+            "--sandbox-origin",
+            "https://target.example.test/apps",
+        ],
+    );
+    assert_eq!(clone.status.code(), Some(1));
+    assert!(stderr(&clone).contains(
+        "--sandbox-origin must be an HTTP(S) origin without a path, query, or credentials"
+    ));
+    assert!(!root.child("ocm-home/envs/target").exists());
+
+    let list = run_ocm(&cwd, &env, &["env", "list", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let listed: Value = serde_json::from_str(&stdout(&list)).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["name"].as_str(), Some("source"));
 }
 
 #[test]

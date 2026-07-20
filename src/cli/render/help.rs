@@ -295,7 +295,7 @@ pub fn migrate_help(cmd: &str) -> String {
         "Migrate an existing OpenClaw home",
         "Create a managed env from an existing plain OpenClaw home in one step, keeping your durable user state and rewriting it for the new OCM-managed root.",
         vec![format!(
-            "{cmd} migrate <env> [<source-home>] [--root <path>] [--raw] [--json]"
+            "{cmd} migrate <env> [<source-home>] [--root <path>] [--sandbox-origin <url>] [--raw] [--json]"
         )],
         &[
             ("<env>", "Target env name OCM should create"),
@@ -304,6 +304,10 @@ pub fn migrate_help(cmd: &str) -> String {
                 "Optional explicit .openclaw home path to import",
             ),
             ("--root <path>", "Optional explicit target env root"),
+            (
+                "--sandbox-origin <url>",
+                "Set the target env's dedicated public MCP app sandbox origin",
+            ),
             ("--raw", "Print machine-friendly key/value output"),
             ("--json", "Print JSON output"),
         ],
@@ -315,6 +319,7 @@ pub fn migrate_help(cmd: &str) -> String {
         &[
             "Without an explicit source path, OCM imports from the default plain OpenClaw home under the current user home.",
             "Migrate preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets.",
+            "A copied public MCP app sandbox origin is removed unless --sandbox-origin supplies a dedicated origin for the new env.",
             "If `openclaw` is already available on PATH, migrate also binds the imported env to an env-local migrated launcher so you can keep going through OCM immediately.",
             "Use `adopt inspect` or `adopt plan` if you want read-only preview commands before importing.",
         ],
@@ -354,7 +359,7 @@ pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
             "Import a plain OpenClaw home",
             "Create a managed env from a plain OpenClaw home, preserve config, auth, sessions, and logs, and clear only live runtime residue like locks, pid files, and sockets.",
             vec![format!(
-                "{cmd} adopt import --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
+                "{cmd} adopt import --name <env> [<source-home>] [--root <path>] [--sandbox-origin <url>] [--raw] [--json]"
             )],
             &[
                 ("--name <env>", "Target env name OCM should create"),
@@ -363,6 +368,10 @@ pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
                     "Optional explicit .openclaw home path to import",
                 ),
                 ("--root <path>", "Optional explicit target env root"),
+                (
+                    "--sandbox-origin <url>",
+                    "Set the target env's dedicated public MCP app sandbox origin",
+                ),
                 ("--raw", "Print machine-friendly key/value output"),
                 ("--json", "Print JSON output"),
             ],
@@ -374,6 +383,7 @@ pub fn adopt_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Without an explicit source path, OCM imports from the default plain OpenClaw home under the current user home.",
                 "This creates a managed env and rewrites env-scoped OpenClaw paths for the new target.",
+                "A copied public MCP app sandbox origin is removed unless --sandbox-origin supplies a dedicated origin for the new env.",
                 "If `openclaw` is already available on PATH, import also binds the env to an env-local migrated launcher so it is immediately runnable through OCM.",
             ],
         )),
@@ -1027,12 +1037,16 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Clone an environment",
             "Copy an environment root and metadata into a new isolated environment.",
             vec![format!(
-                "{cmd} env clone <source> <target> [--root <path>] [--raw] [--json]"
+                "{cmd} env clone <source> <target> [--root <path>] [--sandbox-origin <url>] [--raw] [--json]"
             )],
             &[
                 (
                     "--root <path>",
                     "Use a custom root path for the cloned environment",
+                ),
+                (
+                    "--sandbox-origin <url>",
+                    "Set the clone's dedicated public MCP app sandbox origin",
                 ),
                 (
                     "--raw",
@@ -1046,6 +1060,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 "Clone assigns a fresh gateway port to the new env to avoid collisions.",
                 "Computed gateway ports reserve the full local OpenClaw port family and skip the machine-wide OpenClaw config when present.",
                 "Clone rewrites env-scoped OpenClaw config paths inside the copied env root.",
+                "Clone removes a copied public MCP app sandbox origin unless --sandbox-origin supplies a dedicated origin for the clone.",
                 "Clone keeps durable agent auth/settings for the same user, but clears copied runtime residue like sessions, logs, and backups.",
                 "Background services are not copied; use `start` or `service install` for the clone.",
             ],
@@ -1073,11 +1088,15 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             "Import an environment",
             "Create a new environment from a portable environment archive.",
             vec![format!(
-                "{cmd} env import <archive> [--name <name>] [--root <path>] [--raw] [--json]"
+                "{cmd} env import <archive> [--name <name>] [--root <path>] [--sandbox-origin <url>] [--raw] [--json]"
             )],
             &[
                 ("--name <name>", "Override the imported environment name"),
                 ("--root <path>", "Override the imported environment root"),
+                (
+                    "--sandbox-origin <url>",
+                    "Set the imported env's dedicated public MCP app sandbox origin",
+                ),
                 (
                     "--raw",
                     "Force plain line output instead of the TTY receipt view",
@@ -1090,6 +1109,7 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Imported environments get a fresh identity in the central env registry.",
                 "Import rewrites env-scoped OpenClaw config paths for the new root.",
+                "Import removes a copied public MCP app sandbox origin unless --sandbox-origin supplies a dedicated origin for the imported env.",
                 "Import keeps durable agent auth/settings, but clears copied runtime residue like sessions, logs, and backups.",
             ],
         ),

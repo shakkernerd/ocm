@@ -170,6 +170,96 @@ fn env_import_rewrites_openclaw_config_for_the_new_root() {
 }
 
 #[test]
+fn env_import_resets_or_replaces_a_copied_public_sandbox_origin() {
+    let root = TestDir::new("env-import-sandbox-origin");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
+        concat!(
+            "{\n",
+            "  \"gateway\": { \"port\": 19789 },\n",
+            "  \"mcp\": {\n",
+            "    \"apps\": {\n",
+            "      \"enabled\": true,\n",
+            "      \"sandboxPort\": 19790,\n",
+            "      \"sandboxOrigin\": \"https://source.example.test\"\n",
+            "    }\n",
+            "  }\n",
+            "}\n"
+        ),
+    );
+
+    let export = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "export",
+            "source",
+            "--output",
+            "./source-sandbox.ocm-env.tar",
+        ],
+    );
+    assert!(export.status.success(), "{}", stderr(&export));
+
+    let reset = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "import",
+            "./source-sandbox.ocm-env.tar",
+            "--name",
+            "target-reset",
+        ],
+    );
+    assert!(reset.status.success(), "{}", stderr(&reset));
+    assert!(
+        stderr(&reset).contains(
+            "removed copied MCP app sandbox origin https://source.example.test from env target-reset"
+        ),
+        "{}",
+        stderr(&reset)
+    );
+    let reset_config: Value = serde_json::from_str(
+        &fs::read_to_string(root.child("ocm-home/envs/target-reset/.openclaw/openclaw.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(reset_config["mcp"]["apps"]["sandboxOrigin"].is_null());
+
+    let replaced = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "import",
+            "./source-sandbox.ocm-env.tar",
+            "--name",
+            "target-explicit",
+            "--sandbox-origin",
+            "https://target.example.test",
+        ],
+    );
+    assert!(replaced.status.success(), "{}", stderr(&replaced));
+    assert!(!stderr(&replaced).contains("removed copied MCP app sandbox origin"));
+    let replaced_config: Value = serde_json::from_str(
+        &fs::read_to_string(root.child("ocm-home/envs/target-explicit/.openclaw/openclaw.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        replaced_config["mcp"]["apps"]["sandboxOrigin"].as_str(),
+        Some("https://target.example.test")
+    );
+}
+
+#[test]
 fn env_import_keeps_agent_auth_but_drops_live_runtime_state() {
     let root = TestDir::new("env-import-runtime-cleanup");
     let cwd = root.child("workspace");

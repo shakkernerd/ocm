@@ -102,6 +102,12 @@ pub struct CloneEnvironmentOptions {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct CloneEnvironmentResult {
+    pub meta: EnvMeta,
+    pub cleared_sandbox_origin: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct ExportEnvironmentOptions {
     pub name: String,
     pub output: Option<String>,
@@ -135,6 +141,12 @@ pub struct EnvImportSummary {
     pub default_runtime: Option<String>,
     pub default_launcher: Option<String>,
     pub protected: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ImportEnvironmentResult {
+    pub summary: EnvImportSummary,
+    pub cleared_sandbox_origin: Option<String>,
 }
 
 pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<EnvMeta> {
@@ -227,6 +239,21 @@ impl<'a> EnvironmentService<'a> {
         Ok(meta)
     }
 
+    pub(crate) fn clone_with_sandbox_origin(
+        &self,
+        options: CloneEnvironmentOptions,
+        sandbox_origin: Option<String>,
+    ) -> Result<CloneEnvironmentResult, String> {
+        let result = crate::store::clone_environment_with_sandbox_origin(
+            options,
+            sandbox_origin.as_deref(),
+            self.env,
+            self.cwd,
+        )?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(result)
+    }
+
     pub fn export(&self, options: ExportEnvironmentOptions) -> Result<EnvExportSummary, String> {
         export_environment(options, self.env, self.cwd)
     }
@@ -235,6 +262,21 @@ impl<'a> EnvironmentService<'a> {
         let summary = import_environment(options, self.env, self.cwd)?;
         sync_supervisor_if_present(self.env, self.cwd)?;
         Ok(summary)
+    }
+
+    pub(crate) fn import_with_sandbox_origin(
+        &self,
+        options: ImportEnvironmentOptions,
+        sandbox_origin: Option<String>,
+    ) -> Result<ImportEnvironmentResult, String> {
+        let result = crate::store::import_environment_with_sandbox_origin(
+            options,
+            sandbox_origin.as_deref(),
+            self.env,
+            self.cwd,
+        )?;
+        sync_supervisor_if_present(self.env, self.cwd)?;
+        Ok(result)
     }
 
     pub fn list(&self) -> Result<Vec<EnvMeta>, String> {

@@ -23,6 +23,7 @@ pub use lifecycle::{
     EnvImportSummary, EnvMeta, EnvSummary, ExportEnvironmentOptions, ImportEnvironmentOptions,
     default_service_enabled, default_service_running, select_prune_candidates,
 };
+pub(crate) use lifecycle::{CloneEnvironmentResult, ImportEnvironmentResult};
 pub use snapshots::{
     CreateEnvSnapshotOptions, EnvSnapshotRemoveSummary, EnvSnapshotRestoreSummary,
     EnvSnapshotSummary, RemoveEnvSnapshotOptions, RestoreEnvSnapshotOptions,

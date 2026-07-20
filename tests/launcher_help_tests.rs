@@ -391,6 +391,26 @@ fn env_create_help_mentions_release_selectors() {
 }
 
 #[test]
+fn env_clone_and_import_help_describe_target_sandbox_origins() {
+    let root = TestDir::new("help-env-sandbox-origin");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let clone = run_ocm(&cwd, &env, &["help", "env", "clone"]);
+    assert!(clone.status.success(), "{}", stderr(&clone));
+    let clone_output = stdout(&clone);
+    assert!(clone_output.contains("--sandbox-origin <url>"));
+    assert!(clone_output.contains("removes a copied public MCP app sandbox origin"));
+
+    let import = run_ocm(&cwd, &env, &["help", "env", "import"]);
+    assert!(import.status.success(), "{}", stderr(&import));
+    let import_output = stdout(&import);
+    assert!(import_output.contains("--sandbox-origin <url>"));
+    assert!(import_output.contains("removes a copied public MCP app sandbox origin"));
+}
+
+#[test]
 fn env_set_runtime_help_mentions_release_selectors() {
     let root = TestDir::new("help-env-set-runtime-release-selectors");
     let cwd = root.child("workspace");

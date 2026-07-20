@@ -159,8 +159,9 @@ fn help_adopt_import_is_available() {
         "preserve config, auth, sessions, and logs, and clear only live runtime residue like locks, pid files, and sockets."
     ));
     assert!(body.contains(
-        "ocm adopt import --name <env> [<source-home>] [--root <path>] [--raw] [--json]"
+        "ocm adopt import --name <env> [<source-home>] [--root <path>] [--sandbox-origin <url>] [--raw] [--json]"
     ));
+    assert!(body.contains("--sandbox-origin <url>"));
     assert!(body.contains("migrated launcher"));
 }
 
@@ -727,6 +728,84 @@ fn migrate_preserves_history_and_logs_from_plain_openclaw_home() {
 
     let imported_state = root.child("ocm-home/envs/mira/.openclaw");
     assert_imported_plain_openclaw_home(&imported_state, &source_home);
+}
+
+#[test]
+fn migrate_resets_or_replaces_a_copied_public_sandbox_origin() {
+    let root = TestDir::new("migrate-sandbox-origin");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+    install_fake_openclaw_on_path(&root, &mut env);
+
+    let source_reset = root.child("legacy-reset/.openclaw");
+    let source_explicit = root.child("legacy-explicit/.openclaw");
+    for source_home in [&source_reset, &source_explicit] {
+        fs::create_dir_all(source_home.join("workspace")).unwrap();
+        fs::write(
+            source_home.join("openclaw.json"),
+            concat!(
+                "{\n",
+                "  \"gateway\": { \"port\": 18789 },\n",
+                "  \"mcp\": {\n",
+                "    \"apps\": {\n",
+                "      \"enabled\": true,\n",
+                "      \"sandboxPort\": 18790,\n",
+                "      \"sandboxOrigin\": \"https://source.example.test\"\n",
+                "    }\n",
+                "  }\n",
+                "}\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    let reset = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "reset",
+            source_reset.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+    assert!(reset.status.success(), "{}", stderr(&reset));
+    assert!(
+        stderr(&reset).contains(
+            "removed copied MCP app sandbox origin https://source.example.test from env reset"
+        ),
+        "{}",
+        stderr(&reset)
+    );
+    let reset_config: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.child("ocm-home/envs/reset/.openclaw/openclaw.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(reset_config["mcp"]["apps"]["sandboxOrigin"].is_null());
+
+    let explicit = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "explicit",
+            source_explicit.to_string_lossy().as_ref(),
+            "--sandbox-origin",
+            "https://target.example.test",
+            "--json",
+        ],
+    );
+    assert!(explicit.status.success(), "{}", stderr(&explicit));
+    assert!(!stderr(&explicit).contains("removed copied MCP app sandbox origin"));
+    let explicit_config: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.child("ocm-home/envs/explicit/.openclaw/openclaw.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        explicit_config["mcp"]["apps"]["sandboxOrigin"].as_str(),
+        Some("https://target.example.test")
+    );
 }
 
 #[cfg(unix)]

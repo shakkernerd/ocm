@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::env::{
-    CloneEnvironmentOptions, CreateEnvironmentOptions, EnvExportSummary, EnvImportSummary, EnvMeta,
-    ExportEnvironmentOptions, ImportEnvironmentOptions,
+    CloneEnvironmentOptions, CloneEnvironmentResult, CreateEnvironmentOptions, EnvExportSummary,
+    EnvImportSummary, EnvMeta, ExportEnvironmentOptions, ImportEnvironmentOptions,
+    ImportEnvironmentResult,
 };
 use crate::infra::archive::{
     ArchivedEnvMeta, EnvArchiveMetadata, extract_env_archive, write_env_archive_with_options,
@@ -26,7 +27,7 @@ use super::layout::{
 use super::now_utc;
 use super::{
     clear_nonportable_runtime_state, openclaw_env_archive_options,
-    rewrite_openclaw_config_for_target,
+    rewrite_openclaw_config_for_new_environment,
 };
 
 static NEXT_IMPORT_ID: AtomicU64 = AtomicU64::new(0);
@@ -407,6 +408,15 @@ pub fn clone_environment(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
+    Ok(clone_environment_with_sandbox_origin(options, None, env, cwd)?.meta)
+}
+
+pub(crate) fn clone_environment_with_sandbox_origin(
+    options: CloneEnvironmentOptions,
+    sandbox_origin: Option<&str>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<CloneEnvironmentResult, String> {
     let source_name = validate_name(&options.source_name, "Environment name")?;
     let name = validate_name(&options.name, "Environment name")?;
     let _lock = lock_env_registry(env, cwd)?;
@@ -444,10 +454,11 @@ pub fn clone_environment(
         copy_dir_recursive(&source_paths.root, &target_paths.root)?;
         let created_at = now_utc();
         let gateway_port = choose_cloned_gateway_port(&source, &registry.envs, env);
-        rewrite_openclaw_config_for_target(
+        let config_rewrite = rewrite_openclaw_config_for_new_environment(
             &target_paths,
             Some(&source_paths.root),
             Some(gateway_port),
+            sandbox_origin,
         )?;
         clear_nonportable_runtime_state(&target_paths)?;
 
@@ -469,7 +480,10 @@ pub fn clone_environment(
         };
         let meta = upsert_environment(&mut registry, meta)?;
         write_env_registry(&mut registry, env, cwd)?;
-        Ok(meta)
+        Ok(CloneEnvironmentResult {
+            meta,
+            cleared_sandbox_origin: config_rewrite.cleared_sandbox_origin,
+        })
     })();
 
     if result.is_err() {
@@ -566,6 +580,15 @@ pub fn import_environment(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvImportSummary, String> {
+    Ok(import_environment_with_sandbox_origin(options, None, env, cwd)?.summary)
+}
+
+pub(crate) fn import_environment_with_sandbox_origin(
+    options: ImportEnvironmentOptions,
+    sandbox_origin: Option<&str>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ImportEnvironmentResult, String> {
     let archive_path = resolve_absolute_path(&options.archive, env, cwd)?;
     let staging_dir = import_staging_dir();
     if path_exists(&staging_dir) {
@@ -628,10 +651,11 @@ pub fn import_environment(
             let gateway_port =
                 choose_available_gateway_port(preferred_gateway_port, &registry.envs, env);
             copy_dir_recursive(&extracted.root_dir, &target_paths.root)?;
-            rewrite_openclaw_config_for_target(
+            let config_rewrite = rewrite_openclaw_config_for_new_environment(
                 &target_paths,
                 extracted.metadata.env.source_root.as_deref().map(Path::new),
                 Some(gateway_port),
+                sandbox_origin,
             )?;
             clear_nonportable_runtime_state(&target_paths)?;
 
@@ -654,18 +678,21 @@ pub fn import_environment(
             };
             let meta = upsert_environment(&mut registry, meta)?;
             write_env_registry(&mut registry, env, cwd)?;
-            Ok(meta)
+            Ok((meta, config_rewrite))
         })();
 
         match imported {
-            Ok(meta) => Ok(EnvImportSummary {
-                name: meta.name.clone(),
-                source_name,
-                root: meta.root.clone(),
-                archive_path: display_path(&archive_path),
-                default_runtime: meta.default_runtime.clone(),
-                default_launcher: meta.default_launcher.clone(),
-                protected: meta.protected,
+            Ok((meta, config_rewrite)) => Ok(ImportEnvironmentResult {
+                summary: EnvImportSummary {
+                    name: meta.name.clone(),
+                    source_name,
+                    root: meta.root.clone(),
+                    archive_path: display_path(&archive_path),
+                    default_runtime: meta.default_runtime.clone(),
+                    default_launcher: meta.default_launcher.clone(),
+                    protected: meta.protected,
+                },
+                cleared_sandbox_origin: config_rewrite.cleared_sandbox_origin,
             }),
             Err(error) => {
                 let _ = fs::remove_dir_all(&target_paths.root);

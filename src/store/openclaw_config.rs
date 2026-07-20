@@ -21,6 +21,11 @@ pub(crate) struct OpenClawConfigAudit {
     pub repair_gateway_port: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OpenClawConfigRewriteOutcome {
+    pub cleared_sandbox_origin: Option<String>,
+}
+
 pub(crate) fn audit_openclaw_config(meta: &EnvMeta, known_envs: &[EnvMeta]) -> OpenClawConfigAudit {
     let paths = derive_env_paths(Path::new(&meta.root));
     if !path_exists(&paths.config_path) {
@@ -110,6 +115,22 @@ pub(crate) fn rewrite_openclaw_config_for_target(
         target_paths,
         source_root.map(|source_root| (source_root, target_paths.root.as_path())),
         gateway_port,
+        SandboxOriginPolicy::Preserve,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn rewrite_openclaw_config_for_new_environment(
+    target_paths: &EnvPaths,
+    source_root: Option<&Path>,
+    gateway_port: Option<u32>,
+    sandbox_origin: Option<&str>,
+) -> Result<OpenClawConfigRewriteOutcome, String> {
+    rewrite_openclaw_config_with_root_mapping(
+        target_paths,
+        source_root.map(|source_root| (source_root, target_paths.root.as_path())),
+        gateway_port,
+        SandboxOriginPolicy::NewEnvironment(sandbox_origin),
     )
 }
 
@@ -117,27 +138,45 @@ pub(crate) fn rewrite_openclaw_config_for_migration(
     target_paths: &EnvPaths,
     source_state_root: &Path,
     gateway_port: Option<u32>,
-) -> Result<(), String> {
+    sandbox_origin: Option<&str>,
+) -> Result<OpenClawConfigRewriteOutcome, String> {
     rewrite_openclaw_config_with_root_mapping(
         target_paths,
         Some((source_state_root, target_paths.state_dir.as_path())),
         gateway_port,
+        SandboxOriginPolicy::NewEnvironment(sandbox_origin),
     )
+}
+
+#[derive(Clone, Copy)]
+enum SandboxOriginPolicy<'a> {
+    Preserve,
+    NewEnvironment(Option<&'a str>),
 }
 
 fn rewrite_openclaw_config_with_root_mapping(
     target_paths: &EnvPaths,
     root_mapping: Option<(&Path, &Path)>,
     gateway_port: Option<u32>,
-) -> Result<(), String> {
+    sandbox_origin_policy: SandboxOriginPolicy<'_>,
+) -> Result<OpenClawConfigRewriteOutcome, String> {
     let config_is_symlink = fs::symlink_metadata(&target_paths.config_path)
         .map(|metadata| metadata.file_type().is_symlink())
         .unwrap_or(false);
-    let Some(mut value) = read_config_value(&target_paths.config_path)? else {
-        return Ok(());
+    let mut value = match read_config_value(&target_paths.config_path)? {
+        Some(value) => value,
+        None if matches!(
+            sandbox_origin_policy,
+            SandboxOriginPolicy::NewEnvironment(Some(_))
+        ) =>
+        {
+            json!({})
+        }
+        None => return Ok(OpenClawConfigRewriteOutcome::default()),
     };
 
     let mut changed = false;
+    let mut outcome = OpenClawConfigRewriteOutcome::default();
     if let Some((source_root, replacement_root)) = root_mapping {
         changed |= rewrite_env_root_paths(&mut value, source_root, replacement_root);
     }
@@ -149,12 +188,17 @@ fn rewrite_openclaw_config_with_root_mapping(
     if let Some(gateway_port) = gateway_port {
         changed |= rewrite_gateway_port_family(&mut value, gateway_port);
     }
-
-    if !changed && !config_is_symlink {
-        return Ok(());
+    if let SandboxOriginPolicy::NewEnvironment(sandbox_origin) = sandbox_origin_policy {
+        changed |=
+            rewrite_sandbox_origin_for_new_environment(&mut value, sandbox_origin, &mut outcome)?;
     }
 
-    write_config_value(&target_paths.config_path, &value)
+    if !changed && !config_is_symlink {
+        return Ok(outcome);
+    }
+
+    write_config_value(&target_paths.config_path, &value)?;
+    Ok(outcome)
 }
 
 pub(crate) fn ensure_minimum_local_openclaw_config(
@@ -691,6 +735,87 @@ fn rewrite_loopback_origin_port(origin: &mut String, source_port: u32, target_po
     true
 }
 
+fn rewrite_sandbox_origin_for_new_environment(
+    value: &mut Value,
+    replacement: Option<&str>,
+    outcome: &mut OpenClawConfigRewriteOutcome,
+) -> Result<bool, String> {
+    if let Some(replacement) = replacement {
+        let replacement = normalize_sandbox_origin(replacement)?;
+        let root = value
+            .as_object_mut()
+            .ok_or_else(|| "OpenClaw config root must be an object".to_string())?;
+        let mcp = ensure_object_field(root, "mcp");
+        let apps = ensure_object_field(mcp, "apps");
+        if apps.get("sandboxOrigin").and_then(Value::as_str) == Some(replacement.as_str()) {
+            return Ok(false);
+        }
+        apps.insert("sandboxOrigin".to_string(), Value::String(replacement));
+        return Ok(true);
+    }
+
+    let Some(apps) = value
+        .get_mut("mcp")
+        .and_then(Value::as_object_mut)
+        .and_then(|mcp| mcp.get_mut("apps"))
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(false);
+    };
+    let Some(origin) = apps.get("sandboxOrigin").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    if is_loopback_sandbox_origin(origin) {
+        return Ok(false);
+    }
+
+    outcome.cleared_sandbox_origin = Some(origin.to_string());
+    apps.remove("sandboxOrigin");
+    Ok(true)
+}
+
+fn normalize_sandbox_origin(origin: &str) -> Result<String, String> {
+    let parsed =
+        Url::parse(origin).map_err(|error| format!("invalid --sandbox-origin: {error}"))?;
+    if !is_valid_sandbox_origin_url(&parsed) {
+        return Err(
+            "--sandbox-origin must be an HTTP(S) origin without a path, query, or credentials"
+                .to_string(),
+        );
+    }
+    Ok(parsed.origin().ascii_serialization())
+}
+
+fn is_loopback_sandbox_origin(origin: &str) -> bool {
+    let Ok(parsed) = Url::parse(origin) else {
+        return false;
+    };
+    if !is_valid_sandbox_origin_url(&parsed) {
+        return false;
+    }
+    match parsed.host() {
+        Some(Host::Domain(host)) => host.trim_end_matches('.').eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => {
+            address.is_loopback()
+                || address
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_loopback())
+        }
+        None => false,
+    }
+}
+
+fn is_valid_sandbox_origin_url(parsed: &Url) -> bool {
+    matches!(parsed.scheme(), "http" | "https")
+        && parsed.host().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.path() == "/"
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+}
+
 fn looks_env_scoped_workspace(path: &Path) -> bool {
     let components = path
         .components()
@@ -885,6 +1010,87 @@ mod tests {
         assert_eq!(value["gateway"]["port"], 19900);
         assert!(value["mcp"]["apps"]["sandboxPort"].is_null());
         assert_eq!(value["mcp"]["apps"]["sandboxOrigin"], "http://[::1]:19901");
+    }
+
+    #[test]
+    fn new_environment_origin_policy_clears_a_public_origin() {
+        let mut value = json!({
+            "mcp": {
+                "apps": {
+                    "sandboxOrigin": "https://source.example.test"
+                }
+            }
+        });
+        let mut outcome = OpenClawConfigRewriteOutcome::default();
+
+        assert!(
+            rewrite_sandbox_origin_for_new_environment(&mut value, None, &mut outcome).unwrap()
+        );
+        assert!(value["mcp"]["apps"]["sandboxOrigin"].is_null());
+        assert_eq!(
+            outcome.cleared_sandbox_origin.as_deref(),
+            Some("https://source.example.test")
+        );
+    }
+
+    #[test]
+    fn new_environment_origin_policy_clears_an_invalid_loopback_url() {
+        let mut value = json!({
+            "mcp": {
+                "apps": {
+                    "sandboxOrigin": "http://localhost:18790/apps"
+                }
+            }
+        });
+        let mut outcome = OpenClawConfigRewriteOutcome::default();
+
+        assert!(
+            rewrite_sandbox_origin_for_new_environment(&mut value, None, &mut outcome).unwrap()
+        );
+        assert!(value["mcp"]["apps"]["sandboxOrigin"].is_null());
+        assert_eq!(
+            outcome.cleared_sandbox_origin.as_deref(),
+            Some("http://localhost:18790/apps")
+        );
+    }
+
+    #[test]
+    fn new_environment_origin_policy_sets_an_explicit_target_origin() {
+        let mut value = json!({});
+        let mut outcome = OpenClawConfigRewriteOutcome::default();
+
+        assert!(
+            rewrite_sandbox_origin_for_new_environment(
+                &mut value,
+                Some("HTTPS://target.example.test:443/"),
+                &mut outcome,
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            value["mcp"]["apps"]["sandboxOrigin"],
+            "https://target.example.test"
+        );
+        assert!(outcome.cleared_sandbox_origin.is_none());
+    }
+
+    #[test]
+    fn new_environment_origin_policy_rejects_a_non_origin_url() {
+        let mut value = json!({});
+        let mut outcome = OpenClawConfigRewriteOutcome::default();
+
+        let error = rewrite_sandbox_origin_for_new_environment(
+            &mut value,
+            Some("https://target.example.test/apps"),
+            &mut outcome,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "--sandbox-origin must be an HTTP(S) origin without a path, query, or credentials"
+        );
+        assert_eq!(value, json!({}));
     }
 
     #[test]

@@ -165,6 +165,16 @@ impl Cli {
         }
     }
 
+    fn warn_cleared_sandbox_origin(&self, env_name: &str, origin: Option<&str>, gateway_port: u32) {
+        let Some(origin) = origin else {
+            return;
+        };
+        let sandbox_port = gateway_port.saturating_add(1);
+        self.stderr_line(format!(
+            "warning: removed copied MCP app sandbox origin {origin} from env {env_name}; configure a dedicated public origin routed to sandbox port {sandbox_port}"
+        ));
+    }
+
     fn print_json<T: Serialize>(&self, value: &T) -> Result<(), String> {
         if Self::output_failed() {
             return Ok(());

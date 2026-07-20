@@ -538,6 +538,8 @@ impl Cli {
     pub(super) fn handle_env_clone(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "env clone")?;
         let (args, root) = Self::consume_option(args, "--root")?;
+        let (args, sandbox_origin) = Self::consume_option(args, "--sandbox-origin")?;
+        let sandbox_origin = Self::require_option_value(sandbox_origin, "--sandbox-origin")?;
         let Some(source_name) = args.first() else {
             return Err("source environment name is required".to_string());
         };
@@ -546,25 +548,34 @@ impl Cli {
         };
         Self::assert_no_extra_args(&args[2..])?;
 
-        let meta = self.with_progress(
+        let result = self.with_progress(
             format!("Cloning env {source_name} to {target_name}"),
             || {
-                self.environment_service().clone(CloneEnvironmentOptions {
-                    source_name: source_name.clone(),
-                    name: target_name.clone(),
-                    root,
-                })
+                self.environment_service().clone_with_sandbox_origin(
+                    CloneEnvironmentOptions {
+                        source_name: source_name.clone(),
+                        name: target_name.clone(),
+                        root,
+                    },
+                    sandbox_origin,
+                )
             },
         )?;
+        let meta = result.meta;
+        let (gateway_port, gateway_port_source) = self
+            .environment_service()
+            .resolve_effective_gateway_port(&meta)?;
+        self.warn_cleared_sandbox_origin(
+            &meta.name,
+            result.cleared_sandbox_origin.as_deref(),
+            gateway_port,
+        );
 
         if json_flag {
             self.print_json(&summarize_env(&meta))?;
             return Ok(0);
         }
 
-        let (gateway_port, gateway_port_source) = self
-            .environment_service()
-            .resolve_effective_gateway_port(&meta)?;
         let mut display_meta = meta.clone();
         display_meta.gateway_port = Some(gateway_port);
         let summary = summarize_env(&display_meta);
@@ -609,18 +620,35 @@ impl Cli {
         let name = Self::require_option_value(name, "--name")?;
         let (args, root) = Self::consume_option(args, "--root")?;
         let root = Self::require_option_value(root, "--root")?;
+        let (args, sandbox_origin) = Self::consume_option(args, "--sandbox-origin")?;
+        let sandbox_origin = Self::require_option_value(sandbox_origin, "--sandbox-origin")?;
         let Some(archive) = args.first() else {
             return Err("archive path is required".to_string());
         };
         Self::assert_no_extra_args(&args[1..])?;
 
-        let summary = self.with_progress("Importing environment archive", || {
-            self.environment_service().import(ImportEnvironmentOptions {
-                archive: archive.clone(),
-                name,
-                root,
-            })
+        let result = self.with_progress("Importing environment archive", || {
+            self.environment_service().import_with_sandbox_origin(
+                ImportEnvironmentOptions {
+                    archive: archive.clone(),
+                    name,
+                    root,
+                },
+                sandbox_origin,
+            )
         })?;
+        let summary = result.summary;
+        if result.cleared_sandbox_origin.is_some() {
+            let meta = self.environment_service().get(&summary.name)?;
+            let (gateway_port, _) = self
+                .environment_service()
+                .resolve_effective_gateway_port(&meta)?;
+            self.warn_cleared_sandbox_origin(
+                &summary.name,
+                result.cleared_sandbox_origin.as_deref(),
+                gateway_port,
+            );
+        }
 
         if json_flag {
             self.print_json(&summary)?;
