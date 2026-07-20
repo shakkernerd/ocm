@@ -173,6 +173,94 @@ pub(crate) fn openclaw_config_uses_includes(config_path: &Path) -> Result<bool, 
         .is_some_and(value_contains_include))
 }
 
+pub(crate) fn openclaw_config_include_paths(
+    config_path: &Path,
+    state_dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let Some(value) = read_config_value(config_path)? else {
+        return Ok(Vec::new());
+    };
+    let mut paths = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    collect_config_include_paths(&value, config_path, state_dir, &mut paths, &mut visited)?;
+    Ok(paths.into_iter().collect())
+}
+
+fn collect_config_include_paths(
+    value: &Value,
+    containing_file: &Path,
+    state_dir: &Path,
+    paths: &mut BTreeSet<PathBuf>,
+    visited: &mut BTreeSet<PathBuf>,
+) -> Result<(), String> {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_config_include_paths(value, containing_file, state_dir, paths, visited)?;
+            }
+        }
+        Value::Object(object) => {
+            if let Some(include) = object.get("$include") {
+                let include_paths = match include {
+                    Value::String(path) => vec![path.as_str()],
+                    Value::Array(values) => values
+                        .iter()
+                        .map(|value| {
+                            value.as_str().ok_or_else(|| {
+                                "OpenClaw $include arrays must contain only paths".to_string()
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    _ => {
+                        return Err(
+                            "OpenClaw $include must be a path or an array of paths".to_string()
+                        );
+                    }
+                };
+                for include_path in include_paths {
+                    let include_path = Path::new(include_path);
+                    let resolved = if include_path.is_absolute() {
+                        clean_path(include_path)
+                    } else {
+                        clean_path(
+                            &containing_file
+                                .parent()
+                                .unwrap_or(state_dir)
+                                .join(include_path),
+                        )
+                    };
+                    if !resolved.starts_with(state_dir) || !visited.insert(resolved.clone()) {
+                        continue;
+                    }
+                    paths.insert(resolved.clone());
+                    let raw = fs::read_to_string(&resolved).map_err(|error| {
+                        format!(
+                            "failed to read OpenClaw include {}: {error}",
+                            display_path(&resolved)
+                        )
+                    })?;
+                    if raw.contains("$include") {
+                        let included: Value = serde_json::from_str(&raw).map_err(|error| {
+                            format!(
+                                "cannot preserve nested OpenClaw includes from {}: {error}",
+                                display_path(&resolved)
+                            )
+                        })?;
+                        collect_config_include_paths(
+                            &included, &resolved, state_dir, paths, visited,
+                        )?;
+                    }
+                }
+            }
+            for value in object.values() {
+                collect_config_include_paths(value, containing_file, state_dir, paths, visited)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum SandboxOriginPolicy<'a> {
     Preserve,

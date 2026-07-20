@@ -15,7 +15,9 @@ use crate::openclaw_repo::remove_openclaw_worktree;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
-use super::common::{copy_dir_recursive, ensure_dir, path_exists, read_json, write_json};
+use super::common::{
+    copy_dir_recursive, copy_path, ensure_dir, path_exists, read_json, write_json,
+};
 use super::gateway_ports::{
     DEFAULT_GATEWAY_PORT, choose_available_gateway_port, resolve_effective_gateway_ports,
     resolve_env_gateway_port,
@@ -27,7 +29,7 @@ use super::layout::{
 use super::now_utc;
 use super::{
     clear_nonportable_runtime_state, normalize_new_environment_sandbox_origin,
-    openclaw_config_uses_includes, openclaw_env_archive_options, prepare_migrated_runtime_state,
+    openclaw_config_include_paths, openclaw_config_uses_includes, openclaw_env_archive_options,
     reject_include_owned_sandbox_origin, rewrite_openclaw_config_for_new_environment,
     rewrite_openclaw_config_for_simulation,
 };
@@ -516,7 +518,7 @@ fn clone_environment_with_policy(
                     Some(&source_paths.root),
                     gateway_port,
                 )?;
-                prepare_migrated_runtime_state(&target_paths, &source_paths.state_dir)?;
+                clear_simulation_runtime_state_preserving_includes(&target_paths)?;
                 Default::default()
             }
             CloneEnvironmentPolicy::Simulation => {
@@ -561,6 +563,54 @@ fn clone_environment_with_policy(
     }
 
     result
+}
+
+fn clear_simulation_runtime_state_preserving_includes(
+    target_paths: &super::layout::EnvPaths,
+) -> Result<(), String> {
+    let include_paths =
+        openclaw_config_include_paths(&target_paths.config_path, &target_paths.state_dir)?;
+    if include_paths.is_empty() {
+        clear_nonportable_runtime_state(target_paths)?;
+        return Ok(());
+    }
+
+    let staging_root = std::env::temp_dir().join(format!(
+        "ocm-simulation-includes-{}-{}",
+        std::process::id(),
+        NEXT_IMPORT_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        for include_path in &include_paths {
+            let relative = include_path
+                .strip_prefix(&target_paths.state_dir)
+                .map_err(|error| error.to_string())?;
+            copy_path(include_path, &staging_root.join(relative))?;
+        }
+        clear_nonportable_runtime_state(target_paths)?;
+        for include_path in &include_paths {
+            let relative = include_path
+                .strip_prefix(&target_paths.state_dir)
+                .map_err(|error| error.to_string())?;
+            if let Ok(metadata) = fs::symlink_metadata(include_path) {
+                if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                    fs::remove_dir_all(include_path).map_err(|error| error.to_string())?;
+                } else {
+                    fs::remove_file(include_path).map_err(|error| error.to_string())?;
+                }
+            }
+            copy_path(&staging_root.join(relative), include_path)?;
+        }
+        Ok(())
+    })();
+    let cleanup = fs::remove_dir_all(&staging_root);
+    match (result, cleanup) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error.to_string())
+        }
+        (Ok(()), _) => Ok(()),
+    }
 }
 
 fn choose_cloned_gateway_port(
@@ -982,6 +1032,17 @@ mod tests {
         .unwrap();
         fs::create_dir_all(source_paths.state_dir.join("run")).unwrap();
         fs::write(source_paths.state_dir.join("run/gateway.pid"), "123\n").unwrap();
+        fs::create_dir_all(source_paths.state_dir.join("agents/main/sessions")).unwrap();
+        fs::write(
+            source_paths
+                .state_dir
+                .join("agents/main/sessions/main.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        fs::create_dir_all(source_paths.state_dir.join("logs")).unwrap();
+        fs::write(source_paths.state_dir.join("logs/gateway.log"), "source\n").unwrap();
+        fs::write(source_paths.state_dir.join("openclaw.json.bak"), "{}\n").unwrap();
 
         let simulation = clone_environment_for_simulation(
             CloneEnvironmentOptions {
@@ -1011,6 +1072,9 @@ mod tests {
         );
         assert!(target_paths.state_dir.join("config/base.json").exists());
         assert!(!target_paths.state_dir.join("run").exists());
+        assert!(!target_paths.state_dir.join("agents/main/sessions").exists());
+        assert!(!target_paths.state_dir.join("logs").exists());
+        assert!(!target_paths.state_dir.join("openclaw.json.bak").exists());
         assert!(source_paths.state_dir.join("config/base.json").exists());
 
         remove_environment("simulation", false, &env, &cwd).unwrap();

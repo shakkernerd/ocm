@@ -64,26 +64,28 @@ pub(crate) fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()
         .collect::<Result<Vec<_>, String>>()?;
 
     for (source_path, destination_path) in entries {
-        let metadata = fs::symlink_metadata(&source_path).map_err(|error| error.to_string())?;
-        let file_type = metadata.file_type();
-
-        if file_type.is_symlink() {
-            copy_symlink(&source_path, &destination_path)?;
-            continue;
-        }
-
-        if file_type.is_dir() {
-            copy_dir_recursive(&source_path, &destination_path)?;
-            continue;
-        }
-
-        if let Some(parent) = destination_path.parent() {
-            ensure_dir(parent)?;
-        }
-        fs::copy(&source_path, &destination_path).map_err(|error| error.to_string())?;
+        copy_path(&source_path, &destination_path)?;
     }
 
     Ok(())
+}
+
+pub(crate) fn copy_path(source: &Path, destination: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+    let file_type = metadata.file_type();
+
+    if file_type.is_symlink() {
+        return copy_symlink(source, destination);
+    }
+    if file_type.is_dir() {
+        return copy_dir_recursive(source, destination);
+    }
+    if let Some(parent) = destination.parent() {
+        ensure_dir(parent)?;
+    }
+    fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn copy_symlink(source_path: &Path, destination_path: &Path) -> Result<(), String> {
