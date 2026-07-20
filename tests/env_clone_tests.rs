@@ -284,6 +284,42 @@ fn env_clone_rejects_include_owned_sandbox_configuration_before_copying() {
 }
 
 #[test]
+fn env_clone_rejects_an_include_owned_sandbox_origin_value() {
+    let root = TestDir::new("env-clone-include-owned-sandbox-origin-value");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
+        concat!(
+            "{\n",
+            "  \"mcp\": { \"apps\": {\n",
+            "    \"sandboxOrigin\": { \"$include\": \"./origin.json\" }\n",
+            "  }}\n",
+            "}\n"
+        ),
+    );
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/origin.json"),
+        "\"https://source.example.test\"\n",
+    );
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert_eq!(clone.status.code(), Some(1));
+    assert!(
+        stderr(&clone).contains(
+            "cannot safely reset mcp.apps.sandboxOrigin because OpenClaw config uses $include at mcp.apps.sandboxOrigin"
+        ),
+        "{}",
+        stderr(&clone)
+    );
+    assert!(!root.child("ocm-home/envs/target").exists());
+}
+
+#[test]
 fn env_clone_rejects_an_invalid_target_sandbox_origin_without_leaving_a_clone() {
     let root = TestDir::new("env-clone-invalid-mcp-app-origin");
     let cwd = root.child("workspace");

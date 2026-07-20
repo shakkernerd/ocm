@@ -381,11 +381,13 @@ impl Cli {
         let source = self.environment_service().get(source_name)?;
         let (from_binding_kind, from_binding_name) = source_binding(&source);
         let simulation_name = simulation_env_name(source_name, scenario.id());
-        let cloned = self.environment_service().clone(CloneEnvironmentOptions {
-            source_name: source_name.to_string(),
-            name: simulation_name.clone(),
-            root: None,
-        })?;
+        let cloned = self
+            .environment_service()
+            .clone_for_simulation(CloneEnvironmentOptions {
+                source_name: source_name.to_string(),
+                name: simulation_name.clone(),
+                root: None,
+            })?;
         if let Err(error) =
             self.environment_service()
                 .set_service_policy(&cloned.name, Some(false), Some(false))

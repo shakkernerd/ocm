@@ -167,10 +167,17 @@ pub(crate) fn reject_include_owned_sandbox_origin(config_path: &Path) -> Result<
     ))
 }
 
+pub(crate) fn openclaw_config_uses_includes(config_path: &Path) -> Result<bool, String> {
+    Ok(read_config_value(config_path)?
+        .as_ref()
+        .is_some_and(value_contains_include))
+}
+
 #[derive(Clone, Copy)]
 enum SandboxOriginPolicy<'a> {
     Preserve,
     NewEnvironment(Option<&'a str>),
+    Simulation,
 }
 
 fn rewrite_openclaw_config_with_root_mapping(
@@ -213,6 +220,10 @@ fn rewrite_openclaw_config_with_root_mapping(
         if outcome.cleared_sandbox_origin {
             outcome.sandbox_port = effective_sandbox_port(&value, gateway_port);
         }
+    } else if matches!(sandbox_origin_policy, SandboxOriginPolicy::Simulation) {
+        let gateway_port =
+            gateway_port.ok_or_else(|| "simulation clone requires a gateway port".to_string())?;
+        changed |= apply_simulation_identity_overlay(&mut value, target_paths, gateway_port)?;
     }
 
     if !changed && !config_is_symlink {
@@ -221,6 +232,20 @@ fn rewrite_openclaw_config_with_root_mapping(
 
     write_config_value(&target_paths.config_path, &value)?;
     Ok(outcome)
+}
+
+pub(crate) fn rewrite_openclaw_config_for_simulation(
+    target_paths: &EnvPaths,
+    source_root: Option<&Path>,
+    gateway_port: u32,
+) -> Result<(), String> {
+    rewrite_openclaw_config_with_root_mapping(
+        target_paths,
+        source_root.map(|source_root| (source_root, target_paths.root.as_path())),
+        Some(gateway_port),
+        SandboxOriginPolicy::Simulation,
+    )
+    .map(|_| ())
 }
 
 pub(crate) fn ensure_minimum_local_openclaw_config(
@@ -811,6 +836,49 @@ fn effective_sandbox_port(value: &Value, gateway_port: Option<u32>) -> Option<u3
     }
 }
 
+fn apply_simulation_identity_overlay(
+    value: &mut Value,
+    target_paths: &EnvPaths,
+    gateway_port: u32,
+) -> Result<bool, String> {
+    let sandbox_port = gateway_port
+        .checked_add(1)
+        .filter(|port| *port <= u16::MAX as u32)
+        .ok_or_else(|| "simulation sandbox port is outside the valid port range".to_string())?;
+    let root = value
+        .as_object_mut()
+        .ok_or_else(|| "OpenClaw config root must be an object".to_string())?;
+    let mut changed = false;
+
+    let gateway = ensure_object_field(root, "gateway");
+    if gateway.get("port").and_then(Value::as_u64) != Some(gateway_port as u64) {
+        gateway.insert("port".to_string(), Value::from(gateway_port));
+        changed = true;
+    }
+
+    let agents = ensure_object_field(root, "agents");
+    let defaults = ensure_object_field(agents, "defaults");
+    let workspace = display_path(&target_paths.workspace_dir);
+    if defaults.get("workspace").and_then(Value::as_str) != Some(workspace.as_str()) {
+        defaults.insert("workspace".to_string(), Value::String(workspace));
+        changed = true;
+    }
+
+    let mcp = ensure_object_field(root, "mcp");
+    let apps = ensure_object_field(mcp, "apps");
+    if apps.get("sandboxPort").and_then(Value::as_u64) != Some(sandbox_port as u64) {
+        apps.insert("sandboxPort".to_string(), Value::from(sandbox_port));
+        changed = true;
+    }
+    let sandbox_origin = format!("http://127.0.0.1:{sandbox_port}");
+    if apps.get("sandboxOrigin").and_then(Value::as_str) != Some(sandbox_origin.as_str()) {
+        apps.insert("sandboxOrigin".to_string(), Value::String(sandbox_origin));
+        changed = true;
+    }
+
+    Ok(changed)
+}
+
 fn normalize_sandbox_origin(origin: &str) -> Result<String, String> {
     let parsed =
         Url::parse(origin).map_err(|error| format!("invalid --sandbox-origin: {error}"))?;
@@ -863,7 +931,23 @@ fn sandbox_origin_include_scope(value: &Value) -> Option<&'static str> {
         return Some("mcp");
     }
     let apps = mcp.get("apps")?.as_object()?;
-    apps.contains_key("$include").then_some("mcp.apps")
+    if apps.contains_key("$include") {
+        return Some("mcp.apps");
+    }
+    apps.get("sandboxOrigin")
+        .and_then(Value::as_object)
+        .is_some_and(|origin| origin.contains_key("$include"))
+        .then_some("mcp.apps.sandboxOrigin")
+}
+
+fn value_contains_include(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(value_contains_include),
+        Value::Object(values) => {
+            values.contains_key("$include") || values.values().any(value_contains_include)
+        }
+        _ => false,
+    }
 }
 
 fn looks_env_scoped_workspace(path: &Path) -> bool {
@@ -1153,6 +1237,12 @@ mod tests {
         );
         assert_eq!(
             sandbox_origin_include_scope(
+                &json!({"mcp": {"apps": {"sandboxOrigin": {"$include": "./origin.json"}}}})
+            ),
+            Some("mcp.apps.sandboxOrigin")
+        );
+        assert_eq!(
+            sandbox_origin_include_scope(
                 &json!({"agents": {"$include": "./agents.json5"}, "mcp": {"apps": {}}})
             ),
             None
@@ -1164,6 +1254,25 @@ mod tests {
         let value = json!({"mcp": {"apps": {"sandboxPort": 25000}}});
         assert_eq!(effective_sandbox_port(&value, Some(20011)), Some(25000));
         assert_eq!(effective_sandbox_port(&json!({}), Some(20011)), Some(20012));
+    }
+
+    #[test]
+    fn simulation_overlay_overrides_include_owned_identity_fields() {
+        let target_paths = derive_env_paths(Path::new("/tmp/target"));
+        let mut value = json!({"$include": "./base.json5"});
+
+        assert!(apply_simulation_identity_overlay(&mut value, &target_paths, 20011).unwrap());
+        assert_eq!(value["$include"], "./base.json5");
+        assert_eq!(value["gateway"]["port"], 20011);
+        assert_eq!(value["mcp"]["apps"]["sandboxPort"], 20012);
+        assert_eq!(
+            value["mcp"]["apps"]["sandboxOrigin"],
+            "http://127.0.0.1:20012"
+        );
+        assert_eq!(
+            value["agents"]["defaults"]["workspace"],
+            "/tmp/target/.openclaw/workspace"
+        );
     }
 
     #[test]

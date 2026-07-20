@@ -255,6 +255,7 @@ fn complete_migration_import(
     }
 
     copy_dir_recursive(source_home, &target_paths.state_dir)?;
+    reject_include_owned_sandbox_origin(&target_paths.config_path)?;
     let config_rewrite = rewrite_openclaw_config_for_migration(
         target_paths,
         source_home,

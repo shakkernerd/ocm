@@ -29,7 +29,8 @@ pub use envs::{
     list_environments, remove_environment, save_environment,
 };
 pub(crate) use envs::{
-    clone_environment_with_sandbox_origin, import_environment_with_sandbox_origin,
+    clone_environment_for_simulation, clone_environment_with_sandbox_origin,
+    import_environment_with_sandbox_origin,
 };
 pub(crate) use gateway_ports::{
     openclaw_port_family_available, openclaw_port_family_range, resolve_config_gateway_port,
@@ -47,9 +48,9 @@ pub use layout::{
 pub(crate) use openclaw_config::{
     OpenClawConfigAudit, audit_openclaw_config, clear_skip_bootstrap_for_openclaw_onboarding,
     ensure_minimum_local_openclaw_config, normalize_new_environment_sandbox_origin,
-    reject_include_owned_sandbox_origin, repair_openclaw_config,
+    openclaw_config_uses_includes, reject_include_owned_sandbox_origin, repair_openclaw_config,
     rewrite_openclaw_config_for_migration, rewrite_openclaw_config_for_new_environment,
-    rewrite_openclaw_config_for_target,
+    rewrite_openclaw_config_for_simulation, rewrite_openclaw_config_for_target,
 };
 pub(crate) use openclaw_state::{
     OpenClawStateAudit, audit_openclaw_state, clear_nonportable_runtime_state,

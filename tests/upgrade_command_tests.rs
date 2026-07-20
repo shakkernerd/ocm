@@ -648,6 +648,20 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
 
     let start = run_ocm(&cwd, &env, &["start", "demo", "--no-service"]);
     assert!(start.status.success(), "{}", stderr(&start));
+    let source_state = root.child("ocm-home/envs/demo/.openclaw");
+    let source_config = source_state.join("openclaw.json");
+    let included_config = source_state.join("config/base.json");
+    fs::create_dir_all(included_config.parent().unwrap()).unwrap();
+    fs::write(
+        &included_config,
+        fs::read_to_string(&source_config).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &source_config,
+        "{\n  \"$include\": \"./config/base.json\"\n}\n",
+    )
+    .unwrap();
 
     let simulate = run_ocm(
         &cwd,
@@ -677,6 +691,11 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
     assert!(source.status.success(), "{}", stderr(&source));
     let source_json: Value = serde_json::from_str(&stdout(&source)).unwrap();
     assert_eq!(source_json["defaultRuntime"], "stable");
+    assert_eq!(
+        fs::read_to_string(&source_config).unwrap(),
+        "{\n  \"$include\": \"./config/base.json\"\n}\n"
+    );
+    assert!(included_config.exists());
 
     let simulation = run_ocm(&cwd, &env, &["env", "show", sim_name, "--json"]);
     assert!(!simulation.status.success(), "{}", stdout(&simulation));

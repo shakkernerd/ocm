@@ -27,8 +27,9 @@ use super::layout::{
 use super::now_utc;
 use super::{
     clear_nonportable_runtime_state, normalize_new_environment_sandbox_origin,
-    openclaw_env_archive_options, reject_include_owned_sandbox_origin,
-    rewrite_openclaw_config_for_new_environment,
+    openclaw_config_uses_includes, openclaw_env_archive_options, prepare_migrated_runtime_state,
+    reject_include_owned_sandbox_origin, rewrite_openclaw_config_for_new_environment,
+    rewrite_openclaw_config_for_simulation,
 };
 
 static NEXT_IMPORT_ID: AtomicU64 = AtomicU64::new(0);
@@ -409,12 +410,48 @@ pub fn clone_environment(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
-    Ok(clone_environment_with_sandbox_origin(options, None, env, cwd)?.meta)
+    Ok(
+        clone_environment_with_policy(options, None, CloneEnvironmentPolicy::Standard, env, cwd)?
+            .meta,
+    )
 }
 
 pub(crate) fn clone_environment_with_sandbox_origin(
     options: CloneEnvironmentOptions,
     sandbox_origin: Option<&str>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<CloneEnvironmentResult, String> {
+    clone_environment_with_policy(
+        options,
+        sandbox_origin,
+        CloneEnvironmentPolicy::Standard,
+        env,
+        cwd,
+    )
+}
+
+pub(crate) fn clone_environment_for_simulation(
+    options: CloneEnvironmentOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
+    Ok(
+        clone_environment_with_policy(options, None, CloneEnvironmentPolicy::Simulation, env, cwd)?
+            .meta,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum CloneEnvironmentPolicy {
+    Standard,
+    Simulation,
+}
+
+fn clone_environment_with_policy(
+    options: CloneEnvironmentOptions,
+    sandbox_origin: Option<&str>,
+    policy: CloneEnvironmentPolicy,
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<CloneEnvironmentResult, String> {
@@ -452,18 +489,47 @@ pub(crate) fn clone_environment_with_sandbox_origin(
             display_path(&source_paths.root)
         ));
     }
-    reject_include_owned_sandbox_origin(&source_paths.config_path)?;
+    if matches!(policy, CloneEnvironmentPolicy::Standard) {
+        reject_include_owned_sandbox_origin(&source_paths.config_path)?;
+    }
     let result = (|| {
         copy_dir_recursive(&source_paths.root, &target_paths.root)?;
         let created_at = now_utc();
         let gateway_port = choose_cloned_gateway_port(&source, &registry.envs, env);
-        let config_rewrite = rewrite_openclaw_config_for_new_environment(
-            &target_paths,
-            Some(&source_paths.root),
-            Some(gateway_port),
-            sandbox_origin.as_deref(),
-        )?;
-        clear_nonportable_runtime_state(&target_paths)?;
+        let config_rewrite = match policy {
+            CloneEnvironmentPolicy::Standard => {
+                reject_include_owned_sandbox_origin(&target_paths.config_path)?;
+                let outcome = rewrite_openclaw_config_for_new_environment(
+                    &target_paths,
+                    Some(&source_paths.root),
+                    Some(gateway_port),
+                    sandbox_origin.as_deref(),
+                )?;
+                clear_nonportable_runtime_state(&target_paths)?;
+                outcome
+            }
+            CloneEnvironmentPolicy::Simulation
+                if openclaw_config_uses_includes(&target_paths.config_path)? =>
+            {
+                rewrite_openclaw_config_for_simulation(
+                    &target_paths,
+                    Some(&source_paths.root),
+                    gateway_port,
+                )?;
+                prepare_migrated_runtime_state(&target_paths, &source_paths.state_dir)?;
+                Default::default()
+            }
+            CloneEnvironmentPolicy::Simulation => {
+                let outcome = rewrite_openclaw_config_for_new_environment(
+                    &target_paths,
+                    Some(&source_paths.root),
+                    Some(gateway_port),
+                    None,
+                )?;
+                clear_nonportable_runtime_state(&target_paths)?;
+                outcome
+            }
+        };
 
         let meta = EnvMeta {
             kind: "ocm-env".to_string(),
@@ -657,6 +723,7 @@ pub(crate) fn import_environment_with_sandbox_origin(
             let gateway_port =
                 choose_available_gateway_port(preferred_gateway_port, &registry.envs, env);
             copy_dir_recursive(&extracted.root_dir, &target_paths.root)?;
+            reject_include_owned_sandbox_origin(&target_paths.config_path)?;
             let config_rewrite = rewrite_openclaw_config_for_new_environment(
                 &target_paths,
                 extracted.metadata.env.source_root.as_deref().map(Path::new),
@@ -770,11 +837,14 @@ fn import_staging_dir() -> PathBuf {
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
+    use std::path::Path;
 
     use crate::env::CreateEnvironmentOptions;
+    use serde_json::{Value, json};
 
     use super::{
-        NEXT_IMPORT_ID, Ordering, create_environment, get_environment, remove_environment,
+        CloneEnvironmentOptions, NEXT_IMPORT_ID, Ordering, clone_environment_for_simulation,
+        create_environment, derive_env_paths, get_environment, remove_environment,
         restore_environment_service_policy, save_environment, set_environment_service_policy,
     };
 
@@ -853,6 +923,98 @@ mod tests {
         assert!(!recreated.service_enabled);
         assert!(!recreated.service_running);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn simulation_clone_overlays_identity_and_preserves_included_config_files() {
+        let id = NEXT_IMPORT_ID.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir()
+            .join("ocm-env-simulation-tests")
+            .join(format!("{}-{id}", std::process::id()));
+        let cwd = root.join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+        let env = BTreeMap::from([
+            ("HOME".to_string(), root.join("home").display().to_string()),
+            (
+                "OCM_HOME".to_string(),
+                root.join("ocm-home").display().to_string(),
+            ),
+        ]);
+        let source = create_environment(
+            CreateEnvironmentOptions {
+                name: "source".to_string(),
+                root: None,
+                gateway_port: Some(19_789),
+                service_enabled: false,
+                service_running: false,
+                default_runtime: None,
+                default_launcher: None,
+                dev: None,
+                protected: false,
+            },
+            &env,
+            &cwd,
+        )
+        .unwrap();
+        let source_paths = derive_env_paths(Path::new(&source.root));
+        let include_dir = source_paths.state_dir.join("config");
+        fs::create_dir_all(&include_dir).unwrap();
+        fs::write(
+            &source_paths.config_path,
+            serde_json::to_string_pretty(&json!({"$include": "./config/base.json"})).unwrap()
+                + "\n",
+        )
+        .unwrap();
+        fs::write(
+            include_dir.join("base.json"),
+            serde_json::to_string_pretty(&json!({
+                "gateway": {"port": 19789},
+                "agents": {"defaults": {"workspace": source_paths.workspace_dir}},
+                "mcp": {"apps": {
+                    "sandboxPort": 19790,
+                    "sandboxOrigin": "https://source.example.test"
+                }}
+            }))
+            .unwrap()
+                + "\n",
+        )
+        .unwrap();
+        fs::create_dir_all(source_paths.state_dir.join("run")).unwrap();
+        fs::write(source_paths.state_dir.join("run/gateway.pid"), "123\n").unwrap();
+
+        let simulation = clone_environment_for_simulation(
+            CloneEnvironmentOptions {
+                source_name: "source".to_string(),
+                name: "simulation".to_string(),
+                root: None,
+            },
+            &env,
+            &cwd,
+        )
+        .unwrap();
+
+        let target_paths = derive_env_paths(Path::new(&simulation.root));
+        let config: Value =
+            serde_json::from_str(&fs::read_to_string(&target_paths.config_path).unwrap()).unwrap();
+        let gateway_port = simulation.gateway_port.unwrap();
+        assert_eq!(config["$include"], "./config/base.json");
+        assert_eq!(config["gateway"]["port"], gateway_port);
+        assert_eq!(
+            config["agents"]["defaults"]["workspace"],
+            target_paths.workspace_dir.display().to_string()
+        );
+        assert_eq!(config["mcp"]["apps"]["sandboxPort"], gateway_port + 1);
+        assert_eq!(
+            config["mcp"]["apps"]["sandboxOrigin"],
+            format!("http://127.0.0.1:{}", gateway_port + 1)
+        );
+        assert!(target_paths.state_dir.join("config/base.json").exists());
+        assert!(!target_paths.state_dir.join("run").exists());
+        assert!(source_paths.state_dir.join("config/base.json").exists());
+
+        remove_environment("simulation", false, &env, &cwd).unwrap();
+        remove_environment("source", false, &env, &cwd).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 }

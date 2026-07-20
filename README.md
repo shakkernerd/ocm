@@ -187,7 +187,7 @@ ocm env import ./source.ocm-env.tar --name target --sandbox-origin https://targe
 ocm migrate target --sandbox-origin https://target-apps.example.com
 ```
 
-If the config root, `mcp`, or `mcp.apps` is owned by OpenClaw's `$include`, flatten that section before clone, import, or migration. OCM fails closed instead of flattening include-owned configuration or leaving a copied source origin active.
+If the config root, `mcp`, `mcp.apps`, or `mcp.apps.sandboxOrigin` is owned by OpenClaw's `$include`, flatten that section before clone, import, or migration. OCM fails closed instead of flattening include-owned configuration or leaving a copied source origin active.
 
 `adopt inspect` and `adopt plan` are the explicit read-only preview tools. Use them when you want to inspect the plain OpenClaw home OCM would read or preview the target env/root before importing.
 
