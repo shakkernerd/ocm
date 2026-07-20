@@ -621,6 +621,8 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use serde_json::Value;
+
     use crate::launcher::{AddLauncherOptions, LauncherService};
     use crate::store::derive_env_paths;
 
@@ -810,7 +812,15 @@ mod tests {
         fs::write(
             source_home.join("openclaw.json"),
             format!(
-                "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}}}}\n",
+                concat!(
+                    "{{",
+                    "\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}},",
+                    "\"gateway\":{{\"port\":18789}},",
+                    "\"mcp\":{{\"apps\":{{",
+                    "\"sandboxOrigin\":\"https://node.example.test:18790\"",
+                    "}}}}",
+                    "}}\n"
+                ),
                 source_home.join("workspace").display()
             ),
         )
@@ -873,6 +883,14 @@ mod tests {
             root.join("bin/openclaw").display().to_string()
         );
         assert!(target_paths.config_path.exists());
+        let config: Value =
+            serde_json::from_str(&fs::read_to_string(&target_paths.config_path).unwrap()).unwrap();
+        let migrated_gateway_port = config["gateway"]["port"].as_u64().unwrap();
+        assert_ne!(migrated_gateway_port, 18_789);
+        assert_eq!(
+            config["mcp"]["apps"]["sandboxOrigin"].as_str(),
+            Some(format!("https://node.example.test:{}", migrated_gateway_port + 1).as_str())
+        );
         assert!(target_paths.workspace_dir.join("notes.txt").exists());
         assert!(
             target_paths
