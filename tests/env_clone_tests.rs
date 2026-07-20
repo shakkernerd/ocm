@@ -102,7 +102,7 @@ fn env_clone_rewrites_openclaw_config_for_the_new_env_root() {
 }
 
 #[test]
-fn env_clone_rewrites_port_coupled_mcp_app_sandbox_config() {
+fn env_clone_rewrites_coupled_sandbox_port_and_preserves_public_origin() {
     let root = TestDir::new("env-clone-mcp-app-sandbox-rewrite");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -141,7 +141,7 @@ fn env_clone_rewrites_port_coupled_mcp_app_sandbox_config() {
     );
     assert_eq!(
         config["mcp"]["apps"]["sandboxOrigin"].as_str(),
-        Some(format!("https://node.example.test:{expected_sandbox_port}").as_str())
+        Some("https://node.example.test:19790")
     );
 }
 
