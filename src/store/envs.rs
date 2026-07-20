@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::env::{
     CloneEnvironmentOptions, CloneEnvironmentResult, CreateEnvironmentOptions, EnvExportSummary,
@@ -14,6 +15,9 @@ use crate::infra::archive::{
 use crate::openclaw_repo::remove_openclaw_worktree;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
 
 use super::common::{
     copy_dir_recursive, copy_path, ensure_dir, path_exists, read_json, write_json,
@@ -575,11 +579,7 @@ fn clear_simulation_runtime_state_preserving_includes(
         return Ok(());
     }
 
-    let staging_root = std::env::temp_dir().join(format!(
-        "ocm-simulation-includes-{}-{}",
-        std::process::id(),
-        NEXT_IMPORT_ID.fetch_add(1, Ordering::Relaxed)
-    ));
+    let staging_root = create_private_simulation_staging_dir(&target_paths.root)?;
     let result = (|| {
         for include_path in &include_paths {
             let relative = include_path
@@ -592,12 +592,10 @@ fn clear_simulation_runtime_state_preserving_includes(
             let relative = include_path
                 .strip_prefix(&target_paths.state_dir)
                 .map_err(|error| error.to_string())?;
-            if let Ok(metadata) = fs::symlink_metadata(include_path) {
-                if metadata.is_dir() && !metadata.file_type().is_symlink() {
-                    fs::remove_dir_all(include_path).map_err(|error| error.to_string())?;
-                } else {
-                    fs::remove_file(include_path).map_err(|error| error.to_string())?;
-                }
+            match fs::symlink_metadata(include_path) {
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.to_string()),
             }
             copy_path(&staging_root.join(relative), include_path)?;
         }
@@ -611,6 +609,32 @@ fn clear_simulation_runtime_state_preserving_includes(
         }
         (Ok(()), _) => Ok(()),
     }
+}
+
+fn create_private_simulation_staging_dir(parent: &Path) -> Result<PathBuf, String> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    for attempt in 0..16 {
+        let path = parent.join(format!(
+            ".ocm-simulation-includes-{}-{nonce}-{}-{attempt}",
+            std::process::id(),
+            NEXT_IMPORT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = {
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            builder.create(&path)
+        };
+        match result {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("failed to create private simulation include staging directory".to_string())
 }
 
 fn choose_cloned_gateway_port(
@@ -893,9 +917,11 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        CloneEnvironmentOptions, NEXT_IMPORT_ID, Ordering, clone_environment_for_simulation,
-        create_environment, derive_env_paths, get_environment, remove_environment,
-        restore_environment_service_policy, save_environment, set_environment_service_policy,
+        CloneEnvironmentOptions, NEXT_IMPORT_ID, Ordering,
+        clear_simulation_runtime_state_preserving_includes, clone_environment_for_simulation,
+        create_environment, create_private_simulation_staging_dir, derive_env_paths,
+        get_environment, remove_environment, restore_environment_service_policy, save_environment,
+        set_environment_service_policy,
     };
 
     #[test]
@@ -1079,6 +1105,63 @@ mod tests {
 
         remove_environment("simulation", false, &env, &cwd).unwrap();
         remove_environment("source", false, &env, &cwd).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn simulation_cleanup_does_not_mutate_workspace_include_symlinks() {
+        let id = NEXT_IMPORT_ID.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir()
+            .join("ocm-env-simulation-symlink-tests")
+            .join(format!("{}-{id}", std::process::id()));
+        let paths = derive_env_paths(root.join("target"));
+        fs::create_dir_all(&paths.workspace_dir).unwrap();
+        fs::create_dir_all(paths.state_dir.join("logs")).unwrap();
+        fs::write(paths.state_dir.join("logs/gateway.log"), "remove\n").unwrap();
+        let external = root.join("external/include.json");
+        fs::create_dir_all(external.parent().unwrap()).unwrap();
+        fs::write(&external, "{\"shared\": true}\n").unwrap();
+        std::os::unix::fs::symlink(&external, paths.workspace_dir.join("include.json")).unwrap();
+        fs::write(
+            &paths.config_path,
+            "{\"$include\":\"./workspace/include.json\"}\n",
+        )
+        .unwrap();
+
+        clear_simulation_runtime_state_preserving_includes(&paths).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&external).unwrap(),
+            "{\"shared\": true}\n"
+        );
+        assert!(
+            fs::symlink_metadata(paths.workspace_dir.join("include.json"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!paths.state_dir.join("logs").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn simulation_include_staging_directory_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let id = NEXT_IMPORT_ID.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir()
+            .join("ocm-env-simulation-staging-tests")
+            .join(format!("{}-{id}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+
+        let staging = create_private_simulation_staging_dir(&root).unwrap();
+
+        assert_eq!(
+            fs::metadata(&staging).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }
