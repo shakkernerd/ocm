@@ -491,12 +491,17 @@ fn read_workspace_field(value: &Value) -> Option<&str> {
 }
 
 fn read_gateway_port(value: &Value) -> Option<u32> {
-    let port = value.get("gateway")?.get("port")?.as_u64()?;
-    if (1..=u16::MAX as u64).contains(&port) {
-        Some(port as u32)
-    } else {
-        None
+    read_port_number(value.get("gateway")?.get("port")?)
+}
+
+fn read_port_number(value: &Value) -> Option<u32> {
+    let number = value.as_number()?;
+    if let Some(port) = number.as_u64() {
+        return (1..=u16::MAX as u64).contains(&port).then_some(port as u32);
     }
+
+    let port = number.as_f64()?;
+    (port.fract() == 0.0 && (1.0..=u16::MAX as f64).contains(&port)).then_some(port as u32)
 }
 
 fn rewrite_env_root_paths(value: &mut Value, source_root: &Path, target_root: &Path) -> bool {
@@ -637,12 +642,15 @@ fn rewrite_port_coupled_mcp_app_sandbox(
         return false;
     };
 
-    let configured_sandbox_port = apps.get("sandboxPort").and_then(Value::as_u64);
-    let follows_gateway_port = configured_sandbox_port.is_none()
-        || configured_sandbox_port == Some(source_sandbox_port as u64);
+    let configured_sandbox_port = apps.get("sandboxPort").map(read_port_number);
+    let follows_gateway_port = match configured_sandbox_port {
+        None => true,
+        Some(Some(port)) => port == source_sandbox_port,
+        Some(None) => false,
+    };
 
     let mut changed = false;
-    if configured_sandbox_port == Some(source_sandbox_port as u64) {
+    if configured_sandbox_port == Some(Some(source_sandbox_port)) {
         apps.insert("sandboxPort".to_string(), Value::from(target_sandbox_port));
         changed = true;
     }
@@ -891,5 +899,62 @@ mod tests {
             value["mcp"]["apps"]["sandboxOrigin"],
             "http://localhost:19790"
         );
+    }
+
+    #[test]
+    fn gateway_port_rewrite_accepts_integral_json_number_encodings() {
+        for raw in [
+            r#"{
+                "gateway": {"port": 19789.0},
+                "mcp": {
+                    "apps": {
+                        "sandboxPort": 19790.0,
+                        "sandboxOrigin": "http://localhost:19790"
+                    }
+                }
+            }"#,
+            r#"{
+                "gateway": {"port": 1.9789e4},
+                "mcp": {
+                    "apps": {
+                        "sandboxPort": 1.979e4,
+                        "sandboxOrigin": "http://localhost:19790"
+                    }
+                }
+            }"#,
+        ] {
+            let mut value: Value = serde_json::from_str(raw).unwrap();
+
+            assert!(rewrite_gateway_port_family(&mut value, 19900));
+            assert_eq!(value["gateway"]["port"], 19900);
+            assert_eq!(value["mcp"]["apps"]["sandboxPort"], 19901);
+            assert_eq!(
+                value["mcp"]["apps"]["sandboxOrigin"],
+                "http://localhost:19901"
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_port_rewrite_preserves_unknown_sandbox_port_values() {
+        for sandbox_port in [json!(19790.5), json!("19790")] {
+            let mut value = json!({
+                "gateway": {"port": 19789},
+                "mcp": {
+                    "apps": {
+                        "sandboxPort": sandbox_port,
+                        "sandboxOrigin": "http://localhost:19790"
+                    }
+                }
+            });
+
+            assert!(rewrite_gateway_port_family(&mut value, 19900));
+            assert_eq!(value["gateway"]["port"], 19900);
+            assert_eq!(value["mcp"]["apps"]["sandboxPort"], sandbox_port);
+            assert_eq!(
+                value["mcp"]["apps"]["sandboxOrigin"],
+                "http://localhost:19790"
+            );
+        }
     }
 }
