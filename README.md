@@ -179,6 +179,14 @@ ocm adopt plan --name mira
 
 `migrate` preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets. If `openclaw` is already available on `PATH`, it also binds the imported env to an env-local migrated launcher so you can keep using it through OCM immediately.
 
+Clone, import, and migration give the target environment a new local gateway and MCP app sandbox listener. They do not copy a public `mcp.apps.sandboxOrigin` because that URL belongs to the source environment's external routing and may still reach the source sandbox. Direct connections derive the target sandbox port automatically. For a target behind a reverse proxy or tunnel, pass its dedicated public origin explicitly:
+
+```bash
+ocm env clone source target --sandbox-origin https://target-apps.example.com
+ocm env import ./source.ocm-env.tar --name target --sandbox-origin https://target-apps.example.com
+ocm migrate target --sandbox-origin https://target-apps.example.com
+```
+
 `adopt inspect` and `adopt plan` are the explicit read-only preview tools. Use them when you want to inspect the plain OpenClaw home OCM would read or preview the target env/root before importing.
 
 ### Keep supervised envs visible
