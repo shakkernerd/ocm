@@ -220,12 +220,11 @@ fn env_import_resets_or_replaces_a_copied_public_sandbox_origin() {
     );
     assert!(reset.status.success(), "{}", stderr(&reset));
     assert!(
-        stderr(&reset).contains(
-            "removed copied MCP app sandbox origin https://source.example.test from env target-reset"
-        ),
+        stderr(&reset).contains("removed copied MCP app sandbox origin from env target-reset"),
         "{}",
         stderr(&reset)
     );
+    assert!(!stderr(&reset).contains("source.example.test"));
     let reset_config: Value = serde_json::from_str(
         &fs::read_to_string(root.child("ocm-home/envs/target-reset/.openclaw/openclaw.json"))
             .unwrap(),
@@ -257,6 +256,79 @@ fn env_import_resets_or_replaces_a_copied_public_sandbox_origin() {
         replaced_config["mcp"]["apps"]["sandboxOrigin"].as_str(),
         Some("https://target.example.test")
     );
+}
+
+#[test]
+fn env_import_validates_the_target_origin_before_reading_the_archive() {
+    let root = TestDir::new("env-import-invalid-origin-preflight");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let import = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "import",
+            "./missing.ocm-env.tar",
+            "--sandbox-origin",
+            "https://target.example.test/apps",
+        ],
+    );
+    assert_eq!(import.status.code(), Some(1));
+    assert!(stderr(&import).contains(
+        "--sandbox-origin must be an HTTP(S) origin without a path, query, or credentials"
+    ));
+    assert!(!stderr(&import).contains("missing.ocm-env.tar"));
+}
+
+#[test]
+fn env_import_rejects_include_owned_sandbox_configuration_before_creating_the_target() {
+    let root = TestDir::new("env-import-include-owned-sandbox-origin");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
+        "{\n  \"$include\": \"./base.json5\"\n}\n",
+    );
+    let export = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "export",
+            "source",
+            "--output",
+            "./include-owned.ocm-env.tar",
+        ],
+    );
+    assert!(export.status.success(), "{}", stderr(&export));
+
+    let import = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "import",
+            "./include-owned.ocm-env.tar",
+            "--name",
+            "target",
+        ],
+    );
+    assert_eq!(import.status.code(), Some(1));
+    assert!(
+        stderr(&import).contains(
+            "cannot safely reset mcp.apps.sandboxOrigin because OpenClaw config uses $include at the config root"
+        ),
+        "{}",
+        stderr(&import)
+    );
+    assert!(!root.child("ocm-home/envs/target").exists());
 }
 
 #[test]

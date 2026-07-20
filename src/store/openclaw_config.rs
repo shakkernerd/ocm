@@ -23,7 +23,8 @@ pub(crate) struct OpenClawConfigAudit {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OpenClawConfigRewriteOutcome {
-    pub cleared_sandbox_origin: Option<String>,
+    pub cleared_sandbox_origin: bool,
+    pub sandbox_port: Option<u32>,
 }
 
 pub(crate) fn audit_openclaw_config(meta: &EnvMeta, known_envs: &[EnvMeta]) -> OpenClawConfigAudit {
@@ -148,6 +149,24 @@ pub(crate) fn rewrite_openclaw_config_for_migration(
     )
 }
 
+pub(crate) fn normalize_new_environment_sandbox_origin(
+    sandbox_origin: Option<&str>,
+) -> Result<Option<String>, String> {
+    sandbox_origin.map(normalize_sandbox_origin).transpose()
+}
+
+pub(crate) fn reject_include_owned_sandbox_origin(config_path: &Path) -> Result<(), String> {
+    let Some(value) = read_config_value(config_path)? else {
+        return Ok(());
+    };
+    let Some(scope) = sandbox_origin_include_scope(&value) else {
+        return Ok(());
+    };
+    Err(format!(
+        "cannot safely reset mcp.apps.sandboxOrigin because OpenClaw config uses $include at {scope}; flatten that section before creating a new OCM environment"
+    ))
+}
+
 #[derive(Clone, Copy)]
 enum SandboxOriginPolicy<'a> {
     Preserve,
@@ -191,6 +210,9 @@ fn rewrite_openclaw_config_with_root_mapping(
     if let SandboxOriginPolicy::NewEnvironment(sandbox_origin) = sandbox_origin_policy {
         changed |=
             rewrite_sandbox_origin_for_new_environment(&mut value, sandbox_origin, &mut outcome)?;
+        if outcome.cleared_sandbox_origin {
+            outcome.sandbox_port = effective_sandbox_port(&value, gateway_port);
+        }
     }
 
     if !changed && !config_is_symlink {
@@ -769,9 +791,24 @@ fn rewrite_sandbox_origin_for_new_environment(
         return Ok(false);
     }
 
-    outcome.cleared_sandbox_origin = Some(origin.to_string());
+    outcome.cleared_sandbox_origin = true;
     apps.remove("sandboxOrigin");
     Ok(true)
+}
+
+fn effective_sandbox_port(value: &Value, gateway_port: Option<u32>) -> Option<u32> {
+    match value
+        .get("mcp")
+        .and_then(Value::as_object)
+        .and_then(|mcp| mcp.get("apps"))
+        .and_then(Value::as_object)
+        .and_then(|apps| apps.get("sandboxPort"))
+    {
+        Some(configured) => read_port_number(configured),
+        None => gateway_port
+            .and_then(|port| port.checked_add(1))
+            .filter(|port| *port <= u16::MAX as u32),
+    }
 }
 
 fn normalize_sandbox_origin(origin: &str) -> Result<String, String> {
@@ -814,6 +851,19 @@ fn is_valid_sandbox_origin_url(parsed: &Url) -> bool {
         && parsed.path() == "/"
         && parsed.query().is_none()
         && parsed.fragment().is_none()
+}
+
+fn sandbox_origin_include_scope(value: &Value) -> Option<&'static str> {
+    let root = value.as_object()?;
+    if root.contains_key("$include") {
+        return Some("the config root");
+    }
+    let mcp = root.get("mcp")?.as_object()?;
+    if mcp.contains_key("$include") {
+        return Some("mcp");
+    }
+    let apps = mcp.get("apps")?.as_object()?;
+    apps.contains_key("$include").then_some("mcp.apps")
 }
 
 fn looks_env_scoped_workspace(path: &Path) -> bool {
@@ -1027,10 +1077,7 @@ mod tests {
             rewrite_sandbox_origin_for_new_environment(&mut value, None, &mut outcome).unwrap()
         );
         assert!(value["mcp"]["apps"]["sandboxOrigin"].is_null());
-        assert_eq!(
-            outcome.cleared_sandbox_origin.as_deref(),
-            Some("https://source.example.test")
-        );
+        assert!(outcome.cleared_sandbox_origin);
     }
 
     #[test]
@@ -1048,10 +1095,7 @@ mod tests {
             rewrite_sandbox_origin_for_new_environment(&mut value, None, &mut outcome).unwrap()
         );
         assert!(value["mcp"]["apps"]["sandboxOrigin"].is_null());
-        assert_eq!(
-            outcome.cleared_sandbox_origin.as_deref(),
-            Some("http://localhost:18790/apps")
-        );
+        assert!(outcome.cleared_sandbox_origin);
     }
 
     #[test]
@@ -1071,7 +1115,7 @@ mod tests {
             value["mcp"]["apps"]["sandboxOrigin"],
             "https://target.example.test"
         );
-        assert!(outcome.cleared_sandbox_origin.is_none());
+        assert!(!outcome.cleared_sandbox_origin);
     }
 
     #[test]
@@ -1091,6 +1135,35 @@ mod tests {
             "--sandbox-origin must be an HTTP(S) origin without a path, query, or credentials"
         );
         assert_eq!(value, json!({}));
+    }
+
+    #[test]
+    fn sandbox_origin_include_scope_only_flags_governing_includes() {
+        assert_eq!(
+            sandbox_origin_include_scope(&json!({"$include": "./base.json5"})),
+            Some("the config root")
+        );
+        assert_eq!(
+            sandbox_origin_include_scope(&json!({"mcp": {"$include": "./mcp.json5"}})),
+            Some("mcp")
+        );
+        assert_eq!(
+            sandbox_origin_include_scope(&json!({"mcp": {"apps": {"$include": "./apps.json5"}}})),
+            Some("mcp.apps")
+        );
+        assert_eq!(
+            sandbox_origin_include_scope(
+                &json!({"agents": {"$include": "./agents.json5"}, "mcp": {"apps": {}}})
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn effective_sandbox_port_prefers_a_valid_custom_listener() {
+        let value = json!({"mcp": {"apps": {"sandboxPort": 25000}}});
+        assert_eq!(effective_sandbox_port(&value, Some(20011)), Some(25000));
+        assert_eq!(effective_sandbox_port(&json!({}), Some(20011)), Some(20012));
     }
 
     #[test]

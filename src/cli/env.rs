@@ -567,8 +567,8 @@ impl Cli {
             .resolve_effective_gateway_port(&meta)?;
         self.warn_cleared_sandbox_origin(
             &meta.name,
-            result.cleared_sandbox_origin.as_deref(),
-            gateway_port,
+            result.cleared_sandbox_origin,
+            result.sandbox_port,
         );
 
         if json_flag {
@@ -638,17 +638,11 @@ impl Cli {
             )
         })?;
         let summary = result.summary;
-        if result.cleared_sandbox_origin.is_some() {
-            let meta = self.environment_service().get(&summary.name)?;
-            let (gateway_port, _) = self
-                .environment_service()
-                .resolve_effective_gateway_port(&meta)?;
-            self.warn_cleared_sandbox_origin(
-                &summary.name,
-                result.cleared_sandbox_origin.as_deref(),
-                gateway_port,
-            );
-        }
+        self.warn_cleared_sandbox_origin(
+            &summary.name,
+            result.cleared_sandbox_origin,
+            result.sandbox_port,
+        );
 
         if json_flag {
             self.print_json(&summary)?;

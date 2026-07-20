@@ -26,7 +26,8 @@ use super::layout::{
 };
 use super::now_utc;
 use super::{
-    clear_nonportable_runtime_state, openclaw_env_archive_options,
+    clear_nonportable_runtime_state, normalize_new_environment_sandbox_origin,
+    openclaw_env_archive_options, reject_include_owned_sandbox_origin,
     rewrite_openclaw_config_for_new_environment,
 };
 
@@ -417,6 +418,7 @@ pub(crate) fn clone_environment_with_sandbox_origin(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<CloneEnvironmentResult, String> {
+    let sandbox_origin = normalize_new_environment_sandbox_origin(sandbox_origin)?;
     let source_name = validate_name(&options.source_name, "Environment name")?;
     let name = validate_name(&options.name, "Environment name")?;
     let _lock = lock_env_registry(env, cwd)?;
@@ -450,6 +452,7 @@ pub(crate) fn clone_environment_with_sandbox_origin(
             display_path(&source_paths.root)
         ));
     }
+    reject_include_owned_sandbox_origin(&source_paths.config_path)?;
     let result = (|| {
         copy_dir_recursive(&source_paths.root, &target_paths.root)?;
         let created_at = now_utc();
@@ -458,7 +461,7 @@ pub(crate) fn clone_environment_with_sandbox_origin(
             &target_paths,
             Some(&source_paths.root),
             Some(gateway_port),
-            sandbox_origin,
+            sandbox_origin.as_deref(),
         )?;
         clear_nonportable_runtime_state(&target_paths)?;
 
@@ -483,6 +486,7 @@ pub(crate) fn clone_environment_with_sandbox_origin(
         Ok(CloneEnvironmentResult {
             meta,
             cleared_sandbox_origin: config_rewrite.cleared_sandbox_origin,
+            sandbox_port: config_rewrite.sandbox_port,
         })
     })();
 
@@ -589,6 +593,7 @@ pub(crate) fn import_environment_with_sandbox_origin(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ImportEnvironmentResult, String> {
+    let sandbox_origin = normalize_new_environment_sandbox_origin(sandbox_origin)?;
     let archive_path = resolve_absolute_path(&options.archive, env, cwd)?;
     let staging_dir = import_staging_dir();
     if path_exists(&staging_dir) {
@@ -642,6 +647,7 @@ pub(crate) fn import_environment_with_sandbox_origin(
         if !path_exists(&extracted.root_dir) {
             return Err("archive is missing root/".to_string());
         }
+        reject_include_owned_sandbox_origin(&derive_env_paths(&extracted.root_dir).config_path)?;
         let imported = (|| {
             let preferred_gateway_port = extracted
                 .metadata
@@ -655,7 +661,7 @@ pub(crate) fn import_environment_with_sandbox_origin(
                 &target_paths,
                 extracted.metadata.env.source_root.as_deref().map(Path::new),
                 Some(gateway_port),
-                sandbox_origin,
+                sandbox_origin.as_deref(),
             )?;
             clear_nonportable_runtime_state(&target_paths)?;
 
@@ -693,6 +699,7 @@ pub(crate) fn import_environment_with_sandbox_origin(
                     protected: meta.protected,
                 },
                 cleared_sandbox_origin: config_rewrite.cleared_sandbox_origin,
+                sandbox_port: config_rewrite.sandbox_port,
             }),
             Err(error) => {
                 let _ = fs::remove_dir_all(&target_paths.root);

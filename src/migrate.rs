@@ -9,7 +9,8 @@ use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService}
 use crate::launcher::{AddLauncherOptions, LauncherService};
 use crate::store::{
     copy_dir_recursive, default_env_root, derive_env_paths, display_path, list_environments,
-    prepare_migrated_runtime_state, resolve_user_home, rewrite_openclaw_config_for_migration,
+    normalize_new_environment_sandbox_origin, prepare_migrated_runtime_state,
+    reject_include_owned_sandbox_origin, resolve_user_home, rewrite_openclaw_config_for_migration,
     validate_name,
 };
 
@@ -43,7 +44,8 @@ pub struct MigrateHomeOptions {
 #[derive(Clone, Debug)]
 pub(crate) struct MigrateHomeResult {
     pub summary: EnvImportSummary,
-    pub cleared_sandbox_origin: Option<String>,
+    pub cleared_sandbox_origin: bool,
+    pub sandbox_port: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -120,11 +122,12 @@ pub(crate) fn migrate_plain_openclaw_home_with_sandbox_origin(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<MigrateHomeResult, String> {
-    let (summary, _, cleared_sandbox_origin) =
+    let (summary, _, cleared_sandbox_origin, sandbox_port) =
         migrate_plain_openclaw_home_inner(options, sandbox_origin, env, cwd)?;
     Ok(MigrateHomeResult {
         summary,
         cleared_sandbox_origin,
+        sandbox_port,
     })
 }
 
@@ -133,7 +136,8 @@ fn migrate_plain_openclaw_home_inner(
     sandbox_origin: Option<&str>,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) -> Result<(EnvImportSummary, Option<String>, Option<String>), String> {
+) -> Result<(EnvImportSummary, Option<String>, bool, Option<u32>), String> {
+    let sandbox_origin = normalize_new_environment_sandbox_origin(sandbox_origin)?;
     let service = EnvironmentService::new(env, cwd);
     let env_name = validate_name(&options.name, "Environment name")?;
     let source_home =
@@ -144,6 +148,7 @@ fn migrate_plain_openclaw_home_inner(
             display_path(&source_home)
         ));
     }
+    reject_include_owned_sandbox_origin(&source_home.join("openclaw.json"))?;
     let target_root = resolve_migration_target_root(options.root.as_deref(), &env_name, env, cwd)?;
     let target_root_string = target_root
         .to_str()
@@ -175,14 +180,17 @@ fn migrate_plain_openclaw_home_inner(
         created,
         &target_paths,
         &source_home,
-        sandbox_origin,
+        sandbox_origin.as_deref(),
         migrated_launcher.as_ref(),
         env,
         cwd,
     ) {
-        Ok((created, created_launcher, cleared_sandbox_origin)) => {
-            (created, created_launcher, cleared_sandbox_origin)
-        }
+        Ok((created, created_launcher, cleared_sandbox_origin, sandbox_port)) => (
+            created,
+            created_launcher,
+            cleared_sandbox_origin,
+            sandbox_port,
+        ),
         Err(error) => {
             let rollback = service.remove(&created_name, true).map(|_| ());
             return Err(with_rollback_error(
@@ -205,6 +213,7 @@ fn migrate_plain_openclaw_home_inner(
         },
         created.1,
         created.2,
+        created.3,
     ))
 }
 
@@ -240,7 +249,7 @@ fn complete_migration_import(
     migrated_launcher: Option<&MigratedLauncherSpec>,
     env: &BTreeMap<String, String>,
     cwd: &Path,
-) -> Result<(crate::env::EnvMeta, Option<String>, Option<String>), String> {
+) -> Result<(crate::env::EnvMeta, Option<String>, bool, Option<u32>), String> {
     if target_paths.state_dir.exists() {
         fs::remove_dir_all(&target_paths.state_dir).map_err(|error| error.to_string())?;
     }
@@ -255,7 +264,12 @@ fn complete_migration_import(
     prepare_migrated_runtime_state(target_paths, source_home)?;
 
     let Some(launcher) = migrated_launcher else {
-        return Ok((created, None, config_rewrite.cleared_sandbox_origin));
+        return Ok((
+            created,
+            None,
+            config_rewrite.cleared_sandbox_origin,
+            config_rewrite.sandbox_port,
+        ));
     };
 
     let launcher_service = LauncherService::new(env, cwd);
@@ -279,6 +293,7 @@ fn complete_migration_import(
             meta,
             created_launcher,
             config_rewrite.cleared_sandbox_origin,
+            config_rewrite.sandbox_port,
         )),
         Err(error) => {
             let rollback = rollback_migrated_launcher(created_launcher.as_deref(), env, cwd);
@@ -944,10 +959,8 @@ mod tests {
             Some(migrated_gateway_port + 1)
         );
         assert!(config["mcp"]["apps"]["sandboxOrigin"].is_null());
-        assert_eq!(
-            result.cleared_sandbox_origin.as_deref(),
-            Some("https://node.example.test:18790")
-        );
+        assert!(result.cleared_sandbox_origin);
+        assert_eq!(result.sandbox_port, Some(migrated_gateway_port as u32 + 1));
         assert!(target_paths.workspace_dir.join("notes.txt").exists());
         assert!(
             target_paths

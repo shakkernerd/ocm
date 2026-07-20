@@ -165,8 +165,9 @@ impl Cli {
         })?;
         self.warn_migration_sandbox_origin_reset(
             &result.summary,
-            result.cleared_sandbox_origin.as_deref(),
-        )?;
+            result.cleared_sandbox_origin,
+            result.sandbox_port,
+        );
         let summary = result.summary;
 
         if json_flag {
@@ -205,8 +206,9 @@ impl Cli {
         })?;
         self.warn_migration_sandbox_origin_reset(
             &result.summary,
-            result.cleared_sandbox_origin.as_deref(),
-        )?;
+            result.cleared_sandbox_origin,
+            result.sandbox_port,
+        );
         let summary = result.summary;
 
         if json_flag {
@@ -225,17 +227,10 @@ impl Cli {
     fn warn_migration_sandbox_origin_reset(
         &self,
         summary: &crate::env::EnvImportSummary,
-        cleared_sandbox_origin: Option<&str>,
-    ) -> Result<(), String> {
-        if cleared_sandbox_origin.is_none() {
-            return Ok(());
-        }
-        let meta = self.environment_service().get(&summary.name)?;
-        let (gateway_port, _) = self
-            .environment_service()
-            .resolve_effective_gateway_port(&meta)?;
-        self.warn_cleared_sandbox_origin(&summary.name, cleared_sandbox_origin, gateway_port);
-        Ok(())
+        cleared_sandbox_origin: bool,
+        sandbox_port: Option<u32>,
+    ) {
+        self.warn_cleared_sandbox_origin(&summary.name, cleared_sandbox_origin, sandbox_port);
     }
 
     fn handle_adopt_inspect(&self, args: Vec<String>) -> Result<i32, String> {

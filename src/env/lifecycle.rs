@@ -104,7 +104,8 @@ pub struct CloneEnvironmentOptions {
 #[derive(Clone, Debug)]
 pub(crate) struct CloneEnvironmentResult {
     pub meta: EnvMeta,
-    pub cleared_sandbox_origin: Option<String>,
+    pub cleared_sandbox_origin: bool,
+    pub sandbox_port: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -146,7 +147,8 @@ pub struct EnvImportSummary {
 #[derive(Clone, Debug)]
 pub(crate) struct ImportEnvironmentResult {
     pub summary: EnvImportSummary,
-    pub cleared_sandbox_origin: Option<String>,
+    pub cleared_sandbox_origin: bool,
+    pub sandbox_port: Option<u32>,
 }
 
 pub fn select_prune_candidates(envs: &[EnvMeta], older_than_days: i64) -> Vec<EnvMeta> {

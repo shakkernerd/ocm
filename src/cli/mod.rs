@@ -165,14 +165,24 @@ impl Cli {
         }
     }
 
-    fn warn_cleared_sandbox_origin(&self, env_name: &str, origin: Option<&str>, gateway_port: u32) {
-        let Some(origin) = origin else {
+    fn warn_cleared_sandbox_origin(
+        &self,
+        env_name: &str,
+        cleared: bool,
+        sandbox_port: Option<u32>,
+    ) {
+        if !cleared {
             return;
-        };
-        let sandbox_port = gateway_port.saturating_add(1);
-        self.stderr_line(format!(
-            "warning: removed copied MCP app sandbox origin {origin} from env {env_name}; configure a dedicated public origin routed to sandbox port {sandbox_port}"
-        ));
+        }
+        if let Some(sandbox_port) = sandbox_port {
+            self.stderr_line(format!(
+                "warning: removed copied MCP app sandbox origin from env {env_name}; configure a dedicated public origin routed to sandbox port {sandbox_port}"
+            ));
+        } else {
+            self.stderr_line(format!(
+                "warning: removed copied MCP app sandbox origin from env {env_name}; configure a dedicated public origin for the target sandbox listener"
+            ));
+        }
     }
 
     fn print_json<T: Serialize>(&self, value: &T) -> Result<(), String> {

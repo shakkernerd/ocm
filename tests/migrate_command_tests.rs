@@ -772,12 +772,11 @@ fn migrate_resets_or_replaces_a_copied_public_sandbox_origin() {
     );
     assert!(reset.status.success(), "{}", stderr(&reset));
     assert!(
-        stderr(&reset).contains(
-            "removed copied MCP app sandbox origin https://source.example.test from env reset"
-        ),
+        stderr(&reset).contains("removed copied MCP app sandbox origin from env reset"),
         "{}",
         stderr(&reset)
     );
+    assert!(!stderr(&reset).contains("source.example.test"));
     let reset_config: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(root.child("ocm-home/envs/reset/.openclaw/openclaw.json")).unwrap(),
     )
@@ -806,6 +805,72 @@ fn migrate_resets_or_replaces_a_copied_public_sandbox_origin() {
         explicit_config["mcp"]["apps"]["sandboxOrigin"].as_str(),
         Some("https://target.example.test")
     );
+}
+
+#[test]
+fn migrate_rejects_include_owned_sandbox_configuration_before_creating_the_target() {
+    let root = TestDir::new("migrate-include-owned-sandbox-origin");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy/.openclaw");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&source_home).unwrap();
+    fs::write(
+        source_home.join("openclaw.json"),
+        "{\n  \"mcp\": { \"apps\": { \"$include\": \"./apps.json5\" } }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        source_home.join("apps.json5"),
+        "{ sandboxOrigin: \"https://source.example.test\" }\n",
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "target",
+            source_home.to_string_lossy().as_ref(),
+            "--json",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains(
+            "cannot safely reset mcp.apps.sandboxOrigin because OpenClaw config uses $include at mcp.apps"
+        ),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!root.child("ocm-home/envs/target").exists());
+}
+
+#[test]
+fn migrate_validates_the_target_origin_before_reading_the_source_home() {
+    let root = TestDir::new("migrate-invalid-origin-preflight");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let missing = root.child("missing/.openclaw");
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "migrate",
+            "target",
+            missing.to_string_lossy().as_ref(),
+            "--sandbox-origin",
+            "https://target.example.test/apps",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains(
+        "--sandbox-origin must be an HTTP(S) origin without a path, query, or credentials"
+    ));
+    assert!(!stderr(&output).contains("plain OpenClaw home does not exist"));
 }
 
 #[cfg(unix)]

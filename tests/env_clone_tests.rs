@@ -142,11 +142,10 @@ fn env_clone_rewrites_coupled_sandbox_port_and_clears_public_origin() {
     assert!(config["mcp"]["apps"]["sandboxOrigin"].is_null());
     let warning = stderr(&clone);
     assert!(
-        warning.contains(
-            "removed copied MCP app sandbox origin https://node.example.test:19790 from env target"
-        ),
+        warning.contains("removed copied MCP app sandbox origin from env target"),
         "{warning}"
     );
+    assert!(!warning.contains("node.example.test"), "{warning}");
     assert!(
         warning.contains(&format!("sandbox port {expected_sandbox_port}")),
         "{warning}"
@@ -159,6 +158,44 @@ fn env_clone_rewrites_coupled_sandbox_port_and_clears_public_origin() {
         source_config["mcp"]["apps"]["sandboxOrigin"].as_str(),
         Some("https://node.example.test:19790")
     );
+}
+
+#[test]
+fn env_clone_reports_a_preserved_custom_sandbox_listener_port_without_echoing_the_origin() {
+    let root = TestDir::new("env-clone-custom-mcp-app-sandbox-port");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
+        concat!(
+            "{\n",
+            "  \"gateway\": { \"port\": 19789 },\n",
+            "  \"mcp\": { \"apps\": {\n",
+            "    \"sandboxPort\": 25000,\n",
+            "    \"sandboxOrigin\": \"https://user:secret@source.example.test/apps?token=private\"\n",
+            "  }}\n",
+            "}\n"
+        ),
+    );
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert!(clone.status.success(), "{}", stderr(&clone));
+    let warning = stderr(&clone);
+    assert!(warning.contains("sandbox port 25000"), "{warning}");
+    assert!(!warning.contains("source.example.test"), "{warning}");
+    assert!(!warning.contains("secret"), "{warning}");
+    assert!(!warning.contains("private"), "{warning}");
+
+    let config: Value = serde_json::from_str(
+        &fs::read_to_string(root.child("ocm-home/envs/target/.openclaw/openclaw.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(config["mcp"]["apps"]["sandboxPort"].as_u64(), Some(25000));
+    assert!(config["mcp"]["apps"]["sandboxOrigin"].is_null());
 }
 
 #[test]
@@ -214,6 +251,36 @@ fn env_clone_accepts_an_explicit_target_sandbox_origin() {
         config["mcp"]["apps"]["sandboxOrigin"].as_str(),
         Some("https://target.example.test")
     );
+}
+
+#[test]
+fn env_clone_rejects_include_owned_sandbox_configuration_before_copying() {
+    let root = TestDir::new("env-clone-include-owned-mcp-app-origin");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
+        "{\n  \"mcp\": { \"$include\": \"./mcp.json5\" }\n}\n",
+    );
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/mcp.json5"),
+        "{ apps: { sandboxOrigin: \"https://source.example.test\" } }\n",
+    );
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert_eq!(clone.status.code(), Some(1));
+    assert!(
+        stderr(&clone).contains(
+            "cannot safely reset mcp.apps.sandboxOrigin because OpenClaw config uses $include at mcp"
+        ),
+        "{}",
+        stderr(&clone)
+    );
+    assert!(!root.child("ocm-home/envs/target").exists());
 }
 
 #[test]
