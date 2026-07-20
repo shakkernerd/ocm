@@ -7,7 +7,7 @@ All notable changes to OCM are documented here.
 ### Fixed
 
 - Keep MCP App sandbox listener ports aligned when gateway ports are reassigned, rewrite coupled loopback origins, and preserve public origins during in-place repair.
-- Prevent cloned, imported, and migrated environments from inheriting a source public MCP App sandbox origin, and accept an explicit target origin for proxy-backed environments.
+- Prevent cloned, imported, and migrated environments from inheriting a source public MCP App sandbox origin, accept an explicit target origin for proxy-backed environments, and fail closed when the setting is owned by `$include`.
 
 ## 0.2.28 - 2026-07-16
 

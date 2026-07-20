@@ -402,12 +402,14 @@ fn env_clone_and_import_help_describe_target_sandbox_origins() {
     let clone_output = stdout(&clone);
     assert!(clone_output.contains("--sandbox-origin <url>"));
     assert!(clone_output.contains("removes a copied public MCP app sandbox origin"));
+    assert!(clone_output.contains("owned by $include"));
 
     let import = run_ocm(&cwd, &env, &["help", "env", "import"]);
     assert!(import.status.success(), "{}", stderr(&import));
     let import_output = stdout(&import);
     assert!(import_output.contains("--sandbox-origin <url>"));
     assert!(import_output.contains("removes a copied public MCP app sandbox origin"));
+    assert!(import_output.contains("owned by $include"));
 }
 
 #[test]
