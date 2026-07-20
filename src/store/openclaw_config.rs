@@ -671,7 +671,12 @@ fn rewrite_loopback_origin_port(origin: &mut String, source_port: u32, target_po
     let is_loopback = match parsed.host() {
         Some(Host::Domain(host)) => host.trim_end_matches('.').eq_ignore_ascii_case("localhost"),
         Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => {
+            address.is_loopback()
+                || address
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_loopback())
+        }
         None => false,
     };
     if !is_loopback || parsed.set_port(Some(target_port as u16)).is_err() {
@@ -888,6 +893,10 @@ mod tests {
             ("HTTP://LOCALHOST:19790/", "http://localhost:19901/"),
             ("http://127.1:19790", "http://127.0.0.1:19901"),
             ("http://[0:0:0:0:0:0:0:1]:19790", "http://[::1]:19901"),
+            (
+                "http://[::ffff:127.0.0.1]:19790",
+                "http://[::ffff:7f00:1]:19901",
+            ),
         ] {
             let mut value = json!({
                 "gateway": {"port": 19789},
