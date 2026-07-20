@@ -163,7 +163,7 @@ fn env_clone_rewrites_a_coupled_loopback_sandbox_origin() {
             "  \"mcp\": {\n",
             "    \"apps\": {\n",
             "      \"enabled\": true,\n",
-            "      \"sandboxOrigin\": \"http://localhost:19790\"\n",
+            "      \"sandboxOrigin\": \"HTTP://LOCALHOST:19790/\"\n",
             "    }\n",
             "  }\n",
             "}\n"
@@ -180,7 +180,7 @@ fn env_clone_rewrites_a_coupled_loopback_sandbox_origin() {
     assert!(config["mcp"]["apps"]["sandboxPort"].is_null());
     assert_eq!(
         config["mcp"]["apps"]["sandboxOrigin"].as_str(),
-        Some(format!("http://localhost:{}", cloned_gateway_port + 1).as_str())
+        Some(format!("http://localhost:{}/", cloned_gateway_port + 1).as_str())
     );
 }
 

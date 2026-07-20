@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use serde_json::json;
+use url::{Host, Url};
 
 use crate::env::EnvMeta;
 
@@ -661,26 +662,36 @@ fn rewrite_port_coupled_mcp_app_sandbox(
 }
 
 fn rewrite_loopback_origin_port(origin: &mut String, source_port: u32, target_port: u32) -> bool {
-    let (without_trailing_slash, trailing_slash) = origin
-        .strip_suffix('/')
-        .map_or((origin.as_str(), ""), |value| (value, "/"));
-    let source_suffix = format!(":{source_port}");
-    let Some(loopback_origin) = without_trailing_slash.strip_suffix(&source_suffix) else {
+    let preserve_trailing_slash = origin.ends_with('/');
+    let Ok(mut parsed) = Url::parse(origin) else {
         return false;
     };
-    if !matches!(
-        loopback_origin,
-        "http://localhost"
-            | "https://localhost"
-            | "http://127.0.0.1"
-            | "https://127.0.0.1"
-            | "http://[::1]"
-            | "https://[::1]"
-    ) {
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.port_or_known_default() != Some(source_port as u16)
+    {
         return false;
     }
 
-    *origin = format!("{loopback_origin}:{target_port}{trailing_slash}");
+    let is_loopback = match parsed.host() {
+        Some(Host::Domain(host)) => host.trim_end_matches('.').eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    };
+    if !is_loopback || parsed.set_port(Some(target_port as u16)).is_err() {
+        return false;
+    }
+
+    let mut rewritten = parsed.to_string();
+    if !preserve_trailing_slash && rewritten.ends_with('/') {
+        rewritten.pop();
+    }
+    *origin = rewritten;
     true
 }
 
@@ -878,6 +889,24 @@ mod tests {
         assert_eq!(value["gateway"]["port"], 19900);
         assert!(value["mcp"]["apps"]["sandboxPort"].is_null());
         assert_eq!(value["mcp"]["apps"]["sandboxOrigin"], "http://[::1]:19901");
+    }
+
+    #[test]
+    fn gateway_port_rewrite_canonicalizes_equivalent_loopback_origins() {
+        for (origin, expected) in [
+            ("HTTP://LOCALHOST:19790/", "http://localhost:19901/"),
+            ("http://127.1:19790", "http://127.0.0.1:19901"),
+            ("http://[0:0:0:0:0:0:0:1]:19790", "http://[::1]:19901"),
+        ] {
+            let mut value = json!({
+                "gateway": {"port": 19789},
+                "mcp": {"apps": {"sandboxOrigin": origin}}
+            });
+
+            assert!(rewrite_gateway_port_family(&mut value, 19900));
+            assert_eq!(value["gateway"]["port"], 19900);
+            assert_eq!(value["mcp"]["apps"]["sandboxOrigin"], expected);
+        }
     }
 
     #[test]
