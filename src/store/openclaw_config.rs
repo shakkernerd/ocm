@@ -9,6 +9,7 @@ use url::{Host, Url};
 use crate::env::EnvMeta;
 
 use super::common::{ensure_dir, path_exists, write_file_replacing_path};
+use super::gateway_ports::read_port_number;
 use super::layout::{EnvPaths, clean_path, derive_env_paths, display_path};
 
 #[derive(Clone, Debug)]
@@ -493,16 +494,6 @@ fn read_workspace_field(value: &Value) -> Option<&str> {
 
 fn read_gateway_port(value: &Value) -> Option<u32> {
     read_port_number(value.get("gateway")?.get("port")?)
-}
-
-fn read_port_number(value: &Value) -> Option<u32> {
-    let number = value.as_number()?;
-    if let Some(port) = number.as_u64() {
-        return (1..=u16::MAX as u64).contains(&port).then_some(port as u32);
-    }
-
-    let port = number.as_f64()?;
-    (port.fract() == 0.0 && (1.0..=u16::MAX as f64).contains(&port)).then_some(port as u32)
 }
 
 fn rewrite_env_root_paths(value: &mut Value, source_root: &Path, target_root: &Path) -> bool {

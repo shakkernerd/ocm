@@ -594,7 +594,7 @@ fn env_use_auto_assigns_distinct_gateway_ports_for_fresh_envs() {
 }
 
 #[test]
-fn env_use_skips_the_machine_global_openclaw_port_family() {
+fn env_use_skips_an_integral_decimal_machine_global_openclaw_port_family() {
     let root = TestDir::new("behavior-env-use-skips-global-openclaw");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -604,7 +604,7 @@ fn env_use_skips_the_machine_global_openclaw_port_family() {
     fs::create_dir_all(&global_root).unwrap();
     write_text(
         &global_root.join("openclaw.json"),
-        "{\n  \"gateway\": {\n    \"port\": 18789\n  }\n}\n",
+        "{\n  \"gateway\": {\n    \"port\": 18789.0\n  }\n}\n",
     );
 
     let create_demo = run_ocm(&cwd, &env, &["env", "create", "demo"]);
@@ -625,14 +625,14 @@ fn env_exec_skips_gateway_port_claimed_by_an_initialized_environment() {
     let create_demo = run_ocm(&cwd, &env, &["env", "create", "demo"]);
     assert!(create_demo.status.success(), "{}", stderr(&create_demo));
 
-    let create_test = run_ocm(&cwd, &env, &["env", "create", "test"]);
-    assert!(create_test.status.success(), "{}", stderr(&create_test));
-
     let demo_root = root.child("ocm-home/envs/demo");
     write_text(
         &demo_root.join(".openclaw/openclaw.json"),
         "{\n  \"gateway\": {\n    \"port\": 18789\n  }\n}\n",
     );
+
+    let create_test = run_ocm(&cwd, &env, &["env", "create", "test"]);
+    assert!(create_test.status.success(), "{}", stderr(&create_test));
 
     let exec_output = run_ocm(
         &cwd,
