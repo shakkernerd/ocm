@@ -70,7 +70,7 @@ fn env_create_and_show_json_report_the_same_effective_gateway_port() {
 }
 
 #[test]
-fn env_show_and_list_prefer_a_later_config_gateway_port() {
+fn env_show_and_list_accept_a_later_integral_decimal_config_gateway_port() {
     let root = TestDir::new("env-config-json-port");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -80,7 +80,7 @@ fn env_show_and_list_prefer_a_later_config_gateway_port() {
     assert!(created.status.success(), "{}", stderr(&created));
     fs::write(
         root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
-        "{\"gateway\":{\"port\":18888}}",
+        "{\"gateway\":{\"port\":18888.0}}",
     )
     .unwrap();
 

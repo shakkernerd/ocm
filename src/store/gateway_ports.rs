@@ -131,10 +131,15 @@ fn openclaw_port_family(base_port: u32) -> Vec<u32> {
 fn read_gateway_port_from_config(path: &Path) -> Option<u32> {
     let raw = fs::read_to_string(path).ok()?;
     let value: Value = serde_json::from_str(&raw).ok()?;
-    let port = value.get("gateway")?.get("port")?.as_u64()?;
-    if (1..=u16::MAX as u64).contains(&port) {
-        Some(port as u32)
-    } else {
-        None
+    read_port_number(value.get("gateway")?.get("port")?)
+}
+
+pub(super) fn read_port_number(value: &Value) -> Option<u32> {
+    let number = value.as_number()?;
+    if let Some(port) = number.as_u64() {
+        return (1..=u16::MAX as u64).contains(&port).then_some(port as u32);
     }
+
+    let port = number.as_f64()?;
+    (port.fract() == 0.0 && (1.0..=u16::MAX as f64).contains(&port)).then_some(port as u32)
 }
