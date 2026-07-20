@@ -605,14 +605,13 @@ fn rewrite_gateway_port(value: &mut Value, gateway_port: u32) -> bool {
 
 fn rewrite_gateway_port_family(value: &mut Value, gateway_port: u32) -> bool {
     let source_gateway_port = read_gateway_port(value);
-    let mut changed = source_gateway_port.is_some_and(|source| {
-        rewrite_port_coupled_mcp_app_sandbox_port(value, source, gateway_port)
-    });
+    let mut changed = source_gateway_port
+        .is_some_and(|source| rewrite_port_coupled_mcp_app_sandbox(value, source, gateway_port));
     changed |= rewrite_gateway_port(value, gateway_port);
     changed
 }
 
-fn rewrite_port_coupled_mcp_app_sandbox_port(
+fn rewrite_port_coupled_mcp_app_sandbox(
     value: &mut Value,
     source_gateway_port: u32,
     target_gateway_port: u32,
@@ -638,11 +637,43 @@ fn rewrite_port_coupled_mcp_app_sandbox_port(
         return false;
     };
 
-    if apps.get("sandboxPort").and_then(Value::as_u64) == Some(source_sandbox_port as u64) {
+    let configured_sandbox_port = apps.get("sandboxPort").and_then(Value::as_u64);
+    let follows_gateway_port = configured_sandbox_port.is_none()
+        || configured_sandbox_port == Some(source_sandbox_port as u64);
+
+    let mut changed = false;
+    if configured_sandbox_port == Some(source_sandbox_port as u64) {
         apps.insert("sandboxPort".to_string(), Value::from(target_sandbox_port));
-        return true;
+        changed = true;
     }
-    false
+    if follows_gateway_port && let Some(Value::String(origin)) = apps.get_mut("sandboxOrigin") {
+        changed |= rewrite_loopback_origin_port(origin, source_sandbox_port, target_sandbox_port);
+    }
+    changed
+}
+
+fn rewrite_loopback_origin_port(origin: &mut String, source_port: u32, target_port: u32) -> bool {
+    let (without_trailing_slash, trailing_slash) = origin
+        .strip_suffix('/')
+        .map_or((origin.as_str(), ""), |value| (value, "/"));
+    let source_suffix = format!(":{source_port}");
+    let Some(loopback_origin) = without_trailing_slash.strip_suffix(&source_suffix) else {
+        return false;
+    };
+    if !matches!(
+        loopback_origin,
+        "http://localhost"
+            | "https://localhost"
+            | "http://127.0.0.1"
+            | "https://127.0.0.1"
+            | "http://[::1]"
+            | "https://[::1]"
+    ) {
+        return false;
+    }
+
+    *origin = format!("{loopback_origin}:{target_port}{trailing_slash}");
+    true
 }
 
 fn looks_env_scoped_workspace(path: &Path) -> bool {
@@ -800,6 +831,65 @@ mod tests {
         assert_eq!(
             value["mcp"]["apps"]["sandboxOrigin"],
             "https://node.example.test:19790"
+        );
+    }
+
+    #[test]
+    fn gateway_port_rewrite_updates_coupled_loopback_origin() {
+        let mut value = json!({
+            "gateway": {"port": 19789},
+            "mcp": {
+                "apps": {
+                    "sandboxPort": 19790,
+                    "sandboxOrigin": "http://127.0.0.1:19790/"
+                }
+            }
+        });
+
+        assert!(rewrite_gateway_port_family(&mut value, 19900));
+        assert_eq!(value["gateway"]["port"], 19900);
+        assert_eq!(value["mcp"]["apps"]["sandboxPort"], 19901);
+        assert_eq!(
+            value["mcp"]["apps"]["sandboxOrigin"],
+            "http://127.0.0.1:19901/"
+        );
+    }
+
+    #[test]
+    fn gateway_port_rewrite_updates_default_loopback_origin_without_explicit_sandbox_port() {
+        let mut value = json!({
+            "gateway": {"port": 19789},
+            "mcp": {
+                "apps": {
+                    "sandboxOrigin": "http://[::1]:19790"
+                }
+            }
+        });
+
+        assert!(rewrite_gateway_port_family(&mut value, 19900));
+        assert_eq!(value["gateway"]["port"], 19900);
+        assert!(value["mcp"]["apps"]["sandboxPort"].is_null());
+        assert_eq!(value["mcp"]["apps"]["sandboxOrigin"], "http://[::1]:19901");
+    }
+
+    #[test]
+    fn gateway_port_rewrite_preserves_loopback_origin_for_custom_sandbox_port() {
+        let mut value = json!({
+            "gateway": {"port": 19789},
+            "mcp": {
+                "apps": {
+                    "sandboxPort": 25000,
+                    "sandboxOrigin": "http://localhost:19790"
+                }
+            }
+        });
+
+        assert!(rewrite_gateway_port_family(&mut value, 19900));
+        assert_eq!(value["gateway"]["port"], 19900);
+        assert_eq!(value["mcp"]["apps"]["sandboxPort"], 25000);
+        assert_eq!(
+            value["mcp"]["apps"]["sandboxOrigin"],
+            "http://localhost:19790"
         );
     }
 }

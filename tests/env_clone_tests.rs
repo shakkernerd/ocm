@@ -146,6 +146,45 @@ fn env_clone_rewrites_coupled_sandbox_port_and_preserves_public_origin() {
 }
 
 #[test]
+fn env_clone_rewrites_a_coupled_loopback_sandbox_origin() {
+    let root = TestDir::new("env-clone-mcp-app-loopback-origin");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
+        concat!(
+            "{\n",
+            "  \"gateway\": { \"port\": 19789 },\n",
+            "  \"mcp\": {\n",
+            "    \"apps\": {\n",
+            "      \"enabled\": true,\n",
+            "      \"sandboxOrigin\": \"http://localhost:19790\"\n",
+            "    }\n",
+            "  }\n",
+            "}\n"
+        ),
+    );
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert!(clone.status.success(), "{}", stderr(&clone));
+
+    let config_raw =
+        fs::read_to_string(root.child("ocm-home/envs/target/.openclaw/openclaw.json")).unwrap();
+    let config: Value = serde_json::from_str(&config_raw).unwrap();
+    let cloned_gateway_port = config["gateway"]["port"].as_u64().unwrap();
+    assert!(config["mcp"]["apps"]["sandboxPort"].is_null());
+    assert_eq!(
+        config["mcp"]["apps"]["sandboxOrigin"].as_str(),
+        Some(format!("http://localhost:{}", cloned_gateway_port + 1).as_str())
+    );
+}
+
+#[test]
 fn env_clone_keeps_agent_auth_but_drops_live_runtime_state() {
     let root = TestDir::new("env-clone-clears-runtime-state");
     let cwd = root.child("workspace");
