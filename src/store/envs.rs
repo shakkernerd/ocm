@@ -1148,7 +1148,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn simulation_cleanup_does_not_mutate_workspace_include_symlinks() {
+    fn simulation_cleanup_rejects_escaping_include_symlinks_without_mutation() {
         let id = NEXT_IMPORT_ID.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir()
             .join("ocm-env-simulation-symlink-tests")
@@ -1167,7 +1167,11 @@ mod tests {
         )
         .unwrap();
 
-        clear_simulation_runtime_state_preserving_includes(&paths).unwrap();
+        let error = clear_simulation_runtime_state_preserving_includes(&paths).unwrap_err();
+        assert!(
+            error.contains("OpenClaw $include path resolves outside the config directory"),
+            "{error}"
+        );
 
         assert_eq!(
             fs::read_to_string(&external).unwrap(),
@@ -1179,7 +1183,7 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
-        assert!(!paths.state_dir.join("logs").exists());
+        assert!(paths.state_dir.join("logs/gateway.log").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
