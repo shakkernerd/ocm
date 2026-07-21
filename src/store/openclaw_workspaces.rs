@@ -243,29 +243,92 @@ fn apply_openclaw_config_env(config: &Value, env: &mut BTreeMap<String, String>)
     let Some(config_env) = config.get("env").and_then(Value::as_object) else {
         return;
     };
+    let case_insensitive = cfg!(windows);
+    let mut entries = BTreeMap::new();
     if let Some(vars) = config_env.get("vars").and_then(Value::as_object) {
         for (key, value) in vars {
-            apply_openclaw_config_env_entry(key, value, env);
+            collect_openclaw_config_env_entry(key, value, &mut entries, case_insensitive);
         }
     }
     for (key, value) in config_env {
         if key != "shellEnv" && key != "vars" {
-            apply_openclaw_config_env_entry(key, value, env);
+            collect_openclaw_config_env_entry(key, value, &mut entries, case_insensitive);
         }
+    }
+    for (key, value) in entries {
+        if matching_env_value(env, &key, case_insensitive)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            continue;
+        }
+        insert_env_entry(env, key, value, case_insensitive);
     }
 }
 
-fn apply_openclaw_config_env_entry(key: &str, value: &Value, env: &mut BTreeMap<String, String>) {
+fn collect_openclaw_config_env_entry(
+    key: &str,
+    value: &Value,
+    entries: &mut BTreeMap<String, String>,
+    case_insensitive: bool,
+) {
     let Some(value) = value.as_str().filter(|value| !value.trim().is_empty()) else {
         return;
     };
-    if !is_portable_env_var_name(key)
-        || contains_config_env_reference(value)
-        || env.get(key).is_some_and(|value| !value.trim().is_empty())
-    {
+    if !is_portable_env_var_name(key) || contains_config_env_reference(value) {
         return;
     }
-    env.insert(key.to_string(), value.to_string());
+    insert_env_entry(
+        entries,
+        key.to_string(),
+        value.to_string(),
+        case_insensitive,
+    );
+}
+
+fn insert_env_entry(
+    env: &mut BTreeMap<String, String>,
+    key: String,
+    value: String,
+    case_insensitive: bool,
+) {
+    if let Some(existing) = matching_env_key(env, &key, case_insensitive) {
+        env.remove(&existing);
+    }
+    env.insert(key, value);
+}
+
+fn matching_env_value<'a>(
+    env: &'a BTreeMap<String, String>,
+    key: &str,
+    case_insensitive: bool,
+) -> Option<&'a String> {
+    if let Some(value) = env.get(key) {
+        return Some(value);
+    }
+    case_insensitive
+        .then(|| {
+            env.iter()
+                .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+                .map(|(_, value)| value)
+        })
+        .flatten()
+}
+
+fn matching_env_key(
+    env: &BTreeMap<String, String>,
+    key: &str,
+    case_insensitive: bool,
+) -> Option<String> {
+    if env.contains_key(key) {
+        return Some(key.to_string());
+    }
+    case_insensitive
+        .then(|| {
+            env.keys()
+                .find(|candidate| candidate.eq_ignore_ascii_case(key))
+                .cloned()
+        })
+        .flatten()
 }
 
 fn contains_config_env_reference(value: &str) -> bool {
@@ -362,7 +425,9 @@ fn resolve_config_env_string(value: &str, env: &BTreeMap<String, String>) -> Str
             resolved.push_str("${");
             resolved.push_str(name);
             resolved.push('}');
-        } else if let Some(env_value) = env.get(name).filter(|value| !value.is_empty()) {
+        } else if let Some(env_value) =
+            matching_env_value(env, name, cfg!(windows)).filter(|value| !value.is_empty())
+        {
             resolved.push_str(env_value);
         } else {
             resolved.push_str("${");
@@ -901,6 +966,51 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn config_env_top_level_entries_override_vars_entries() {
+        let config = serde_json::json!({
+            "env": {
+                "vars": {
+                    "WORKSPACE_ROOT": "/from-vars",
+                    "ONLY_VARS": "/only-vars"
+                },
+                "WORKSPACE_ROOT": "/from-top-level"
+            }
+        });
+        let mut env = BTreeMap::new();
+
+        apply_openclaw_config_env(&config, &mut env);
+
+        assert_eq!(
+            env.get("WORKSPACE_ROOT").map(String::as_str),
+            Some("/from-top-level")
+        );
+        assert_eq!(env.get("ONLY_VARS").map(String::as_str), Some("/only-vars"));
+    }
+
+    #[test]
+    fn config_env_preserves_host_precedence_with_windows_key_semantics() {
+        let mut entries =
+            BTreeMap::from([("workspace_root".to_string(), "/from-host".to_string())]);
+        assert_eq!(
+            matching_env_value(&entries, "WORKSPACE_ROOT", true).map(String::as_str),
+            Some("/from-host")
+        );
+
+        insert_env_entry(
+            &mut entries,
+            "WORKSPACE_ROOT".to_string(),
+            "/from-config".to_string(),
+            true,
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            matching_env_value(&entries, "workspace_root", true).map(String::as_str),
+            Some("/from-config")
+        );
     }
 
     #[test]

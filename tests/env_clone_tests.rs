@@ -159,6 +159,57 @@ fn env_clone_preserves_configured_custom_workspaces_without_prefix_lookalikes() 
 }
 
 #[test]
+fn env_clone_uses_openclaw_config_env_precedence_for_workspace_selection() {
+    let root = TestDir::new("env-clone-config-env-precedence");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    let source_vars_workspace = source_state.join("team/from-vars");
+    let source_active_workspace = source_state.join("team/from-top-level");
+    write_text(
+        &source_state.join("openclaw.json"),
+        &format!(
+            concat!(
+                "{{\n",
+                "  env: {{\n",
+                "    vars: {{ WORKSPACE_ROOT: '{}' }},\n",
+                "    WORKSPACE_ROOT: '{}'\n",
+                "  }},\n",
+                "  agents: {{ defaults: {{ workspace: '${{WORKSPACE_ROOT}}' }} }}\n",
+                "}}\n"
+            ),
+            source_vars_workspace.display(),
+            source_active_workspace.display()
+        ),
+    );
+    write_text(
+        &source_vars_workspace.join("notes.txt"),
+        "inactive workspace\n",
+    );
+    write_text(
+        &source_active_workspace.join("notes.txt"),
+        "active workspace\n",
+    );
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert!(clone.status.success(), "{}", stderr(&clone));
+
+    let target_state = root.child("ocm-home/envs/target/.openclaw");
+    assert_eq!(
+        fs::read_to_string(target_state.join("team/from-top-level/notes.txt")).unwrap(),
+        "active workspace\n"
+    );
+    assert!(!target_state.join("team/from-vars").exists());
+    assert!(source_vars_workspace.exists());
+    assert!(source_active_workspace.exists());
+}
+
+#[test]
 fn env_clone_rejects_external_workspaces_before_creating_the_target() {
     let root = TestDir::new("env-clone-external-workspace");
     let cwd = root.child("workspace");

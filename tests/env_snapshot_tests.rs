@@ -353,6 +353,63 @@ fn env_snapshot_restore_preserves_configured_agent_workspaces_and_includes() {
 }
 
 #[test]
+fn env_snapshot_uses_openclaw_config_env_precedence_for_workspace_selection() {
+    let root = TestDir::new("env-snapshot-config-env-precedence");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    let vars_workspace = source_state.join("team/from-vars");
+    let active_workspace = source_state.join("team/from-top-level");
+    write_text(
+        &source_state.join("openclaw.json"),
+        &format!(
+            concat!(
+                "{{\n",
+                "  env: {{\n",
+                "    vars: {{ WORKSPACE_ROOT: '{}' }},\n",
+                "    WORKSPACE_ROOT: '{}'\n",
+                "  }},\n",
+                "  agents: {{ defaults: {{ workspace: '${{WORKSPACE_ROOT}}' }} }}\n",
+                "}}\n"
+            ),
+            vars_workspace.display(),
+            active_workspace.display()
+        ),
+    );
+    write_text(&vars_workspace.join("notes.txt"), "inactive workspace\n");
+    write_text(&active_workspace.join("notes.txt"), "active workspace\n");
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    fs::remove_dir_all(source_state.join("team")).unwrap();
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "restore", "source", &snapshot_id],
+    );
+    assert!(restore.status.success(), "{}", stderr(&restore));
+    assert_eq!(
+        fs::read_to_string(active_workspace.join("notes.txt")).unwrap(),
+        "active workspace\n"
+    );
+    assert!(!vars_workspace.exists());
+}
+
+#[test]
 fn env_snapshot_rejects_external_workspaces_before_writing_an_archive() {
     let root = TestDir::new("env-snapshot-external-workspace");
     let cwd = root.child("workspace");
