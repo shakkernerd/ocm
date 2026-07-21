@@ -24,6 +24,18 @@ fn env_import_restores_an_archive_with_a_new_name_and_root() {
         &root.child("ocm-home/envs/source/.openclaw/workspace/notes.txt"),
         "hello import",
     );
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    write_text(
+        &source_state.join("openclaw.json"),
+        &format!(
+            r#"{{"agents":{{"list":[{{"id":"main","default":true}},{{"id":"ops","workspace":"{}"}}]}}}}"#,
+            source_state.join("team/ops").display()
+        ),
+    );
+    write_text(
+        &source_state.join("team/ops/custom.txt"),
+        "hello custom import",
+    );
 
     let export = run_ocm(
         &cwd,
@@ -72,6 +84,20 @@ fn env_import_restores_an_archive_with_a_new_name_and_root() {
         .unwrap(),
         "hello import"
     );
+    let target_state = root.child("workspace/imports/target-root/.openclaw");
+    assert_eq!(
+        fs::read_to_string(target_state.join("team/ops/custom.txt")).unwrap(),
+        "hello custom import"
+    );
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(target_state.join("openclaw.json")).unwrap())
+            .unwrap();
+    let actual_workspace = fs::canonicalize(Path::new(
+        config["agents"]["list"][1]["workspace"].as_str().unwrap(),
+    ))
+    .unwrap();
+    let expected_workspace = fs::canonicalize(target_state.join("team/ops")).unwrap();
+    assert_eq!(actual_workspace, expected_workspace);
 }
 
 #[test]
@@ -295,6 +321,10 @@ fn env_import_rejects_include_owned_sandbox_configuration_before_creating_the_ta
     write_text(
         &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
         "{\n  \"$include\": \"./base.json5\"\n}\n",
+    );
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/base.json5"),
+        "{ mcp: { apps: { sandboxOrigin: 'https://source.example.test' } } }\n",
     );
     let export = run_ocm(
         &cwd,

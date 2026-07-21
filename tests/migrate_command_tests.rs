@@ -360,6 +360,7 @@ fn migrate_rejects_alias_after_name_flag_with_clear_error() {
 
 fn seed_plain_openclaw_home(source_home: &std::path::Path) {
     fs::create_dir_all(source_home.join("workspace")).unwrap();
+    fs::create_dir_all(source_home.join("team/ops")).unwrap();
     fs::create_dir_all(source_home.join("logs")).unwrap();
     fs::create_dir_all(source_home.join("run")).unwrap();
     fs::create_dir_all(source_home.join("agents/main/agent")).unwrap();
@@ -367,8 +368,9 @@ fn seed_plain_openclaw_home(source_home: &std::path::Path) {
     fs::write(
         source_home.join("openclaw.json"),
         format!(
-            "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}}}},\"externalProject\":\"{}\"}}\n",
+            "{{\"agents\":{{\"defaults\":{{\"workspace\":\"{}\"}},\"list\":[{{\"id\":\"main\",\"default\":true}},{{\"id\":\"ops\",\"workspace\":\"{}\"}}]}},\"externalProject\":\"{}\"}}\n",
             source_home.join("workspace").display(),
+            source_home.join("team/ops").display(),
             source_home
                 .parent()
                 .unwrap()
@@ -378,6 +380,11 @@ fn seed_plain_openclaw_home(source_home: &std::path::Path) {
     )
     .unwrap();
     fs::write(source_home.join("workspace/notes.txt"), "hello\n").unwrap();
+    fs::write(
+        source_home.join("team/ops/custom.txt"),
+        "secondary workspace\n",
+    )
+    .unwrap();
     fs::write(
         source_home.join("logs/app.log"),
         format!("cwd={}\n", source_home.join("workspace").display()),
@@ -411,6 +418,10 @@ fn assert_imported_plain_openclaw_home(
     source_home: &std::path::Path,
 ) {
     assert!(imported_state.join("workspace/notes.txt").exists());
+    assert_eq!(
+        fs::read_to_string(imported_state.join("team/ops/custom.txt")).unwrap(),
+        "secondary workspace\n"
+    );
     assert!(
         imported_state
             .join("agents/main/agent/auth-profiles.json")
@@ -871,6 +882,44 @@ fn migrate_validates_the_target_origin_before_reading_the_source_home() {
         "--sandbox-origin must be an HTTP(S) origin without a path, query, or credentials"
     ));
     assert!(!stderr(&output).contains("plain OpenClaw home does not exist"));
+}
+
+#[test]
+fn migrate_rejects_external_workspaces_before_creating_the_environment() {
+    let root = TestDir::new("migrate-external-workspace");
+    let cwd = root.child("workspace");
+    let source_home = root.child("legacy-home/.openclaw");
+    let external = root.child("external-workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&source_home).unwrap();
+    fs::create_dir_all(&external).unwrap();
+    fs::write(external.join("notes.txt"), "external data\n").unwrap();
+    fs::write(
+        source_home.join("openclaw.json"),
+        format!(
+            r#"{{"agents":{{"defaults":{{"workspace":"{}"}}}}}}"#,
+            external.display()
+        ),
+    )
+    .unwrap();
+    let env = ocm_env(&root);
+
+    let output = run_ocm(
+        &cwd,
+        &env,
+        &["migrate", "mira", source_home.to_string_lossy().as_ref()],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("outside the environment root"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!root.child("ocm-home/envs/mira").exists());
+    assert_eq!(
+        fs::read_to_string(external.join("notes.txt")).unwrap(),
+        "external data\n"
+    );
 }
 
 #[cfg(unix)]

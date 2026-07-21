@@ -5,6 +5,7 @@ mod launchers;
 mod layout;
 mod openclaw_config;
 mod openclaw_state;
+mod openclaw_workspaces;
 mod runtimes;
 mod snapshots;
 
@@ -49,13 +50,17 @@ pub(crate) use openclaw_config::{
     OpenClawConfigAudit, audit_openclaw_config, clear_skip_bootstrap_for_openclaw_onboarding,
     ensure_minimum_local_openclaw_config, normalize_new_environment_sandbox_origin,
     openclaw_config_include_paths, openclaw_config_uses_includes,
-    reject_include_owned_sandbox_origin, repair_openclaw_config,
-    rewrite_openclaw_config_for_migration, rewrite_openclaw_config_for_new_environment,
-    rewrite_openclaw_config_for_simulation, rewrite_openclaw_config_for_target,
+    reject_include_owned_agent_workspaces, reject_include_owned_sandbox_origin,
+    repair_openclaw_config, rewrite_openclaw_config_for_migration,
+    rewrite_openclaw_config_for_new_environment, rewrite_openclaw_config_for_simulation,
+    rewrite_openclaw_config_for_target, rewrite_openclaw_config_includes_for_target,
 };
 pub(crate) use openclaw_state::{
     OpenClawStateAudit, audit_openclaw_state, clear_nonportable_runtime_state,
     openclaw_env_archive_options, prepare_migrated_runtime_state, repair_openclaw_runtime_state,
+};
+pub(crate) use openclaw_workspaces::{
+    resolve_env_openclaw_workspaces, resolve_plain_openclaw_workspaces,
 };
 pub(crate) use runtimes::install_runtime_from_local_openclaw_build;
 pub(crate) use runtimes::install_runtime_from_selected_official_openclaw_release;
