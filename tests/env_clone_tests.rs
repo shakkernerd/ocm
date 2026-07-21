@@ -116,9 +116,18 @@ fn env_clone_preserves_configured_custom_workspaces_without_prefix_lookalikes() 
     write_text(
         &source_state.join("openclaw.json"),
         &format!(
-            r#"{{"agents":{{"list":[{{"id":"main","default":true}},{{"id":"ops","workspace":"{}"}}]}}}}"#,
+            concat!(
+                r#"{{"agents":{{"#,
+                r#""defaults":{{"memorySearch":{{"$include":"./config/memory.json5"}}}},"#,
+                r#""list":[{{"id":"main","default":true}},{{"id":"ops","workspace":"{}"}}]"#,
+                "}}}}"
+            ),
             source_state.join("team/ops").display()
         ),
+    );
+    write_text(
+        &source_state.join("config/memory.json5"),
+        "{ enabled: false }\n",
     );
     write_text(
         &source_state.join("team/ops/notes.txt"),
@@ -146,6 +155,7 @@ fn env_clone_preserves_configured_custom_workspaces_without_prefix_lookalikes() 
         config["agents"]["list"][1]["workspace"].as_str(),
         Some(expected_workspace.as_str())
     );
+    assert!(target_state.join("config/memory.json5").exists());
 }
 
 #[test]

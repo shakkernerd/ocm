@@ -1039,9 +1039,45 @@ fn agent_workspaces_include_scope(value: &Value) -> Option<&'static str> {
     if root.contains_key("$include") {
         return Some("the config root");
     }
-    root.get("agents")
-        .is_some_and(value_contains_include)
-        .then_some("agents")
+    let agents = root.get("agents")?;
+    let Some(agents) = agents.as_object() else {
+        return value_contains_include(agents).then_some("agents");
+    };
+    if agents.contains_key("$include") {
+        return Some("agents");
+    }
+    if agents
+        .get("defaults")
+        .is_some_and(workspace_defaults_contains_include)
+    {
+        return Some("agents.defaults.workspace");
+    }
+    agents
+        .get("list")
+        .is_some_and(agent_list_contains_include)
+        .then_some("agents.list")
+}
+
+fn workspace_defaults_contains_include(value: &Value) -> bool {
+    let Some(defaults) = value.as_object() else {
+        return value_contains_include(value);
+    };
+    defaults.contains_key("$include")
+        || defaults
+            .get("workspace")
+            .is_some_and(value_contains_include)
+}
+
+fn agent_list_contains_include(value: &Value) -> bool {
+    let Some(entries) = value.as_array() else {
+        return value_contains_include(value);
+    };
+    entries.iter().any(|entry| {
+        let Some(entry) = entry.as_object() else {
+            return value_contains_include(entry);
+        };
+        entry.contains_key("$include") || entry.get("workspace").is_some_and(value_contains_include)
+    })
 }
 
 fn value_contains_include(value: &Value) -> bool {
@@ -1365,6 +1401,18 @@ mod tests {
         );
         assert_eq!(
             agent_workspaces_include_scope(
+                &json!({"agents": {"defaults": {"$include": "./defaults.json5"}}})
+            ),
+            Some("agents.defaults.workspace")
+        );
+        assert_eq!(
+            agent_workspaces_include_scope(
+                &json!({"agents": {"list": [{"$include": "./main.json5"}]}})
+            ),
+            Some("agents.list")
+        );
+        assert_eq!(
+            agent_workspaces_include_scope(
                 &json!({"agents": {"defaults": {"workspace": "/tmp/workspace"}}})
             ),
             None
@@ -1372,6 +1420,12 @@ mod tests {
         assert_eq!(
             agent_workspaces_include_scope(
                 &json!({"mcp": {"$include": "./mcp.json5"}, "agents": {}})
+            ),
+            None
+        );
+        assert_eq!(
+            agent_workspaces_include_scope(
+                &json!({"agents": {"defaults": {"memorySearch": {"$include": "./memory.json5"}}}})
             ),
             None
         );
