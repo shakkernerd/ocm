@@ -267,39 +267,93 @@ fn openclaw_config_env(
     config_path: &Path,
     runtime: OpenClawWorkspaceRuntime<'_>,
 ) -> BTreeMap<String, String> {
+    openclaw_config_env_with_platform_semantics(
+        env,
+        openclaw_home,
+        state_dir,
+        config_path,
+        runtime,
+        cfg!(windows),
+    )
+}
+
+fn openclaw_config_env_with_platform_semantics(
+    env: &BTreeMap<String, String>,
+    openclaw_home: &Path,
+    state_dir: &Path,
+    config_path: &Path,
+    runtime: OpenClawWorkspaceRuntime<'_>,
+    case_insensitive: bool,
+) -> BTreeMap<String, String> {
     let mut resolved = env
         .iter()
-        .filter(|(key, _)| {
-            !key.starts_with("OPENCLAW_")
-                && key.as_str() != "OCM_ACTIVE_ENV"
-                && key.as_str() != "OCM_ACTIVE_ENV_ROOT"
-        })
+        .filter(|(key, _)| !is_runtime_owned_env_key(key, case_insensitive))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<BTreeMap<_, _>>();
-    resolved.insert("OPENCLAW_HOME".to_string(), display_path(openclaw_home));
-    resolved.insert("OPENCLAW_STATE_DIR".to_string(), display_path(state_dir));
-    resolved.insert(
+    insert_env_entry(
+        &mut resolved,
+        "OPENCLAW_HOME".to_string(),
+        display_path(openclaw_home),
+        case_insensitive,
+    );
+    insert_env_entry(
+        &mut resolved,
+        "OPENCLAW_STATE_DIR".to_string(),
+        display_path(state_dir),
+        case_insensitive,
+    );
+    insert_env_entry(
+        &mut resolved,
         "OPENCLAW_CONFIG_PATH".to_string(),
         display_path(config_path),
+        case_insensitive,
     );
-    resolved.insert(
+    insert_env_entry(
+        &mut resolved,
         "OPENCLAW_SERVICE_REPAIR_POLICY".to_string(),
         "external".to_string(),
+        case_insensitive,
     );
     if let Some(env_name) = runtime.env_name {
-        resolved.insert("OCM_ACTIVE_ENV".to_string(), env_name.to_string());
-        resolved.insert(
+        insert_env_entry(
+            &mut resolved,
+            "OCM_ACTIVE_ENV".to_string(),
+            env_name.to_string(),
+            case_insensitive,
+        );
+        insert_env_entry(
+            &mut resolved,
             "OCM_ACTIVE_ENV_ROOT".to_string(),
             display_path(openclaw_home),
+            case_insensitive,
         );
     }
     if let Some(gateway_port) = runtime.gateway_port {
-        resolved.insert(
+        insert_env_entry(
+            &mut resolved,
             "OPENCLAW_GATEWAY_PORT".to_string(),
             gateway_port.to_string(),
+            case_insensitive,
         );
     }
     resolved
+}
+
+fn is_runtime_owned_env_key(key: &str, case_insensitive: bool) -> bool {
+    let matches = |candidate: &str| {
+        if case_insensitive {
+            key.eq_ignore_ascii_case(candidate)
+        } else {
+            key == candidate
+        }
+    };
+    let openclaw_owned = if case_insensitive {
+        key.get(..9)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("OPENCLAW_"))
+    } else {
+        key.starts_with("OPENCLAW_")
+    };
+    openclaw_owned || matches("OCM_ACTIVE_ENV") || matches("OCM_ACTIVE_ENV_ROOT")
 }
 
 fn apply_openclaw_config_env(config: &Value, env: &mut BTreeMap<String, String>) {
@@ -1073,6 +1127,50 @@ mod tests {
 
         assert!(inventory.contains(&paths.state_dir.join("team/source-19789")));
         assert!(!inventory.contains(Path::new("/tmp/stale-root")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_identity_replaces_differently_cased_windows_env_keys() {
+        let root = test_root("runtime-identity-windows-casing");
+        let paths = super::super::layout::derive_env_paths(&root);
+        let env = BTreeMap::from([
+            ("openclaw_home".to_string(), "C:\\stale".to_string()),
+            ("openclaw_gateway_port".to_string(), "1".to_string()),
+            ("ocm_active_env".to_string(), "stale".to_string()),
+            (
+                "ocm_active_env_root".to_string(),
+                "C:\\stale-root".to_string(),
+            ),
+        ]);
+
+        let resolved = openclaw_config_env_with_platform_semantics(
+            &env,
+            &paths.openclaw_home,
+            &paths.state_dir,
+            &paths.config_path,
+            OpenClawWorkspaceRuntime::for_env("source", Some(19_789)),
+            true,
+        );
+
+        assert_eq!(resolved.len(), 7);
+        assert_eq!(
+            matching_env_value(&resolved, "OPENCLAW_HOME", true).map(String::as_str),
+            Some(display_path(&paths.openclaw_home).as_str())
+        );
+        assert_eq!(
+            matching_env_value(&resolved, "OPENCLAW_GATEWAY_PORT", true).map(String::as_str),
+            Some("19789")
+        );
+        assert_eq!(
+            matching_env_value(&resolved, "OCM_ACTIVE_ENV", true).map(String::as_str),
+            Some("source")
+        );
+        assert_eq!(
+            matching_env_value(&resolved, "OCM_ACTIVE_ENV_ROOT", true).map(String::as_str),
+            Some(display_path(&paths.openclaw_home).as_str())
+        );
 
         let _ = fs::remove_dir_all(root);
     }
