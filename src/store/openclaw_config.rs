@@ -12,7 +12,7 @@ use crate::env::EnvMeta;
 use super::common::{ensure_dir, path_exists, write_file_replacing_path};
 use super::gateway_ports::read_port_number;
 use super::layout::{EnvPaths, clean_path, derive_env_paths, display_path};
-use super::openclaw_workspaces::load_effective_openclaw_config;
+use super::openclaw_workspaces::{OpenClawWorkspaceInventory, load_effective_openclaw_config};
 
 #[derive(Clone, Debug)]
 pub(crate) struct OpenClawConfigAudit {
@@ -309,6 +309,108 @@ pub(crate) fn rewrite_openclaw_config_includes_for_target(
         }
     }
     Ok(changed)
+}
+
+pub(crate) fn rewrite_identity_bound_workspace_paths_for_target(
+    config_path: &Path,
+    source_workspaces: &OpenClawWorkspaceInventory,
+    source_root: &Path,
+    target_root: &Path,
+) -> Result<bool, String> {
+    let Some(mut value) = read_config_value(config_path)? else {
+        return Ok(false);
+    };
+    let Some(agents) = value.get_mut("agents").and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+
+    let mut changed = false;
+    let default_identity_bound = agents
+        .get("defaults")
+        .and_then(Value::as_object)
+        .and_then(|defaults| defaults.get("workspace"))
+        .and_then(Value::as_str)
+        .is_some_and(workspace_uses_changing_runtime_identity);
+    if default_identity_bound
+        && let Some(source_workspace) = source_workspaces.default_agent_workspace()
+    {
+        let target_workspace = rebase_workspace_path(source_workspace, source_root, target_root)?;
+        agents
+            .get_mut("defaults")
+            .and_then(Value::as_object_mut)
+            .expect("defaults remained an object")
+            .insert(
+                "workspace".to_string(),
+                Value::String(display_path(&target_workspace)),
+            );
+        changed = true;
+    }
+
+    if let Some(entries) = agents.get_mut("list").and_then(Value::as_array_mut) {
+        for entry in entries {
+            let Some(entry) = entry.as_object_mut() else {
+                continue;
+            };
+            let Some(agent_id) = entry.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let identity_bound = entry
+                .get("workspace")
+                .and_then(Value::as_str)
+                .is_some_and(workspace_uses_changing_runtime_identity);
+            if !identity_bound {
+                continue;
+            }
+            let Some(source_workspace) = source_workspaces.agent_workspace(agent_id) else {
+                continue;
+            };
+            let target_workspace =
+                rebase_workspace_path(source_workspace, source_root, target_root)?;
+            entry.insert(
+                "workspace".to_string(),
+                Value::String(display_path(&target_workspace)),
+            );
+            changed = true;
+        }
+    }
+
+    if changed {
+        write_config_value(config_path, &value)?;
+    }
+    Ok(changed)
+}
+
+fn rebase_workspace_path(
+    source_workspace: &Path,
+    source_root: &Path,
+    target_root: &Path,
+) -> Result<PathBuf, String> {
+    let relative = source_workspace.strip_prefix(source_root).map_err(|_| {
+        format!(
+            "cannot rewrite identity-bound OpenClaw workspace outside the source environment root: {}",
+            display_path(source_workspace)
+        )
+    })?;
+    Ok(clean_path(&target_root.join(relative)))
+}
+
+fn workspace_uses_changing_runtime_identity(value: &str) -> bool {
+    contains_unescaped_env_reference(value, "OCM_ACTIVE_ENV")
+        || contains_unescaped_env_reference(value, "OPENCLAW_GATEWAY_PORT")
+}
+
+fn contains_unescaped_env_reference(value: &str, name: &str) -> bool {
+    let token = format!("${{{name}}}");
+    let escaped = format!("$${{{name}}}");
+    let mut remainder = value;
+    while let Some(index) = remainder.find(&token) {
+        if index == 0 || !remainder[..index].ends_with('$') {
+            return true;
+        }
+        let escaped_index = remainder.find(&escaped).unwrap_or(index);
+        remainder = &remainder[escaped_index + escaped.len()..];
+    }
+    false
 }
 
 pub(crate) fn ensure_minimum_local_openclaw_config(
@@ -1429,6 +1531,16 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn identity_bound_workspace_detection_ignores_escaped_placeholders() {
+        assert!(workspace_uses_changing_runtime_identity(
+            "${OCM_ACTIVE_ENV_ROOT}/team/${OCM_ACTIVE_ENV}-${OPENCLAW_GATEWAY_PORT}"
+        ));
+        assert!(!workspace_uses_changing_runtime_identity(
+            "${OCM_ACTIVE_ENV_ROOT}/team/$${OCM_ACTIVE_ENV}-$${OPENCLAW_GATEWAY_PORT}"
+        ));
     }
 
     #[test]

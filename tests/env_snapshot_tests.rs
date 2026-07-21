@@ -410,6 +410,60 @@ fn env_snapshot_uses_openclaw_config_env_precedence_for_workspace_selection() {
 }
 
 #[test]
+fn env_snapshot_uses_the_environment_runtime_identity_for_workspace_selection() {
+    let root = TestDir::new("env-snapshot-runtime-identity");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    let workspace = source_state.join("team/source-19789");
+    write_text(
+        &source_state.join("openclaw.json"),
+        concat!(
+            "{\n",
+            "  agents: { defaults: {\n",
+            "    workspace: '${OCM_ACTIVE_ENV_ROOT}/.openclaw/team/${OCM_ACTIVE_ENV}-${OPENCLAW_GATEWAY_PORT}'\n",
+            "  } }\n",
+            "}\n"
+        ),
+    );
+    write_text(&workspace.join("notes.txt"), "runtime workspace\n");
+    env.insert("OCM_ACTIVE_ENV".to_string(), "stale".to_string());
+    env.insert(
+        "OCM_ACTIVE_ENV_ROOT".to_string(),
+        root.child("stale-root").display().to_string(),
+    );
+    env.insert("OPENCLAW_GATEWAY_PORT".to_string(), "1".to_string());
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    fs::remove_dir_all(source_state.join("team")).unwrap();
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "restore", "source", &snapshot_id],
+    );
+    assert!(restore.status.success(), "{}", stderr(&restore));
+    assert_eq!(
+        fs::read_to_string(workspace.join("notes.txt")).unwrap(),
+        "runtime workspace\n"
+    );
+}
+
+#[test]
 fn env_snapshot_rejects_external_workspaces_before_writing_an_archive() {
     let root = TestDir::new("env-snapshot-external-workspace");
     let cwd = root.child("workspace");

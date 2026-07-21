@@ -16,6 +16,21 @@ const MAX_INCLUDE_DEPTH: usize = 10;
 const MAX_INCLUDE_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_INCLUDE_PATH_LENGTH: usize = 4096;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct OpenClawWorkspaceRuntime<'a> {
+    pub(crate) env_name: Option<&'a str>,
+    pub(crate) gateway_port: Option<u32>,
+}
+
+impl<'a> OpenClawWorkspaceRuntime<'a> {
+    pub(crate) fn for_env(env_name: &'a str, gateway_port: Option<u32>) -> Self {
+        Self {
+            env_name: Some(env_name),
+            gateway_port,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct EffectiveOpenClawConfig {
     pub(crate) value: Value,
@@ -26,6 +41,8 @@ pub(crate) struct EffectiveOpenClawConfig {
 pub(crate) struct OpenClawWorkspaceInventory {
     workspace_roots: BTreeSet<PathBuf>,
     config_include_paths: BTreeSet<PathBuf>,
+    agent_workspace_roots: BTreeMap<String, PathBuf>,
+    default_agent_id: String,
 }
 
 impl OpenClawWorkspaceInventory {
@@ -87,17 +104,35 @@ impl OpenClawWorkspaceInventory {
 
         Ok(relative_roots)
     }
+
+    pub(crate) fn default_agent_workspace(&self) -> Option<&Path> {
+        self.agent_workspace_roots
+            .get(&self.default_agent_id)
+            .map(PathBuf::as_path)
+    }
+
+    pub(crate) fn agent_workspace(&self, agent_id: &str) -> Option<&Path> {
+        self.agent_workspace_roots
+            .get(&normalize_agent_id(agent_id))
+            .map(PathBuf::as_path)
+    }
+
+    pub(crate) fn workspace_roots(&self) -> impl Iterator<Item = &Path> {
+        self.workspace_roots.iter().map(PathBuf::as_path)
+    }
 }
 
 pub(crate) fn resolve_env_openclaw_workspaces(
     paths: &EnvPaths,
     env: &BTreeMap<String, String>,
+    runtime: OpenClawWorkspaceRuntime<'_>,
 ) -> Result<OpenClawWorkspaceInventory, String> {
     let mut inventory = resolve_openclaw_workspaces(
         &paths.config_path,
         &paths.state_dir,
         &paths.openclaw_home,
         env,
+        runtime,
     )?;
     inventory
         .workspace_roots
@@ -116,6 +151,7 @@ pub(crate) fn resolve_plain_openclaw_workspaces(
         &state_dir,
         openclaw_home,
         env,
+        OpenClawWorkspaceRuntime::default(),
     )?;
     inventory
         .workspace_roots
@@ -152,13 +188,14 @@ fn resolve_openclaw_workspaces(
     state_dir: &Path,
     openclaw_home: &Path,
     env: &BTreeMap<String, String>,
+    runtime: OpenClawWorkspaceRuntime<'_>,
 ) -> Result<OpenClawWorkspaceInventory, String> {
     let resolved = load_effective_openclaw_config(config_path)?;
     let config = resolved
         .as_ref()
         .map(|resolved| resolved.value.clone())
         .unwrap_or_else(|| Value::Object(Map::new()));
-    let mut config_env = openclaw_config_env(env, openclaw_home, state_dir, config_path);
+    let mut config_env = openclaw_config_env(env, openclaw_home, state_dir, config_path, runtime);
     apply_openclaw_config_env(&config, &mut config_env);
     let config = resolve_config_env_vars(config, &config_env);
     let config_include_paths = resolved
@@ -180,6 +217,7 @@ fn resolve_openclaw_workspaces(
     agent_ids.insert(default_agent_id.clone());
 
     let mut workspace_roots = BTreeSet::new();
+    let mut agent_workspace_roots = BTreeMap::new();
     for agent_id in agent_ids {
         let explicit = entries
             .iter()
@@ -211,11 +249,14 @@ fn resolve_openclaw_workspaces(
                 display_path(&workspace)
             ));
         }
-        workspace_roots.insert(workspace);
+        workspace_roots.insert(workspace.clone());
+        agent_workspace_roots.insert(agent_id, workspace);
     }
     Ok(OpenClawWorkspaceInventory {
         workspace_roots,
         config_include_paths,
+        agent_workspace_roots,
+        default_agent_id,
     })
 }
 
@@ -224,10 +265,15 @@ fn openclaw_config_env(
     openclaw_home: &Path,
     state_dir: &Path,
     config_path: &Path,
+    runtime: OpenClawWorkspaceRuntime<'_>,
 ) -> BTreeMap<String, String> {
     let mut resolved = env
         .iter()
-        .filter(|(key, _)| !key.starts_with("OPENCLAW_"))
+        .filter(|(key, _)| {
+            !key.starts_with("OPENCLAW_")
+                && key.as_str() != "OCM_ACTIVE_ENV"
+                && key.as_str() != "OCM_ACTIVE_ENV_ROOT"
+        })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<BTreeMap<_, _>>();
     resolved.insert("OPENCLAW_HOME".to_string(), display_path(openclaw_home));
@@ -236,6 +282,23 @@ fn openclaw_config_env(
         "OPENCLAW_CONFIG_PATH".to_string(),
         display_path(config_path),
     );
+    resolved.insert(
+        "OPENCLAW_SERVICE_REPAIR_POLICY".to_string(),
+        "external".to_string(),
+    );
+    if let Some(env_name) = runtime.env_name {
+        resolved.insert("OCM_ACTIVE_ENV".to_string(), env_name.to_string());
+        resolved.insert(
+            "OCM_ACTIVE_ENV_ROOT".to_string(),
+            display_path(openclaw_home),
+        );
+    }
+    if let Some(gateway_port) = runtime.gateway_port {
+        resolved.insert(
+            "OPENCLAW_GATEWAY_PORT".to_string(),
+            gateway_port.to_string(),
+        );
+    }
     resolved
 }
 
@@ -889,7 +952,12 @@ mod tests {
         )
         .unwrap();
 
-        let inventory = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap();
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
         assert_eq!(
             inventory.workspace_roots,
             BTreeSet::from([
@@ -948,7 +1016,9 @@ mod tests {
         )
         .unwrap();
 
-        let inventory = resolve_env_openclaw_workspaces(&paths, &env).unwrap();
+        let inventory =
+            resolve_env_openclaw_workspaces(&paths, &env, OpenClawWorkspaceRuntime::default())
+                .unwrap();
         assert!(inventory.contains(&paths.state_dir.join("team")));
         assert!(inventory.contains(&paths.state_dir.join("custom/ops")));
         assert!(inventory.contains(&paths.state_dir.join("configured/agent")));
@@ -959,11 +1029,50 @@ mod tests {
                     &env,
                     &paths.openclaw_home,
                     &paths.state_dir,
-                    &paths.config_path
+                    &paths.config_path,
+                    OpenClawWorkspaceRuntime::default()
                 )
             ),
             format!("${{OPENCLAW_HOME}}/{}", display_path(&paths.openclaw_home))
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn workspace_inventory_uses_ocm_runtime_identity_instead_of_stale_caller_values() {
+        let root = test_root("runtime-identity");
+        let paths = super::super::layout::derive_env_paths(&root);
+        fs::create_dir_all(&paths.state_dir).unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{
+              "agents": {
+                "defaults": {
+                  "workspace": "${OCM_ACTIVE_ENV_ROOT}/.openclaw/team/${OCM_ACTIVE_ENV}-${OPENCLAW_GATEWAY_PORT}"
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        let env = BTreeMap::from([
+            ("OCM_ACTIVE_ENV".to_string(), "stale".to_string()),
+            (
+                "OCM_ACTIVE_ENV_ROOT".to_string(),
+                "/tmp/stale-root".to_string(),
+            ),
+            ("OPENCLAW_GATEWAY_PORT".to_string(), "1".to_string()),
+        ]);
+
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &env,
+            OpenClawWorkspaceRuntime::for_env("source", Some(19_789)),
+        )
+        .unwrap();
+
+        assert!(inventory.contains(&paths.state_dir.join("team/source-19789")));
+        assert!(!inventory.contains(Path::new("/tmp/stale-root")));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1028,7 +1137,12 @@ mod tests {
             ),
         )
         .unwrap();
-        let inventory = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap();
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
         assert!(
             inventory.archive_relative_roots(&paths.root).is_err(),
             "external workspace must be rejected"
@@ -1046,7 +1160,12 @@ mod tests {
                 ),
             )
             .unwrap();
-            let inventory = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap();
+            let inventory = resolve_env_openclaw_workspaces(
+                &paths,
+                &test_env(),
+                OpenClawWorkspaceRuntime::default(),
+            )
+            .unwrap();
             assert!(
                 inventory.archive_relative_roots(&paths.root).is_err(),
                 "workspace symlink escaping the env root must be rejected"
@@ -1075,7 +1194,12 @@ mod tests {
         )
         .unwrap();
 
-        let inventory = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap();
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
         assert!(inventory.contains(&linked));
         let error = inventory.archive_relative_roots(&paths.root).unwrap_err();
         assert!(error.contains("through a symlink"), "{error}");
@@ -1094,7 +1218,12 @@ mod tests {
         )
         .unwrap();
 
-        let error = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap_err();
+        let error = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap_err();
         assert!(
             error.contains("relative OpenClaw workspace path"),
             "{error}"
@@ -1110,7 +1239,12 @@ mod tests {
         fs::create_dir_all(&paths.state_dir).unwrap();
         fs::write(&paths.config_path, "{}").unwrap();
 
-        let inventory = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap();
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
         assert!(inventory.contains(&paths.workspace_dir));
         assert!(!inventory.contains(&paths.state_dir.join("workspace-attestations")));
         assert!(!inventory.contains(&paths.state_dir.join("workspace-cache")));

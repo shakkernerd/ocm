@@ -101,6 +101,75 @@ fn env_import_restores_an_archive_with_a_new_name_and_root() {
 }
 
 #[test]
+fn env_import_rewrites_identity_bound_workspaces_to_the_imported_data_path() {
+    let root = TestDir::new("env-import-runtime-identity");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source", "--port", "19789"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    write_text(
+        &source_state.join("openclaw.json"),
+        concat!(
+            "{\n",
+            "  agents: { defaults: {\n",
+            "    workspace: '${OCM_ACTIVE_ENV_ROOT}/.openclaw/team/${OCM_ACTIVE_ENV}-${OPENCLAW_GATEWAY_PORT}'\n",
+            "  } }\n",
+            "}\n"
+        ),
+    );
+    write_text(
+        &source_state.join("team/source-19789/notes.txt"),
+        "runtime workspace\n",
+    );
+
+    let archive = root.child("source.ocm-env.tar");
+    let export = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "export",
+            "source",
+            "--output",
+            archive.to_string_lossy().as_ref(),
+        ],
+    );
+    assert!(export.status.success(), "{}", stderr(&export));
+
+    let target_root = root.child("imports/target");
+    let import = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "import",
+            archive.to_string_lossy().as_ref(),
+            "--name",
+            "target",
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+    assert!(import.status.success(), "{}", stderr(&import));
+
+    let copied_workspace = target_root.join(".openclaw/team/source-19789");
+    assert_eq!(
+        fs::read_to_string(copied_workspace.join("notes.txt")).unwrap(),
+        "runtime workspace\n"
+    );
+    let config: Value = serde_json::from_str(
+        &fs::read_to_string(target_root.join(".openclaw/openclaw.json")).unwrap(),
+    )
+    .unwrap();
+    let configured_workspace = config["agents"]["defaults"]["workspace"].as_str().unwrap();
+    assert_eq!(Path::new(configured_workspace), copied_workspace);
+}
+
+#[test]
 fn env_import_json_reports_the_archive_and_source_name() {
     let root = TestDir::new("env-import-json");
     let cwd = root.child("workspace");

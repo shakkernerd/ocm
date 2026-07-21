@@ -20,8 +20,9 @@ use super::layout::{
     validate_name,
 };
 use super::{
-    audit_openclaw_state, clear_nonportable_runtime_state, get_environment, list_environments,
-    now_utc, openclaw_env_archive_options, rewrite_openclaw_config_for_target, save_environment,
+    OpenClawWorkspaceRuntime, audit_openclaw_state, clear_nonportable_runtime_state,
+    get_environment, list_environments, now_utc, openclaw_env_archive_options,
+    rewrite_openclaw_config_for_target, save_environment,
 };
 
 static NEXT_RESTORE_ID: AtomicU64 = AtomicU64::new(0);
@@ -113,7 +114,11 @@ pub fn create_env_snapshot(
             &metadata,
             &env_paths.root,
             &archive_path,
-            openclaw_env_archive_options(&env_paths, env)?,
+            openclaw_env_archive_options(
+                &env_paths,
+                env,
+                OpenClawWorkspaceRuntime::for_env(&meta.name, meta.gateway_port),
+            )?,
         )?;
         write_json(&meta_path, &snapshot)?;
         Ok(snapshot)
@@ -233,7 +238,11 @@ pub fn restore_env_snapshot(
             let known_envs = list_environments(env, cwd)?;
             let audit = audit_openclaw_state(&restored, &known_envs, env);
             if audit.repair_runtime_state {
-                clear_nonportable_runtime_state(&current_paths, env)?;
+                clear_nonportable_runtime_state(
+                    &current_paths,
+                    env,
+                    OpenClawWorkspaceRuntime::for_env(&restored.name, restored.gateway_port),
+                )?;
             }
             save_environment(restored, env, cwd)
         })();

@@ -8,8 +8,8 @@ use serde::Serialize;
 use crate::env::{CreateEnvironmentOptions, EnvImportSummary, EnvironmentService};
 use crate::launcher::{AddLauncherOptions, LauncherService};
 use crate::store::{
-    copy_dir_recursive, default_env_root, derive_env_paths, display_path, list_environments,
-    normalize_new_environment_sandbox_origin, prepare_migrated_runtime_state,
+    OpenClawWorkspaceRuntime, copy_dir_recursive, default_env_root, derive_env_paths, display_path,
+    list_environments, normalize_new_environment_sandbox_origin, prepare_migrated_runtime_state,
     reject_include_owned_agent_workspaces, reject_include_owned_sandbox_origin,
     resolve_plain_openclaw_workspaces, resolve_user_home, rewrite_openclaw_config_for_migration,
     validate_name,
@@ -272,7 +272,12 @@ fn complete_migration_import(
         created.gateway_port,
         sandbox_origin,
     )?;
-    prepare_migrated_runtime_state(target_paths, source_home, env)?;
+    prepare_migrated_runtime_state(
+        target_paths,
+        source_home,
+        env,
+        OpenClawWorkspaceRuntime::for_env(&created.name, created.gateway_port),
+    )?;
 
     let Some(launcher) = migrated_launcher else {
         return Ok((

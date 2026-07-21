@@ -8,7 +8,9 @@ use crate::infra::archive::{EnvArchiveEntryKind, EnvArchiveOptions};
 
 use super::common::path_exists;
 use super::layout::{EnvPaths, clean_path, derive_env_paths, display_path};
-use super::openclaw_workspaces::{OpenClawWorkspaceInventory, resolve_env_openclaw_workspaces};
+use super::openclaw_workspaces::{
+    OpenClawWorkspaceInventory, OpenClawWorkspaceRuntime, resolve_env_openclaw_workspaces,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct OpenClawStateAudit {
@@ -28,7 +30,8 @@ pub(crate) fn audit_openclaw_state(
             repair_runtime_state: false,
         };
     }
-    let workspaces = match resolve_archivable_workspaces(&paths, env) {
+    let runtime = OpenClawWorkspaceRuntime::for_env(&meta.name, meta.gateway_port);
+    let workspaces = match resolve_archivable_workspaces(&paths, env, runtime) {
         Ok(workspaces) => workspaces,
         Err(error) => {
             return OpenClawStateAudit {
@@ -89,14 +92,19 @@ pub(crate) fn repair_openclaw_runtime_state(
     env: &BTreeMap<String, String>,
 ) -> Result<bool, String> {
     let paths = derive_env_paths(Path::new(&meta.root));
-    clear_nonportable_runtime_state(&paths, env)
+    clear_nonportable_runtime_state(
+        &paths,
+        env,
+        OpenClawWorkspaceRuntime::for_env(&meta.name, meta.gateway_port),
+    )
 }
 
 pub(crate) fn openclaw_env_archive_options(
     paths: &EnvPaths,
     env: &BTreeMap<String, String>,
+    runtime: OpenClawWorkspaceRuntime<'_>,
 ) -> Result<EnvArchiveOptions, String> {
-    let workspaces = resolve_env_openclaw_workspaces(paths, env)?;
+    let workspaces = resolve_env_openclaw_workspaces(paths, env, runtime)?;
     Ok(EnvArchiveOptions {
         should_skip_path: should_skip_openclaw_env_archive_path,
         included_path_roots: workspaces.archive_relative_roots(&paths.root)?,
@@ -119,11 +127,12 @@ pub(crate) fn prepare_migrated_runtime_state(
     paths: &EnvPaths,
     source_state_root: &Path,
     env: &BTreeMap<String, String>,
+    runtime: OpenClawWorkspaceRuntime<'_>,
 ) -> Result<bool, String> {
     if !path_exists(&paths.state_dir) {
         return Ok(false);
     }
-    let workspaces = resolve_archivable_workspaces(paths, env)?;
+    let workspaces = resolve_archivable_workspaces(paths, env, runtime)?;
 
     let mut changed = false;
     changed |= rewrite_runtime_state_root_refs(
@@ -140,11 +149,12 @@ pub(crate) fn prepare_migrated_runtime_state(
 pub(crate) fn clear_nonportable_runtime_state(
     paths: &EnvPaths,
     env: &BTreeMap<String, String>,
+    runtime: OpenClawWorkspaceRuntime<'_>,
 ) -> Result<bool, String> {
     if !path_exists(&paths.state_dir) {
         return Ok(false);
     }
-    let workspaces = resolve_archivable_workspaces(paths, env)?;
+    let workspaces = resolve_archivable_workspaces(paths, env, runtime)?;
 
     let mut changed = false;
     let entries = fs::read_dir(&paths.state_dir).map_err(|error| error.to_string())?;
@@ -366,8 +376,9 @@ fn prune_agent_runtime_state(
 fn resolve_archivable_workspaces(
     paths: &EnvPaths,
     env: &BTreeMap<String, String>,
+    runtime: OpenClawWorkspaceRuntime<'_>,
 ) -> Result<OpenClawWorkspaceInventory, String> {
-    let workspaces = resolve_env_openclaw_workspaces(paths, env)?;
+    let workspaces = resolve_env_openclaw_workspaces(paths, env, runtime)?;
     workspaces.archive_relative_roots(&paths.root)?;
     Ok(workspaces)
 }
@@ -630,7 +641,12 @@ mod tests {
         )
         .unwrap();
 
-        let changed = clear_nonportable_runtime_state(&paths, &BTreeMap::new()).unwrap();
+        let changed = clear_nonportable_runtime_state(
+            &paths,
+            &BTreeMap::new(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
         assert!(changed);
         assert!(paths.config_path.exists());
         assert!(paths.workspace_dir.join("notes/todo.txt").exists());
@@ -703,8 +719,13 @@ mod tests {
         fs::write(paths.state_dir.join("gateway.pid"), "4242\n").unwrap();
         fs::write(paths.state_dir.join("run/live.sock"), "sock\n").unwrap();
 
-        let changed =
-            prepare_migrated_runtime_state(&paths, &source_state_root, &BTreeMap::new()).unwrap();
+        let changed = prepare_migrated_runtime_state(
+            &paths,
+            &source_state_root,
+            &BTreeMap::new(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
         assert!(changed);
         assert!(paths.workspace_dir.join("notes/todo.txt").exists());
         assert!(
@@ -755,7 +776,12 @@ mod tests {
         )
         .unwrap();
 
-        let options = openclaw_env_archive_options(&paths, &BTreeMap::new()).unwrap();
+        let options = openclaw_env_archive_options(
+            &paths,
+            &BTreeMap::new(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
         assert!(
             options
                 .included_path_roots
