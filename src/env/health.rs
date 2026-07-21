@@ -71,7 +71,7 @@ impl<'a> EnvironmentService<'a> {
     pub fn cleanup_preview(&self, name: &str) -> Result<EnvCleanupSummary, String> {
         let env = self.get(name)?;
         let config_audit = audit_openclaw_config(&env, &self.list()?);
-        let state_audit = audit_openclaw_state(&env, &self.list()?);
+        let state_audit = audit_openclaw_state(&env, &self.list()?, self.env);
         let doctor = self.doctor(name)?;
         let actions = cleanup_actions(&env, &doctor, &config_audit, &state_audit);
         Ok(build_cleanup_summary(&env, doctor, false, actions, None))
@@ -81,7 +81,7 @@ impl<'a> EnvironmentService<'a> {
         let _operation_lock = self.lock_operation(name)?;
         let mut env = self.get(name)?;
         let config_audit = audit_openclaw_config(&env, &self.list()?);
-        let state_audit = audit_openclaw_state(&env, &self.list()?);
+        let state_audit = audit_openclaw_state(&env, &self.list()?, self.env);
         let doctor_before = self.doctor(name)?;
         let actions = cleanup_actions(&env, &doctor_before, &config_audit, &state_audit);
 
@@ -98,7 +98,7 @@ impl<'a> EnvironmentService<'a> {
                     repair_openclaw_config(&env, &known_envs)?;
                 }
                 "reset-openclaw-runtime-state" => {
-                    repair_openclaw_runtime_state(&env)?;
+                    repair_openclaw_runtime_state(&env, self.env)?;
                 }
                 _ => {}
             }
@@ -157,7 +157,7 @@ impl<'a> EnvironmentService<'a> {
             push_issue(&mut issues, issue.clone());
         }
         let config_status = config_audit.status.clone();
-        let state_audit = audit_openclaw_state(&env, &known_envs);
+        let state_audit = audit_openclaw_state(&env, &known_envs, self.env);
         for issue in &state_audit.issues {
             push_issue(&mut issues, issue.clone());
         }

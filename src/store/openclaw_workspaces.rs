@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -88,9 +88,14 @@ impl OpenClawWorkspaceInventory {
 
 pub(crate) fn resolve_env_openclaw_workspaces(
     paths: &EnvPaths,
+    env: &BTreeMap<String, String>,
 ) -> Result<OpenClawWorkspaceInventory, String> {
-    let mut inventory =
-        resolve_openclaw_workspaces(&paths.config_path, &paths.state_dir, &paths.openclaw_home)?;
+    let mut inventory = resolve_openclaw_workspaces(
+        &paths.config_path,
+        &paths.state_dir,
+        &paths.openclaw_home,
+        env,
+    )?;
     inventory
         .workspace_roots
         .insert(paths.workspace_dir.clone());
@@ -99,11 +104,16 @@ pub(crate) fn resolve_env_openclaw_workspaces(
 
 pub(crate) fn resolve_plain_openclaw_workspaces(
     state_dir: &Path,
+    env: &BTreeMap<String, String>,
 ) -> Result<OpenClawWorkspaceInventory, String> {
     let state_dir = canonicalize_path_allow_missing(state_dir)?;
     let openclaw_home = state_dir.parent().unwrap_or(&state_dir);
-    let mut inventory =
-        resolve_openclaw_workspaces(&state_dir.join("openclaw.json"), &state_dir, openclaw_home)?;
+    let mut inventory = resolve_openclaw_workspaces(
+        &state_dir.join("openclaw.json"),
+        &state_dir,
+        openclaw_home,
+        env,
+    )?;
     inventory
         .workspace_roots
         .insert(state_dir.join("workspace"));
@@ -143,12 +153,16 @@ fn resolve_openclaw_workspaces(
     config_path: &Path,
     state_dir: &Path,
     openclaw_home: &Path,
+    env: &BTreeMap<String, String>,
 ) -> Result<OpenClawWorkspaceInventory, String> {
     let resolved = load_effective_openclaw_config(config_path)?;
     let config = resolved
         .as_ref()
         .map(|resolved| resolved.value.clone())
         .unwrap_or_else(|| Value::Object(Map::new()));
+    let mut config_env = openclaw_config_env(env, openclaw_home, state_dir, config_path);
+    apply_openclaw_config_env(&config, &mut config_env);
+    let config = resolve_config_env_vars(config, &config_env);
     let config_include_paths = resolved
         .map(|resolved| resolved.include_paths)
         .unwrap_or_default();
@@ -205,6 +219,169 @@ fn resolve_openclaw_workspaces(
         workspace_roots,
         config_include_paths,
     })
+}
+
+fn openclaw_config_env(
+    env: &BTreeMap<String, String>,
+    openclaw_home: &Path,
+    state_dir: &Path,
+    config_path: &Path,
+) -> BTreeMap<String, String> {
+    let mut resolved = env
+        .iter()
+        .filter(|(key, _)| !key.starts_with("OPENCLAW_"))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    resolved.insert("OPENCLAW_HOME".to_string(), display_path(openclaw_home));
+    resolved.insert("OPENCLAW_STATE_DIR".to_string(), display_path(state_dir));
+    resolved.insert(
+        "OPENCLAW_CONFIG_PATH".to_string(),
+        display_path(config_path),
+    );
+    resolved
+}
+
+fn apply_openclaw_config_env(config: &Value, env: &mut BTreeMap<String, String>) {
+    let Some(config_env) = config.get("env").and_then(Value::as_object) else {
+        return;
+    };
+    if let Some(vars) = config_env.get("vars").and_then(Value::as_object) {
+        for (key, value) in vars {
+            apply_openclaw_config_env_entry(key, value, env);
+        }
+    }
+    for (key, value) in config_env {
+        if key != "shellEnv" && key != "vars" {
+            apply_openclaw_config_env_entry(key, value, env);
+        }
+    }
+}
+
+fn apply_openclaw_config_env_entry(key: &str, value: &Value, env: &mut BTreeMap<String, String>) {
+    let Some(value) = value.as_str().filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    if !is_portable_env_var_name(key)
+        || contains_config_env_reference(value)
+        || env.get(key).is_some_and(|value| !value.trim().is_empty())
+    {
+        return;
+    }
+    env.insert(key.to_string(), value.to_string());
+}
+
+fn contains_config_env_reference(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            index += 1;
+            continue;
+        }
+        if bytes.get(index + 1) == Some(&b'$') && bytes.get(index + 2) == Some(&b'{') {
+            index += 2;
+            continue;
+        }
+        if bytes.get(index + 1) == Some(&b'{') {
+            let name_start = index + 2;
+            if let Some(relative_end) = value[name_start..].find('}') {
+                let name_end = name_start + relative_end;
+                if is_openclaw_env_var_name(&value[name_start..name_end]) {
+                    return true;
+                }
+            }
+        }
+        index += 1;
+    }
+    false
+}
+
+fn is_portable_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn resolve_config_env_vars(value: Value, env: &BTreeMap<String, String>) -> Value {
+    match value {
+        Value::String(value) => Value::String(resolve_config_env_string(&value, env)),
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(|value| resolve_config_env_vars(value, env))
+                .collect(),
+        ),
+        Value::Object(values) => Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, resolve_config_env_vars(value, env)))
+                .collect(),
+        ),
+        value => value,
+    }
+}
+
+fn resolve_config_env_string(value: &str, env: &BTreeMap<String, String>) -> String {
+    let mut resolved = String::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            let ch = value[index..]
+                .chars()
+                .next()
+                .expect("valid string boundary");
+            resolved.push(ch);
+            index += ch.len_utf8();
+            continue;
+        }
+
+        let (escaped, name_start) =
+            if bytes.get(index + 1) == Some(&b'$') && bytes.get(index + 2) == Some(&b'{') {
+                (true, index + 3)
+            } else if bytes.get(index + 1) == Some(&b'{') {
+                (false, index + 2)
+            } else {
+                resolved.push('$');
+                index += 1;
+                continue;
+            };
+        let Some(relative_end) = value[name_start..].find('}') else {
+            resolved.push('$');
+            index += 1;
+            continue;
+        };
+        let name_end = name_start + relative_end;
+        let name = &value[name_start..name_end];
+        if !is_openclaw_env_var_name(name) {
+            resolved.push('$');
+            index += 1;
+            continue;
+        }
+        if escaped {
+            resolved.push_str("${");
+            resolved.push_str(name);
+            resolved.push('}');
+        } else if let Some(env_value) = env.get(name).filter(|value| !value.is_empty()) {
+            resolved.push_str(env_value);
+        } else {
+            resolved.push_str("${");
+            resolved.push_str(name);
+            resolved.push('}');
+        }
+        index = name_end + 1;
+    }
+    resolved
+}
+
+fn is_openclaw_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|ch| ch == '_' || ch.is_ascii_uppercase())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_uppercase() || ch.is_ascii_digit())
 }
 
 fn agent_entries(config: &Value) -> Vec<&Map<String, Value>> {
@@ -541,6 +718,10 @@ mod tests {
         ))
     }
 
+    fn test_env() -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
     #[test]
     fn effective_config_resolves_json5_nested_includes_and_merges_arrays() {
         let root = test_root("includes");
@@ -608,7 +789,7 @@ mod tests {
         )
         .unwrap();
 
-        let inventory = resolve_env_openclaw_workspaces(&paths).unwrap();
+        let inventory = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap();
         assert_eq!(
             inventory.workspace_roots,
             BTreeSet::from([
@@ -617,6 +798,71 @@ mod tests {
                 root.join("teams/ops-team"),
                 root.join(".openclaw/team/custom"),
             ])
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn workspace_inventory_resolves_openclaw_config_env_substitution() {
+        let root = test_root("env-substitution");
+        let paths = super::super::layout::derive_env_paths(&root);
+        fs::create_dir_all(&paths.state_dir).unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{
+              "agents": {
+                "defaults": {
+                  "workspace": "${OPENCLAW_HOME}/.openclaw/team"
+                },
+                "list": [
+                  { "id": "main", "default": true },
+                  { "id": "ops", "workspace": "${CUSTOM_WORKSPACE_ROOT}/ops" }
+                ]
+              }
+            }"#,
+        )
+        .unwrap();
+        let env = BTreeMap::from([(
+            "CUSTOM_WORKSPACE_ROOT".to_string(),
+            display_path(&paths.state_dir.join("custom")),
+        )]);
+        let mut config: Value =
+            serde_json::from_str(&fs::read_to_string(&paths.config_path).unwrap()).unwrap();
+        config["env"] = serde_json::json!({
+            "vars": {
+                "CONFIG_WORKSPACE_ROOT": display_path(&paths.state_dir.join("configured")),
+                "IGNORED_REFERENCE": "${CUSTOM_WORKSPACE_ROOT}"
+            }
+        });
+        config["agents"]["list"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": "config",
+                "workspace": "${CONFIG_WORKSPACE_ROOT}/agent"
+            }));
+        fs::write(
+            &paths.config_path,
+            serde_json::to_vec_pretty(&config).unwrap(),
+        )
+        .unwrap();
+
+        let inventory = resolve_env_openclaw_workspaces(&paths, &env).unwrap();
+        assert!(inventory.contains(&paths.state_dir.join("team")));
+        assert!(inventory.contains(&paths.state_dir.join("custom/ops")));
+        assert!(inventory.contains(&paths.state_dir.join("configured/agent")));
+        assert_eq!(
+            resolve_config_env_string(
+                "$${OPENCLAW_HOME}/${OPENCLAW_HOME}",
+                &openclaw_config_env(
+                    &env,
+                    &paths.openclaw_home,
+                    &paths.state_dir,
+                    &paths.config_path
+                )
+            ),
+            format!("${{OPENCLAW_HOME}}/{}", display_path(&paths.openclaw_home))
         );
 
         let _ = fs::remove_dir_all(root);
@@ -637,7 +883,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let inventory = resolve_env_openclaw_workspaces(&paths).unwrap();
+        let inventory = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap();
         assert!(
             inventory.archive_relative_roots(&paths.root).is_err(),
             "external workspace must be rejected"
@@ -655,7 +901,7 @@ mod tests {
                 ),
             )
             .unwrap();
-            let inventory = resolve_env_openclaw_workspaces(&paths).unwrap();
+            let inventory = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap();
             assert!(
                 inventory.archive_relative_roots(&paths.root).is_err(),
                 "workspace symlink escaping the env root must be rejected"
@@ -684,7 +930,7 @@ mod tests {
         )
         .unwrap();
 
-        let inventory = resolve_env_openclaw_workspaces(&paths).unwrap();
+        let inventory = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap();
         assert!(inventory.contains(&linked));
         let error = inventory.archive_relative_roots(&paths.root).unwrap_err();
         assert!(error.contains("through a symlink"), "{error}");
@@ -703,7 +949,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = resolve_env_openclaw_workspaces(&paths).unwrap_err();
+        let error = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap_err();
         assert!(
             error.contains("relative OpenClaw workspace path"),
             "{error}"
@@ -719,7 +965,7 @@ mod tests {
         fs::create_dir_all(&paths.state_dir).unwrap();
         fs::write(&paths.config_path, "{}").unwrap();
 
-        let inventory = resolve_env_openclaw_workspaces(&paths).unwrap();
+        let inventory = resolve_env_openclaw_workspaces(&paths, &test_env()).unwrap();
         assert!(inventory.contains(&paths.workspace_dir));
         assert!(!inventory.contains(&paths.state_dir.join("workspace-attestations")));
         assert!(!inventory.contains(&paths.state_dir.join("workspace-cache")));
