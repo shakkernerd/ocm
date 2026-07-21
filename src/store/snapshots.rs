@@ -113,7 +113,7 @@ pub fn create_env_snapshot(
             &metadata,
             &env_paths.root,
             &archive_path,
-            openclaw_env_archive_options(),
+            openclaw_env_archive_options(&env_paths)?,
         )?;
         write_json(&meta_path, &snapshot)?;
         Ok(snapshot)

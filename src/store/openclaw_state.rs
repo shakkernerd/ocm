@@ -8,6 +8,7 @@ use crate::infra::archive::{EnvArchiveEntryKind, EnvArchiveOptions};
 
 use super::common::path_exists;
 use super::layout::{EnvPaths, clean_path, derive_env_paths, display_path};
+use super::openclaw_workspaces::{OpenClawWorkspaceInventory, resolve_env_openclaw_workspaces};
 
 #[derive(Clone, Debug)]
 pub(crate) struct OpenClawStateAudit {
@@ -23,11 +24,23 @@ pub(crate) fn audit_openclaw_state(meta: &EnvMeta, known_envs: &[EnvMeta]) -> Op
             repair_runtime_state: false,
         };
     }
+    let workspaces = match resolve_archivable_workspaces(&paths) {
+        Ok(workspaces) => workspaces,
+        Err(error) => {
+            return OpenClawStateAudit {
+                issues: vec![format!(
+                    "OpenClaw workspace inventory could not be resolved safely: {error}"
+                )],
+                repair_runtime_state: false,
+            };
+        }
+    };
 
     let mut known_refs = BTreeMap::<String, (PathBuf, usize)>::new();
     let mut inferred_refs = BTreeMap::<PathBuf, usize>::new();
     collect_runtime_state_path_refs(
         &paths,
+        &workspaces,
         meta,
         known_envs,
         &mut known_refs,
@@ -72,11 +85,12 @@ pub(crate) fn repair_openclaw_runtime_state(meta: &EnvMeta) -> Result<bool, Stri
     clear_nonportable_runtime_state(&paths)
 }
 
-pub(crate) fn openclaw_env_archive_options() -> EnvArchiveOptions {
-    EnvArchiveOptions {
+pub(crate) fn openclaw_env_archive_options(paths: &EnvPaths) -> Result<EnvArchiveOptions, String> {
+    let workspaces = resolve_env_openclaw_workspaces(paths)?;
+    Ok(EnvArchiveOptions {
         should_skip_path: should_skip_openclaw_env_archive_path,
-        ..EnvArchiveOptions::default()
-    }
+        included_path_roots: workspaces.archive_relative_roots(&paths.root)?,
+    })
 }
 
 pub(crate) fn should_skip_openclaw_env_archive_path(
@@ -98,17 +112,17 @@ pub(crate) fn prepare_migrated_runtime_state(
     if !path_exists(&paths.state_dir) {
         return Ok(false);
     }
+    let workspaces = resolve_archivable_workspaces(paths)?;
 
     let mut changed = false;
     changed |= rewrite_runtime_state_root_refs(
         &paths.state_dir,
         &paths.config_path,
-        &paths.state_dir,
+        &workspaces,
         source_state_root,
         &paths.state_dir,
     )?;
-    changed |=
-        clear_volatile_runtime_state(&paths.state_dir, &paths.config_path, &paths.state_dir)?;
+    changed |= clear_volatile_runtime_state(&paths.state_dir, &paths.config_path, &workspaces)?;
     Ok(changed)
 }
 
@@ -116,6 +130,7 @@ pub(crate) fn clear_nonportable_runtime_state(paths: &EnvPaths) -> Result<bool, 
     if !path_exists(&paths.state_dir) {
         return Ok(false);
     }
+    let workspaces = resolve_archivable_workspaces(paths)?;
 
     let mut changed = false;
     let entries = fs::read_dir(&paths.state_dir).map_err(|error| error.to_string())?;
@@ -123,15 +138,17 @@ pub(crate) fn clear_nonportable_runtime_state(paths: &EnvPaths) -> Result<bool, 
         let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
         let name = entry.file_name();
-        if name == OsStr::new("openclaw.json")
-            || name.to_str().is_some_and(is_openclaw_workspace_name)
-        {
+        if name == OsStr::new("openclaw.json") || workspaces.contains(&path) {
             continue;
         }
         if name == OsStr::new("agents") {
-            if prune_agent_runtime_state(&path)? {
+            if prune_agent_runtime_state(&path, &workspaces)? {
                 changed = true;
             }
+            continue;
+        }
+        if workspaces.has_descendant(&path) {
+            changed |= clear_parent_preserving_workspaces(&path, &workspaces)?;
             continue;
         }
 
@@ -145,7 +162,7 @@ pub(crate) fn clear_nonportable_runtime_state(paths: &EnvPaths) -> Result<bool, 
 fn rewrite_runtime_state_root_refs(
     root: &Path,
     config_path: &Path,
-    state_dir: &Path,
+    workspaces: &OpenClawWorkspaceInventory,
     source_state_root: &Path,
     target_state_root: &Path,
 ) -> Result<bool, String> {
@@ -155,7 +172,7 @@ fn rewrite_runtime_state_root_refs(
     rewrite_runtime_state_root_refs_inner(
         root,
         config_path,
-        state_dir,
+        workspaces,
         &source_root,
         &target_root,
         &mut changed,
@@ -166,7 +183,7 @@ fn rewrite_runtime_state_root_refs(
 fn rewrite_runtime_state_root_refs_inner(
     root: &Path,
     config_path: &Path,
-    state_dir: &Path,
+    workspaces: &OpenClawWorkspaceInventory,
     source_root: &str,
     target_root: &str,
     changed: &mut bool,
@@ -179,7 +196,7 @@ fn rewrite_runtime_state_root_refs_inner(
     for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
-        if path == config_path || is_openclaw_workspace_path(&path, state_dir) {
+        if path == config_path || workspaces.contains(&path) {
             continue;
         }
 
@@ -188,7 +205,7 @@ fn rewrite_runtime_state_root_refs_inner(
             rewrite_runtime_state_root_refs_inner(
                 &path,
                 config_path,
-                state_dir,
+                workspaces,
                 source_root,
                 target_root,
                 changed,
@@ -216,7 +233,7 @@ fn rewrite_runtime_state_root_refs_inner(
 fn clear_volatile_runtime_state(
     root: &Path,
     config_path: &Path,
-    state_dir: &Path,
+    workspaces: &OpenClawWorkspaceInventory,
 ) -> Result<bool, String> {
     if !path_exists(root) {
         return Ok(false);
@@ -227,11 +244,15 @@ fn clear_volatile_runtime_state(
     for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
-        if path == config_path || is_openclaw_workspace_path(&path, state_dir) {
+        if path == config_path || workspaces.contains(&path) {
             continue;
         }
 
         let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.is_dir() && workspaces.has_descendant(&path) {
+            changed |= clear_volatile_runtime_state(&path, config_path, workspaces)?;
+            continue;
+        }
         let file_name = entry.file_name();
         if should_remove_volatile_runtime_path(&file_name, metadata.is_dir()) {
             remove_path(&path)?;
@@ -240,14 +261,44 @@ fn clear_volatile_runtime_state(
         }
 
         if metadata.is_dir() {
-            changed |= clear_volatile_runtime_state(&path, config_path, state_dir)?;
+            changed |= clear_volatile_runtime_state(&path, config_path, workspaces)?;
         }
     }
 
     Ok(changed)
 }
 
-fn prune_agent_runtime_state(agents_root: &Path) -> Result<bool, String> {
+fn clear_parent_preserving_workspaces(
+    root: &Path,
+    workspaces: &OpenClawWorkspaceInventory,
+) -> Result<bool, String> {
+    if workspaces.contains(root) {
+        return Ok(false);
+    }
+
+    let mut changed = false;
+    let entries = fs::read_dir(root).map_err(|error| error.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if workspaces.contains(&path) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.is_dir() && workspaces.has_descendant(&path) {
+            changed |= clear_parent_preserving_workspaces(&path, workspaces)?;
+            continue;
+        }
+        remove_path(&path)?;
+        changed = true;
+    }
+    Ok(changed)
+}
+
+fn prune_agent_runtime_state(
+    agents_root: &Path,
+    workspaces: &OpenClawWorkspaceInventory,
+) -> Result<bool, String> {
     if !path_exists(agents_root) {
         return Ok(false);
     }
@@ -257,6 +308,9 @@ fn prune_agent_runtime_state(agents_root: &Path) -> Result<bool, String> {
     for entry in agent_entries {
         let entry = entry.map_err(|error| error.to_string())?;
         let agent_root = entry.path();
+        if workspaces.contains(&agent_root) {
+            continue;
+        }
         let metadata = fs::symlink_metadata(&agent_root).map_err(|error| error.to_string())?;
         if !metadata.is_dir() {
             remove_path(&agent_root)?;
@@ -268,7 +322,11 @@ fn prune_agent_runtime_state(agents_root: &Path) -> Result<bool, String> {
         for child in child_entries {
             let child = child.map_err(|error| error.to_string())?;
             let child_path = child.path();
-            if child.file_name() == OsStr::new("agent") {
+            if child.file_name() == OsStr::new("agent") || workspaces.contains(&child_path) {
+                continue;
+            }
+            if workspaces.has_descendant(&child_path) {
+                changed |= clear_parent_preserving_workspaces(&child_path, workspaces)?;
                 continue;
             }
             remove_path(&child_path)?;
@@ -289,6 +347,12 @@ fn prune_agent_runtime_state(agents_root: &Path) -> Result<bool, String> {
     }
 
     Ok(changed)
+}
+
+fn resolve_archivable_workspaces(paths: &EnvPaths) -> Result<OpenClawWorkspaceInventory, String> {
+    let workspaces = resolve_env_openclaw_workspaces(paths)?;
+    workspaces.archive_relative_roots(&paths.root)?;
+    Ok(workspaces)
 }
 
 fn should_remove_volatile_runtime_path(name: &OsStr, is_dir: bool) -> bool {
@@ -318,35 +382,24 @@ fn path_components(path: &Path) -> Vec<&str> {
 }
 
 fn is_durable_openclaw_archive_path(components: &[&str]) -> bool {
-    match components {
-        [".openclaw"] => true,
-        [".openclaw", name, ..] if is_openclaw_workspace_name(name) => true,
-        [".openclaw", "openclaw.json"]
-        | [".openclaw", "agents", ..]
-        | [".openclaw", "credentials", ..]
-        | [".openclaw", "cron", ..]
-        | [".openclaw", "devices", ..]
-        | [".openclaw", "identity", ..]
-        | [".openclaw", "memory", ..]
-        | [".openclaw", "plugins", ..] => true,
-        _ => false,
-    }
-}
-
-fn is_openclaw_workspace_name(name: &str) -> bool {
-    name == "workspace" || name.starts_with("workspace-")
-}
-
-fn is_openclaw_workspace_path(path: &Path, state_dir: &Path) -> bool {
-    path.strip_prefix(state_dir)
-        .ok()
-        .and_then(|relative| relative.components().next())
-        .and_then(|component| component.as_os_str().to_str())
-        .is_some_and(is_openclaw_workspace_name)
+    matches!(
+        components,
+        [".openclaw"]
+            | [".openclaw", "workspace", ..]
+            | [".openclaw", "openclaw.json"]
+            | [".openclaw", "agents", ..]
+            | [".openclaw", "credentials", ..]
+            | [".openclaw", "cron", ..]
+            | [".openclaw", "devices", ..]
+            | [".openclaw", "identity", ..]
+            | [".openclaw", "memory", ..]
+            | [".openclaw", "plugins", ..]
+    )
 }
 
 fn collect_runtime_state_path_refs(
     paths: &EnvPaths,
+    workspaces: &OpenClawWorkspaceInventory,
     current: &EnvMeta,
     known_envs: &[EnvMeta],
     known_refs: &mut BTreeMap<String, (PathBuf, usize)>,
@@ -355,7 +408,7 @@ fn collect_runtime_state_path_refs(
     visit_runtime_state_files(
         &paths.state_dir,
         &paths.config_path,
-        &paths.state_dir,
+        workspaces,
         &mut |path| {
             let Ok(raw) = fs::read_to_string(path) else {
                 return;
@@ -383,7 +436,7 @@ fn collect_runtime_state_path_refs(
 fn visit_runtime_state_files(
     root: &Path,
     config_path: &Path,
-    state_dir: &Path,
+    workspaces: &OpenClawWorkspaceInventory,
     on_file: &mut dyn FnMut(&Path),
 ) {
     let Ok(entries) = fs::read_dir(root) else {
@@ -391,7 +444,7 @@ fn visit_runtime_state_files(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path == config_path || is_openclaw_workspace_path(&path, state_dir) {
+        if path == config_path || workspaces.contains(&path) {
             continue;
         }
 
@@ -399,7 +452,7 @@ fn visit_runtime_state_files(
             continue;
         };
         if metadata.is_dir() {
-            visit_runtime_state_files(&path, config_path, state_dir, on_file);
+            visit_runtime_state_files(&path, config_path, workspaces, on_file);
         } else if metadata.is_file() {
             on_file(&path);
         }
@@ -540,7 +593,11 @@ mod tests {
         let paths = derive_env_paths(&temp);
         fs::create_dir_all(paths.workspace_dir.join("notes")).unwrap();
         fs::create_dir_all(paths.state_dir.join("workspace-clawforce/skills")).unwrap();
-        fs::write(&paths.config_path, "{}\n").unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{"agents":{"list":[{"id":"main","default":true},{"id":"clawforce"}]}}"#,
+        )
+        .unwrap();
         fs::create_dir_all(paths.state_dir.join("agents/main/agent")).unwrap();
         fs::create_dir_all(paths.state_dir.join("agents/main/sessions")).unwrap();
         fs::write(
@@ -591,7 +648,11 @@ mod tests {
         fs::create_dir_all(paths.state_dir.join("agents/main/sessions")).unwrap();
         fs::create_dir_all(paths.state_dir.join("logs")).unwrap();
         fs::create_dir_all(paths.state_dir.join("run")).unwrap();
-        fs::write(&paths.config_path, "{}\n").unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{"agents":{"list":[{"id":"main","default":true},{"id":"clawforce"}]}}"#,
+        )
+        .unwrap();
         fs::write(paths.workspace_dir.join("notes/todo.txt"), "keep\n").unwrap();
         fs::write(
             paths.state_dir.join("workspace-clawforce/tmp/durable.txt"),
@@ -661,22 +722,45 @@ mod tests {
     }
 
     #[test]
-    fn archive_policy_preserves_all_top_level_openclaw_workspaces() {
-        for path in [
-            ".openclaw/workspace/notes.txt",
-            ".openclaw/workspace-clawforce/skills/social.md",
-            ".openclaw/workspace-clawdred/IDENTITY.md",
-            ".openclaw/workspace-attestations/manifest.json",
-        ] {
-            assert!(
-                !should_skip_openclaw_env_archive_path(Path::new(path), EnvArchiveEntryKind::File),
-                "{path} should be durable"
-            );
-        }
+    fn archive_policy_uses_configured_workspace_roots_without_prefix_guessing() {
+        let temp =
+            std::env::temp_dir().join(format!("ocm-openclaw-archive-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        let paths = derive_env_paths(&temp);
+        fs::create_dir_all(&paths.state_dir).unwrap();
+        fs::write(
+            &paths.config_path,
+            format!(
+                r#"{{"agents":{{"defaults":{{"workspace":"{}"}},"list":[{{"id":"primary","default":true}},{{"id":"ops"}}]}}}}"#,
+                paths.state_dir.join("team").display()
+            ),
+        )
+        .unwrap();
 
-        assert!(should_skip_openclaw_env_archive_path(
-            Path::new(".openclaw/logs/gateway.log"),
+        let options = openclaw_env_archive_options(&paths).unwrap();
+        assert!(
+            options
+                .included_path_roots
+                .contains(Path::new(".openclaw/team"))
+        );
+        assert!(
+            options
+                .included_path_roots
+                .contains(Path::new(".openclaw/workspace"))
+        );
+        assert!(!should_skip_openclaw_env_archive_path(
+            Path::new(".openclaw/workspace/notes.txt"),
             EnvArchiveEntryKind::File
         ));
+        assert!(should_skip_openclaw_env_archive_path(
+            Path::new(".openclaw/workspace-attestations/manifest.json"),
+            EnvArchiveEntryKind::File
+        ));
+        assert!(should_skip_openclaw_env_archive_path(
+            Path::new(".openclaw/workspace-cache/data.json"),
+            EnvArchiveEntryKind::File
+        ));
+
+        let _ = fs::remove_dir_all(&temp);
     }
 }

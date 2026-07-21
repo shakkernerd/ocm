@@ -269,7 +269,7 @@ fn env_snapshot_restore_reverts_state_from_the_selected_snapshot() {
 }
 
 #[test]
-fn env_snapshot_restore_preserves_secondary_agent_workspaces() {
+fn env_snapshot_restore_preserves_configured_agent_workspaces_and_includes() {
     let root = TestDir::new("env-snapshot-secondary-workspaces");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -280,12 +280,37 @@ fn env_snapshot_restore_preserves_secondary_agent_workspaces() {
 
     let source_state = root.child("ocm-home/envs/source/.openclaw");
     write_text(
+        &source_state.join("openclaw.json"),
+        "{ $include: './config/agents.json5' }\n",
+    );
+    write_text(
+        &source_state.join("config/agents.json5"),
+        &format!(
+            concat!(
+                "{{ agents: {{ list: [\n",
+                "  {{ id: 'main', default: true }},\n",
+                "  {{ id: 'clawforce' }},\n",
+                "  {{ id: 'custom', workspace: '{}' }}\n",
+                "] }} }}\n"
+            ),
+            source_state.join("team/ops").display()
+        ),
+    );
+    write_text(
         &source_state.join("workspace-clawforce/skills/social/SKILL.md"),
         "clawforce skill before upgrade\n",
     );
     write_text(
-        &source_state.join("workspace-clawdred/IDENTITY.md"),
-        "Clawd Red before upgrade\n",
+        &source_state.join("team/ops/IDENTITY.md"),
+        "custom workspace before upgrade\n",
+    );
+    write_text(
+        &source_state.join("workspace-attestations/manifest.json"),
+        "legacy generated state\n",
+    );
+    write_text(
+        &source_state.join("workspace-cache/cache.json"),
+        "unconfigured prefix lookalike\n",
     );
 
     let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
@@ -300,7 +325,10 @@ fn env_snapshot_restore_preserves_secondary_agent_workspaces() {
         .to_string();
 
     fs::remove_dir_all(source_state.join("workspace-clawforce")).unwrap();
-    fs::remove_dir_all(source_state.join("workspace-clawdred")).unwrap();
+    fs::remove_dir_all(source_state.join("team")).unwrap();
+    fs::remove_dir_all(source_state.join("config")).unwrap();
+    fs::remove_dir_all(source_state.join("workspace-attestations")).unwrap();
+    fs::remove_dir_all(source_state.join("workspace-cache")).unwrap();
 
     let restore = run_ocm(
         &cwd,
@@ -314,8 +342,44 @@ fn env_snapshot_restore_preserves_secondary_agent_workspaces() {
         "clawforce skill before upgrade\n"
     );
     assert_eq!(
-        fs::read_to_string(source_state.join("workspace-clawdred/IDENTITY.md")).unwrap(),
-        "Clawd Red before upgrade\n"
+        fs::read_to_string(source_state.join("team/ops/IDENTITY.md")).unwrap(),
+        "custom workspace before upgrade\n"
+    );
+    assert!(source_state.join("config/agents.json5").exists());
+    assert!(!source_state.join("workspace-attestations").exists());
+    assert!(!source_state.join("workspace-cache").exists());
+}
+
+#[test]
+fn env_snapshot_rejects_external_workspaces_before_writing_an_archive() {
+    let root = TestDir::new("env-snapshot-external-workspace");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let external = root.child("external-workspace");
+    write_text(&external.join("notes.txt"), "external data\n");
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
+        &format!(
+            r#"{{"agents":{{"defaults":{{"workspace":"{}"}}}}}}"#,
+            external.display()
+        ),
+    );
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert_eq!(snapshot.status.code(), Some(1));
+    assert!(
+        stderr(&snapshot).contains("outside the environment root"),
+        "{}",
+        stderr(&snapshot)
+    );
+    assert!(!root.child("ocm-home/snapshots/source").exists());
+    assert_eq!(
+        fs::read_to_string(external.join("notes.txt")).unwrap(),
+        "external data\n"
     );
 }
 

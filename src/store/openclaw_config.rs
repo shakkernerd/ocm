@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,6 +12,7 @@ use crate::env::EnvMeta;
 use super::common::{ensure_dir, path_exists, write_file_replacing_path};
 use super::gateway_ports::read_port_number;
 use super::layout::{EnvPaths, clean_path, derive_env_paths, display_path};
+use super::openclaw_workspaces::load_effective_openclaw_config;
 
 #[derive(Clone, Debug)]
 pub(crate) struct OpenClawConfigAudit {
@@ -55,13 +57,13 @@ pub(crate) fn audit_openclaw_config(meta: &EnvMeta, known_envs: &[EnvMeta]) -> O
         }
     };
 
-    let value: Value = match serde_json::from_str(&raw) {
+    let value: Value = match json5::from_str(&raw) {
         Ok(value) => value,
         Err(error) => {
             return OpenClawConfigAudit {
                 status: "invalid".to_string(),
                 issues: vec![format!(
-                    "OpenClaw config is invalid JSON: {} ({error})",
+                    "OpenClaw config is invalid JSON/JSON5: {} ({error})",
                     display_path(&paths.config_path)
                 )],
                 repair_source_root: None,
@@ -167,6 +169,18 @@ pub(crate) fn reject_include_owned_sandbox_origin(config_path: &Path) -> Result<
     ))
 }
 
+pub(crate) fn reject_include_owned_agent_workspaces(config_path: &Path) -> Result<(), String> {
+    let Some(value) = read_config_value(config_path)? else {
+        return Ok(());
+    };
+    let Some(scope) = agent_workspaces_include_scope(&value) else {
+        return Ok(());
+    };
+    Err(format!(
+        "cannot safely rewrite OpenClaw agent workspaces because config uses $include at {scope}; flatten the agents section before creating a new OCM environment"
+    ))
+}
+
 pub(crate) fn openclaw_config_uses_includes(config_path: &Path) -> Result<bool, String> {
     Ok(read_config_value(config_path)?
         .as_ref()
@@ -177,88 +191,20 @@ pub(crate) fn openclaw_config_include_paths(
     config_path: &Path,
     state_dir: &Path,
 ) -> Result<Vec<PathBuf>, String> {
-    let Some(value) = read_config_value(config_path)? else {
+    let Some(resolved) = load_effective_openclaw_config(config_path)? else {
         return Ok(Vec::new());
     };
-    let mut paths = BTreeSet::new();
-    let mut visited = BTreeSet::new();
-    collect_config_include_paths(&value, config_path, state_dir, &mut paths, &mut visited)?;
-    Ok(paths.into_iter().collect())
-}
-
-fn collect_config_include_paths(
-    value: &Value,
-    containing_file: &Path,
-    state_dir: &Path,
-    paths: &mut BTreeSet<PathBuf>,
-    visited: &mut BTreeSet<PathBuf>,
-) -> Result<(), String> {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                collect_config_include_paths(value, containing_file, state_dir, paths, visited)?;
-            }
-        }
-        Value::Object(object) => {
-            if let Some(include) = object.get("$include") {
-                let include_paths = match include {
-                    Value::String(path) => vec![path.as_str()],
-                    Value::Array(values) => values
-                        .iter()
-                        .map(|value| {
-                            value.as_str().ok_or_else(|| {
-                                "OpenClaw $include arrays must contain only paths".to_string()
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                    _ => {
-                        return Err(
-                            "OpenClaw $include must be a path or an array of paths".to_string()
-                        );
-                    }
-                };
-                for include_path in include_paths {
-                    let include_path = Path::new(include_path);
-                    let resolved = if include_path.is_absolute() {
-                        clean_path(include_path)
-                    } else {
-                        clean_path(
-                            &containing_file
-                                .parent()
-                                .unwrap_or(state_dir)
-                                .join(include_path),
-                        )
-                    };
-                    if !resolved.starts_with(state_dir) || !visited.insert(resolved.clone()) {
-                        continue;
-                    }
-                    paths.insert(resolved.clone());
-                    let raw = fs::read_to_string(&resolved).map_err(|error| {
-                        format!(
-                            "failed to read OpenClaw include {}: {error}",
-                            display_path(&resolved)
-                        )
-                    })?;
-                    if raw.contains("$include") {
-                        let included: Value = json5::from_str(&raw).map_err(|error| {
-                            format!(
-                                "cannot preserve nested OpenClaw includes from {}: {error}",
-                                display_path(&resolved)
-                            )
-                        })?;
-                        collect_config_include_paths(
-                            &included, &resolved, state_dir, paths, visited,
-                        )?;
-                    }
-                }
-            }
-            for value in object.values() {
-                collect_config_include_paths(value, containing_file, state_dir, paths, visited)?;
-            }
-        }
-        _ => {}
+    if let Some(path) = resolved
+        .include_paths
+        .iter()
+        .find(|path| !path.starts_with(state_dir))
+    {
+        return Err(format!(
+            "OpenClaw include resolves outside the state directory: {}",
+            display_path(path)
+        ));
     }
-    Ok(())
+    Ok(resolved.include_paths.into_iter().collect())
 }
 
 #[derive(Clone, Copy)]
@@ -334,6 +280,35 @@ pub(crate) fn rewrite_openclaw_config_for_simulation(
         SandboxOriginPolicy::Simulation,
     )
     .map(|_| ())
+}
+
+pub(crate) fn rewrite_openclaw_config_includes_for_target(
+    config_path: &Path,
+    state_dir: &Path,
+    source_root: &Path,
+    target_root: &Path,
+) -> Result<bool, String> {
+    let include_paths = openclaw_config_include_paths(config_path, state_dir)?;
+    let mut changed = false;
+    for include_path in include_paths {
+        let raw = fs::read_to_string(&include_path).map_err(|error| {
+            format!(
+                "failed to read OpenClaw include {}: {error}",
+                display_path(&include_path)
+            )
+        })?;
+        let mut value: Value = json5::from_str(&raw).map_err(|error| {
+            format!(
+                "failed to parse OpenClaw include {}: {error}",
+                display_path(&include_path)
+            )
+        })?;
+        if rewrite_env_root_paths(&mut value, source_root, target_root) {
+            write_config_value(&include_path, &value)?;
+            changed = true;
+        }
+    }
+    Ok(changed)
 }
 
 pub(crate) fn ensure_minimum_local_openclaw_config(
@@ -516,7 +491,7 @@ fn read_config_value(config_path: &Path) -> Result<Option<Value>, String> {
     }
 
     let raw = fs::read_to_string(config_path).map_err(|error| error.to_string())?;
-    let value = serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+    let value = json5::from_str(&raw).map_err(|error| error.to_string())?;
     Ok(Some(value))
 }
 
@@ -702,12 +677,43 @@ fn rewrite_env_root_string(raw: &mut String, source_root: &Path, target_root: &P
         return false;
     }
 
-    let Ok(suffix) = path.strip_prefix(source_root) else {
-        return false;
+    let suffix = if let Ok(suffix) = path.strip_prefix(source_root) {
+        suffix.to_path_buf()
+    } else {
+        let Some(normalized_path) = normalize_path_allow_missing(path) else {
+            return false;
+        };
+        let Some(normalized_source_root) = normalize_path_allow_missing(source_root) else {
+            return false;
+        };
+        let Ok(suffix) = normalized_path.strip_prefix(normalized_source_root) else {
+            return false;
+        };
+        suffix.to_path_buf()
     };
 
     *raw = display_path(&clean_path(&target_root.join(suffix)));
     true
+}
+
+fn normalize_path_allow_missing(path: &Path) -> Option<PathBuf> {
+    let mut existing = path;
+    let mut missing = Vec::<OsString>::new();
+    loop {
+        match fs::canonicalize(existing) {
+            Ok(mut resolved) => {
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Some(clean_path(&resolved));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(existing.file_name()?.to_os_string());
+                existing = existing.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 fn rewrite_workspace_field_if_env_scoped(
@@ -1028,6 +1034,16 @@ fn sandbox_origin_include_scope(value: &Value) -> Option<&'static str> {
         .then_some("mcp.apps.sandboxOrigin")
 }
 
+fn agent_workspaces_include_scope(value: &Value) -> Option<&'static str> {
+    let root = value.as_object()?;
+    if root.contains_key("$include") {
+        return Some("the config root");
+    }
+    root.get("agents")
+        .is_some_and(value_contains_include)
+        .then_some("agents")
+}
+
 fn value_contains_include(value: &Value) -> bool {
     match value {
         Value::Array(values) => values.iter().any(value_contains_include),
@@ -1332,6 +1348,30 @@ mod tests {
         assert_eq!(
             sandbox_origin_include_scope(
                 &json!({"agents": {"$include": "./agents.json5"}, "mcp": {"apps": {}}})
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn agent_workspace_include_scope_only_flags_agent_governing_includes() {
+        assert_eq!(
+            agent_workspaces_include_scope(&json!({"$include": "./base.json5"})),
+            Some("the config root")
+        );
+        assert_eq!(
+            agent_workspaces_include_scope(&json!({"agents": {"$include": "./agents.json5"}})),
+            Some("agents")
+        );
+        assert_eq!(
+            agent_workspaces_include_scope(
+                &json!({"agents": {"defaults": {"workspace": "/tmp/workspace"}}})
+            ),
+            None
+        );
+        assert_eq!(
+            agent_workspaces_include_scope(
+                &json!({"mcp": {"$include": "./mcp.json5"}, "agents": {}})
             ),
             None
         );

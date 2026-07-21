@@ -10,7 +10,8 @@ use crate::launcher::{AddLauncherOptions, LauncherService};
 use crate::store::{
     copy_dir_recursive, default_env_root, derive_env_paths, display_path, list_environments,
     normalize_new_environment_sandbox_origin, prepare_migrated_runtime_state,
-    reject_include_owned_sandbox_origin, resolve_user_home, rewrite_openclaw_config_for_migration,
+    reject_include_owned_agent_workspaces, reject_include_owned_sandbox_origin,
+    resolve_plain_openclaw_workspaces, resolve_user_home, rewrite_openclaw_config_for_migration,
     validate_name,
 };
 
@@ -149,6 +150,7 @@ fn migrate_plain_openclaw_home_inner(
         ));
     }
     reject_include_owned_sandbox_origin(&source_home.join("openclaw.json"))?;
+    reject_include_owned_agent_workspaces(&source_home.join("openclaw.json"))?;
     let target_root = resolve_migration_target_root(options.root.as_deref(), &env_name, env, cwd)?;
     let target_root_string = target_root
         .to_str()
@@ -160,6 +162,14 @@ fn migrate_plain_openclaw_home_inner(
         })?
         .to_string();
     reject_overlapping_migration_paths(&source_home, &target_root)?;
+    let workspace_source_home = fs::canonicalize(&source_home).map_err(|error| {
+        format!(
+            "failed to resolve plain OpenClaw home {}: {error}",
+            display_path(&source_home)
+        )
+    })?;
+    resolve_plain_openclaw_workspaces(&workspace_source_home)?
+        .archive_relative_roots(&workspace_source_home)?;
     let migrated_launcher = preflight_migrated_launcher(&env_name, env, cwd)?;
 
     let created = service.create(CreateEnvironmentOptions {

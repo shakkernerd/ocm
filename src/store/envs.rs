@@ -34,8 +34,9 @@ use super::now_utc;
 use super::{
     clear_nonportable_runtime_state, normalize_new_environment_sandbox_origin,
     openclaw_config_include_paths, openclaw_config_uses_includes, openclaw_env_archive_options,
-    reject_include_owned_sandbox_origin, rewrite_openclaw_config_for_new_environment,
-    rewrite_openclaw_config_for_simulation,
+    reject_include_owned_agent_workspaces, reject_include_owned_sandbox_origin,
+    resolve_env_openclaw_workspaces, rewrite_openclaw_config_for_new_environment,
+    rewrite_openclaw_config_for_simulation, rewrite_openclaw_config_includes_for_target,
 };
 
 static NEXT_IMPORT_ID: AtomicU64 = AtomicU64::new(0);
@@ -497,7 +498,9 @@ fn clone_environment_with_policy(
     }
     if matches!(policy, CloneEnvironmentPolicy::Standard) {
         reject_include_owned_sandbox_origin(&source_paths.config_path)?;
+        reject_include_owned_agent_workspaces(&source_paths.config_path)?;
     }
+    resolve_env_openclaw_workspaces(&source_paths)?.archive_relative_roots(&source_paths.root)?;
     let result = (|| {
         copy_dir_recursive(&source_paths.root, &target_paths.root)?;
         let created_at = now_utc();
@@ -521,6 +524,12 @@ fn clone_environment_with_policy(
                     &target_paths,
                     Some(&source_paths.root),
                     gateway_port,
+                )?;
+                rewrite_openclaw_config_includes_for_target(
+                    &target_paths.config_path,
+                    &target_paths.state_dir,
+                    &source_paths.root,
+                    &target_paths.root,
                 )?;
                 clear_simulation_runtime_state_preserving_includes(&target_paths)?;
                 Default::default()
@@ -702,7 +711,7 @@ pub fn export_environment(
         &metadata,
         &env_paths.root,
         &output_path,
-        openclaw_env_archive_options(),
+        openclaw_env_archive_options(&env_paths)?,
     );
     if result.is_err() {
         let _ = fs::remove_file(&output_path);
@@ -787,7 +796,9 @@ pub(crate) fn import_environment_with_sandbox_origin(
         if !path_exists(&extracted.root_dir) {
             return Err("archive is missing root/".to_string());
         }
-        reject_include_owned_sandbox_origin(&derive_env_paths(&extracted.root_dir).config_path)?;
+        let extracted_paths = derive_env_paths(&extracted.root_dir);
+        reject_include_owned_sandbox_origin(&extracted_paths.config_path)?;
+        reject_include_owned_agent_workspaces(&extracted_paths.config_path)?;
         let imported = (|| {
             let preferred_gateway_port = extracted
                 .metadata
@@ -1048,7 +1059,10 @@ mod tests {
                 r#"{{
                   // OpenClaw include files support JSON5.
                   gateway: {{ port: 19789 }},
-                  agents: {{ defaults: {{ workspace: "{}" }} }},
+                  agents: {{
+                    defaults: {{ workspace: "{}" }},
+                    list: [{{ id: "main", default: true, workspace: "{}" }}],
+                  }},
                   mcp: {{ apps: {{
                     sandboxPort: 19790,
                     sandboxOrigin: "https://source.example.test",
@@ -1056,6 +1070,7 @@ mod tests {
                   nested: {{ $include: "./nested.json5" }},
                 }}
 "#,
+                source_paths.workspace_dir.display(),
                 source_paths.workspace_dir.display()
             ),
         )
@@ -1107,11 +1122,24 @@ mod tests {
         );
         assert!(target_paths.state_dir.join("config/base.json").exists());
         assert!(target_paths.state_dir.join("config/nested.json5").exists());
+        let included: Value = serde_json::from_str(
+            &fs::read_to_string(target_paths.state_dir.join("config/base.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            included["agents"]["list"][0]["workspace"],
+            target_paths.workspace_dir.display().to_string()
+        );
         assert!(!target_paths.state_dir.join("run").exists());
         assert!(!target_paths.state_dir.join("agents/main/sessions").exists());
         assert!(!target_paths.state_dir.join("logs").exists());
         assert!(!target_paths.state_dir.join("openclaw.json.bak").exists());
         assert!(source_paths.state_dir.join("config/base.json").exists());
+        assert!(
+            fs::read_to_string(source_paths.state_dir.join("config/base.json"))
+                .unwrap()
+                .contains(&source_paths.workspace_dir.display().to_string())
+        );
 
         remove_environment("simulation", false, &env, &cwd).unwrap();
         remove_environment("source", false, &env, &cwd).unwrap();

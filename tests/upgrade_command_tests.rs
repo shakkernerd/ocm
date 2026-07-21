@@ -1560,6 +1560,11 @@ fn upgrade_rolls_back_runtime_binding_when_update_finalization_fails() {
     );
     assert!(create.status.success(), "{}", stderr(&create));
 
+    fs::write(
+        root.child("ocm-home/envs/demo/.openclaw/openclaw.json"),
+        r#"{"agents":{"list":[{"id":"main","default":true},{"id":"clawforce"}]}}"#,
+    )
+    .unwrap();
     let secondary_skill =
         root.child("ocm-home/envs/demo/.openclaw/workspace-clawforce/skills/social/SKILL.md");
     fs::create_dir_all(secondary_skill.parent().unwrap()).unwrap();

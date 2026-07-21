@@ -102,6 +102,89 @@ fn env_clone_rewrites_openclaw_config_for_the_new_env_root() {
 }
 
 #[test]
+fn env_clone_preserves_configured_custom_workspaces_without_prefix_lookalikes() {
+    let root = TestDir::new("env-clone-custom-workspace");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_root = root.child("ocm-home/envs/source");
+    let source_state = source_root.join(".openclaw");
+    write_text(
+        &source_state.join("openclaw.json"),
+        &format!(
+            r#"{{"agents":{{"list":[{{"id":"main","default":true}},{{"id":"ops","workspace":"{}"}}]}}}}"#,
+            source_state.join("team/ops").display()
+        ),
+    );
+    write_text(
+        &source_state.join("team/ops/notes.txt"),
+        "custom workspace should survive\n",
+    );
+    write_text(
+        &source_state.join("workspace-cache/cache.json"),
+        "unconfigured lookalike\n",
+    );
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert!(clone.status.success(), "{}", stderr(&clone));
+
+    let target_state = root.child("ocm-home/envs/target/.openclaw");
+    assert_eq!(
+        fs::read_to_string(target_state.join("team/ops/notes.txt")).unwrap(),
+        "custom workspace should survive\n"
+    );
+    assert!(!target_state.join("workspace-cache").exists());
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(target_state.join("openclaw.json")).unwrap())
+            .unwrap();
+    let expected_workspace = target_state.join("team/ops").display().to_string();
+    assert_eq!(
+        config["agents"]["list"][1]["workspace"].as_str(),
+        Some(expected_workspace.as_str())
+    );
+}
+
+#[test]
+fn env_clone_rejects_external_workspaces_before_creating_the_target() {
+    let root = TestDir::new("env-clone-external-workspace");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let external = root.child("external-workspace");
+    write_text(
+        &external.join("notes.txt"),
+        "must not be silently omitted\n",
+    );
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
+        &format!(
+            r#"{{"agents":{{"defaults":{{"workspace":"{}"}}}}}}"#,
+            external.display()
+        ),
+    );
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert_eq!(clone.status.code(), Some(1));
+    assert!(
+        stderr(&clone).contains("outside the environment root"),
+        "{}",
+        stderr(&clone)
+    );
+    assert!(!root.child("ocm-home/envs/target").exists());
+    assert_eq!(
+        fs::read_to_string(external.join("notes.txt")).unwrap(),
+        "must not be silently omitted\n"
+    );
+}
+
+#[test]
 fn env_clone_rewrites_coupled_sandbox_port_and_clears_public_origin() {
     let root = TestDir::new("env-clone-mcp-app-sandbox-rewrite");
     let cwd = root.child("workspace");
@@ -276,6 +359,36 @@ fn env_clone_rejects_include_owned_sandbox_configuration_before_copying() {
     assert!(
         stderr(&clone).contains(
             "cannot safely reset mcp.apps.sandboxOrigin because OpenClaw config uses $include at mcp"
+        ),
+        "{}",
+        stderr(&clone)
+    );
+    assert!(!root.child("ocm-home/envs/target").exists());
+}
+
+#[test]
+fn env_clone_rejects_include_owned_agent_workspaces_before_copying() {
+    let root = TestDir::new("env-clone-include-owned-agent-workspace");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/openclaw.json"),
+        "{\n  \"agents\": { \"$include\": \"./agents.json5\" }\n}\n",
+    );
+    write_text(
+        &root.child("ocm-home/envs/source/.openclaw/agents.json5"),
+        "{ defaults: { workspace: '~/.openclaw/team/ops' } }\n",
+    );
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert_eq!(clone.status.code(), Some(1));
+    assert!(
+        stderr(&clone).contains(
+            "cannot safely rewrite OpenClaw agent workspaces because config uses $include at agents"
         ),
         "{}",
         stderr(&clone)
