@@ -500,7 +500,8 @@ fn clone_environment_with_policy(
         reject_include_owned_sandbox_origin(&source_paths.config_path)?;
         reject_include_owned_agent_workspaces(&source_paths.config_path)?;
     }
-    resolve_env_openclaw_workspaces(&source_paths)?.archive_relative_roots(&source_paths.root)?;
+    resolve_env_openclaw_workspaces(&source_paths, env)?
+        .archive_relative_roots(&source_paths.root)?;
     let result = (|| {
         copy_dir_recursive(&source_paths.root, &target_paths.root)?;
         let created_at = now_utc();
@@ -514,7 +515,7 @@ fn clone_environment_with_policy(
                     Some(gateway_port),
                     sandbox_origin.as_deref(),
                 )?;
-                clear_nonportable_runtime_state(&target_paths)?;
+                clear_nonportable_runtime_state(&target_paths, env)?;
                 outcome
             }
             CloneEnvironmentPolicy::Simulation
@@ -531,7 +532,7 @@ fn clone_environment_with_policy(
                     &source_paths.root,
                     &target_paths.root,
                 )?;
-                clear_simulation_runtime_state_preserving_includes(&target_paths)?;
+                clear_simulation_runtime_state_preserving_includes(&target_paths, env)?;
                 Default::default()
             }
             CloneEnvironmentPolicy::Simulation => {
@@ -541,7 +542,7 @@ fn clone_environment_with_policy(
                     Some(gateway_port),
                     None,
                 )?;
-                clear_nonportable_runtime_state(&target_paths)?;
+                clear_nonportable_runtime_state(&target_paths, env)?;
                 outcome
             }
         };
@@ -580,11 +581,12 @@ fn clone_environment_with_policy(
 
 fn clear_simulation_runtime_state_preserving_includes(
     target_paths: &super::layout::EnvPaths,
+    env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     let include_paths =
         openclaw_config_include_paths(&target_paths.config_path, &target_paths.state_dir)?;
     if include_paths.is_empty() {
-        clear_nonportable_runtime_state(target_paths)?;
+        clear_nonportable_runtime_state(target_paths, env)?;
         return Ok(());
     }
 
@@ -596,7 +598,7 @@ fn clear_simulation_runtime_state_preserving_includes(
                 .map_err(|error| error.to_string())?;
             copy_path(include_path, &staging_root.join(relative))?;
         }
-        clear_nonportable_runtime_state(target_paths)?;
+        clear_nonportable_runtime_state(target_paths, env)?;
         for include_path in &include_paths {
             let relative = include_path
                 .strip_prefix(&target_paths.state_dir)
@@ -711,7 +713,7 @@ pub fn export_environment(
         &metadata,
         &env_paths.root,
         &output_path,
-        openclaw_env_archive_options(&env_paths)?,
+        openclaw_env_archive_options(&env_paths, env)?,
     );
     if result.is_err() {
         let _ = fs::remove_file(&output_path);
@@ -815,7 +817,7 @@ pub(crate) fn import_environment_with_sandbox_origin(
                 Some(gateway_port),
                 sandbox_origin.as_deref(),
             )?;
-            clear_nonportable_runtime_state(&target_paths)?;
+            clear_nonportable_runtime_state(&target_paths, env)?;
 
             let created_at = now_utc();
             let meta = EnvMeta {
@@ -1167,7 +1169,8 @@ mod tests {
         )
         .unwrap();
 
-        let error = clear_simulation_runtime_state_preserving_includes(&paths).unwrap_err();
+        let error = clear_simulation_runtime_state_preserving_includes(&paths, &BTreeMap::new())
+            .unwrap_err();
         assert!(
             error.contains("OpenClaw $include path resolves outside the config directory"),
             "{error}"

@@ -168,7 +168,7 @@ fn migrate_plain_openclaw_home_inner(
             display_path(&source_home)
         )
     })?;
-    resolve_plain_openclaw_workspaces(&workspace_source_home)?
+    resolve_plain_openclaw_workspaces(&workspace_source_home, env)?
         .archive_relative_roots(&workspace_source_home)?;
     let migrated_launcher = preflight_migrated_launcher(&env_name, env, cwd)?;
 
@@ -272,7 +272,7 @@ fn complete_migration_import(
         created.gateway_port,
         sandbox_origin,
     )?;
-    prepare_migrated_runtime_state(target_paths, source_home)?;
+    prepare_migrated_runtime_state(target_paths, source_home, env)?;
 
     let Some(launcher) = migrated_launcher else {
         return Ok((

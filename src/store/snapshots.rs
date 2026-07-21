@@ -113,7 +113,7 @@ pub fn create_env_snapshot(
             &metadata,
             &env_paths.root,
             &archive_path,
-            openclaw_env_archive_options(&env_paths)?,
+            openclaw_env_archive_options(&env_paths, env)?,
         )?;
         write_json(&meta_path, &snapshot)?;
         Ok(snapshot)
@@ -231,9 +231,9 @@ pub fn restore_env_snapshot(
                 last_used_at: current.last_used_at,
             };
             let known_envs = list_environments(env, cwd)?;
-            let audit = audit_openclaw_state(&restored, &known_envs);
+            let audit = audit_openclaw_state(&restored, &known_envs, env);
             if audit.repair_runtime_state {
-                clear_nonportable_runtime_state(&current_paths)?;
+                clear_nonportable_runtime_state(&current_paths, env)?;
             }
             save_environment(restored, env, cwd)
         })();

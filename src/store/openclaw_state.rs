@@ -16,7 +16,11 @@ pub(crate) struct OpenClawStateAudit {
     pub repair_runtime_state: bool,
 }
 
-pub(crate) fn audit_openclaw_state(meta: &EnvMeta, known_envs: &[EnvMeta]) -> OpenClawStateAudit {
+pub(crate) fn audit_openclaw_state(
+    meta: &EnvMeta,
+    known_envs: &[EnvMeta],
+    env: &BTreeMap<String, String>,
+) -> OpenClawStateAudit {
     let paths = derive_env_paths(Path::new(&meta.root));
     if !path_exists(&paths.state_dir) {
         return OpenClawStateAudit {
@@ -24,7 +28,7 @@ pub(crate) fn audit_openclaw_state(meta: &EnvMeta, known_envs: &[EnvMeta]) -> Op
             repair_runtime_state: false,
         };
     }
-    let workspaces = match resolve_archivable_workspaces(&paths) {
+    let workspaces = match resolve_archivable_workspaces(&paths, env) {
         Ok(workspaces) => workspaces,
         Err(error) => {
             return OpenClawStateAudit {
@@ -80,13 +84,19 @@ pub(crate) fn audit_openclaw_state(meta: &EnvMeta, known_envs: &[EnvMeta]) -> Op
     }
 }
 
-pub(crate) fn repair_openclaw_runtime_state(meta: &EnvMeta) -> Result<bool, String> {
+pub(crate) fn repair_openclaw_runtime_state(
+    meta: &EnvMeta,
+    env: &BTreeMap<String, String>,
+) -> Result<bool, String> {
     let paths = derive_env_paths(Path::new(&meta.root));
-    clear_nonportable_runtime_state(&paths)
+    clear_nonportable_runtime_state(&paths, env)
 }
 
-pub(crate) fn openclaw_env_archive_options(paths: &EnvPaths) -> Result<EnvArchiveOptions, String> {
-    let workspaces = resolve_env_openclaw_workspaces(paths)?;
+pub(crate) fn openclaw_env_archive_options(
+    paths: &EnvPaths,
+    env: &BTreeMap<String, String>,
+) -> Result<EnvArchiveOptions, String> {
+    let workspaces = resolve_env_openclaw_workspaces(paths, env)?;
     Ok(EnvArchiveOptions {
         should_skip_path: should_skip_openclaw_env_archive_path,
         included_path_roots: workspaces.archive_relative_roots(&paths.root)?,
@@ -108,11 +118,12 @@ pub(crate) fn should_skip_openclaw_env_archive_path(
 pub(crate) fn prepare_migrated_runtime_state(
     paths: &EnvPaths,
     source_state_root: &Path,
+    env: &BTreeMap<String, String>,
 ) -> Result<bool, String> {
     if !path_exists(&paths.state_dir) {
         return Ok(false);
     }
-    let workspaces = resolve_archivable_workspaces(paths)?;
+    let workspaces = resolve_archivable_workspaces(paths, env)?;
 
     let mut changed = false;
     changed |= rewrite_runtime_state_root_refs(
@@ -126,11 +137,14 @@ pub(crate) fn prepare_migrated_runtime_state(
     Ok(changed)
 }
 
-pub(crate) fn clear_nonportable_runtime_state(paths: &EnvPaths) -> Result<bool, String> {
+pub(crate) fn clear_nonportable_runtime_state(
+    paths: &EnvPaths,
+    env: &BTreeMap<String, String>,
+) -> Result<bool, String> {
     if !path_exists(&paths.state_dir) {
         return Ok(false);
     }
-    let workspaces = resolve_archivable_workspaces(paths)?;
+    let workspaces = resolve_archivable_workspaces(paths, env)?;
 
     let mut changed = false;
     let entries = fs::read_dir(&paths.state_dir).map_err(|error| error.to_string())?;
@@ -349,8 +363,11 @@ fn prune_agent_runtime_state(
     Ok(changed)
 }
 
-fn resolve_archivable_workspaces(paths: &EnvPaths) -> Result<OpenClawWorkspaceInventory, String> {
-    let workspaces = resolve_env_openclaw_workspaces(paths)?;
+fn resolve_archivable_workspaces(
+    paths: &EnvPaths,
+    env: &BTreeMap<String, String>,
+) -> Result<OpenClawWorkspaceInventory, String> {
+    let workspaces = resolve_env_openclaw_workspaces(paths, env)?;
     workspaces.archive_relative_roots(&paths.root)?;
     Ok(workspaces)
 }
@@ -576,7 +593,7 @@ mod tests {
 
         let current = meta("target", &display_path(&target_root));
         let known_envs = vec![meta("source", &display_path(&source_root)), current.clone()];
-        let audit = audit_openclaw_state(&current, &known_envs);
+        let audit = audit_openclaw_state(&current, &known_envs, &BTreeMap::new());
         assert!(audit.repair_runtime_state);
         assert!(audit.issues.iter().any(|issue| issue.contains(
             "OpenClaw runtime state contains 1 copied path reference(s) under env \"source\" root"
@@ -613,7 +630,7 @@ mod tests {
         )
         .unwrap();
 
-        let changed = clear_nonportable_runtime_state(&paths).unwrap();
+        let changed = clear_nonportable_runtime_state(&paths, &BTreeMap::new()).unwrap();
         assert!(changed);
         assert!(paths.config_path.exists());
         assert!(paths.workspace_dir.join("notes/todo.txt").exists());
@@ -686,7 +703,8 @@ mod tests {
         fs::write(paths.state_dir.join("gateway.pid"), "4242\n").unwrap();
         fs::write(paths.state_dir.join("run/live.sock"), "sock\n").unwrap();
 
-        let changed = prepare_migrated_runtime_state(&paths, &source_state_root).unwrap();
+        let changed =
+            prepare_migrated_runtime_state(&paths, &source_state_root, &BTreeMap::new()).unwrap();
         assert!(changed);
         assert!(paths.workspace_dir.join("notes/todo.txt").exists());
         assert!(
@@ -737,7 +755,7 @@ mod tests {
         )
         .unwrap();
 
-        let options = openclaw_env_archive_options(&paths).unwrap();
+        let options = openclaw_env_archive_options(&paths, &BTreeMap::new()).unwrap();
         assert!(
             options
                 .included_path_roots

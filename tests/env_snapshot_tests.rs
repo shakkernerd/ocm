@@ -281,19 +281,21 @@ fn env_snapshot_restore_preserves_configured_agent_workspaces_and_includes() {
     let source_state = root.child("ocm-home/envs/source/.openclaw");
     write_text(
         &source_state.join("openclaw.json"),
-        "{ $include: './config/agents.json5' }\n",
+        concat!(
+            "{\n",
+            "  $include: './config/agents.json5',\n",
+            "  env: { vars: { SECONDARY_WORKSPACE: 'team/ops' } }\n",
+            "}\n"
+        ),
     );
     write_text(
         &source_state.join("config/agents.json5"),
-        &format!(
-            concat!(
-                "{{ agents: {{ list: [\n",
-                "  {{ id: 'main', default: true }},\n",
-                "  {{ id: 'clawforce' }},\n",
-                "  {{ id: 'custom', workspace: '{}' }}\n",
-                "] }} }}\n"
-            ),
-            source_state.join("team/ops").display()
+        concat!(
+            "{ agents: { list: [\n",
+            "  { id: 'main', default: true },\n",
+            "  { id: 'clawforce' },\n",
+            "  { id: 'custom', workspace: '${OPENCLAW_HOME}/.openclaw/${SECONDARY_WORKSPACE}' }\n",
+            "] } }\n"
         ),
     );
     write_text(
