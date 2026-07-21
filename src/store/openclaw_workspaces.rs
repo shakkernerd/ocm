@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -127,12 +130,7 @@ pub(crate) fn load_effective_openclaw_config(
         return Ok(None);
     }
 
-    let raw = fs::read_to_string(config_path).map_err(|error| {
-        format!(
-            "failed to read OpenClaw config {}: {error}",
-            display_path(config_path)
-        )
-    })?;
+    let raw = read_regular_text_file(config_path, "OpenClaw config", None)?;
     let value = parse_json5(&raw, config_path, "OpenClaw config")?;
     let config_root = config_path.parent().ok_or_else(|| {
         format!(
@@ -453,7 +451,9 @@ fn resolve_workspace_path(raw: &str, openclaw_home: &Path) -> Result<PathBuf, St
     let expanded = match trimmed {
         "~" => openclaw_home.to_path_buf(),
         _ if trimmed.starts_with("~/") || trimmed.starts_with("~\\") => {
-            openclaw_home.join(&trimmed[2..])
+            let mut expanded = openclaw_home.as_os_str().to_os_string();
+            expanded.push(&trimmed[1..]);
+            PathBuf::from(expanded)
         }
         _ => PathBuf::from(trimmed),
     };
@@ -574,25 +574,8 @@ impl IncludeProcessor {
             return Err(format!("circular OpenClaw $include detected: {chain}"));
         }
 
-        let metadata = fs::metadata(&resolved).map_err(|error| {
-            format!(
-                "failed to inspect OpenClaw include {}: {error}",
-                display_path(&resolved)
-            )
-        })?;
-        if metadata.len() > MAX_INCLUDE_FILE_BYTES {
-            return Err(format!(
-                "OpenClaw include exceeds {} bytes: {}",
-                MAX_INCLUDE_FILE_BYTES,
-                display_path(&resolved)
-            ));
-        }
-        let raw = fs::read_to_string(&resolved).map_err(|error| {
-            format!(
-                "failed to read OpenClaw include {}: {error}",
-                display_path(&resolved)
-            )
-        })?;
+        let raw =
+            read_regular_text_file(&resolved, "OpenClaw include", Some(MAX_INCLUDE_FILE_BYTES))?;
         let parsed = parse_json5(&raw, &resolved, "OpenClaw include")?;
         self.include_paths.insert(resolved.clone());
         stack.push(resolved.clone());
@@ -645,6 +628,54 @@ impl IncludeProcessor {
         }
         Ok(resolved)
     }
+}
+
+fn read_regular_text_file(
+    path: &Path,
+    label: &str,
+    max_bytes: Option<u64>,
+) -> Result<String, String> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("failed to open {label} {}: {error}", display_path(path)))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect {label} {}: {error}", display_path(path)))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{label} must be a regular file: {}",
+            display_path(path)
+        ));
+    }
+    if max_bytes.is_some_and(|max_bytes| metadata.len() > max_bytes) {
+        return Err(format!(
+            "{label} exceeds {} bytes: {}",
+            max_bytes.unwrap_or_default(),
+            display_path(path)
+        ));
+    }
+
+    let mut raw = String::new();
+    if let Some(max_bytes) = max_bytes {
+        file.take(max_bytes + 1)
+            .read_to_string(&mut raw)
+            .map_err(|error| format!("failed to read {label} {}: {error}", display_path(path)))?;
+        if raw.len() as u64 > max_bytes {
+            return Err(format!(
+                "{label} exceeds {max_bytes} bytes: {}",
+                display_path(path)
+            ));
+        }
+    } else {
+        file.read_to_string(&mut raw)
+            .map_err(|error| format!("failed to read {label} {}: {error}", display_path(path)))?;
+    }
+    Ok(raw)
 }
 
 fn parse_json5(raw: &str, path: &Path, label: &str) -> Result<Value, String> {
@@ -704,6 +735,10 @@ fn canonicalize_path_allow_missing(path: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::ffi::CString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
@@ -993,5 +1028,35 @@ mod tests {
         assert!(error.contains("circular OpenClaw $include"), "{error}");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn effective_config_rejects_non_regular_includes_without_blocking() {
+        let root = test_root("fifo-include");
+        let state_dir = root.join(".openclaw");
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(
+            state_dir.join("openclaw.json"),
+            r#"{"$include":"./agents.json5"}"#,
+        )
+        .unwrap();
+        let fifo = state_dir.join("agents.json5");
+        let fifo_path = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
+
+        let error = load_effective_openclaw_config(&state_dir.join("openclaw.json")).unwrap_err();
+        assert!(error.contains("must be a regular file"), "{error}");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_home_expansion_preserves_backslashes_on_unix() {
+        assert_eq!(
+            resolve_workspace_path(r"~\team", Path::new("/tmp/openclaw-home")).unwrap(),
+            PathBuf::from(r"/tmp/openclaw-home\team")
+        );
     }
 }
