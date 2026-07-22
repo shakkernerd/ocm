@@ -564,15 +564,25 @@ fn is_openclaw_env_var_name(name: &str) -> bool {
         && chars.all(|ch| ch == '_' || ch.is_ascii_uppercase() || ch.is_ascii_digit())
 }
 
-fn agent_entries(config: &Value) -> Vec<&Map<String, Value>> {
+fn agent_entries(config: &Value) -> Vec<Map<String, Value>> {
+    if let Some(entries) = config.pointer("/agents/entries").and_then(Value::as_object) {
+        return entries
+            .iter()
+            .filter_map(|(agent_id, entry)| {
+                let mut entry = entry.as_object()?.clone();
+                entry.insert("id".to_string(), Value::String(agent_id.clone()));
+                Some(entry)
+            })
+            .collect();
+    }
     config
         .pointer("/agents/list")
         .and_then(Value::as_array)
-        .map(|entries| entries.iter().filter_map(Value::as_object).collect())
+        .map(|entries| entries.iter().filter_map(Value::as_object).cloned().collect())
         .unwrap_or_default()
 }
 
-fn resolve_default_agent_id(entries: &[&Map<String, Value>]) -> String {
+fn resolve_default_agent_id(entries: &[Map<String, Value>]) -> String {
     let selected = entries
         .iter()
         .find(|entry| entry.get("default").and_then(Value::as_bool) == Some(true))
@@ -996,11 +1006,11 @@ mod tests {
             r#"{
               "agents": {
                 "defaults": { "workspace": "~/teams" },
-                "list": [
-                  { "id": "Primary", "default": true },
-                  { "id": "Ops Team" },
-                  { "id": "Custom", "workspace": "~/.openclaw/team/custom" }
-                ]
+                "entries": {
+                  "Primary": { "default": true },
+                  "ops-team": {},
+                  "Custom": { "workspace": "~/.openclaw/team/custom" }
+                }
               }
             }"#,
         )

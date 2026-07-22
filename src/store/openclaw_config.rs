@@ -346,6 +346,31 @@ pub(crate) fn rewrite_identity_bound_workspace_paths_for_target(
         changed = true;
     }
 
+    if let Some(entries) = agents.get_mut("entries").and_then(Value::as_object_mut) {
+        for (agent_id, entry) in entries {
+            let Some(entry) = entry.as_object_mut() else {
+                continue;
+            };
+            let identity_bound = entry
+                .get("workspace")
+                .and_then(Value::as_str)
+                .is_some_and(workspace_uses_changing_runtime_identity);
+            if !identity_bound {
+                continue;
+            }
+            let Some(source_workspace) = source_workspaces.agent_workspace(agent_id) else {
+                continue;
+            };
+            let target_workspace =
+                rebase_workspace_path(source_workspace, source_root, target_root)?;
+            entry.insert(
+                "workspace".to_string(),
+                Value::String(display_path(&target_workspace)),
+            );
+            changed = true;
+        }
+    }
+
     if let Some(entries) = agents.get_mut("list").and_then(Value::as_array_mut) {
         for entry in entries {
             let Some(entry) = entry.as_object_mut() else {
@@ -449,19 +474,30 @@ pub(crate) fn ensure_minimum_local_openclaw_config(
         .entry("workspace".to_string())
         .or_insert_with(|| Value::String(workspace.clone()));
 
-    let list_needs_default = agents
-        .get("list")
-        .and_then(Value::as_array)
-        .map(|entries| entries.is_empty())
-        .unwrap_or(true);
-    if list_needs_default {
-        agents.insert(
-            "list".to_string(),
-            Value::Array(vec![json!({
+    if let Some(entries) = agents.get_mut("entries").and_then(Value::as_object_mut) {
+        if entries.is_empty() {
+            entries.insert(
+                "main".to_string(),
+                json!({"default": true, "workspace": workspace}),
+            );
+        }
+    } else if let Some(entries) = agents.get_mut("list").and_then(Value::as_array_mut) {
+        if entries.is_empty() {
+            entries.push(json!({
                 "id": "main",
                 "default": true,
                 "workspace": workspace,
-            })]),
+            }));
+        }
+    } else {
+        agents.insert(
+            "entries".to_string(),
+            json!({
+                "main": {
+                    "default": true,
+                    "workspace": workspace,
+                }
+            }),
         );
     }
 
@@ -1154,6 +1190,12 @@ fn agent_workspaces_include_scope(value: &Value) -> Option<&'static str> {
     {
         return Some("agents.defaults.workspace");
     }
+    if agents
+        .get("entries")
+        .is_some_and(agent_entries_contains_include)
+    {
+        return Some("agents.entries");
+    }
     agents
         .get("list")
         .is_some_and(agent_list_contains_include)
@@ -1170,6 +1212,22 @@ fn workspace_defaults_contains_include(value: &Value) -> bool {
             .is_some_and(value_contains_include)
 }
 
+fn agent_entries_contains_include(value: &Value) -> bool {
+    let Some(entries) = value.as_object() else {
+        return value_contains_include(value);
+    };
+    entries.contains_key("$include")
+        || entries.values().any(|entry| {
+            let Some(entry) = entry.as_object() else {
+                return value_contains_include(entry);
+            };
+            entry.contains_key("$include")
+                || entry
+                    .get("workspace")
+                    .is_some_and(value_contains_include)
+        })
+}
+
 fn agent_list_contains_include(value: &Value) -> bool {
     let Some(entries) = value.as_array() else {
         return value_contains_include(value);
@@ -1178,7 +1236,10 @@ fn agent_list_contains_include(value: &Value) -> bool {
         let Some(entry) = entry.as_object() else {
             return value_contains_include(entry);
         };
-        entry.contains_key("$include") || entry.get("workspace").is_some_and(value_contains_include)
+        entry.contains_key("$include")
+            || entry
+                .get("workspace")
+                .is_some_and(value_contains_include)
     })
 }
 
@@ -1506,6 +1567,18 @@ mod tests {
                 &json!({"agents": {"defaults": {"$include": "./defaults.json5"}}})
             ),
             Some("agents.defaults.workspace")
+        );
+        assert_eq!(
+            agent_workspaces_include_scope(
+                &json!({"agents": {"entries": {"$include": "./agents.json5"}}})
+            ),
+            Some("agents.entries")
+        );
+        assert_eq!(
+            agent_workspaces_include_scope(
+                &json!({"agents": {"entries": {"main": {"$include": "./main.json5"}}}})
+            ),
+            Some("agents.entries")
         );
         assert_eq!(
             agent_workspaces_include_scope(

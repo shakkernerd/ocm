@@ -124,7 +124,8 @@ fn start_generates_an_env_name_and_uses_latest_stable_runtime() {
             .get("skipBootstrap")
             .is_none()
     );
-    assert_eq!(config_json["agents"]["list"][0]["id"], "main");
+    assert_eq!(config_json["agents"]["entries"]["main"]["default"], true);
+    assert!(config_json["agents"].get("list").is_none());
 }
 
 #[test]
