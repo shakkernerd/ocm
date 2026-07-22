@@ -472,34 +472,7 @@ pub(crate) fn ensure_minimum_local_openclaw_config(
     let defaults = ensure_object_field(agents, "defaults");
     defaults
         .entry("workspace".to_string())
-        .or_insert_with(|| Value::String(workspace.clone()));
-
-    if let Some(entries) = agents.get_mut("entries").and_then(Value::as_object_mut) {
-        if entries.is_empty() {
-            entries.insert(
-                "main".to_string(),
-                json!({"default": true, "workspace": workspace}),
-            );
-        }
-    } else if let Some(entries) = agents.get_mut("list").and_then(Value::as_array_mut) {
-        if entries.is_empty() {
-            entries.push(json!({
-                "id": "main",
-                "default": true,
-                "workspace": workspace,
-            }));
-        }
-    } else {
-        agents.insert(
-            "entries".to_string(),
-            json!({
-                "main": {
-                    "default": true,
-                    "workspace": workspace,
-                }
-            }),
-        );
-    }
+        .or_insert_with(|| Value::String(workspace));
 
     write_config_value(&target_paths.config_path, &value)
 }
@@ -1222,9 +1195,7 @@ fn agent_entries_contains_include(value: &Value) -> bool {
                 return value_contains_include(entry);
             };
             entry.contains_key("$include")
-                || entry
-                    .get("workspace")
-                    .is_some_and(value_contains_include)
+                || entry.get("workspace").is_some_and(value_contains_include)
         })
 }
 
@@ -1236,10 +1207,7 @@ fn agent_list_contains_include(value: &Value) -> bool {
         let Some(entry) = entry.as_object() else {
             return value_contains_include(entry);
         };
-        entry.contains_key("$include")
-            || entry
-                .get("workspace")
-                .is_some_and(value_contains_include)
+        entry.contains_key("$include") || entry.get("workspace").is_some_and(value_contains_include)
     })
 }
 
@@ -1292,6 +1260,40 @@ mod tests {
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
             last_used_at: None,
+        }
+    }
+
+    fn test_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "ocm-openclaw-config-{label}-{}-{}",
+            std::process::id(),
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ))
+    }
+
+    #[test]
+    fn minimum_config_preserves_existing_agent_collection_shape() {
+        for (label, agents, retained_key, absent_key) in [
+            ("list", json!({"list": []}), "list", "entries"),
+            ("entries", json!({"entries": {}}), "entries", "list"),
+        ] {
+            let root = test_root(label);
+            let paths = derive_env_paths(&root);
+            fs::create_dir_all(&paths.state_dir).unwrap();
+            write_config_value(&paths.config_path, &json!({"agents": agents})).unwrap();
+
+            ensure_minimum_local_openclaw_config(&paths, 19789).unwrap();
+
+            let value = read_config_value(&paths.config_path).unwrap().unwrap();
+            assert!(value["agents"].get(retained_key).is_some());
+            assert!(value["agents"].get(absent_key).is_none());
+            assert_eq!(value["gateway"]["port"], 19789);
+            assert_eq!(
+                value["agents"]["defaults"]["workspace"],
+                display_path(&paths.workspace_dir)
+            );
+
+            let _ = fs::remove_dir_all(root);
         }
     }
 
