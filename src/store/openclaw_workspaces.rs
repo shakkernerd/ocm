@@ -578,7 +578,13 @@ fn agent_entries(config: &Value) -> Vec<Map<String, Value>> {
     config
         .pointer("/agents/list")
         .and_then(Value::as_array)
-        .map(|entries| entries.iter().filter_map(Value::as_object).cloned().collect())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(Value::as_object)
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1030,6 +1036,40 @@ mod tests {
                 root.join("teams/ops-team"),
                 root.join(".openclaw/team/custom"),
             ])
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn keyed_workspace_inventory_preserves_the_first_entry_as_the_implicit_default() {
+        let root = test_root("inventory-key-order");
+        let paths = super::super::layout::derive_env_paths(&root);
+        fs::create_dir_all(&paths.state_dir).unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{
+              "agents": {
+                "defaults": { "workspace": "~/teams" },
+                "entries": {
+                  "zeta": { "workspace": "~/zeta" },
+                  "alpha": { "workspace": "~/alpha" }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
+        assert_eq!(inventory.default_agent_id, "zeta");
+        assert_eq!(
+            inventory.default_agent_workspace(),
+            Some(root.join("zeta").as_path())
         );
 
         let _ = fs::remove_dir_all(root);
