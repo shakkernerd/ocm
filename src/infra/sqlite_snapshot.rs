@@ -42,7 +42,7 @@ fn create_sqlite_snapshot_inner(source: &Path, target: &Path) -> Result<(), Stri
         )
     })?;
     source_db
-        .busy_timeout(SQLITE_BACKUP_TIMEOUT)
+        .busy_timeout(SQLITE_BACKUP_RETRY_DELAY)
         .map_err(|error| {
             format!(
                 "failed to configure SQLite snapshot timeout for {}: {error}",
@@ -61,7 +61,7 @@ fn create_sqlite_snapshot_inner(source: &Path, target: &Path) -> Result<(), Stri
         )
     })?;
     target_db
-        .busy_timeout(SQLITE_BACKUP_TIMEOUT)
+        .busy_timeout(SQLITE_BACKUP_RETRY_DELAY)
         .map_err(|error| {
             format!(
                 "failed to configure SQLite snapshot target {}: {error}",
