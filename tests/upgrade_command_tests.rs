@@ -153,7 +153,11 @@ case "$1" in
       echo "missing gateway status flags" >&2
       exit 1
     }}
-    printf '{{"gatewayState":"simulation-ok"}}\n'
+    if [ "${{OCM_TEST_GATEWAY_UNREADY:-}}" = "1" ]; then
+      printf '{{"rpc":{{"ok":false,"error":"gateway RPC is not ready"}}}}\n'
+    else
+      printf '{{"rpc":{{"ok":true}}}}\n'
+    fi
     exit 0
     ;;
 esac
@@ -239,7 +243,7 @@ case "$1" in
     exit 0
     ;;
   gateway)
-    printf '{{"gatewayState":"simulation-ok"}}\n'
+    printf '{{"rpc":{{"ok":true}}}}\n'
     exit 0
     ;;
 esac
