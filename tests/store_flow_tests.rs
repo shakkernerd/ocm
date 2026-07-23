@@ -21,6 +21,7 @@ use ocm::store::{
     remove_environment, remove_launcher, remove_runtime, restore_env_snapshot,
     runtime_install_root, runtime_meta_path,
 };
+use rusqlite::{Connection, OpenFlags};
 
 use crate::support::{TestDir, ocm_env, path_string, write_executable_script, write_text};
 
@@ -1106,6 +1107,112 @@ fn environment_snapshot_captures_a_named_point_in_time() {
         fs::read_to_string(extracted.root_dir.join(".openclaw/workspace/notes.txt")).unwrap(),
         "hello snapshot"
     );
+}
+
+#[test]
+fn environment_snapshot_restores_live_global_and_agent_sqlite_state() {
+    let root = TestDir::new("store-env-snapshot-sqlite");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            service_enabled: false,
+            service_running: false,
+            default_runtime: None,
+            default_launcher: None,
+            dev: None,
+            protected: true,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = Path::new(&created.root);
+    let global_database = source_root.join(".openclaw/state/openclaw.sqlite");
+    let agent_database = source_root.join(".openclaw/agents/main/agent/openclaw-agent.sqlite");
+
+    for database in [&global_database, &agent_database] {
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+    }
+    let global = Connection::open(&global_database).unwrap();
+    let agent = Connection::open(&agent_database).unwrap();
+    for connection in [&global, &agent] {
+        connection
+            .pragma_update(None, "journal_mode", "WAL")
+            .unwrap();
+        connection
+            .pragma_update(None, "wal_autocheckpoint", 0)
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE durable_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO durable_state VALUES ('sentinel', 'before-upgrade');",
+            )
+            .unwrap();
+    }
+    assert!(global_database.with_extension("sqlite-wal").exists());
+    assert!(agent_database.with_extension("sqlite-wal").exists());
+
+    let snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: Some("before-upgrade".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    drop(global);
+    drop(agent);
+    for database in [&global_database, &agent_database] {
+        let connection = Connection::open(database).unwrap();
+        connection
+            .execute(
+                "UPDATE durable_state SET value = 'after-upgrade' WHERE key = 'sentinel'",
+                [],
+            )
+            .unwrap();
+    }
+
+    restore_env_snapshot(
+        RestoreEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            snapshot_id: snapshot.id,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    for database in [&global_database, &agent_database] {
+        assert!(database.exists());
+        assert!(!database.with_extension("sqlite-wal").exists());
+        assert!(!database.with_extension("sqlite-shm").exists());
+        assert!(!database.with_extension("sqlite-journal").exists());
+        let restored = Connection::open_with_flags(
+            database,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .unwrap();
+        let value: String = restored
+            .query_row(
+                "SELECT value FROM durable_state WHERE key = 'sentinel'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "before-upgrade");
+        let integrity: String = restored
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+    }
 }
 
 #[cfg(unix)]
