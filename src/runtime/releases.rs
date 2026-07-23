@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,75 @@ pub struct OpenClawReleaseCatalogEntry {
     pub release: OpenClawRelease,
     #[serde(default)]
     pub installed_runtime_names: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ParsedOpenClawReleaseVersion {
+    year: u64,
+    month: u64,
+    patch: u64,
+    channel_rank: u8,
+    sequence: u64,
+}
+
+fn parse_openclaw_release_version(value: &str) -> Option<ParsedOpenClawReleaseVersion> {
+    let value = value.trim().strip_prefix('v').unwrap_or(value.trim());
+    if value.contains('+') {
+        return None;
+    }
+
+    let (base, suffix) = value
+        .split_once('-')
+        .map_or((value, None), |(base, suffix)| (base, Some(suffix)));
+    let mut parts = base.split('.');
+    let year_raw = parts.next()?;
+    let month_raw = parts.next()?;
+    let patch_raw = parts.next()?;
+    if parts.next().is_some() || year_raw.len() != 4 {
+        return None;
+    }
+
+    let year = year_raw.parse().ok()?;
+    let month = month_raw.parse().ok()?;
+    let patch = patch_raw.parse().ok()?;
+    if !(1..=12).contains(&month) || patch == 0 {
+        return None;
+    }
+
+    let (channel_rank, sequence) = match suffix {
+        None => (2, 0),
+        Some(suffix) => {
+            if let Ok(correction) = suffix.parse::<u64>() {
+                if correction == 0 {
+                    return None;
+                }
+                (3, correction)
+            } else {
+                let (channel, sequence) = suffix.split_once('.')?;
+                let sequence = sequence.parse::<u64>().ok()?;
+                if sequence == 0 {
+                    return None;
+                }
+                match channel {
+                    "alpha" => (0, sequence),
+                    "beta" => (1, sequence),
+                    _ => return None,
+                }
+            }
+        }
+    };
+
+    Some(ParsedOpenClawReleaseVersion {
+        year,
+        month,
+        patch,
+        channel_rank,
+        sequence,
+    })
+}
+
+pub fn compare_openclaw_release_versions(left: &str, right: &str) -> Option<Ordering> {
+    Some(parse_openclaw_release_version(left)?.cmp(&parse_openclaw_release_version(right)?))
 }
 
 #[derive(Debug, Deserialize)]
