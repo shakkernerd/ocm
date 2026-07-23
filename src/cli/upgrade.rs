@@ -2893,9 +2893,12 @@ fn gateway_readiness_result(ready: bool, status: &Value) -> Result<(), String> {
         return Ok(());
     }
 
-    let detail = status
-        .pointer("/rpc/error")
-        .and_then(Value::as_str)
+    let rpc_error = status.pointer("/rpc/error").and_then(Value::as_str);
+    if rpc_error.is_some_and(gateway_auth_failure_proves_reachable) {
+        return Ok(());
+    }
+
+    let detail = rpc_error
         .or_else(|| {
             status
                 .get("warnings")
@@ -2915,6 +2918,38 @@ fn gateway_readiness_result(ready: bool, status: &Value) -> Result<(), String> {
         .unwrap_or("OpenClaw reported that no gateway RPC endpoint was reachable");
 
     Err(format!("post-upgrade gateway readiness failed: {detail}"))
+}
+
+fn gateway_auth_failure_proves_reachable(error: &str) -> bool {
+    let normalized = error.trim().to_ascii_lowercase();
+    let reason = normalized
+        .strip_prefix("gateway closed (1008):")
+        .map(str::trim)
+        .unwrap_or(normalized.as_str());
+
+    matches!(
+        reason,
+        "auth required"
+            | "owner auth required"
+            | "connect failed"
+            | "device required"
+            | "device identity required"
+            | "pairing required"
+    ) || reason.starts_with("pairing required:")
+        || reason.starts_with("unauthorized: gateway token missing")
+        || reason.starts_with("unauthorized: gateway token mismatch")
+        || reason.starts_with("unauthorized: gateway token not configured")
+        || reason.starts_with("unauthorized: gateway password missing")
+        || reason.starts_with("unauthorized: gateway password mismatch")
+        || reason.starts_with("unauthorized: gateway password not configured")
+        || reason.starts_with("unauthorized: bootstrap token invalid or expired")
+        || reason.starts_with("unauthorized: tailscale identity missing")
+        || reason.starts_with("unauthorized: tailscale proxy headers missing")
+        || reason.starts_with("unauthorized: tailscale identity check failed")
+        || reason.starts_with("unauthorized: tailscale identity mismatch")
+        || reason.starts_with("unauthorized: too many failed authentication attempts")
+        || reason.starts_with("unauthorized: device token mismatch")
+        || reason.starts_with("unauthorized: device token rejected")
 }
 
 #[cfg(test)]
