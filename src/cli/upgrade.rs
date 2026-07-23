@@ -2914,15 +2914,22 @@ fn gateway_readiness_result(ready: bool, status: &Value) -> Result<(), String> {
     if rpc_error.is_some_and(gateway_auth_failure_proves_reachable) {
         return Ok(());
     }
+    let target_auth_reachable = status
+        .get("targets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|target| target.pointer("/connect/error").and_then(Value::as_str))
+        .any(gateway_auth_failure_proves_reachable);
+    if target_auth_reachable {
+        return Ok(());
+    }
     let target_error = status
         .get("targets")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .find_map(|target| target.pointer("/connect/error").and_then(Value::as_str));
-    if target_error.is_some_and(gateway_auth_failure_proves_reachable) {
-        return Ok(());
-    }
 
     let detail = rpc_error
         .or_else(|| {
@@ -3060,6 +3067,12 @@ mod tests {
         assert!(
             verify_gateway_status_readiness(
                 r#"{"ok":false,"targets":[{"connect":{"ok":false,"error":"gateway closed (1008): device identity required"}}]}"#
+            )
+            .is_ok()
+        );
+        assert!(
+            verify_gateway_status_readiness(
+                r#"{"targets":[{"connect":{"ok":false,"error":"connect ECONNREFUSED 127.0.0.1:18789"}},{"connect":{"ok":false,"error":"gateway closed (1008): pairing required"}}]}"#
             )
             .is_ok()
         );
