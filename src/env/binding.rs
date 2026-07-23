@@ -1,7 +1,7 @@
 use super::{EnvMeta, EnvironmentService};
 use crate::store::{
-    get_environment, get_runtime_verified, save_environment,
-    save_environment_with_validated_launcher,
+    get_environment, save_environment, save_environment_with_validated_launcher,
+    save_environment_with_validated_runtime,
 };
 use crate::supervisor::sync_supervisor_if_present;
 
@@ -26,11 +26,14 @@ impl<'a> EnvironmentService<'a> {
         if runtime_name.eq_ignore_ascii_case("none") {
             meta.default_runtime = None;
         } else {
-            get_runtime_verified(runtime_name, self.env, self.cwd)?;
             meta.default_runtime = Some(runtime_name.to_string());
             meta.default_launcher = None;
         }
-        let meta = save_environment(meta, self.env, self.cwd)?;
+        let meta = if meta.default_runtime.is_some() {
+            save_environment_with_validated_runtime(meta, self.env, self.cwd)?
+        } else {
+            save_environment(meta, self.env, self.cwd)?
+        };
         sync_supervisor_if_present(self.env, self.cwd)?;
         Ok(meta)
     }
