@@ -1081,7 +1081,7 @@ impl Cli {
             self.ensure_upgrade_is_not_downgrade(
                 env_name,
                 current.release_version.as_deref(),
-                &target_version,
+                target_version.as_deref(),
             )?;
             if !target.is_named_runtime() {
                 self.ensure_runtime_upgrade_isolated(env_name, &target_runtime_name)?;
@@ -1100,7 +1100,7 @@ impl Cli {
                     } else {
                         "would-update".to_string()
                     },
-                    runtime_release_version: Some(target_version),
+                    runtime_release_version: target_version.clone(),
                     runtime_release_channel: resolved.release_channel.clone(),
                     service_action: service_action_for_dry_run(
                         service.as_ref(),
@@ -1128,7 +1128,7 @@ impl Cli {
                         previous_binding_name,
                         "runtime",
                         target_runtime_name,
-                        Some(target_version),
+                        target_version.clone(),
                         target.release_channel_hint(),
                         transaction,
                         error,
@@ -1299,7 +1299,7 @@ impl Cli {
             self.ensure_upgrade_is_not_downgrade(
                 env_name,
                 current.release_version.as_deref(),
-                &target_version,
+                target_version.as_deref(),
             )?;
             if options.dry_run {
                 return Ok(UpgradeEnvSummary {
@@ -1309,7 +1309,7 @@ impl Cli {
                     binding_kind: "runtime".to_string(),
                     binding_name: target_runtime_name,
                     outcome: "would-update".to_string(),
-                    runtime_release_version: Some(target_version),
+                    runtime_release_version: target_version.clone(),
                     runtime_release_channel: resolved.release_channel.clone(),
                     service_action: service_action_for_dry_run(service.as_ref(), false, true),
                     snapshot_id: None,
@@ -1333,7 +1333,7 @@ impl Cli {
                         previous_binding_name,
                         "runtime",
                         target_runtime_name,
-                        Some(target_version),
+                        target_version.clone(),
                         target.release_channel_hint(),
                         transaction,
                         error,
@@ -1450,7 +1450,7 @@ impl Cli {
         self.ensure_upgrade_is_not_downgrade(
             env_name,
             current.release_version.as_deref(),
-            &target_version,
+            Some(&target_version),
         )?;
         let service = self.upgrade_service_status(env_name)?;
         if options.dry_run {
@@ -1642,7 +1642,7 @@ impl Cli {
         let resolved = self.resolve_upgrade_target(target)?;
         let target_runtime_name = resolved.name.clone();
         let target_version = self.resolved_target_version(env_name, &resolved)?;
-        self.ensure_upgrade_is_not_downgrade(env_name, None, &target_version)?;
+        self.ensure_upgrade_is_not_downgrade(env_name, None, target_version.as_deref())?;
         if !target.is_named_runtime() {
             self.ensure_runtime_upgrade_isolated(env_name, &target_runtime_name)?;
         }
@@ -1655,7 +1655,7 @@ impl Cli {
                 binding_kind: "runtime".to_string(),
                 binding_name: target_runtime_name,
                 outcome: "would-switch".to_string(),
-                runtime_release_version: Some(target_version),
+                runtime_release_version: target_version.clone(),
                 runtime_release_channel: resolved.release_channel.clone(),
                 service_action: service_action_for_dry_run(service.as_ref(), true, true),
                 snapshot_id: None,
@@ -1678,7 +1678,7 @@ impl Cli {
                     launcher_name.to_string(),
                     "runtime",
                     target_runtime_name,
-                    Some(target_version),
+                    target_version.clone(),
                     target.release_channel_hint(),
                     transaction,
                     error,
@@ -1792,47 +1792,54 @@ impl Cli {
         &self,
         env_name: &str,
         target: &ResolvedUpgradeTarget,
-    ) -> Result<String, String> {
-        if let Some(version) = target.release_version.as_deref() {
-            return Ok(version.to_string());
+    ) -> Result<Option<String>, String> {
+        if let Some(version) = target
+            .release_version
+            .as_deref()
+            .filter(|version| compare_runtime_release_versions(version, version).is_some())
+        {
+            return Ok(Some(version.to_string()));
         }
 
-        let output = self.run_update_mode_openclaw_command_output(
+        let Ok(output) = self.run_update_mode_openclaw_command_output(
             env_name,
             &target.name,
             "target openclaw --version",
             &["--version"],
-        )?;
+        ) else {
+            return Ok(None);
+        };
         if !output.status.success() {
-            return Err(format!(
-                "target openclaw --version failed: {}",
-                output.failure_summary()
-            ));
+            return Ok(None);
         }
-        release_version_from_output(&output.first_line(), None).ok_or_else(|| {
-            format!(
-                "cannot determine the OpenClaw version provided by runtime \"{}\"",
-                target.name
-            )
-        })
+        Ok(release_version_from_output(&output.first_line(), None))
     }
 
     fn ensure_upgrade_is_not_downgrade(
         &self,
         env_name: &str,
         current_version_hint: Option<&str>,
-        target_version: &str,
+        target_version: Option<&str>,
     ) -> Result<(), String> {
-        let current =
-            self.run_openclaw_command(env_name, "current openclaw --version", &["--version"])?;
-        let current_version =
-            release_version_from_output(&current.first_line(), current_version_hint).ok_or_else(
-                || {
-                    format!(
-                        "cannot determine the current OpenClaw version for env \"{env_name}\"; refusing to change its runtime without downgrade safety"
-                    )
-                },
-            )?;
+        let Some(target_version) = target_version else {
+            return Ok(());
+        };
+        let current_version = if let Some(current_version) = current_version_hint
+            .filter(|version| compare_runtime_release_versions(version, version).is_some())
+        {
+            current_version.to_string()
+        } else {
+            let Ok(current) =
+                self.run_openclaw_command(env_name, "current openclaw --version", &["--version"])
+            else {
+                return Ok(());
+            };
+            let Some(current_version) = release_version_from_output(&current.first_line(), None)
+            else {
+                return Ok(());
+            };
+            current_version
+        };
 
         if current_version == target_version {
             return Ok(());
@@ -2632,6 +2639,7 @@ fn version_output_matches_expected(actual: &str, expected: &str) -> bool {
 fn release_version_from_output(actual: &str, hint: Option<&str>) -> Option<String> {
     if let Some(hint) = hint
         && version_output_matches_expected(actual, hint)
+        && compare_runtime_release_versions(hint, hint).is_some()
     {
         return Some(hint.to_string());
     }
