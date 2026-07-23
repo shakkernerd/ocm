@@ -1786,7 +1786,71 @@ fn environment_snapshot_remove_deletes_snapshot_artifacts_and_metadata() {
     assert_eq!(removed.env_name, "source");
     assert_eq!(removed.snapshot_id, snapshot.id);
     assert_eq!(removed.label.as_deref(), Some("before-cleanup"));
+    assert!(removed.warnings.is_empty());
     assert!(!std::path::Path::new(&removed.archive_path).exists());
+    assert!(list_env_snapshots("source", &env, &cwd).unwrap().is_empty());
+    assert!(!root.child("ocm-home/snapshots/source").exists());
+}
+
+#[test]
+fn environment_snapshot_remove_reports_post_removal_cleanup_warnings() {
+    let root = TestDir::new("store-env-snapshot-remove-warning");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: None,
+            service_enabled: false,
+            service_running: false,
+            default_runtime: None,
+            default_launcher: None,
+            dev: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let history_root = root.child("ocm-home/upgrade-history");
+    fs::create_dir_all(&history_root).unwrap();
+    fs::write(
+        history_root.join("source"),
+        "block linked recovery traversal",
+    )
+    .unwrap();
+
+    let removed = remove_env_snapshot(
+        RemoveEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            snapshot_id: snapshot.id.clone(),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(removed.snapshot_id, snapshot.id);
+    assert_eq!(removed.warnings.len(), 1);
+    assert!(
+        removed.warnings[0].contains("linked upgrade recovery cleanup failed"),
+        "{:?}",
+        removed.warnings
+    );
+    assert!(!Path::new(&removed.archive_path).exists());
     assert!(list_env_snapshots("source", &env, &cwd).unwrap().is_empty());
     assert!(!root.child("ocm-home/snapshots/source").exists());
 }

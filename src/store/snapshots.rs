@@ -26,6 +26,7 @@ use super::{
 };
 
 static NEXT_RESTORE_ID: AtomicU64 = AtomicU64::new(0);
+static NEXT_REMOVAL_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -287,22 +288,74 @@ pub fn remove_env_snapshot(
     let snapshot = get_env_snapshot(&options.env_name, &options.snapshot_id, env, cwd)?;
     let meta_path = snapshot_meta_path(&snapshot.env_name, &snapshot.id, env, cwd)?;
     let archive_path = PathBuf::from(&snapshot.archive_path);
+    let staging_dir = snapshot_removal_staging_dir(&snapshot.env_name, &snapshot.id, env, cwd)?;
+    let staged_meta_path = staging_dir.join("snapshot.json");
+    let staged_archive_path = staging_dir.join("snapshot.tar");
 
-    if path_exists(&meta_path) {
-        fs::remove_file(&meta_path).map_err(|error| error.to_string())?;
-    }
-    if path_exists(&archive_path) {
-        fs::remove_file(&archive_path).map_err(|error| error.to_string())?;
-    }
-    remove_upgrade_recovery_for_snapshot(&snapshot.env_name, &snapshot.id, env, cwd)?;
+    fs::create_dir(&staging_dir).map_err(|error| {
+        format!(
+            "failed to create snapshot removal staging directory {}: {error}",
+            display_path(&staging_dir)
+        )
+    })?;
 
-    remove_snapshot_parent_if_empty(&snapshot.env_name, env, cwd)?;
+    let archive_staged = if path_exists(&archive_path) {
+        if let Err(error) = fs::rename(&archive_path, &staged_archive_path) {
+            let _ = fs::remove_dir(&staging_dir);
+            return Err(format!(
+                "failed to stage snapshot archive {} for removal: {error}",
+                display_path(&archive_path)
+            ));
+        }
+        true
+    } else {
+        false
+    };
+
+    if let Err(error) = fs::rename(&meta_path, &staged_meta_path) {
+        let restore_error = if archive_staged {
+            fs::rename(&staged_archive_path, &archive_path)
+                .err()
+                .map(|restore_error| {
+                    format!("; restoring the staged archive also failed: {restore_error}")
+                })
+        } else {
+            None
+        };
+        let _ = fs::remove_dir(&staging_dir);
+        return Err(format!(
+            "failed to stage snapshot metadata {} for removal: {error}{}",
+            display_path(&meta_path),
+            restore_error.unwrap_or_default()
+        ));
+    }
+
+    let mut warnings = Vec::new();
+    if let Err(error) =
+        remove_upgrade_recovery_for_snapshot(&snapshot.env_name, &snapshot.id, env, cwd)
+    {
+        warnings.push(format!(
+            "linked upgrade recovery cleanup failed after snapshot removal: {error}"
+        ));
+    }
+    if let Err(error) = fs::remove_dir_all(&staging_dir) {
+        warnings.push(format!(
+            "staged snapshot artifact cleanup failed at {}: {error}",
+            display_path(&staging_dir)
+        ));
+    }
+    if let Err(error) = remove_snapshot_parent_if_empty(&snapshot.env_name, env, cwd) {
+        warnings.push(format!(
+            "snapshot directory cleanup failed after removal: {error}"
+        ));
+    }
 
     Ok(EnvSnapshotRemoveSummary {
         env_name: snapshot.env_name,
         snapshot_id: snapshot.id,
         label: snapshot.label,
         archive_path: snapshot.archive_path,
+        warnings,
     })
 }
 
@@ -415,6 +468,17 @@ fn restore_staging_dir() -> PathBuf {
     std::env::temp_dir()
         .join("ocm-snapshot-restores")
         .join(format!("{}-{id}", std::process::id()))
+}
+
+fn snapshot_removal_staging_dir(
+    env_name: &str,
+    snapshot_id: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    let id = NEXT_REMOVAL_ID.fetch_add(1, Ordering::Relaxed);
+    Ok(snapshot_env_dir(env_name, env, cwd)?
+        .join(format!(".remove-{snapshot_id}-{}-{id}", std::process::id())))
 }
 
 fn restore_backup_root(root: &Path) -> PathBuf {
