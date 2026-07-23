@@ -4,8 +4,31 @@ All notable changes to OCM are documented here.
 
 ## Unreleased
 
+## 0.2.30 - 2026-07-23
+
+### Added
+
+- Add durable, credential-free upgrade history with observed versions, snapshots, service state, completed stages, and rollback outcomes in pretty, raw, and JSON output.
+- Add transactional `ocm upgrade rollback`, including pre-rollback safety snapshots, linked history, strict stale-state and shared-runtime refusal checks, and reversible rollback transactions.
+- Retain previous installer-managed runtime bytes after successful in-place upgrades until the matching recovery snapshot is removed or pruned.
+
 ### Fixed
 
+- Keep fresh and existing environments compatible across OpenClaw 2026.6.x and 2026.7.x agent configuration shapes, including list and keyed agents, JavaScript key ordering, includes, and identity-bound workspace rewrites.
+- Finalize OpenClaw runtime migrations before publishing replacement bindings, repair compatible legacy configuration with the target runtime, verify the reported version and gateway reachability, and restore the previous environment when post-upgrade checks fail.
+- Preserve managed plugin payloads and live SQLite state through snapshots, clones, imports, exports, upgrades, and rollback while excluding generated dependencies, runtime residue, SQLite sidecars, and other nonportable state.
+- Update the managed Node.js fallback to 24.15.0, enforce OpenClaw's supported host Node.js ranges, and preserve the managed toolchain on execution, npm lifecycle, service, restart-handoff, simulation, and Windows `Path` flows.
+- Reject unsafe OpenClaw downgrades before mutation, prevent direct changes to bound runtimes, isolate shared-runtime upgrades, and serialize runtime binding and upgrade preflight decisions.
+- Serialize each complete environment upgrade operation so concurrent mutations cannot publish stale bindings, snapshots, service policy, or history.
+- Make failed rollback and snapshot removal cleanup consistent by validating snapshot identity, tombstoning metadata before archive staging, removing unrecorded safety snapshots, and preserving post-removal warnings.
+- Retry transient executable-busy failures when invoking launchd or systemd service managers without masking other service-manager errors.
+
+## 0.2.29 - 2026-07-21
+
+### Fixed
+
+- Preserve every workspace selected by effective OpenClaw agent configuration across snapshots, exports, clones, imports, migrations, cleanup, and upgrade rollback while rejecting unsafe or externally owned paths.
+- Retry an environment archive transaction once when a child entry disappears during traversal, while keeping repeated disappearance and every other filesystem error fatal.
 - Keep MCP App sandbox listener ports aligned when gateway ports are reassigned, rewrite coupled loopback origins, and preserve public origins during in-place repair.
 - Prevent cloned, imported, and migrated environments from inheriting a source public MCP App sandbox origin, accept an explicit target origin for proxy-backed environments, and fail closed when the setting is owned by `$include`.
 
