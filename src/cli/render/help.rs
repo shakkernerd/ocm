@@ -581,6 +581,7 @@ pub fn upgrade_help(cmd: &str) -> String {
             "Local-repo simulations validate deps/build/UI build before post-update checks.",
             "Post-update checks run update-mode doctor, plugin update dry-run, and gateway status.",
             "Channel-tracked runtimes move forward automatically.",
+            "When current and target OpenClaw versions are known, older targets are rejected before snapshot creation or runtime mutation because config and SQLite state migrations cannot be reversed by switching binaries.",
             "An env upgrade will not replace runtime bytes shared with another env; use --runtime to reuse those bytes or an exact --version for an isolated target.",
             "Upgrades create a pre-upgrade snapshot before changing env state.",
             "When an env moves to a new runtime, upgrade runs OpenClaw update finalization inside the env before service restart.",
