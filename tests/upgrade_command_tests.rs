@@ -132,6 +132,29 @@ exit 1
     )
 }
 
+fn destructive_finalize_openclaw_script(version: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+home="${{OPENCLAW_HOME:-$PWD}}"
+case "$1" in
+  --version)
+    printf '{version}\n'
+    exit 0
+    ;;
+  update)
+    if [ "$2" = "finalize" ]; then
+      rm -rf "$home/.openclaw/npm"
+      printf '{{"status":"ok","mode":"finalize"}}\n'
+      exit 0
+    fi
+    ;;
+esac
+echo "unexpected args: $*" >&2
+exit 1
+"#
+    )
+}
+
 fn prebinding_guard_openclaw_script(version: &str, expected_runtime: &str) -> String {
     format!(
         r#"#!/bin/sh
@@ -1317,8 +1340,10 @@ fn upgrade_rolls_back_when_post_upgrade_version_verification_fails() {
         &old_tarball,
     );
 
-    let wrong_version_tarball =
-        openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.25");
+    let wrong_version_tarball = openclaw_package_tarball(
+        &destructive_finalize_openclaw_script("2026.3.24"),
+        "2026.3.25",
+    );
     let wrong_version_integrity = sha512_integrity(&wrong_version_tarball);
     let wrong_version_tarball_server = TestHttpServer::serve_bytes(
         "/openclaw-2026.3.25.tgz",
@@ -1357,6 +1382,27 @@ fn upgrade_rolls_back_when_post_upgrade_version_verification_fails() {
     let start = run_ocm(&cwd, &env, &["start", "demo", "--no-service"]);
     assert!(start.status.success(), "{}", stderr(&start));
 
+    let state_root = root.child("ocm-home/envs/demo/.openclaw");
+    let plugin_payloads = [
+        (
+            "npm/projects/demo/package.json",
+            "{\"name\":\"@example/demo\"}\n",
+        ),
+        (
+            "npm/projects/demo/package-lock.json",
+            "{\"lockfileVersion\":3}\n",
+        ),
+        (
+            "npm/projects/demo/node_modules/demo/index.js",
+            "module.exports = 'restored';\n",
+        ),
+    ];
+    for (path, contents) in plugin_payloads {
+        let path = state_root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
     assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
     let output = stdout(&upgrade);
@@ -1371,6 +1417,13 @@ fn upgrade_rolls_back_when_post_upgrade_version_verification_fails() {
     assert!(runtime.status.success(), "{}", stderr(&runtime));
     let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
     assert_eq!(runtime_json["releaseVersion"], "2026.3.24");
+    for (path, contents) in plugin_payloads {
+        assert_eq!(
+            fs::read_to_string(state_root.join(path)).unwrap(),
+            contents,
+            "{path}"
+        );
+    }
 }
 
 #[test]
