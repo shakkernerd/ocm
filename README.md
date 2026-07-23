@@ -135,7 +135,9 @@ ocm upgrade simulate mira --to ./openclaw
 running service cannot be restarted or started after the change, OCM restores
 the snapshot and previous runtime by default. When an environment moves to a new
 runtime, OCM runs OpenClaw's update finalization path inside that environment
-before service restart.
+before service restart. Snapshots preserve managed path, npm, and Git plugin
+payloads together with their package metadata and symlinks, while generated
+plugin dependency caches and live runtime residue stay out of the archive.
 
 `upgrade simulate` clones the source env, leaves the real env untouched, and
 cleans temporary simulation envs and runtimes when the run finishes. For
@@ -178,6 +180,11 @@ ocm adopt plan --name mira
 `migrate` is the simple front door for existing OpenClaw users. It imports a plain OpenClaw home into a managed env in one step.
 
 `migrate` preserves config, auth, sessions, logs, and other durable user state, rewrites env-scoped paths for the new managed root, and clears only live runtime residue like locks, pid files, and sockets. If `openclaw` is already available on `PATH`, it also binds the imported env to an env-local migrated launcher so you can keep using it through OCM immediately.
+
+Environment clone, export, and import flows preserve managed OpenClaw plugin
+payloads under the legacy, extension, npm, and Git install roots. Clone and
+import still clear live sessions, logs, backups, and process residue so the new
+environment does not share active runtime state with its source.
 
 Clone, import, and migration give the target environment a new local gateway and MCP app sandbox listener. They do not copy a public `mcp.apps.sandboxOrigin` because that URL belongs to the source environment's external routing and may still reach the source sandbox. Direct connections derive the target sandbox port automatically. For a target behind a reverse proxy or tunnel, pass its dedicated public origin explicitly:
 
