@@ -79,6 +79,15 @@ pub(crate) struct ResolvedRuntimeUpdate {
     release: ResolvedRuntimeUpdateRelease,
 }
 
+impl ResolvedRuntimeUpdate {
+    pub(crate) fn release_version(&self) -> &str {
+        match &self.release {
+            ResolvedRuntimeUpdateRelease::Official(release) => &release.version,
+            ResolvedRuntimeUpdateRelease::Manifest(release) => &release.version,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeUpdateSummary {
@@ -159,16 +168,20 @@ impl<'a> RuntimeService<'a> {
         &self,
         options: InstallRuntimeFromOfficialReleaseOptions,
     ) -> Result<(RuntimeMeta, OfficialRuntimePrepareAction), String> {
-        self.prepare_official_openclaw_runtime_with_refresh(options, true, true)
+        self.prepare_official_openclaw_runtime_with_refresh(options, true, true, None)
     }
 
-    pub(crate) fn prepare_official_openclaw_runtime_deferred(
+    pub(crate) fn prepare_selected_official_openclaw_runtime_deferred(
         &self,
         options: InstallRuntimeFromOfficialReleaseOptions,
+        selected_release: OpenClawRelease,
     ) -> Result<(RuntimeMeta, OfficialRuntimePrepareAction), String> {
-        // Upgrade finalization must run before changed runtime metadata reaches the live
-        // supervisor; the upgrade transaction publishes one coherent state afterward.
-        self.prepare_official_openclaw_runtime_with_refresh(options, false, false)
+        self.prepare_official_openclaw_runtime_with_refresh(
+            options,
+            false,
+            false,
+            Some(selected_release),
+        )
     }
 
     fn prepare_official_openclaw_runtime_with_refresh(
@@ -176,6 +189,7 @@ impl<'a> RuntimeService<'a> {
         options: InstallRuntimeFromOfficialReleaseOptions,
         refresh_supervisor: bool,
         require_unbound: bool,
+        selected_release: Option<OpenClawRelease>,
     ) -> Result<(RuntimeMeta, OfficialRuntimePrepareAction), String> {
         let version = options
             .version
@@ -206,15 +220,39 @@ impl<'a> RuntimeService<'a> {
         }
 
         let releases_url = official_openclaw_releases_url(self.env);
-        let releases = load_official_openclaw_release_selection(&releases_url)?;
-        let selected_release = match (version.as_deref(), channel.as_deref()) {
-            (Some(version), None) => {
-                select_official_openclaw_release_by_version(&releases, version)?
+        let selected_release = match selected_release {
+            Some(selected_release) => {
+                let matches_selector = match (version.as_deref(), channel.as_deref()) {
+                    (Some(version), None) => selected_release.version == version,
+                    (None, Some(channel)) => {
+                        selected_release.channel.as_deref() == Some(channel)
+                            || selected_release
+                                .channels
+                                .iter()
+                                .any(|value| value == channel)
+                    }
+                    _ => false,
+                };
+                if !matches_selector {
+                    return Err(format!(
+                        "resolved OpenClaw release \"{}\" no longer matches the requested selector",
+                        selected_release.version
+                    ));
+                }
+                selected_release
             }
-            (None, Some(channel)) => {
-                select_official_openclaw_release_by_channel(&releases, channel)?
+            None => {
+                let releases = load_official_openclaw_release_selection(&releases_url)?;
+                match (version.as_deref(), channel.as_deref()) {
+                    (Some(version), None) => {
+                        select_official_openclaw_release_by_version(&releases, version)?
+                    }
+                    (None, Some(channel)) => {
+                        select_official_openclaw_release_by_channel(&releases, channel)?
+                    }
+                    _ => unreachable!("validated above"),
+                }
             }
-            _ => unreachable!("validated above"),
         };
 
         let mut existing_meta = None;
@@ -373,14 +411,6 @@ impl<'a> RuntimeService<'a> {
             let resolved = self.resolve_update_from_release(options)?;
             self.apply_resolved_update(resolved, true)
         })
-    }
-
-    pub(crate) fn update_from_release_deferred(
-        &self,
-        options: UpdateRuntimeFromReleaseOptions,
-    ) -> Result<RuntimeMeta, String> {
-        let resolved = self.resolve_update_from_release(options)?;
-        self.apply_resolved_update(resolved, false)
     }
 
     pub(crate) fn resolve_update_from_release(
