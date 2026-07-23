@@ -154,8 +154,9 @@ migration/finalization status, service state, and rollback outcome. History is
 stored as atomic JSON metadata under `OCM_HOME`; it does not copy config
 contents, command output, or credentials. A successful in-place update of a
 managed runtime retains the previous runtime files beside its transaction
-record. Removing the corresponding pre-upgrade snapshot removes those retained
-files; switching to a different runtime does not duplicate the source runtime.
+record. Removing or pruning the corresponding pre-upgrade snapshot removes
+those retained files; switching to a different runtime does not duplicate the
+source runtime.
 Once an environment is bound to a runtime, direct `runtime update`,
 `runtime install --force`, `runtime build-local --force`, and `runtime remove`
 operations reject that runtime. Use `ocm upgrade <env>` so the environment gets
