@@ -73,6 +73,14 @@ fn env_clone_preserves_plugin_payloads_while_clearing_live_runtime_state() {
             "{\"id\":\"path-demo\"}\n",
         ),
         (
+            "extensions/path-demo/node_modules/path-dependency/index.js",
+            "module.exports = 'path-dependency';\n",
+        ),
+        (
+            "extensions/generated/openclaw.plugin.json",
+            "{\"id\":\"generated\"}\n",
+        ),
+        (
             "npm/projects/npm-demo/package-lock.json",
             "{\"lockfileVersion\":3}\n",
         ),
@@ -94,6 +102,18 @@ fn env_clone_preserves_plugin_payloads_while_clearing_live_runtime_state() {
         "{\"message\":\"do not copy\"}\n",
     );
     write_text(&source_state.join("logs/gateway.log"), "do not copy\n");
+    write_text(
+        &source_state.join("extensions/generated/.openclaw-runtime-deps.json"),
+        "{}\n",
+    );
+    write_text(
+        &source_state.join("extensions/generated/.openclaw-install-backups/backup.json"),
+        "{}\n",
+    );
+    write_text(
+        &source_state.join("extensions/generated/node_modules/generated/index.js"),
+        "module.exports = 'generated';\n",
+    );
 
     let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
     assert!(clone.status.success(), "{}", stderr(&clone));
@@ -108,6 +128,13 @@ fn env_clone_preserves_plugin_payloads_while_clearing_live_runtime_state() {
     }
     assert!(!target_state.join("agents/main/sessions").exists());
     assert!(!target_state.join("logs").exists());
+    for path in [
+        "extensions/generated/.openclaw-runtime-deps.json",
+        "extensions/generated/.openclaw-install-backups",
+        "extensions/generated/node_modules",
+    ] {
+        assert!(!target_state.join(path).exists(), "{path}");
+    }
 }
 
 #[test]
