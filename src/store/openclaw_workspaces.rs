@@ -566,8 +566,8 @@ fn is_openclaw_env_var_name(name: &str) -> bool {
 
 fn agent_entries(config: &Value) -> Vec<Map<String, Value>> {
     if let Some(entries) = config.pointer("/agents/entries").and_then(Value::as_object) {
-        return entries
-            .iter()
+        return javascript_property_entries(entries)
+            .into_iter()
             .filter_map(|(agent_id, entry)| {
                 let mut entry = entry.as_object()?.clone();
                 entry.insert("id".to_string(), Value::String(agent_id.clone()));
@@ -586,6 +586,29 @@ fn agent_entries(config: &Value) -> Vec<Map<String, Value>> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn javascript_property_entries(entries: &Map<String, Value>) -> Vec<(&String, &Value)> {
+    let mut integer_entries = entries
+        .iter()
+        .filter_map(|entry @ (key, _)| javascript_array_index(key).map(|index| (index, entry)))
+        .collect::<Vec<_>>();
+    integer_entries.sort_unstable_by_key(|(index, _)| *index);
+
+    integer_entries
+        .into_iter()
+        .map(|(_, entry)| entry)
+        .chain(
+            entries
+                .iter()
+                .filter(|(key, _)| javascript_array_index(key).is_none()),
+        )
+        .collect()
+}
+
+fn javascript_array_index(key: &str) -> Option<u32> {
+    let index = key.parse::<u32>().ok()?;
+    (index != u32::MAX && index.to_string() == key).then_some(index)
 }
 
 fn resolve_default_agent_id(entries: &[Map<String, Value>]) -> String {
@@ -889,11 +912,11 @@ fn deep_merge(base: Value, override_value: Value) -> Value {
         }
         (Value::Object(mut base), Value::Object(override_values)) => {
             for (key, value) in override_values {
-                let merged = base
-                    .remove(&key)
-                    .map(|current| deep_merge(current, value.clone()))
-                    .unwrap_or(value);
-                base.insert(key, merged);
+                if let Some(current) = base.get_mut(&key) {
+                    *current = deep_merge(std::mem::take(current), value);
+                } else {
+                    base.insert(key, value);
+                }
             }
             Value::Object(base)
         }
@@ -1070,6 +1093,80 @@ mod tests {
         assert_eq!(
             inventory.default_agent_workspace(),
             Some(root.join("zeta").as_path())
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn keyed_workspace_inventory_matches_javascript_integer_key_order() {
+        let root = test_root("inventory-key-integer-order");
+        let paths = super::super::layout::derive_env_paths(&root);
+        fs::create_dir_all(&paths.state_dir).unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{
+              "agents": {
+                "entries": {
+                  "10": {},
+                  "2": {}
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
+        assert_eq!(inventory.default_agent_id, "2");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn keyed_workspace_inventory_preserves_included_key_position_on_override() {
+        let root = test_root("inventory-key-include-order");
+        let paths = super::super::layout::derive_env_paths(&root);
+        fs::create_dir_all(paths.state_dir.join("config")).unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{
+              "$include": "./config/agents.json5",
+              "agents": {
+                "entries": {
+                  "primary": { "name": "override" }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            paths.state_dir.join("config/agents.json5"),
+            r#"{
+              agents: {
+                entries: {
+                  primary: {},
+                  ops: {}
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
+        assert_eq!(inventory.default_agent_id, "primary");
+        assert_eq!(
+            inventory.agent_workspace("ops"),
+            Some(paths.state_dir.join("workspace-ops").as_path())
         );
 
         let _ = fs::remove_dir_all(root);

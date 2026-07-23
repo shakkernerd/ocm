@@ -319,7 +319,8 @@ fn env_snapshot_restore_preserves_configured_agent_workspaces_and_includes() {
     assert!(snapshot.status.success(), "{}", stderr(&snapshot));
     let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
     assert!(list.status.success(), "{}", stderr(&list));
-    let snapshot_id = stdout(&list)
+    let list_output = stdout(&list);
+    let snapshot_id = list_output
         .split("\"id\": \"")
         .nth(1)
         .and_then(|rest| rest.split('"').next())
@@ -350,6 +351,63 @@ fn env_snapshot_restore_preserves_configured_agent_workspaces_and_includes() {
     assert!(source_state.join("config/agents.json5").exists());
     assert!(!source_state.join("workspace-attestations").exists());
     assert!(!source_state.join("workspace-cache").exists());
+}
+
+#[test]
+fn env_snapshot_preserves_keyed_include_order_when_overriding_an_agent() {
+    let root = TestDir::new("env-snapshot-keyed-include-order");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    write_text(
+        &source_state.join("openclaw.json"),
+        concat!(
+            "{\n",
+            "  $include: './config/agents.json5',\n",
+            "  agents: { entries: { primary: { name: 'override' } } }\n",
+            "}\n"
+        ),
+    );
+    write_text(
+        &source_state.join("config/agents.json5"),
+        "{ agents: { entries: { primary: {}, ops: {} } } }\n",
+    );
+    write_text(
+        &source_state.join("workspace/default.txt"),
+        "default workspace\n",
+    );
+    write_text(
+        &source_state.join("workspace-ops/secondary.txt"),
+        "secondary workspace\n",
+    );
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let list_output = stdout(&list);
+    let snapshot_id = list_output
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap();
+
+    fs::remove_dir_all(source_state.join("workspace-ops")).unwrap();
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "restore", "source", snapshot_id],
+    );
+    assert!(restore.status.success(), "{}", stderr(&restore));
+    assert_eq!(
+        fs::read_to_string(source_state.join("workspace-ops/secondary.txt")).unwrap(),
+        "secondary workspace\n"
+    );
 }
 
 #[test]
