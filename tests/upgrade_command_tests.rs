@@ -132,6 +132,34 @@ exit 1
     )
 }
 
+fn prebinding_guard_openclaw_script(version: &str, expected_runtime: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+home="${{OPENCLAW_HOME:-$PWD}}"
+mkdir -p "$home"
+printf '%s\n' "$*" >> "$home/sim-commands.log"
+case "$1" in
+  --version)
+    printf '{version}\n'
+    exit 0
+    ;;
+  update)
+    if [ "$2" = "finalize" ]; then
+      if ! grep -q '"defaultRuntime": "{expected_runtime}"' "$OCM_HOME/envs.json"; then
+        echo "replacement runtime was published before update finalization" >&2
+        exit 24
+      fi
+      printf '{{"status":"ok"}}\n'
+      exit 0
+    fi
+    ;;
+esac
+echo "unexpected args: $*" >&2
+exit 1
+"#
+    )
+}
+
 fn scenario_sensitive_openclaw_script(version: &str) -> String {
     format!(
         r#"#!/bin/sh
@@ -1452,7 +1480,10 @@ fn upgrade_can_switch_env_to_an_installed_runtime() {
     let old_runtime = root.child("old-openclaw");
     let new_runtime = root.child("new-openclaw");
     write_executable_script(&old_runtime, &recording_openclaw_script("old-openclaw"));
-    write_executable_script(&new_runtime, &recording_openclaw_script("new-openclaw"));
+    write_executable_script(
+        &new_runtime,
+        &prebinding_guard_openclaw_script("new-openclaw", "old-local"),
+    );
 
     let env = ocm_env(&root);
     let add_old = run_ocm(
@@ -1513,6 +1544,55 @@ fn upgrade_can_switch_env_to_an_installed_runtime() {
         !command_log.contains("plugins update --all\n"),
         "{command_log}"
     );
+}
+
+#[test]
+fn env_set_runtime_uses_the_transactional_upgrade_path_for_existing_bindings() {
+    let root = TestDir::new("set-runtime-transactional-upgrade");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_runtime = root.child("old-openclaw");
+    let new_runtime = root.child("new-openclaw");
+    write_executable_script(&old_runtime, &recording_openclaw_script("old-openclaw"));
+    write_executable_script(&new_runtime, &recording_openclaw_script("new-openclaw"));
+
+    let mut env = ocm_env(&root);
+    for (name, runtime) in [("old-local", &old_runtime), ("new-local", &new_runtime)] {
+        let add = run_ocm(
+            &cwd,
+            &env,
+            &[
+                "runtime",
+                "add",
+                name,
+                "--path",
+                &runtime.display().to_string(),
+            ],
+        );
+        assert!(add.status.success(), "{}", stderr(&add));
+    }
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "old-local"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    env.insert("OCM_TEST_FAIL_UPDATE_FINALIZE".to_string(), "1".to_string());
+    let bind = run_ocm(&cwd, &env, &["env", "set-runtime", "demo", "new-local"]);
+    assert!(!bind.status.success(), "{}", stdout(&bind));
+    assert!(
+        stderr(&bind).contains("restored the pre-upgrade snapshot"),
+        "{}",
+        stderr(&bind)
+    );
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(env_json["defaultRuntime"], "old-local");
 }
 
 #[test]

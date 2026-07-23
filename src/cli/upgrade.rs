@@ -192,6 +192,35 @@ impl UpgradeTarget {
 }
 
 impl Cli {
+    pub(super) fn upgrade_env_to_runtime_target(
+        &self,
+        name: &str,
+        version: Option<String>,
+        channel: Option<String>,
+        runtime: Option<String>,
+    ) -> Result<UpgradeEnvSummary, String> {
+        let explicit_count = usize::from(version.is_some())
+            + usize::from(channel.is_some())
+            + usize::from(runtime.is_some());
+        if explicit_count != 1 {
+            return Err(
+                "runtime transition requires exactly one version, channel, or runtime".to_string(),
+            );
+        }
+        self.upgrade_env(
+            name,
+            &UpgradeTarget {
+                version,
+                channel,
+                runtime,
+            },
+            UpgradeOptions {
+                dry_run: false,
+                rollback_enabled: true,
+            },
+        )
+    }
+
     pub(super) fn handle_upgrade_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "upgrade")?;
         if matches!(args.first().map(String::as_str), Some("simulate")) {
@@ -1078,11 +1107,7 @@ impl Cli {
                 }
             };
             let binding_changed = prepared.name != current.name;
-            if binding_changed {
-                self.environment_service()
-                    .set_runtime(env_name, prepared.name.as_str())?;
-            }
-            let post_update_note = match self.run_post_core_update(env_name) {
+            let post_update_note = match self.run_post_core_update(env_name, &prepared.name) {
                 Ok(note) => note,
                 Err(error) => {
                     return self.rollback_failed_upgrade(
@@ -1098,6 +1123,26 @@ impl Cli {
                     );
                 }
             };
+            let publish_result = if binding_changed {
+                self.environment_service()
+                    .set_runtime(env_name, prepared.name.as_str())
+                    .map(|_| ())
+            } else {
+                self.runtime_service().refresh_supervisor_if_present()
+            };
+            if let Err(error) = publish_result {
+                return self.rollback_failed_upgrade(
+                    env_name,
+                    "runtime",
+                    previous_binding_name,
+                    "runtime",
+                    prepared.name,
+                    prepared.meta.release_version,
+                    prepared.meta.release_channel,
+                    transaction,
+                    format!("failed to publish upgraded runtime: {error}"),
+                );
+            }
             let service_result =
                 self.reconcile_upgraded_service(env_name, service.as_ref(), binding_changed, true);
             let (service_action, service_note) = match service_result {
@@ -1262,7 +1307,7 @@ impl Cli {
                 OfficialRuntimePrepareAction::Installed | OfficialRuntimePrepareAction::Updated
             );
             let post_update_note = if changed {
-                match self.run_post_core_update(env_name) {
+                match self.run_post_core_update(env_name, &prepared.name) {
                     Ok(note) => note,
                     Err(error) => {
                         return self.rollback_failed_upgrade(
@@ -1281,6 +1326,19 @@ impl Cli {
             } else {
                 None
             };
+            if changed && let Err(error) = self.runtime_service().refresh_supervisor_if_present() {
+                return self.rollback_failed_upgrade(
+                    env_name,
+                    "runtime",
+                    previous_binding_name,
+                    "runtime",
+                    prepared.name,
+                    prepared.meta.release_version,
+                    prepared.meta.release_channel,
+                    transaction,
+                    format!("failed to publish upgraded runtime: {error}"),
+                );
+            }
             let service_result =
                 self.reconcile_upgraded_service(env_name, service.as_ref(), false, changed);
             let (service_action, service_note) = match service_result {
@@ -1350,7 +1408,7 @@ impl Cli {
             options.rollback_enabled,
         )?;
         let updated = match self.with_progress(format!("Updating runtime {}", current.name), || {
-            self.runtime_service().update_from_release(
+            self.runtime_service().update_from_release_deferred(
                 crate::runtime::UpdateRuntimeFromReleaseOptions {
                     name: current.name.clone(),
                     version: None,
@@ -1373,7 +1431,7 @@ impl Cli {
                 );
             }
         };
-        let post_update_note = match self.run_post_core_update(env_name) {
+        let post_update_note = match self.run_post_core_update(env_name, &updated.name) {
             Ok(note) => note,
             Err(error) => {
                 return self.rollback_failed_upgrade(
@@ -1389,6 +1447,19 @@ impl Cli {
                 );
             }
         };
+        if let Err(error) = self.runtime_service().refresh_supervisor_if_present() {
+            return self.rollback_failed_upgrade(
+                env_name,
+                "runtime",
+                previous_binding_name,
+                "runtime",
+                updated.name,
+                updated.release_version,
+                updated.release_channel,
+                transaction,
+                format!("failed to publish upgraded runtime: {error}"),
+            );
+        }
         let service_result =
             self.reconcile_upgraded_service(env_name, service.as_ref(), false, true);
         let (service_action, service_note) = match service_result {
@@ -1515,9 +1586,7 @@ impl Cli {
                 );
             }
         };
-        self.environment_service()
-            .set_runtime(env_name, prepared.name.as_str())?;
-        let post_update_note = match self.run_post_core_update(env_name) {
+        let post_update_note = match self.run_post_core_update(env_name, &prepared.name) {
             Ok(note) => note,
             Err(error) => {
                 return self.rollback_failed_upgrade(
@@ -1533,6 +1602,22 @@ impl Cli {
                 );
             }
         };
+        if let Err(error) = self
+            .environment_service()
+            .set_runtime(env_name, prepared.name.as_str())
+        {
+            return self.rollback_failed_upgrade(
+                env_name,
+                "launcher",
+                launcher_name.to_string(),
+                "runtime",
+                prepared.name,
+                prepared.meta.release_version,
+                prepared.meta.release_channel,
+                transaction,
+                format!("failed to publish upgraded runtime: {error}"),
+            );
+        }
         let service_result =
             self.reconcile_upgraded_service(env_name, service.as_ref(), true, true);
         let (service_action, service_note) = match service_result {
@@ -1625,15 +1710,16 @@ impl Cli {
         }
         let (meta, action) =
             self.with_progress(format!("Preparing OpenClaw runtime for {env_name}"), || {
-                self.runtime_service().prepare_official_openclaw_runtime(
-                    InstallRuntimeFromOfficialReleaseOptions {
-                        name: runtime_name.clone(),
-                        version: target.version.clone(),
-                        channel: target.channel.clone(),
-                        description: None,
-                        force: false,
-                    },
-                )
+                self.runtime_service()
+                    .prepare_official_openclaw_runtime_deferred(
+                        InstallRuntimeFromOfficialReleaseOptions {
+                            name: runtime_name.clone(),
+                            version: target.version.clone(),
+                            channel: target.channel.clone(),
+                            description: None,
+                            force: false,
+                        },
+                    )
             })?;
         Ok(PreparedUpgradeTarget {
             name: runtime_name,
@@ -1768,9 +1854,16 @@ impl Cli {
         }
     }
 
-    fn run_post_core_update(&self, env_name: &str) -> Result<Option<String>, String> {
+    fn run_post_core_update(
+        &self,
+        env_name: &str,
+        runtime_name: &str,
+    ) -> Result<Option<String>, String> {
+        // Resolve the replacement explicitly while the previous binding remains published.
+        // A failed finalizer can then roll back without ever activating the replacement.
         self.run_update_mode_openclaw_command(
             env_name,
+            runtime_name,
             "openclaw update finalize",
             &["update", "finalize", "--json", "--yes", "--no-restart"],
         )?;
@@ -1780,13 +1873,14 @@ impl Cli {
     fn run_update_mode_openclaw_command(
         &self,
         env_name: &str,
+        runtime_name: &str,
         name: &str,
         args: &[&str],
     ) -> Result<(), String> {
         let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
         let resolved = self
             .environment_service()
-            .resolve(env_name, None, None, &args)
+            .resolve(env_name, Some(runtime_name.to_string()), None, &args)
             .map_err(|error| format!("{name} failed: {error}"))?;
         match self.run_resolved_for_simulation(
             resolved,
@@ -1950,6 +2044,11 @@ impl Cli {
         env_name: &str,
         transaction: &UpgradeTransaction,
     ) -> Result<(), String> {
+        // Restore runtime bytes and metadata before the snapshot republishes supervisor
+        // state; otherwise rollback can briefly advertise the failed runtime revision.
+        for runtime_backup in &transaction.runtime_backups {
+            self.restore_runtime_backup(runtime_backup)?;
+        }
         self.environment_service()
             .restore_snapshot(RestoreEnvSnapshotOptions {
                 env_name: env_name.to_string(),
@@ -1957,9 +2056,6 @@ impl Cli {
             })?;
         for runtime_name in &transaction.created_runtime_names {
             self.remove_runtime_created_during_upgrade(runtime_name)?;
-        }
-        for runtime_backup in &transaction.runtime_backups {
-            self.restore_runtime_backup(runtime_backup)?;
         }
         Ok(())
     }

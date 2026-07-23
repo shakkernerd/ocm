@@ -143,6 +143,23 @@ impl<'a> RuntimeService<'a> {
         &self,
         options: InstallRuntimeFromOfficialReleaseOptions,
     ) -> Result<(RuntimeMeta, OfficialRuntimePrepareAction), String> {
+        self.prepare_official_openclaw_runtime_with_refresh(options, true)
+    }
+
+    pub(crate) fn prepare_official_openclaw_runtime_deferred(
+        &self,
+        options: InstallRuntimeFromOfficialReleaseOptions,
+    ) -> Result<(RuntimeMeta, OfficialRuntimePrepareAction), String> {
+        // Upgrade finalization must run before changed runtime metadata reaches the live
+        // supervisor; the upgrade transaction publishes one coherent state afterward.
+        self.prepare_official_openclaw_runtime_with_refresh(options, false)
+    }
+
+    fn prepare_official_openclaw_runtime_with_refresh(
+        &self,
+        options: InstallRuntimeFromOfficialReleaseOptions,
+        refresh_supervisor: bool,
+    ) -> Result<(RuntimeMeta, OfficialRuntimePrepareAction), String> {
         let version = options
             .version
             .map(|value| value.trim().to_string())
@@ -253,7 +270,9 @@ impl<'a> RuntimeService<'a> {
         } else {
             OfficialRuntimePrepareAction::Installed
         };
-        self.refresh_supervisor_if_present()?;
+        if refresh_supervisor {
+            self.refresh_supervisor_if_present()?;
+        }
         Ok((install.meta, action))
     }
 
@@ -311,6 +330,23 @@ impl<'a> RuntimeService<'a> {
         &self,
         options: UpdateRuntimeFromReleaseOptions,
     ) -> Result<RuntimeMeta, String> {
+        self.update_from_release_with_refresh(options, true)
+    }
+
+    pub(crate) fn update_from_release_deferred(
+        &self,
+        options: UpdateRuntimeFromReleaseOptions,
+    ) -> Result<RuntimeMeta, String> {
+        // Keep the existing supervisor spec active until the replacement runtime has
+        // migrated and validated the environment it will own.
+        self.update_from_release_with_refresh(options, false)
+    }
+
+    fn update_from_release_with_refresh(
+        &self,
+        options: UpdateRuntimeFromReleaseOptions,
+        refresh_supervisor: bool,
+    ) -> Result<RuntimeMeta, String> {
         if options.version.is_some() && options.channel.is_some() {
             return Err("runtime update accepts only one of --version or --channel".to_string());
         }
@@ -354,7 +390,9 @@ impl<'a> RuntimeService<'a> {
                 self.cwd,
             );
             let meta = meta?;
-            self.refresh_supervisor_if_present()?;
+            if refresh_supervisor {
+                self.refresh_supervisor_if_present()?;
+            }
             return Ok(meta);
         }
 
@@ -370,7 +408,9 @@ impl<'a> RuntimeService<'a> {
             self.env,
             self.cwd,
         )?;
-        self.refresh_supervisor_if_present()?;
+        if refresh_supervisor {
+            self.refresh_supervisor_if_present()?;
+        }
         Ok(meta)
     }
 
