@@ -145,6 +145,10 @@ gateway is reachable; otherwise the upgrade follows the normal rollback path.
 Snapshots preserve managed path, npm, and Git plugin payloads together with
 their package metadata and symlinks, while generated plugin dependency caches
 and live runtime residue stay out of the archive.
+Snapshot removal validates that the stored environment, snapshot ID, and
+archive path match the named snapshot before deleting anything. It takes the
+live metadata and archive out of service together, then reports warnings if
+linked upgrade recovery or staged artifact cleanup still needs attention.
 When both OpenClaw versions are known, `upgrade` rejects an older target before
 creating a snapshot, downloading the target, or changing runtime metadata.
 Switching only the binary cannot reverse newer OpenClaw config or SQLite state
