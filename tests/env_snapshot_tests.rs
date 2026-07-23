@@ -269,6 +269,75 @@ fn env_snapshot_restore_reverts_state_from_the_selected_snapshot() {
 }
 
 #[test]
+fn env_snapshot_restore_recovers_managed_plugin_payloads() {
+    let root = TestDir::new("env-snapshot-plugin-payloads");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let state_root = root.child("ocm-home/envs/source/.openclaw");
+    let payloads = [
+        (
+            "plugins/installs.json",
+            "{\"legacy\":{\"source\":\"path\"}}\n",
+        ),
+        (
+            "extensions/path-demo/openclaw.plugin.json",
+            "{\"id\":\"path-demo\"}\n",
+        ),
+        (
+            "npm/projects/npm-demo/package-lock.json",
+            "{\"lockfileVersion\":3}\n",
+        ),
+        (
+            "npm/projects/npm-demo/node_modules/npm-demo/index.js",
+            "module.exports = 'npm-demo';\n",
+        ),
+        ("git/git-demo/repo/.git/HEAD", "ref: refs/heads/main\n"),
+        (
+            "git/git-demo/repo/openclaw.plugin.json",
+            "{\"id\":\"git-demo\"}\n",
+        ),
+    ];
+    for (path, contents) in payloads {
+        write_text(&state_root.join(path), contents);
+    }
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let snapshot_id = stdout(&list)
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .to_string();
+
+    for root_name in ["plugins", "extensions", "npm", "git"] {
+        fs::remove_dir_all(state_root.join(root_name)).unwrap();
+    }
+
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "restore", "source", &snapshot_id],
+    );
+    assert!(restore.status.success(), "{}", stderr(&restore));
+
+    for (path, contents) in payloads {
+        assert_eq!(
+            fs::read_to_string(state_root.join(path)).unwrap(),
+            contents,
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn env_snapshot_restore_preserves_configured_agent_workspaces_and_includes() {
     let root = TestDir::new("env-snapshot-secondary-workspaces");
     let cwd = root.child("workspace");
