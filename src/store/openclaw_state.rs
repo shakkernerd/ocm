@@ -109,7 +109,7 @@ pub(crate) fn openclaw_env_archive_options(
         should_skip_path: should_skip_openclaw_env_archive_path,
         included_path_roots: workspaces.archive_relative_roots(&paths.root)?,
         excluded_path_roots: openclaw_archive_excluded_path_roots(paths)?,
-        snapshot_sqlite_files: false,
+        snapshot_sqlite_files: true,
     })
 }
 
@@ -437,6 +437,7 @@ fn is_durable_openclaw_archive_path(components: &[&str]) -> bool {
             | [".openclaw", "devices", ..]
             | [".openclaw", "identity", ..]
             | [".openclaw", "memory", ..]
+            | [".openclaw", "state", ..]
             | [".openclaw", "plugins", ..]
             | [".openclaw", "extensions", ..]
             | [".openclaw", "npm", ..]
@@ -912,11 +913,13 @@ mod tests {
                 .contains(Path::new(".openclaw/workspace"))
         );
         assert!(options.excluded_path_roots.is_empty());
+        assert!(options.snapshot_sqlite_files);
         assert!(!should_skip_openclaw_env_archive_path(
             Path::new(".openclaw/workspace/notes.txt"),
             EnvArchiveEntryKind::File
         ));
         for path in [
+            ".openclaw/state/openclaw.sqlite",
             ".openclaw/plugins/installs.json",
             ".openclaw/extensions/demo/package.json",
             ".openclaw/npm/projects/demo/package-lock.json",
