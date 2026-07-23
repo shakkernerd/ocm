@@ -77,7 +77,7 @@ fn setup_can_prepare_latest_stable_without_onboarding() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),

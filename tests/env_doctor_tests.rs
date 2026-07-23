@@ -114,7 +114,7 @@ fn env_doctor_keeps_official_runtime_healthy_when_managed_fallback_is_available(
     let packument_server =
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),

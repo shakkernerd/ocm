@@ -8,7 +8,8 @@ use crate::infra::archive::{extract_tar_gz, extract_zip};
 use crate::infra::download::{download_to_file, normalize_sha256, verify_file_sha256};
 use crate::store::{display_path, lock_file, resolve_store_paths};
 
-pub const OPENCLAW_MIN_NODE_VERSION: &str = "22.14.0";
+pub const OPENCLAW_MIN_NODE_VERSION: &str = "22.22.3";
+pub const OPENCLAW_NODE_VERSION_REQUIREMENT: &str = "Node.js 22.22.3+, 24.15.0+, or 25.9.0+";
 const MANAGED_NODE_VERSION: &str = "24.15.0";
 
 const INTERNAL_MANAGED_NODE_ARCHIVE_URL_ENV: &str = "OCM_INTERNAL_MANAGED_NODE_ARCHIVE_URL";
