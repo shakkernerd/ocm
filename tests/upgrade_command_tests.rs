@@ -203,6 +203,7 @@ case "$1" in
     }}
     if [ "${{OCM_TEST_GATEWAY_AUTH_HANDSHAKE:-}}" = "1" ]; then
       printf '{{"rpc":{{"ok":false,"error":"device identity required"}}}}\n'
+      exit "${{OCM_TEST_GATEWAY_STATUS_EXIT_CODE:-0}}"
     elif [ "${{OCM_TEST_GATEWAY_UNREADY:-}}" = "1" ]; then
       printf '{{"rpc":{{"ok":false,"error":"gateway RPC is not ready"}}}}\n'
     else
@@ -513,6 +514,10 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
 
     env.insert(
         "OCM_TEST_GATEWAY_AUTH_HANDSHAKE".to_string(),
+        "1".to_string(),
+    );
+    env.insert(
+        "OCM_TEST_GATEWAY_STATUS_EXIT_CODE".to_string(),
         "1".to_string(),
     );
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);

@@ -2050,12 +2050,18 @@ impl Cli {
         }
 
         if verify_gateway {
-            let gateway_status = self.run_openclaw_command(
+            let gateway_status = self.capture_openclaw_command(
                 env_name,
                 "openclaw gateway status",
                 &["gateway", "status", "--deep", "--json"],
             )?;
-            verify_gateway_status_readiness(&gateway_status.stdout)?;
+            if let Err(error) = verify_gateway_status_readiness(&gateway_status.stdout) {
+                return if gateway_status.status.success() {
+                    Err(error)
+                } else {
+                    Err(format!("{error}; {}", gateway_status.failure_summary()))
+                };
+            }
         }
 
         Ok(Some(format!(
@@ -2070,16 +2076,27 @@ impl Cli {
         name: &str,
         args: &[&str],
     ) -> Result<SimulationCommandOutput, String> {
+        let output = self.capture_openclaw_command(env_name, name, args)?;
+        if output.status.success() {
+            Ok(output)
+        } else {
+            Err(format!("{name} failed: {}", output.failure_summary()))
+        }
+    }
+
+    fn capture_openclaw_command(
+        &self,
+        env_name: &str,
+        name: &str,
+        args: &[&str],
+    ) -> Result<SimulationCommandOutput, String> {
         let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
         let resolved = self
             .environment_service()
             .resolve(env_name, None, None, &args)
             .map_err(|error| format!("{name} failed: {error}"))?;
-        match self.run_resolved_for_simulation(resolved, &[]) {
-            Ok(output) if output.status.success() => Ok(output),
-            Ok(output) => Err(format!("{name} failed: {}", output.failure_summary())),
-            Err(error) => Err(format!("{name} failed: {error}")),
-        }
+        self.run_resolved_for_simulation(resolved, &[])
+            .map_err(|error| format!("{name} failed: {error}"))
     }
 
     fn run_post_core_update(
