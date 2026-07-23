@@ -28,8 +28,9 @@ use crate::service::ServiceSummary;
 use crate::store::{
     InstallContext, RuntimeReleaseDetails, clean_path, copy_dir_recursive, derive_env_paths,
     display_path, ensure_minimum_local_openclaw_config, ensure_store, get_runtime,
-    install_runtime_from_selected_official_openclaw_release, remove_runtime, resolve_absolute_path,
-    runtime_install_root, runtime_integrity_issue, runtime_meta_path, save_environment, write_json,
+    install_runtime_from_selected_official_openclaw_release, lock_env_registry, remove_runtime,
+    resolve_absolute_path, runtime_install_root, runtime_integrity_issue, runtime_meta_path,
+    save_environment, write_json,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -1097,7 +1098,7 @@ impl Cli {
                 &[current.name.clone(), target_runtime_name.clone()],
                 options.rollback_enabled,
             )?;
-            let prepared = match self.prepare_upgrade_target(env_name, target) {
+            let prepared = match self.prepare_isolated_upgrade_target(env_name, target) {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     return self.rollback_failed_upgrade(
@@ -1295,7 +1296,7 @@ impl Cli {
                 &[current.name.clone(), target_runtime_name.clone()],
                 options.rollback_enabled,
             )?;
-            let prepared = match self.prepare_upgrade_target(env_name, &target) {
+            let prepared = match self.prepare_isolated_upgrade_target(env_name, &target) {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     return self.rollback_failed_upgrade(
@@ -1417,13 +1418,15 @@ impl Cli {
             options.rollback_enabled,
         )?;
         let updated = match self.with_progress(format!("Updating runtime {}", current.name), || {
-            self.runtime_service().update_from_release_deferred(
-                crate::runtime::UpdateRuntimeFromReleaseOptions {
-                    name: current.name.clone(),
-                    version: None,
-                    channel: None,
-                },
-            )
+            self.with_isolated_runtime_mutation(env_name, &current.name, || {
+                self.runtime_service().update_from_release_deferred(
+                    crate::runtime::UpdateRuntimeFromReleaseOptions {
+                        name: current.name.clone(),
+                        version: None,
+                        channel: None,
+                    },
+                )
+            })
         }) {
             Ok(updated) => updated,
             Err(error) => {
@@ -1611,7 +1614,7 @@ impl Cli {
             std::slice::from_ref(&target_runtime_name),
             options.rollback_enabled,
         )?;
-        let prepared = match self.prepare_upgrade_target(env_name, target) {
+        let prepared = match self.prepare_isolated_upgrade_target(env_name, target) {
             Ok(prepared) => prepared,
             Err(error) => {
                 return self.rollback_failed_upgrade(
@@ -1767,6 +1770,31 @@ impl Cli {
             meta,
             action,
         })
+    }
+
+    fn prepare_isolated_upgrade_target(
+        &self,
+        env_name: &str,
+        target: &UpgradeTarget,
+    ) -> Result<PreparedUpgradeTarget, String> {
+        if target.is_named_runtime() {
+            return self.prepare_upgrade_target(env_name, target);
+        }
+        let runtime_name = target.canonical_runtime_name()?;
+        self.with_isolated_runtime_mutation(env_name, &runtime_name, || {
+            self.prepare_upgrade_target(env_name, target)
+        })
+    }
+
+    fn with_isolated_runtime_mutation<T>(
+        &self,
+        env_name: &str,
+        runtime_name: &str,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _registry_lock = lock_env_registry(&self.env, &self.cwd)?;
+        self.ensure_runtime_upgrade_isolated(env_name, runtime_name)?;
+        operation()
     }
 
     fn reconcile_upgraded_service(

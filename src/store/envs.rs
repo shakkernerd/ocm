@@ -94,7 +94,7 @@ fn write_env_registry(
     write_json(&path, &registry)
 }
 
-struct EnvRegistryLock {
+pub(crate) struct EnvRegistryLock {
     file: File,
 }
 
@@ -149,7 +149,7 @@ pub(crate) fn lock_environment_operation(
     Ok(EnvironmentOperationLock { file })
 }
 
-fn lock_env_registry(
+pub(crate) fn lock_env_registry(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvRegistryLock, String> {

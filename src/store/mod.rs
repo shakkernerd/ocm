@@ -20,7 +20,7 @@ pub(crate) use common::{
     ExclusiveFileLock, copy_dir_recursive, ensure_dir, lock_file, read_json, write_json,
 };
 pub(crate) use envs::save_environment_with_validated_launcher;
-pub(crate) use envs::{EnvironmentOperationLock, lock_environment_operation};
+pub(crate) use envs::{EnvironmentOperationLock, lock_env_registry, lock_environment_operation};
 pub(crate) use envs::{
     EnvironmentServicePolicyChange, restore_environment_service_policy,
     set_environment_service_policy,
