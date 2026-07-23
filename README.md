@@ -136,9 +136,12 @@ ocm upgrade simulate mira --to ./openclaw
 running service cannot be restarted or started after the change, OCM restores
 the snapshot and previous runtime by default. When an environment moves to a new
 runtime, OCM runs OpenClaw's update finalization path inside that environment
-before service restart. Snapshots preserve managed path, npm, and Git plugin
-payloads together with their package metadata and symlinks, while generated
-plugin dependency caches and live runtime residue stay out of the archive.
+before service restart. A running managed service is considered recovered only
+after its HTTP health endpoint responds and OpenClaw's gateway status reports a
+reachable RPC endpoint; otherwise the upgrade follows the normal rollback path.
+Snapshots preserve managed path, npm, and Git plugin payloads together with
+their package metadata and symlinks, while generated plugin dependency caches
+and live runtime residue stay out of the archive.
 When both OpenClaw versions are known, `upgrade` rejects an older target before
 creating a snapshot, downloading the target, or changing runtime metadata.
 Switching only the binary cannot reverse newer OpenClaw config or SQLite state
