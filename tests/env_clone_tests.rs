@@ -53,6 +53,64 @@ fn env_clone_copies_state_into_a_new_environment() {
 }
 
 #[test]
+fn env_clone_preserves_plugin_payloads_while_clearing_live_runtime_state() {
+    let root = TestDir::new("env-clone-plugin-payloads");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    let payloads = [
+        (
+            "plugins/installs.json",
+            "{\"legacy\":{\"source\":\"path\"}}\n",
+        ),
+        (
+            "extensions/path-demo/openclaw.plugin.json",
+            "{\"id\":\"path-demo\"}\n",
+        ),
+        (
+            "npm/projects/npm-demo/package-lock.json",
+            "{\"lockfileVersion\":3}\n",
+        ),
+        (
+            "npm/projects/npm-demo/node_modules/npm-demo/index.js",
+            "module.exports = 'npm-demo';\n",
+        ),
+        ("git/git-demo/repo/.git/HEAD", "ref: refs/heads/main\n"),
+        (
+            "git/git-demo/repo/openclaw.plugin.json",
+            "{\"id\":\"git-demo\"}\n",
+        ),
+    ];
+    for (path, contents) in payloads {
+        write_text(&source_state.join(path), contents);
+    }
+    write_text(
+        &source_state.join("agents/main/sessions/session.jsonl"),
+        "{\"message\":\"do not copy\"}\n",
+    );
+    write_text(&source_state.join("logs/gateway.log"), "do not copy\n");
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert!(clone.status.success(), "{}", stderr(&clone));
+
+    let target_state = root.child("ocm-home/envs/target/.openclaw");
+    for (path, contents) in payloads {
+        assert_eq!(
+            fs::read_to_string(target_state.join(path)).unwrap(),
+            contents,
+            "{path}"
+        );
+    }
+    assert!(!target_state.join("agents/main/sessions").exists());
+    assert!(!target_state.join("logs").exists());
+}
+
+#[test]
 fn env_clone_rewrites_openclaw_config_for_the_new_env_root() {
     let root = TestDir::new("env-clone-config-rewrite");
     let cwd = root.child("workspace");
