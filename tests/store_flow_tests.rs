@@ -745,6 +745,10 @@ fn environment_export_writes_a_portable_archive() {
         &source_root.join(".openclaw/workspace/notes.txt"),
         "hello export",
     );
+    write_text(
+        &source_root.join(".openclaw/state/openclaw.sqlite"),
+        "nonportable runtime state",
+    );
 
     let summary = export_environment(
         ExportEnvironmentOptions {
@@ -775,6 +779,7 @@ fn environment_export_writes_a_portable_archive() {
         fs::read_to_string(extracted.root_dir.join(".openclaw/workspace/notes.txt")).unwrap(),
         "hello export"
     );
+    assert!(!extracted.root_dir.join(".openclaw/state").exists());
 }
 
 #[test]
