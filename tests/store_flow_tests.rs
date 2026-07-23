@@ -1110,7 +1110,7 @@ fn environment_snapshot_captures_a_named_point_in_time() {
 
 #[cfg(unix)]
 #[test]
-fn environment_snapshot_skips_legacy_plugin_dependency_state_and_preserves_symlinks() {
+fn environment_snapshot_preserves_managed_plugin_payloads_and_skips_runtime_debris() {
     let root = TestDir::new("store-env-snapshot-legacy-plugin-deps");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -1174,6 +1174,39 @@ fn environment_snapshot_skips_legacy_plugin_dependency_state_and_preserves_symli
         &source_root.join(".openclaw/plugins/installed.json"),
         "{\"plugins\":[]}\n",
     );
+    write_text(
+        &source_root.join(".openclaw/extensions/current/openclaw.plugin.json"),
+        "{\"id\":\"current\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/extensions/current/node_modules/package/index.js"),
+        "module.exports = true;\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/npm/projects/demo/package.json"),
+        "{\"name\":\"demo\"}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/npm/projects/demo/package-lock.json"),
+        "{\"lockfileVersion\":3}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/npm/projects/demo/node_modules/demo/index.js"),
+        "module.exports = 'npm';\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/git/git-demo/repo/.git/HEAD"),
+        "ref: refs/heads/main\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/git/git-demo/repo/openclaw.plugin.json"),
+        "{\"id\":\"git-demo\"}\n",
+    );
+    std::os::unix::fs::symlink(
+        "../demo",
+        source_root.join(".openclaw/npm/projects/demo/node_modules/demo-link"),
+    )
+    .unwrap();
     std::os::unix::fs::symlink(
         "../missing-workspace-target.txt",
         source_root.join(".openclaw/workspace/missing-link"),
@@ -1262,6 +1295,13 @@ fn environment_snapshot_skips_legacy_plugin_dependency_state_and_preserves_symli
         ".openclaw/identity/profile.json",
         ".openclaw/memory/store.json",
         ".openclaw/plugins/installed.json",
+        ".openclaw/extensions/current/openclaw.plugin.json",
+        ".openclaw/extensions/current/node_modules/package/index.js",
+        ".openclaw/npm/projects/demo/package.json",
+        ".openclaw/npm/projects/demo/package-lock.json",
+        ".openclaw/npm/projects/demo/node_modules/demo/index.js",
+        ".openclaw/git/git-demo/repo/.git/HEAD",
+        ".openclaw/git/git-demo/repo/openclaw.plugin.json",
     ] {
         assert!(extracted.root_dir.join(path).exists(), "{path}");
     }
@@ -1270,6 +1310,16 @@ fn environment_snapshot_skips_legacy_plugin_dependency_state_and_preserves_symli
             .unwrap()
             .file_type()
             .is_symlink()
+    );
+    assert!(
+        fs::symlink_metadata(
+            extracted
+                .root_dir
+                .join(".openclaw/npm/projects/demo/node_modules/demo-link")
+        )
+        .unwrap()
+        .file_type()
+        .is_symlink()
     );
     assert!(
         !extracted
