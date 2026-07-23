@@ -528,6 +528,7 @@ fn local_build_npm_adapter(
         command: CommandSpec {
             program: "node".to_string(),
             args: vec![display_path(&adapter_path)],
+            path_prepend: None,
         },
         real_npm: "npm".to_string(),
         workspace_dependency_dirs: local_workspace_dependency_dirs(repo_path)?,
@@ -548,6 +549,7 @@ fn install_openclaw_package_with_npm(
         CommandSpec {
             program: npm_program(env),
             args: Vec::new(),
+            path_prepend: None,
         }
     } else {
         managed_runtime_install_command(env, cwd)?
@@ -569,6 +571,7 @@ fn install_openclaw_package_with_npm(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    install_command.apply_environment(&mut command, env)?;
     if let Some(local_adapter) = local_adapter {
         local_adapter.apply_environment(&mut command);
     }
@@ -668,6 +671,7 @@ fn pack_local_openclaw_repo(
         .unwrap_or_else(|| CommandSpec {
             program: npm_program(env),
             args: Vec::new(),
+            path_prepend: None,
         });
     let mut command = Command::new(&npm.program);
     command

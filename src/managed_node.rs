@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::infra::archive::{extract_tar_gz, extract_zip};
 use crate::infra::download::{download_to_file, normalize_sha256, verify_file_sha256};
@@ -41,6 +43,21 @@ enum ManagedNodeArchiveKind {
 pub(crate) struct CommandSpec {
     pub(crate) program: String,
     pub(crate) args: Vec<String>,
+    pub(crate) path_prepend: Option<PathBuf>,
+}
+
+impl CommandSpec {
+    pub(crate) fn apply_environment(
+        &self,
+        command: &mut Command,
+        env: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let Some(path_prepend) = self.path_prepend.as_deref() else {
+            return Ok(());
+        };
+        command.env("PATH", prepend_to_path(path_prepend, env.get("PATH"))?);
+        Ok(())
+    }
 }
 
 pub(crate) fn managed_node_fallback_supported() -> bool {
@@ -154,9 +171,11 @@ pub(crate) fn managed_runtime_install_command(
     cwd: &Path,
 ) -> Result<CommandSpec, String> {
     let toolchain = ensure_managed_node_toolchain(env, cwd)?;
+    let path_prepend = toolchain.node_bin.parent().map(Path::to_path_buf);
     Ok(CommandSpec {
         program: display_path(&toolchain.node_bin),
         args: vec![display_path(&toolchain.npm_cli)],
+        path_prepend,
     })
 }
 
@@ -183,6 +202,7 @@ pub(crate) fn managed_runtime_launch_command(
     Ok(CommandSpec {
         program: display_path(&toolchain.node_bin),
         args,
+        path_prepend: None,
     })
 }
 
@@ -356,4 +376,16 @@ fn relocate_checked_path(path: &Path, from_root: &Path, to_root: &Path) -> Resul
         .strip_prefix(from_root)
         .map_err(|error| error.to_string())?;
     Ok(to_root.join(relative))
+}
+
+fn prepend_to_path(path: &Path, current: Option<&String>) -> Result<OsString, String> {
+    let mut paths = vec![path.to_path_buf()];
+    if let Some(current) = current {
+        paths.extend(
+            std::env::split_paths(current)
+                .filter(|candidate| !candidate.as_os_str().is_empty() && candidate != path),
+        );
+    }
+    std::env::join_paths(paths)
+        .map_err(|error| format!("failed to add managed Node.js to PATH for OpenClaw: {error}"))
 }

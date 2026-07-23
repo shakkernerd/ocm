@@ -525,6 +525,13 @@ script="$1"
 shift
 case "$script" in
   *npm-cli.js)
+    if [ "${{OCM_TEST_REQUIRE_MANAGED_NODE_ON_PATH:-}}" = "1" ]; then
+      resolved_node="$(command -v node || true)"
+      if [ "$resolved_node" != "$0" ]; then
+        echo "managed npm lifecycle PATH resolved node to ${{resolved_node:-missing}}, expected $0" >&2
+        exit 1
+      fi
+    fi
     prefix=""
     archive=""
     while [ "$#" -gt 0 ]; do

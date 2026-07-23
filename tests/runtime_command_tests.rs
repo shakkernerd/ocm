@@ -1338,6 +1338,10 @@ fn official_runtime_install_uses_managed_node_when_npm_is_missing() {
         "OCM_INTERNAL_NPM_BIN".to_string(),
         path_string(&root.child("missing-npm")),
     );
+    env.insert(
+        "OCM_TEST_REQUIRE_MANAGED_NODE_ON_PATH".to_string(),
+        "1".to_string(),
+    );
 
     let install = run_ocm(
         &cwd,
