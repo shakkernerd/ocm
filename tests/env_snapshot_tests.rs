@@ -411,6 +411,73 @@ fn env_snapshot_preserves_keyed_include_order_when_overriding_an_agent() {
 }
 
 #[test]
+fn env_snapshot_ignores_openclaw_blocked_keyed_agents() {
+    let root = TestDir::new("env-snapshot-blocked-keyed-agent");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    write_text(
+        &source_state.join("openclaw.json"),
+        r#"{
+          "$include": "./config/agents.json5",
+          "env": {}
+        }"#,
+    );
+    write_text(
+        &source_state.join("config/agents.json5"),
+        r#"{
+          "agents": {
+            "defaults": { "workspace": "${OPENCLAW_STATE_DIR}/team" },
+            "entries": {
+              "constructor": {
+                "workspace": "${OPENCLAW_STATE_DIR}/ignored"
+              },
+              "ops": {}
+            }
+          }
+        }"#,
+    );
+    write_text(
+        &source_state.join("team/real.txt"),
+        "actual OpenClaw default workspace\n",
+    );
+    write_text(
+        &source_state.join("ignored/ignored.txt"),
+        "ignored keyed agent workspace\n",
+    );
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let list_output = stdout(&list);
+    let snapshot_id = list_output
+        .split("\"id\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap();
+
+    fs::remove_dir_all(source_state.join("team")).unwrap();
+    fs::remove_dir_all(source_state.join("ignored")).unwrap();
+    let restore = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "restore", "source", snapshot_id],
+    );
+    assert!(restore.status.success(), "{}", stderr(&restore));
+    assert_eq!(
+        fs::read_to_string(source_state.join("team/real.txt")).unwrap(),
+        "actual OpenClaw default workspace\n"
+    );
+    assert!(!source_state.join("ignored").exists());
+}
+
+#[test]
 fn env_snapshot_uses_openclaw_config_env_precedence_for_workspace_selection() {
     let root = TestDir::new("env-snapshot-config-env-precedence");
     let cwd = root.child("workspace");
