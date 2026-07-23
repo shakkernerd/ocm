@@ -1101,7 +1101,7 @@ impl Cli {
             let resolved = self.resolve_upgrade_target(target)?;
             let target_runtime_name = resolved.name.clone();
             let target_version = self.resolved_target_version(env_name, &resolved)?;
-            self.ensure_upgrade_is_not_downgrade(
+            let source_version = self.ensure_upgrade_is_not_downgrade(
                 env_name,
                 current.release_version.as_deref(),
                 target_version.as_deref(),
@@ -1143,7 +1143,7 @@ impl Cli {
                     source: UpgradeHistoryBinding {
                         kind: "runtime".to_string(),
                         name: current.name.clone(),
-                        openclaw_version: current.release_version.clone(),
+                        openclaw_version: source_version,
                     },
                     target: UpgradeHistoryBinding {
                         kind: "runtime".to_string(),
@@ -1334,7 +1334,7 @@ impl Cli {
             let resolved = self.resolve_upgrade_target(&target)?;
             let target_runtime_name = resolved.name.clone();
             let target_version = self.resolved_target_version(env_name, &resolved)?;
-            self.ensure_upgrade_is_not_downgrade(
+            let source_version = self.ensure_upgrade_is_not_downgrade(
                 env_name,
                 current.release_version.as_deref(),
                 target_version.as_deref(),
@@ -1363,7 +1363,7 @@ impl Cli {
                     source: UpgradeHistoryBinding {
                         kind: "runtime".to_string(),
                         name: current.name.clone(),
-                        openclaw_version: current.release_version.clone(),
+                        openclaw_version: source_version,
                     },
                     target: UpgradeHistoryBinding {
                         kind: "runtime".to_string(),
@@ -1501,7 +1501,7 @@ impl Cli {
             },
         )?;
         let target_version = resolved_update.release_version().to_string();
-        self.ensure_upgrade_is_not_downgrade(
+        let source_version = self.ensure_upgrade_is_not_downgrade(
             env_name,
             current.release_version.as_deref(),
             Some(&target_version),
@@ -1529,7 +1529,7 @@ impl Cli {
                 source: UpgradeHistoryBinding {
                     kind: "runtime".to_string(),
                     name: current.name.clone(),
-                    openclaw_version: current.release_version.clone(),
+                    openclaw_version: source_version,
                 },
                 target: UpgradeHistoryBinding {
                     kind: "runtime".to_string(),
@@ -1711,7 +1711,8 @@ impl Cli {
         let resolved = self.resolve_upgrade_target(target)?;
         let target_runtime_name = resolved.name.clone();
         let target_version = self.resolved_target_version(env_name, &resolved)?;
-        self.ensure_upgrade_is_not_downgrade(env_name, None, target_version.as_deref())?;
+        let source_version =
+            self.ensure_upgrade_is_not_downgrade(env_name, None, target_version.as_deref())?;
         if !target.is_named_runtime() {
             self.ensure_runtime_upgrade_isolated(env_name, &target_runtime_name)?;
         }
@@ -1739,7 +1740,7 @@ impl Cli {
                 source: UpgradeHistoryBinding {
                     kind: "launcher".to_string(),
                     name: launcher_name.to_string(),
-                    openclaw_version: None,
+                    openclaw_version: source_version,
                 },
                 target: UpgradeHistoryBinding {
                     kind: "runtime".to_string(),
@@ -1907,10 +1908,7 @@ impl Cli {
         env_name: &str,
         current_version_hint: Option<&str>,
         target_version: Option<&str>,
-    ) -> Result<(), String> {
-        let Some(target_version) = target_version else {
-            return Ok(());
-        };
+    ) -> Result<Option<String>, String> {
         let current_version_hint = current_version_hint
             .filter(|version| compare_runtime_release_versions(version, version).is_some());
         let current_version =
@@ -1922,19 +1920,22 @@ impl Cli {
                 }
                 Err(_) => current_version_hint.map(str::to_string),
             };
+        let Some(target_version) = target_version else {
+            return Ok(current_version);
+        };
         let Some(current_version) = current_version else {
-            return Ok(());
+            return Ok(None);
         };
 
         if current_version == target_version {
-            return Ok(());
+            return Ok(Some(current_version));
         }
 
         match compare_runtime_release_versions(&current_version, target_version) {
             Some(std::cmp::Ordering::Greater) => Err(format!(
                 "refusing to downgrade env \"{env_name}\" from OpenClaw {current_version} to {target_version}: OCM does not run reverse config or SQLite state migrations, and newer environment state may be unreadable by the older runtime. Restore a complete pre-upgrade snapshot captured with {target_version} instead of switching only the runtime"
             )),
-            Some(_) => Ok(()),
+            Some(_) => Ok(Some(current_version)),
             None => Err(format!(
                 "cannot safely compare current OpenClaw version \"{current_version}\" with target \"{target_version}\"; refusing to change env \"{env_name}\" without downgrade safety"
             )),
