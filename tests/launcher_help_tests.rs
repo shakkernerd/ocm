@@ -279,6 +279,7 @@ fn upgrade_help_is_available_from_help_and_flag() {
     assert!(output.contains("Simulations clone the source env"));
     assert!(output.contains("Channel-tracked runtimes move forward automatically."));
     assert!(output.contains("older targets are rejected before snapshot creation"));
+    assert!(output.contains("require both HTTP health and OpenClaw gateway RPC readiness"));
     assert!(
         output.contains("An env upgrade will not replace runtime bytes shared with another env")
     );
