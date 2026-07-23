@@ -1620,6 +1620,7 @@ impl Cli {
         options: UpgradeOptions,
     ) -> Result<UpgradeEnvSummary, String> {
         let _transaction_lock = lock_upgrade_transaction(name, &self.env, &self.cwd)?;
+        let _operation_lock = self.environment_service().lock_operation(name)?;
         self.upgrade_env_locked(name, target, options)
     }
 
@@ -1694,7 +1695,7 @@ impl Cli {
                     ),
                 });
             }
-            let mut transaction = self.begin_upgrade_transaction(
+            let mut transaction = self.begin_upgrade_transaction_locked(
                 env_name,
                 UpgradeTransactionPlan {
                     source: UpgradeHistoryBinding {
@@ -1710,6 +1711,8 @@ impl Cli {
                 },
                 &[current.name.clone(), target_runtime_name.clone()],
                 options.rollback_enabled,
+                "pre-upgrade",
+                None,
             )?;
             let prepared = match self.prepare_isolated_upgrade_target(env_name, target, resolved) {
                 Ok(prepared) => prepared,
@@ -1756,7 +1759,7 @@ impl Cli {
             };
             let publish_result = if binding_changed {
                 self.environment_service()
-                    .set_runtime(env_name, prepared.name.as_str())
+                    .set_runtime_locked(env_name, prepared.name.as_str())
                     .map(|_| ())
             } else {
                 self.runtime_service().refresh_supervisor_if_present()
@@ -1774,8 +1777,12 @@ impl Cli {
                     format!("failed to publish upgraded runtime: {error}"),
                 );
             }
-            let service_result =
-                self.reconcile_upgraded_service(env_name, service.as_ref(), binding_changed, true);
+            let service_result = self.reconcile_upgraded_service_locked(
+                env_name,
+                service.as_ref(),
+                binding_changed,
+                true,
+            );
             let (service_action, service_note) = match service_result {
                 Ok(result) => result,
                 Err(error) => {
@@ -1920,7 +1927,7 @@ impl Cli {
                     ),
                 });
             }
-            let mut transaction = self.begin_upgrade_transaction(
+            let mut transaction = self.begin_upgrade_transaction_locked(
                 env_name,
                 UpgradeTransactionPlan {
                     source: UpgradeHistoryBinding {
@@ -1936,6 +1943,8 @@ impl Cli {
                 },
                 &[current.name.clone(), target_runtime_name.clone()],
                 options.rollback_enabled,
+                "pre-upgrade",
+                None,
             )?;
             let prepared = match self.prepare_isolated_upgrade_target(env_name, &target, resolved) {
                 Ok(prepared) => prepared,
@@ -1999,7 +2008,7 @@ impl Cli {
                 );
             }
             let service_result =
-                self.reconcile_upgraded_service(env_name, service.as_ref(), false, changed);
+                self.reconcile_upgraded_service_locked(env_name, service.as_ref(), false, changed);
             let (service_action, service_note) = match service_result {
                 Ok(result) => result,
                 Err(error) => {
@@ -2089,7 +2098,7 @@ impl Cli {
                 note: Some("dry run: no runtime, env, service, or snapshot changed".to_string()),
             });
         }
-        let mut transaction = self.begin_upgrade_transaction(
+        let mut transaction = self.begin_upgrade_transaction_locked(
             env_name,
             UpgradeTransactionPlan {
                 source: UpgradeHistoryBinding {
@@ -2105,6 +2114,8 @@ impl Cli {
             },
             std::slice::from_ref(&current.name),
             options.rollback_enabled,
+            "pre-upgrade",
+            None,
         )?;
         let updated = match self.with_progress(format!("Updating runtime {}", current.name), || {
             self.with_isolated_runtime_mutation(env_name, &current.name, || {
@@ -2162,7 +2173,7 @@ impl Cli {
             );
         }
         let service_result =
-            self.reconcile_upgraded_service(env_name, service.as_ref(), false, true);
+            self.reconcile_upgraded_service_locked(env_name, service.as_ref(), false, true);
         let (service_action, service_note) = match service_result {
             Ok(result) => result,
             Err(error) => {
@@ -2301,7 +2312,7 @@ impl Cli {
             });
         }
 
-        let mut transaction = self.begin_upgrade_transaction(
+        let mut transaction = self.begin_upgrade_transaction_locked(
             env_name,
             UpgradeTransactionPlan {
                 source: UpgradeHistoryBinding {
@@ -2317,6 +2328,8 @@ impl Cli {
             },
             std::slice::from_ref(&target_runtime_name),
             options.rollback_enabled,
+            "pre-upgrade",
+            None,
         )?;
         let prepared = match self.prepare_isolated_upgrade_target(env_name, target, resolved) {
             Ok(prepared) => prepared,
@@ -2362,7 +2375,7 @@ impl Cli {
         };
         if let Err(error) = self
             .environment_service()
-            .set_runtime(env_name, prepared.name.as_str())
+            .set_runtime_locked(env_name, prepared.name.as_str())
         {
             return self.rollback_failed_upgrade(
                 env_name,
@@ -2377,7 +2390,7 @@ impl Cli {
             );
         }
         let service_result =
-            self.reconcile_upgraded_service(env_name, service.as_ref(), true, true);
+            self.reconcile_upgraded_service_locked(env_name, service.as_ref(), true, true);
         let (service_action, service_note) = match service_result {
             Ok(result) => result,
             Err(error) => {
@@ -2613,7 +2626,7 @@ impl Cli {
         operation()
     }
 
-    fn reconcile_upgraded_service(
+    fn reconcile_upgraded_service_locked(
         &self,
         env_name: &str,
         service: Option<&ServiceSummary>,
@@ -2633,7 +2646,7 @@ impl Cli {
         if service.running {
             let restart = self
                 .with_progress(format!("Restarting service for {env_name}"), || {
-                    self.service_service().restart(env_name)
+                    self.service_service().restart_locked(env_name)
                 })?;
             let note = join_optional_warnings(
                 join_warnings(&restart.warnings),
@@ -2644,7 +2657,7 @@ impl Cli {
 
         if binding_changed || runtime_changed {
             let start = self.with_progress(format!("Starting service for {env_name}"), || {
-                self.service_service().start(env_name)
+                self.service_service().start_locked(env_name)
             })?;
             let note = join_optional_warnings(
                 join_warnings(&start.warnings),
@@ -2875,24 +2888,6 @@ impl Cli {
             .map_err(|error| format!("{name} failed: {error}"))?;
         self.run_resolved_for_simulation(resolved, &[])
             .map_err(|error| format!("{name} failed: {error}"))
-    }
-
-    fn begin_upgrade_transaction(
-        &self,
-        env_name: &str,
-        plan: UpgradeTransactionPlan,
-        runtime_names: &[String],
-        rollback_enabled: bool,
-    ) -> Result<UpgradeTransaction, String> {
-        let _operation_lock = self.environment_service().lock_operation(env_name)?;
-        self.begin_upgrade_transaction_locked(
-            env_name,
-            plan,
-            runtime_names,
-            rollback_enabled,
-            "pre-upgrade",
-            None,
-        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3241,7 +3236,7 @@ impl Cli {
             return Ok(summary);
         }
 
-        let rollback_result = self.rollback_upgrade(env_name, &transaction);
+        let rollback_result = self.rollback_upgrade_locked(env_name, &transaction);
         let snapshot_id = transaction.snapshot_id.clone();
         let mut summary = match rollback_result {
             Ok(()) => UpgradeEnvSummary {
@@ -3287,32 +3282,13 @@ impl Cli {
         Ok(summary)
     }
 
-    fn rollback_upgrade(
+    fn rollback_upgrade_locked(
         &self,
         env_name: &str,
         transaction: &UpgradeTransaction,
     ) -> Result<(), String> {
         // Restore runtime bytes and metadata before the snapshot republishes supervisor
         // state; otherwise rollback can briefly advertise the failed runtime revision.
-        for runtime_backup in &transaction.runtime_backups {
-            self.restore_runtime_backup(runtime_backup)?;
-        }
-        self.environment_service()
-            .restore_snapshot(RestoreEnvSnapshotOptions {
-                env_name: env_name.to_string(),
-                snapshot_id: transaction.snapshot_id.clone(),
-            })?;
-        for runtime_name in &transaction.created_runtime_names {
-            self.remove_runtime_created_during_upgrade(runtime_name)?;
-        }
-        Ok(())
-    }
-
-    fn rollback_upgrade_locked(
-        &self,
-        env_name: &str,
-        transaction: &UpgradeTransaction,
-    ) -> Result<(), String> {
         for runtime_backup in &transaction.runtime_backups {
             self.restore_runtime_backup(runtime_backup)?;
         }
