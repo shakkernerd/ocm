@@ -2050,11 +2050,12 @@ impl Cli {
         }
 
         if verify_gateway {
-            self.run_openclaw_command(
+            let gateway_status = self.run_openclaw_command(
                 env_name,
                 "openclaw gateway status",
                 &["gateway", "status", "--deep", "--json"],
             )?;
+            verify_gateway_status_readiness(&gateway_status.stdout)?;
         }
 
         Ok(Some(format!(
@@ -2858,6 +2859,62 @@ fn gateway_health_ok(port: u32) -> bool {
     };
     let text = String::from_utf8_lossy(&response[..read]);
     text.starts_with("HTTP/1.1 200") || text.starts_with("HTTP/1.0 200")
+}
+
+fn verify_gateway_status_readiness(stdout: &str) -> Result<(), String> {
+    let status: Value = serde_json::from_str(stdout.trim()).map_err(|error| {
+        format!("post-upgrade gateway readiness failed: invalid status JSON ({error})")
+    })?;
+
+    if let Some(ready) = status.pointer("/rpc/ok").and_then(Value::as_bool) {
+        return gateway_readiness_result(ready, &status);
+    }
+    if let Some(ready) = status.get("ok").and_then(Value::as_bool) {
+        return gateway_readiness_result(ready, &status);
+    }
+    if let Some(targets) = status.get("targets").and_then(Value::as_array) {
+        let ready = targets.iter().any(|target| {
+            target
+                .pointer("/connect/ok")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        });
+        return gateway_readiness_result(ready, &status);
+    }
+
+    Err(
+        "post-upgrade gateway readiness failed: status JSON did not report RPC reachability"
+            .to_string(),
+    )
+}
+
+fn gateway_readiness_result(ready: bool, status: &Value) -> Result<(), String> {
+    if ready {
+        return Ok(());
+    }
+
+    let detail = status
+        .pointer("/rpc/error")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            status
+                .get("warnings")
+                .and_then(Value::as_array)
+                .and_then(|warnings| warnings.first())
+                .and_then(|warning| warning.get("message"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            status
+                .get("targets")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find_map(|target| target.pointer("/connect/error").and_then(Value::as_str))
+        })
+        .unwrap_or("OpenClaw reported that no gateway RPC endpoint was reachable");
+
+    Err(format!("post-upgrade gateway readiness failed: {detail}"))
 }
 
 #[cfg(test)]
