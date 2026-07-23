@@ -1903,6 +1903,9 @@ impl Cli {
         if validation.status.success() {
             return Ok(false);
         }
+        if command_output_reports_unsupported_command(&validation.stdout, &validation.stderr) {
+            return Ok(false);
+        }
 
         self.run_update_mode_openclaw_command(
             env_name,
@@ -2508,6 +2511,20 @@ fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> String {
     summarize_command_text(&stderr, &stdout).unwrap_or_else(|| "no output".to_string())
 }
 
+fn command_output_reports_unsupported_command(stdout: &str, stderr: &str) -> bool {
+    [stdout, stderr].iter().any(|text| {
+        let normalized = text.to_ascii_lowercase();
+        [
+            "unknown command",
+            "unrecognized command",
+            "command not found",
+            "unexpected args:",
+        ]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    })
+}
+
 fn shell_command(command: &str) -> Command {
     if cfg!(windows) {
         let mut process = Command::new("cmd");
@@ -2609,7 +2626,7 @@ fn gateway_health_ok(port: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::version_output_matches_expected;
+    use super::{command_output_reports_unsupported_command, version_output_matches_expected};
 
     #[test]
     fn version_output_accepts_exact_version() {
@@ -2637,6 +2654,26 @@ mod tests {
         assert!(!version_output_matches_expected(
             "OpenClaw 12026.5.14",
             "2026.5.14"
+        ));
+    }
+
+    #[test]
+    fn config_probe_recognizes_unsupported_commands() {
+        assert!(command_output_reports_unsupported_command(
+            "",
+            "error: unknown command 'config'"
+        ));
+        assert!(command_output_reports_unsupported_command(
+            "",
+            "unexpected args: config validate"
+        ));
+    }
+
+    #[test]
+    fn config_probe_keeps_invalid_config_failures_actionable() {
+        assert!(!command_output_reports_unsupported_command(
+            "",
+            "OpenClaw config is invalid\nProblem: meta: Unrecognized key: lastTouchedAt"
         ));
     }
 }
