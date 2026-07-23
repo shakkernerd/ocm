@@ -58,7 +58,8 @@ pub(crate) use openclaw_config::{
 };
 pub(crate) use openclaw_state::{
     OpenClawStateAudit, audit_openclaw_state, clear_nonportable_runtime_state,
-    openclaw_env_archive_options, prepare_migrated_runtime_state, repair_openclaw_runtime_state,
+    openclaw_env_archive_options, openclaw_env_snapshot_archive_options,
+    prepare_migrated_runtime_state, repair_openclaw_runtime_state,
 };
 pub(crate) use openclaw_workspaces::{
     OpenClawWorkspaceRuntime, resolve_env_openclaw_workspaces, resolve_plain_openclaw_workspaces,

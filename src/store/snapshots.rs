@@ -21,7 +21,7 @@ use super::layout::{
 };
 use super::{
     OpenClawWorkspaceRuntime, audit_openclaw_state, clear_nonportable_runtime_state,
-    get_environment, list_environments, now_utc, openclaw_env_archive_options,
+    get_environment, list_environments, now_utc, openclaw_env_snapshot_archive_options,
     rewrite_openclaw_config_for_target, save_environment,
 };
 
@@ -114,7 +114,7 @@ pub fn create_env_snapshot(
             &metadata,
             &env_paths.root,
             &archive_path,
-            openclaw_env_archive_options(
+            openclaw_env_snapshot_archive_options(
                 &env_paths,
                 env,
                 OpenClawWorkspaceRuntime::for_env(&meta.name, meta.gateway_port),

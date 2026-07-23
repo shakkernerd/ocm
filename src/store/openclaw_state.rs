@@ -113,6 +113,18 @@ pub(crate) fn openclaw_env_archive_options(
     })
 }
 
+pub(crate) fn openclaw_env_snapshot_archive_options(
+    paths: &EnvPaths,
+    env: &BTreeMap<String, String>,
+    runtime: OpenClawWorkspaceRuntime<'_>,
+) -> Result<EnvArchiveOptions, String> {
+    let mut options = openclaw_env_archive_options(paths, env, runtime)?;
+    options
+        .included_path_roots
+        .insert(Path::new(".openclaw/state").to_path_buf());
+    Ok(options)
+}
+
 pub(crate) fn should_skip_openclaw_env_archive_path(
     relative_path: &Path,
     _kind: EnvArchiveEntryKind,
@@ -437,7 +449,6 @@ fn is_durable_openclaw_archive_path(components: &[&str]) -> bool {
             | [".openclaw", "devices", ..]
             | [".openclaw", "identity", ..]
             | [".openclaw", "memory", ..]
-            | [".openclaw", "state", ..]
             | [".openclaw", "plugins", ..]
             | [".openclaw", "extensions", ..]
             | [".openclaw", "npm", ..]
@@ -896,7 +907,13 @@ mod tests {
         )
         .unwrap();
 
-        let options = openclaw_env_archive_options(
+        let export_options = openclaw_env_archive_options(
+            &paths,
+            &BTreeMap::new(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
+        let options = openclaw_env_snapshot_archive_options(
             &paths,
             &BTreeMap::new(),
             OpenClawWorkspaceRuntime::default(),
@@ -912,14 +929,28 @@ mod tests {
                 .included_path_roots
                 .contains(Path::new(".openclaw/workspace"))
         );
+        assert!(
+            options
+                .included_path_roots
+                .contains(Path::new(".openclaw/state"))
+        );
         assert!(options.excluded_path_roots.is_empty());
         assert!(options.snapshot_sqlite_files);
+        assert!(export_options.snapshot_sqlite_files);
+        assert!(
+            !export_options
+                .included_path_roots
+                .contains(Path::new(".openclaw/state"))
+        );
+        assert!(should_skip_openclaw_env_archive_path(
+            Path::new(".openclaw/state/openclaw.sqlite"),
+            EnvArchiveEntryKind::File
+        ));
         assert!(!should_skip_openclaw_env_archive_path(
             Path::new(".openclaw/workspace/notes.txt"),
             EnvArchiveEntryKind::File
         ));
         for path in [
-            ".openclaw/state/openclaw.sqlite",
             ".openclaw/plugins/installs.json",
             ".openclaw/extensions/demo/package.json",
             ".openclaw/npm/projects/demo/package-lock.json",
