@@ -276,6 +276,25 @@ pub fn upgrade_history_meta_path(
     Ok(upgrade_history_env_dir(env_name, env, cwd)?.join(format!("{transaction_id}.json")))
 }
 
+pub fn upgrade_history_recovery_dir(
+    env_name: &str,
+    transaction_id: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    Ok(upgrade_history_env_dir(env_name, env, cwd)?.join(format!("{transaction_id}.recovery")))
+}
+
+pub fn upgrade_history_runtime_recovery_dir(
+    env_name: &str,
+    transaction_id: &str,
+    runtime_name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<PathBuf, String> {
+    Ok(upgrade_history_recovery_dir(env_name, transaction_id, env, cwd)?.join(runtime_name))
+}
+
 pub fn supervisor_state_path(
     env: &BTreeMap<String, String>,
     cwd: &Path,

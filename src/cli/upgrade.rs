@@ -32,7 +32,7 @@ use crate::store::{
     ensure_store, get_runtime, install_runtime_from_selected_official_openclaw_release,
     list_upgrade_history, lock_env_registry, remove_runtime, resolve_absolute_path,
     runtime_install_root, runtime_integrity_issue, runtime_meta_path, save_environment,
-    save_upgrade_history_record, write_json,
+    save_upgrade_history_record, upgrade_history_runtime_recovery_dir, write_json,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -1170,6 +1170,12 @@ impl Cli {
                     );
                 }
             };
+            if matches!(
+                prepared.action,
+                OfficialRuntimePrepareAction::Installed | OfficialRuntimePrepareAction::Updated
+            ) {
+                transaction.mark_runtime_mutated();
+            }
             let binding_changed = prepared.name != current.name;
             let post_update_note = match self.run_post_core_update(env_name, &prepared.name) {
                 Ok(note) => {
@@ -1394,6 +1400,9 @@ impl Cli {
                 prepared.action,
                 OfficialRuntimePrepareAction::Installed | OfficialRuntimePrepareAction::Updated
             );
+            if changed {
+                transaction.mark_runtime_mutated();
+            }
             let post_update_note = if changed {
                 match self.run_post_core_update(env_name, &prepared.name) {
                     Ok(note) => {
@@ -1561,6 +1570,7 @@ impl Cli {
                 );
             }
         };
+        transaction.mark_runtime_mutated();
         let post_update_note = match self.run_post_core_update(env_name, &updated.name) {
             Ok(note) => {
                 transaction.mark_post_update_completed(note.as_deref());
@@ -1767,6 +1777,12 @@ impl Cli {
                 );
             }
         };
+        if matches!(
+            prepared.action,
+            OfficialRuntimePrepareAction::Installed | OfficialRuntimePrepareAction::Updated
+        ) {
+            transaction.mark_runtime_mutated();
+        }
         let post_update_note = match self.run_post_core_update(env_name, &prepared.name) {
             Ok(note) => {
                 transaction.mark_post_update_completed(note.as_deref());
@@ -2349,14 +2365,30 @@ impl Cli {
                 status: "not-run".to_string(),
                 note: None,
             },
+            runtime_mutated: false,
         })
     }
 
     fn finish_successful_upgrade(
         &self,
         summary: UpgradeEnvSummary,
-        transaction: UpgradeTransaction,
+        mut transaction: UpgradeTransaction,
     ) -> Result<UpgradeEnvSummary, String> {
+        if let Err(error) =
+            self.retain_required_runtime_recovery(&summary.env_name, &mut transaction)
+        {
+            return self.rollback_failed_upgrade(
+                &summary.env_name,
+                &summary.previous_binding_kind,
+                summary.previous_binding_name.clone(),
+                &summary.binding_kind,
+                summary.binding_name.clone(),
+                summary.runtime_release_version.clone(),
+                summary.runtime_release_channel.clone(),
+                transaction,
+                format!("failed to retain runtime recovery material: {error}"),
+            );
+        }
         if let Err(error) = self.record_upgrade_history(&transaction, &summary) {
             return self.rollback_failed_upgrade(
                 &summary.env_name,
@@ -2370,8 +2402,63 @@ impl Cli {
                 format!("failed to record upgrade history: {error}"),
             );
         }
-        transaction.cleanup();
+        transaction.commit();
         Ok(summary)
+    }
+
+    fn retain_required_runtime_recovery(
+        &self,
+        env_name: &str,
+        transaction: &mut UpgradeTransaction,
+    ) -> Result<(), String> {
+        if !transaction.runtime_mutated
+            || transaction.source.kind != "runtime"
+            || transaction.source.name != transaction.target.name
+        {
+            return Ok(());
+        }
+        let runtime_name = transaction.source.name.clone();
+        let backup = transaction
+            .runtime_backups
+            .iter_mut()
+            .find(|backup| backup.meta.name == runtime_name)
+            .ok_or_else(|| {
+                format!("runtime backup for in-place upgrade of \"{runtime_name}\" was not created")
+            })?;
+        let Some(source_root) = backup.backup_root.take() else {
+            return Err(format!(
+                "runtime \"{runtime_name}\" does not have installer-managed bytes to retain"
+            ));
+        };
+        let recovery_root = upgrade_history_runtime_recovery_dir(
+            env_name,
+            &transaction.id,
+            &runtime_name,
+            &self.env,
+            &self.cwd,
+        )?;
+        if recovery_root.exists() {
+            backup.backup_root = Some(source_root);
+            return Err(format!(
+                "runtime recovery path already exists: {}",
+                display_path(&recovery_root)
+            ));
+        }
+        fs::create_dir_all(&recovery_root).map_err(|error| error.to_string())?;
+        let recovery_files = recovery_root.join("files");
+        if let Err(error) = fs::rename(&source_root, &recovery_files) {
+            let _ = fs::remove_dir_all(&recovery_root);
+            backup.backup_root = Some(source_root);
+            return Err(format!(
+                "failed to retain runtime recovery bytes at {}: {error}",
+                display_path(&recovery_files)
+            ));
+        }
+        backup.backup_root = Some(recovery_files);
+        backup.retained_root = Some(recovery_root.clone());
+        write_json(&recovery_root.join("runtime.json"), &backup.meta)?;
+        backup.backup_id = Some(runtime_name);
+        Ok(())
     }
 
     fn record_upgrade_history(
@@ -2386,7 +2473,7 @@ impl Cli {
             .map(|backup| UpgradeHistoryRuntimeRecovery {
                 runtime_name: backup.meta.name.clone(),
                 release_version: backup.meta.release_version.clone(),
-                backup_id: None,
+                backup_id: backup.backup_id.clone(),
             })
             .collect();
         let record = UpgradeHistoryRecord {
@@ -2444,6 +2531,8 @@ impl Cli {
         Ok(RuntimeRollbackBackup {
             meta: runtime.clone(),
             backup_root,
+            retained_root: None,
+            backup_id: None,
         })
     }
 
@@ -2732,9 +2821,14 @@ struct UpgradeTransaction {
     service_before: UpgradeHistoryServiceState,
     migration: UpgradeHistoryStage,
     finalization: UpgradeHistoryStage,
+    runtime_mutated: bool,
 }
 
 impl UpgradeTransaction {
+    fn mark_runtime_mutated(&mut self) {
+        self.runtime_mutated = true;
+    }
+
     fn mark_post_update_completed(&mut self, note: Option<&str>) {
         self.migration.status = if note.is_some_and(|note| note.contains("config repair")) {
             "repaired".to_string()
@@ -2764,25 +2858,48 @@ impl UpgradeTransaction {
             runtime_backup.cleanup();
         }
     }
+
+    fn commit(self) {
+        for runtime_backup in self.runtime_backups {
+            runtime_backup.commit();
+        }
+    }
 }
 
 #[derive(Debug)]
 struct RuntimeRollbackBackup {
     meta: RuntimeMeta,
     backup_root: Option<PathBuf>,
+    retained_root: Option<PathBuf>,
+    backup_id: Option<String>,
 }
 
 impl RuntimeRollbackBackup {
     fn cleanup(mut self) {
-        if let Some(backup_root) = self.backup_root.take() {
+        if let Some(retained_root) = self.retained_root.take() {
+            self.backup_root.take();
+            let _ = fs::remove_dir_all(retained_root);
+        } else if let Some(backup_root) = self.backup_root.take() {
             let _ = fs::remove_dir_all(backup_root);
+        }
+    }
+
+    fn commit(mut self) {
+        if self.backup_id.is_some() {
+            self.backup_root.take();
+            self.retained_root.take();
+        } else {
+            self.cleanup();
         }
     }
 }
 
 impl Drop for RuntimeRollbackBackup {
     fn drop(&mut self) {
-        if let Some(backup_root) = self.backup_root.take() {
+        if let Some(retained_root) = self.retained_root.take() {
+            self.backup_root.take();
+            let _ = fs::remove_dir_all(retained_root);
+        } else if let Some(backup_root) = self.backup_root.take() {
             let _ = fs::remove_dir_all(backup_root);
         }
     }
