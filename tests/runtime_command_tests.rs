@@ -1350,6 +1350,16 @@ fn official_runtime_install_uses_managed_node_when_npm_is_missing() {
     );
     assert!(install.status.success(), "{}", stderr(&install));
     assert!(root.child("ocm-home/runtimes/stable").exists());
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "managed", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+    let run = run_ocm(&cwd, &env, &["env", "run", "managed", "--", "--version"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert_eq!(stdout(&run), "stable\n");
 }
 
 #[test]

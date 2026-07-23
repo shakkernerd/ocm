@@ -8,6 +8,7 @@ use crate::infra::shell::{build_openclaw_dev_source_env, build_openclaw_env};
 use crate::launcher::{
     build_launcher_command, resolve_direct_launcher_command, resolve_launcher_run_dir,
 };
+use crate::managed_node::apply_path_prepend_to_environment;
 use crate::runtime::resolve_runtime_launch;
 use crate::store::{display_path, get_launcher, get_runtime_verified};
 
@@ -151,6 +152,8 @@ pub fn resolve_gateway_process_spec(
                 cwd,
                 bootstrap_managed_node,
             )?;
+            let mut process_env = build_openclaw_env(env_meta, process_env);
+            apply_path_prepend_to_environment(&mut process_env, launch.path_prepend.as_deref())?;
             Ok(GatewayProcessSpec {
                 env_name: env_meta.name.clone(),
                 binding_kind: "runtime".to_string(),
@@ -162,7 +165,7 @@ pub fn resolve_gateway_process_spec(
                 runtime_release_channel: runtime.release_channel.clone(),
                 args: launch.args,
                 run_dir: Path::new(&env_meta.root).to_path_buf(),
-                process_env: build_openclaw_env(env_meta, process_env),
+                process_env,
             })
         }
         ExecutionBinding::Dev => {
@@ -235,6 +238,7 @@ pub enum ResolvedExecution {
         forwarded_args: Vec<String>,
         program: String,
         program_args: Vec<String>,
+        path_prepend: Option<PathBuf>,
         run_dir: PathBuf,
     },
     Dev {
@@ -394,6 +398,7 @@ impl<'a> EnvironmentService<'a> {
                     forwarded_args: args,
                     program: launch.program,
                     program_args: launch.args,
+                    path_prepend: launch.path_prepend,
                     run_dir: resolve_runtime_run_dir(self.cwd),
                     env,
                 })

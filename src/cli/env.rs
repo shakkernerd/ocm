@@ -1296,14 +1296,17 @@ impl Cli {
                 env,
                 program,
                 program_args,
+                path_prepend,
                 run_dir,
                 ..
-            } => run_direct(
-                &program,
-                &program_args,
-                &build_openclaw_env(&env, &self.env),
-                &run_dir,
-            ),
+            } => {
+                let mut process_env = build_openclaw_env(&env, &self.env);
+                crate::managed_node::apply_path_prepend_to_environment(
+                    &mut process_env,
+                    path_prepend.as_deref(),
+                )?;
+                run_direct(&program, &program_args, &process_env, &run_dir)
+            }
             crate::env::ResolvedExecution::Dev {
                 env,
                 worktree_root,

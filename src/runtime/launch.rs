@@ -11,6 +11,7 @@ pub(crate) struct RuntimeLaunchSpec {
     pub(crate) runtime_binary_path: String,
     pub(crate) program: String,
     pub(crate) args: Vec<String>,
+    pub(crate) path_prepend: Option<PathBuf>,
 }
 
 pub(crate) fn resolve_runtime_launch(
@@ -32,6 +33,7 @@ pub(crate) fn resolve_runtime_launch(
             runtime_binary_path: meta.binary_path.clone(),
             program: managed.program,
             args: managed.args,
+            path_prepend: managed.path_prepend,
         });
     }
 
@@ -39,6 +41,7 @@ pub(crate) fn resolve_runtime_launch(
         runtime_binary_path: meta.binary_path.clone(),
         program: meta.binary_path.clone(),
         args: openclaw_args.to_vec(),
+        path_prepend: None,
     })
 }
 

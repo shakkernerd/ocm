@@ -859,7 +859,7 @@ impl Cli {
         resolved: crate::env::ResolvedExecution,
         extra_env: &[(&str, &str)],
     ) -> Result<SimulationCommandOutput, String> {
-        let (mut command, env_meta, source_root) = match resolved {
+        let (mut command, env_meta, source_root, path_prepend) = match resolved {
             crate::env::ResolvedExecution::Launcher {
                 env,
                 command,
@@ -868,18 +868,19 @@ impl Cli {
             } => {
                 let mut process = shell_command(&command);
                 process.current_dir(run_dir);
-                (process, env, None)
+                (process, env, None, None)
             }
             crate::env::ResolvedExecution::Runtime {
                 env,
                 program,
                 program_args,
+                path_prepend,
                 run_dir,
                 ..
             } => {
                 let mut process = Command::new(program);
                 process.args(program_args).current_dir(run_dir);
-                (process, env, None)
+                (process, env, None, path_prepend)
             }
             crate::env::ResolvedExecution::Dev {
                 env,
@@ -891,7 +892,7 @@ impl Cli {
             } => {
                 let mut process = Command::new(program);
                 process.args(program_args).current_dir(run_dir);
-                (process, env, Some(PathBuf::from(worktree_root)))
+                (process, env, Some(PathBuf::from(worktree_root)), None)
             }
             crate::env::ResolvedExecution::SourceWatch {
                 env,
@@ -903,13 +904,17 @@ impl Cli {
             } => {
                 let mut process = Command::new(program);
                 process.args(program_args).current_dir(run_dir);
-                (process, env, Some(PathBuf::from(source.repo_root)))
+                (process, env, Some(PathBuf::from(source.repo_root)), None)
             }
         };
         let mut process_env = match source_root {
             Some(source_root) => build_openclaw_dev_source_env(&env_meta, &self.env, &source_root),
             None => build_openclaw_env(&env_meta, &self.env),
         };
+        crate::managed_node::apply_path_prepend_to_environment(
+            &mut process_env,
+            path_prepend.as_deref(),
+        )?;
         for (key, value) in extra_env {
             process_env.insert((*key).to_string(), (*value).to_string());
         }
