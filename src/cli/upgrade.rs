@@ -613,7 +613,13 @@ impl Cli {
                         &record.source.name,
                         &self.env,
                         &self.cwd,
-                    )?;
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "cannot roll back upgrade transaction \"{}\": {error}",
+                            record.id
+                        )
+                    })?;
                     if let Some(expected_version) = record.source.openclaw_version.as_deref()
                         && recovery.meta.release_version.as_deref() != Some(expected_version)
                     {

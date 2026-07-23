@@ -2749,6 +2749,149 @@ fn upgrade_rollback_cleans_snapshot_when_transaction_setup_fails() {
 }
 
 #[test]
+fn upgrade_rollback_refuses_missing_in_place_recovery_before_mutation() {
+    let root = TestDir::new("upgrade-explicit-rollback-missing-recovery");
+    let fixture = seed_in_place_rollback(&root, "2026.6.11");
+    fs::remove_dir_all(&fixture.original_recovery_root).unwrap();
+
+    let rollback = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--json"],
+    );
+    assert!(!rollback.status.success());
+    assert!(
+        stderr(&rollback).contains("runtime recovery"),
+        "{}",
+        stderr(&rollback)
+    );
+    assert_eq!(
+        fs::read_to_string(&fixture.marker).unwrap(),
+        "after-upgrade"
+    );
+
+    let snapshots = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["env", "snapshot", "list", "demo", "--json"],
+    );
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    let snapshots_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
+    assert_eq!(snapshots_json.as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn upgrade_rollback_refuses_drifted_target_version_before_mutation() {
+    let root = TestDir::new("upgrade-explicit-rollback-target-drift");
+    let fixture = seed_in_place_rollback(&root, "2026.6.11");
+    let runtime_binary =
+        Path::new(fixture.env.get("OCM_HOME").unwrap()).join("runtimes/stable/files/bin/openclaw");
+    write_executable_script(&runtime_binary, &recording_openclaw_script("2026.7.1"));
+
+    let rollback = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--json"],
+    );
+    assert!(!rollback.status.success());
+    assert!(
+        stderr(&rollback).contains("reports OpenClaw 2026.7.1, expected 2026.6.33"),
+        "{}",
+        stderr(&rollback)
+    );
+    assert_eq!(
+        fs::read_to_string(&fixture.marker).unwrap(),
+        "after-upgrade"
+    );
+    assert!(fixture.original_recovery_root.exists());
+
+    let history = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "history", "demo", "--json"],
+    );
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    assert_eq!(history_json.as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn upgrade_rollback_refuses_to_replace_a_runtime_shared_after_upgrade() {
+    let root = TestDir::new("upgrade-explicit-rollback-shared-runtime");
+    let fixture = seed_in_place_rollback(&root, "2026.6.11");
+    let sibling = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["env", "create", "sibling", "--runtime", "stable"],
+    );
+    assert!(sibling.status.success(), "{}", stderr(&sibling));
+
+    let rollback = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--json"],
+    );
+    assert!(!rollback.status.success());
+    assert!(
+        stderr(&rollback).contains("runtime \"stable\" is shared with \"sibling\""),
+        "{}",
+        stderr(&rollback)
+    );
+    assert_eq!(
+        fs::read_to_string(&fixture.marker).unwrap(),
+        "after-upgrade"
+    );
+
+    let version = run_ocm(&fixture.cwd, &fixture.env, &["@demo", "--", "--version"]);
+    assert!(version.status.success(), "{}", stderr(&version));
+    assert_eq!(stdout(&version).trim(), "2026.6.33");
+}
+
+#[test]
+fn upgrade_rollback_refuses_a_transaction_with_a_successful_child() {
+    let root = TestDir::new("upgrade-explicit-rollback-already-used");
+    let fixture = seed_in_place_rollback(&root, "2026.6.11");
+    let rollback = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--json"],
+    );
+    assert!(rollback.status.success(), "{}", stderr(&rollback));
+
+    let repeated = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &[
+            "upgrade",
+            "rollback",
+            "demo",
+            "--transaction",
+            &fixture.transaction_id,
+            "--json",
+        ],
+    );
+    assert!(!repeated.status.success());
+    assert!(
+        stderr(&repeated).contains("has already been rolled back"),
+        "{}",
+        stderr(&repeated)
+    );
+    assert_eq!(
+        fs::read_to_string(&fixture.marker).unwrap(),
+        "before-upgrade"
+    );
+
+    let history = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "history", "demo", "--json"],
+    );
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    assert_eq!(history_json.as_array().unwrap().len(), 2);
+}
+
+#[test]
 fn upgrade_repairs_target_config_before_finalization() {
     let root = TestDir::new("upgrade-target-config-repair");
     let cwd = root.child("workspace");
