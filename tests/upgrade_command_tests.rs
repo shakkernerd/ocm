@@ -2889,6 +2889,7 @@ fn upgrade_rollback_failure_restores_the_pre_rollback_state() {
     let rollback_json: Value = serde_json::from_str(&stdout(&rollback)).unwrap();
     assert_eq!(rollback_json["transactionId"], fixture.transaction_id);
     assert_eq!(rollback_json["outcome"], "failed");
+    assert!(rollback_json["safetySnapshotId"].is_string());
     assert!(
         rollback_json["note"]
             .as_str()
@@ -2916,6 +2917,15 @@ fn upgrade_rollback_failure_restores_the_pre_rollback_state() {
     assert_eq!(history_json[0]["outcome"], "failed");
     assert_eq!(history_json[0]["rollback"], "restored");
     assert_eq!(history_json[0]["rollbackOf"], fixture.transaction_id);
+
+    let snapshots = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["env", "snapshot", "list", "demo", "--json"],
+    );
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    let snapshots_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
+    assert_eq!(snapshots_json.as_array().unwrap().len(), 2);
 }
 
 #[cfg(unix)]
