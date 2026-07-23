@@ -26,11 +26,13 @@ use crate::runtime::{
 };
 use crate::service::ServiceSummary;
 use crate::store::{
-    InstallContext, RuntimeReleaseDetails, clean_path, copy_dir_recursive, derive_env_paths,
-    display_path, ensure_minimum_local_openclaw_config, ensure_store, get_runtime,
-    install_runtime_from_selected_official_openclaw_release, list_upgrade_history,
-    lock_env_registry, remove_runtime, resolve_absolute_path, runtime_install_root,
-    runtime_integrity_issue, runtime_meta_path, save_environment, write_json,
+    InstallContext, RuntimeReleaseDetails, UpgradeHistoryBinding, UpgradeHistoryRecord,
+    UpgradeHistoryRuntimeRecovery, UpgradeHistoryServiceState, UpgradeHistoryStage, clean_path,
+    copy_dir_recursive, derive_env_paths, display_path, ensure_minimum_local_openclaw_config,
+    ensure_store, get_runtime, install_runtime_from_selected_official_openclaw_release,
+    list_upgrade_history, lock_env_registry, remove_runtime, resolve_absolute_path,
+    runtime_install_root, runtime_integrity_issue, runtime_meta_path, save_environment,
+    save_upgrade_history_record, write_json,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -148,6 +150,12 @@ struct UpgradeOptions {
 #[derive(Clone, Copy, Debug)]
 struct UpgradeSimulationOptions {
     keep_envs: bool,
+}
+
+#[derive(Clone, Debug)]
+struct UpgradeTransactionPlan {
+    source: UpgradeHistoryBinding,
+    target: UpgradeHistoryBinding,
 }
 
 #[derive(Clone, Debug)]
@@ -1129,8 +1137,20 @@ impl Cli {
                     ),
                 });
             }
-            let transaction = self.begin_upgrade_transaction(
+            let mut transaction = self.begin_upgrade_transaction(
                 env_name,
+                UpgradeTransactionPlan {
+                    source: UpgradeHistoryBinding {
+                        kind: "runtime".to_string(),
+                        name: current.name.clone(),
+                        openclaw_version: current.release_version.clone(),
+                    },
+                    target: UpgradeHistoryBinding {
+                        kind: "runtime".to_string(),
+                        name: target_runtime_name.clone(),
+                        openclaw_version: target_version.clone(),
+                    },
+                },
                 &[current.name.clone(), target_runtime_name.clone()],
                 options.rollback_enabled,
             )?;
@@ -1152,8 +1172,12 @@ impl Cli {
             };
             let binding_changed = prepared.name != current.name;
             let post_update_note = match self.run_post_core_update(env_name, &prepared.name) {
-                Ok(note) => note,
+                Ok(note) => {
+                    transaction.mark_post_update_completed(note.as_deref());
+                    note
+                }
                 Err(error) => {
+                    transaction.mark_post_update_failed(&error);
                     return self.rollback_failed_upgrade(
                         env_name,
                         "runtime",
@@ -1255,8 +1279,7 @@ impl Cli {
                 rollback: None,
                 note,
             };
-            transaction.cleanup();
-            return Ok(summary);
+            return self.finish_successful_upgrade(summary, transaction);
         }
 
         if current.source_manifest_url.is_none() {
@@ -1334,8 +1357,20 @@ impl Cli {
                     ),
                 });
             }
-            let transaction = self.begin_upgrade_transaction(
+            let mut transaction = self.begin_upgrade_transaction(
                 env_name,
+                UpgradeTransactionPlan {
+                    source: UpgradeHistoryBinding {
+                        kind: "runtime".to_string(),
+                        name: current.name.clone(),
+                        openclaw_version: current.release_version.clone(),
+                    },
+                    target: UpgradeHistoryBinding {
+                        kind: "runtime".to_string(),
+                        name: target_runtime_name.clone(),
+                        openclaw_version: target_version.clone(),
+                    },
+                },
                 &[current.name.clone(), target_runtime_name.clone()],
                 options.rollback_enabled,
             )?;
@@ -1361,8 +1396,12 @@ impl Cli {
             );
             let post_update_note = if changed {
                 match self.run_post_core_update(env_name, &prepared.name) {
-                    Ok(note) => note,
+                    Ok(note) => {
+                        transaction.mark_post_update_completed(note.as_deref());
+                        note
+                    }
                     Err(error) => {
+                        transaction.mark_post_update_failed(&error);
                         return self.rollback_failed_upgrade(
                             env_name,
                             "runtime",
@@ -1377,6 +1416,7 @@ impl Cli {
                     }
                 }
             } else {
+                transaction.mark_post_update_not_needed();
                 None
             };
             if changed && let Err(error) = self.runtime_service().refresh_supervisor_if_present() {
@@ -1450,8 +1490,7 @@ impl Cli {
                     verification_note,
                 ),
             };
-            transaction.cleanup();
-            return Ok(summary);
+            return self.finish_successful_upgrade(summary, transaction);
         }
 
         let resolved_update = self.runtime_service().resolve_update_from_release(
@@ -1484,8 +1523,20 @@ impl Cli {
                 note: Some("dry run: no runtime, env, service, or snapshot changed".to_string()),
             });
         }
-        let transaction = self.begin_upgrade_transaction(
+        let mut transaction = self.begin_upgrade_transaction(
             env_name,
+            UpgradeTransactionPlan {
+                source: UpgradeHistoryBinding {
+                    kind: "runtime".to_string(),
+                    name: current.name.clone(),
+                    openclaw_version: current.release_version.clone(),
+                },
+                target: UpgradeHistoryBinding {
+                    kind: "runtime".to_string(),
+                    name: current.name.clone(),
+                    openclaw_version: Some(target_version.clone()),
+                },
+            },
             std::slice::from_ref(&current.name),
             options.rollback_enabled,
         )?;
@@ -1511,8 +1562,12 @@ impl Cli {
             }
         };
         let post_update_note = match self.run_post_core_update(env_name, &updated.name) {
-            Ok(note) => note,
+            Ok(note) => {
+                transaction.mark_post_update_completed(note.as_deref());
+                note
+            }
             Err(error) => {
+                transaction.mark_post_update_failed(&error);
                 return self.rollback_failed_upgrade(
                     env_name,
                     "runtime",
@@ -1594,8 +1649,7 @@ impl Cli {
                 verification_note,
             ),
         };
-        transaction.cleanup();
-        Ok(summary)
+        self.finish_successful_upgrade(summary, transaction)
     }
 
     fn ensure_runtime_upgrade_isolated(
@@ -1679,8 +1733,20 @@ impl Cli {
             });
         }
 
-        let transaction = self.begin_upgrade_transaction(
+        let mut transaction = self.begin_upgrade_transaction(
             env_name,
+            UpgradeTransactionPlan {
+                source: UpgradeHistoryBinding {
+                    kind: "launcher".to_string(),
+                    name: launcher_name.to_string(),
+                    openclaw_version: None,
+                },
+                target: UpgradeHistoryBinding {
+                    kind: "runtime".to_string(),
+                    name: target_runtime_name.clone(),
+                    openclaw_version: target_version.clone(),
+                },
+            },
             std::slice::from_ref(&target_runtime_name),
             options.rollback_enabled,
         )?;
@@ -1701,8 +1767,12 @@ impl Cli {
             }
         };
         let post_update_note = match self.run_post_core_update(env_name, &prepared.name) {
-            Ok(note) => note,
+            Ok(note) => {
+                transaction.mark_post_update_completed(note.as_deref());
+                note
+            }
             Err(error) => {
+                transaction.mark_post_update_failed(&error);
                 return self.rollback_failed_upgrade(
                     env_name,
                     "launcher",
@@ -1791,8 +1861,7 @@ impl Cli {
                 verification_note,
             ),
         };
-        transaction.cleanup();
-        Ok(summary)
+        self.finish_successful_upgrade(summary, transaction)
     }
 
     fn upgrade_service_status(&self, env_name: &str) -> Result<Option<ServiceSummary>, String> {
@@ -2221,9 +2290,17 @@ impl Cli {
     fn begin_upgrade_transaction(
         &self,
         env_name: &str,
+        plan: UpgradeTransactionPlan,
         runtime_names: &[String],
         rollback_enabled: bool,
     ) -> Result<UpgradeTransaction, String> {
+        let env_meta = self.environment_service().get(env_name)?;
+        let started_at = time::OffsetDateTime::now_utc();
+        let id = format!(
+            "{}-{:09}",
+            started_at.unix_timestamp(),
+            started_at.nanosecond()
+        );
         let snapshot = self
             .environment_service()
             .create_snapshot(CreateEnvSnapshotOptions {
@@ -2251,11 +2328,89 @@ impl Cli {
         }
 
         Ok(UpgradeTransaction {
+            id,
             snapshot_id: snapshot.id,
             runtime_backups,
             created_runtime_names,
             rollback_enabled,
+            started_at,
+            source: plan.source,
+            target: plan.target,
+            service_before: UpgradeHistoryServiceState {
+                enabled: env_meta.service_enabled,
+                running: env_meta.service_running,
+            },
+            migration: UpgradeHistoryStage {
+                status: "not-run".to_string(),
+                note: None,
+            },
+            finalization: UpgradeHistoryStage {
+                status: "not-run".to_string(),
+                note: None,
+            },
         })
+    }
+
+    fn finish_successful_upgrade(
+        &self,
+        summary: UpgradeEnvSummary,
+        transaction: UpgradeTransaction,
+    ) -> Result<UpgradeEnvSummary, String> {
+        if let Err(error) = self.record_upgrade_history(&transaction, &summary) {
+            return self.rollback_failed_upgrade(
+                &summary.env_name,
+                &summary.previous_binding_kind,
+                summary.previous_binding_name.clone(),
+                &summary.binding_kind,
+                summary.binding_name.clone(),
+                summary.runtime_release_version.clone(),
+                summary.runtime_release_channel.clone(),
+                transaction,
+                format!("failed to record upgrade history: {error}"),
+            );
+        }
+        transaction.cleanup();
+        Ok(summary)
+    }
+
+    fn record_upgrade_history(
+        &self,
+        transaction: &UpgradeTransaction,
+        summary: &UpgradeEnvSummary,
+    ) -> Result<(), String> {
+        let env_meta = self.environment_service().get(&summary.env_name)?;
+        let runtime_recovery = transaction
+            .runtime_backups
+            .iter()
+            .map(|backup| UpgradeHistoryRuntimeRecovery {
+                runtime_name: backup.meta.name.clone(),
+                release_version: backup.meta.release_version.clone(),
+                backup_id: None,
+            })
+            .collect();
+        let record = UpgradeHistoryRecord {
+            kind: "ocm-upgrade-transaction".to_string(),
+            format_version: 1,
+            id: transaction.id.clone(),
+            env_name: summary.env_name.clone(),
+            source: transaction.source.clone(),
+            target: transaction.target.clone(),
+            snapshot_id: transaction.snapshot_id.clone(),
+            runtime_recovery,
+            started_at: transaction.started_at,
+            completed_at: time::OffsetDateTime::now_utc(),
+            outcome: summary.outcome.clone(),
+            migration: transaction.migration.clone(),
+            finalization: transaction.finalization.clone(),
+            service_before: transaction.service_before.clone(),
+            service_after: UpgradeHistoryServiceState {
+                enabled: env_meta.service_enabled,
+                running: env_meta.service_running,
+            },
+            rollback: summary.rollback.clone(),
+            note: None,
+        };
+        save_upgrade_history_record(&record, &self.env, &self.cwd)
     }
 
     fn backup_runtime_for_upgrade(
@@ -2306,8 +2461,7 @@ impl Cli {
     ) -> Result<UpgradeEnvSummary, String> {
         if !transaction.rollback_enabled {
             let snapshot_id = transaction.snapshot_id.clone();
-            transaction.cleanup();
-            return Ok(UpgradeEnvSummary {
+            let mut summary = UpgradeEnvSummary {
                 env_name: env_name.to_string(),
                 previous_binding_kind: previous_binding_kind.to_string(),
                 previous_binding_name,
@@ -2320,14 +2474,21 @@ impl Cli {
                 snapshot_id: Some(snapshot_id),
                 rollback: Some("disabled".to_string()),
                 note: Some(format!("upgrade failed and rollback was disabled: {error}")),
-            });
+            };
+            if let Err(history_error) = self.record_upgrade_history(&transaction, &summary) {
+                summary.note = join_optional_warnings(
+                    summary.note,
+                    Some(format!("upgrade history was not recorded: {history_error}")),
+                );
+            }
+            transaction.cleanup();
+            return Ok(summary);
         }
 
         let rollback_result = self.rollback_upgrade(env_name, &transaction);
         let snapshot_id = transaction.snapshot_id.clone();
-        transaction.cleanup();
-        match rollback_result {
-            Ok(()) => Ok(UpgradeEnvSummary {
+        let mut summary = match rollback_result {
+            Ok(()) => UpgradeEnvSummary {
                 env_name: env_name.to_string(),
                 previous_binding_kind: previous_binding_kind.to_string(),
                 previous_binding_name,
@@ -2342,8 +2503,8 @@ impl Cli {
                 note: Some(format!(
                     "upgrade failed, so ocm restored the pre-upgrade snapshot: {error}"
                 )),
-            }),
-            Err(rollback_error) => Ok(UpgradeEnvSummary {
+            },
+            Err(rollback_error) => UpgradeEnvSummary {
                 env_name: env_name.to_string(),
                 previous_binding_kind: previous_binding_kind.to_string(),
                 previous_binding_name,
@@ -2358,8 +2519,16 @@ impl Cli {
                 note: Some(format!(
                     "upgrade failed ({error}); rollback also failed: {rollback_error}"
                 )),
-            }),
+            },
+        };
+        if let Err(history_error) = self.record_upgrade_history(&transaction, &summary) {
+            summary.note = join_optional_warnings(
+                summary.note,
+                Some(format!("upgrade history was not recorded: {history_error}")),
+            );
         }
+        transaction.cleanup();
+        Ok(summary)
     }
 
     fn rollback_upgrade(
@@ -2551,13 +2720,44 @@ impl UpgradeSimulationScenario {
 
 #[derive(Debug)]
 struct UpgradeTransaction {
+    id: String,
     snapshot_id: String,
     runtime_backups: Vec<RuntimeRollbackBackup>,
     created_runtime_names: Vec<String>,
     rollback_enabled: bool,
+    started_at: time::OffsetDateTime,
+    source: UpgradeHistoryBinding,
+    target: UpgradeHistoryBinding,
+    service_before: UpgradeHistoryServiceState,
+    migration: UpgradeHistoryStage,
+    finalization: UpgradeHistoryStage,
 }
 
 impl UpgradeTransaction {
+    fn mark_post_update_completed(&mut self, note: Option<&str>) {
+        self.migration.status = if note.is_some_and(|note| note.contains("config repair")) {
+            "repaired".to_string()
+        } else {
+            "validated".to_string()
+        };
+        self.finalization.status = "completed".to_string();
+    }
+
+    fn mark_post_update_failed(&mut self, error: &str) {
+        if error.contains("openclaw update finalize failed") {
+            self.migration.status = "validated".to_string();
+            self.finalization.status = "failed".to_string();
+        } else {
+            self.migration.status = "failed".to_string();
+            self.finalization.status = "not-run".to_string();
+        }
+    }
+
+    fn mark_post_update_not_needed(&mut self) {
+        self.migration.status = "not-needed".to_string();
+        self.finalization.status = "not-needed".to_string();
+    }
+
     fn cleanup(self) {
         for runtime_backup in self.runtime_backups {
             runtime_backup.cleanup();

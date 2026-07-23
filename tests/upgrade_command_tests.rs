@@ -557,6 +557,24 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     let snapshot_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
     assert_eq!(snapshot_json.as_array().unwrap().len(), 1);
     assert_eq!(snapshot_json[0]["label"], "pre-upgrade");
+
+    let history = run_ocm(&cwd, &env, &["upgrade", "history", "demo", "--json"]);
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    let record = &history_json[0];
+    assert_eq!(record["kind"], "ocm-upgrade-transaction");
+    assert_eq!(record["formatVersion"], 1);
+    assert_eq!(record["source"]["name"], "stable");
+    assert_eq!(record["source"]["openclawVersion"], "2026.3.24");
+    assert_eq!(record["target"]["name"], "stable");
+    assert_eq!(record["target"]["openclawVersion"], "2026.3.25");
+    assert_eq!(record["snapshotId"], snapshot_json[0]["id"]);
+    assert_eq!(record["outcome"], "updated");
+    assert_eq!(record["migration"]["status"], "validated");
+    assert_eq!(record["finalization"]["status"], "completed");
+    assert_eq!(record["serviceBefore"]["running"], true);
+    assert_eq!(record["serviceAfter"]["running"], true);
+    assert!(record["note"].is_null());
 }
 
 #[test]
@@ -677,6 +695,19 @@ fn upgrade_rolls_back_when_gateway_rpc_is_not_ready() {
     assert!(runtime.status.success(), "{}", stderr(&runtime));
     let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
     assert_eq!(runtime_json["releaseVersion"], "2026.3.24");
+
+    let history = run_ocm(&cwd, &env, &["upgrade", "history", "demo", "--json"]);
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    let record = &history_json[0];
+    assert_eq!(record["source"]["openclawVersion"], "2026.3.24");
+    assert_eq!(record["target"]["openclawVersion"], "2026.3.25");
+    assert_eq!(record["outcome"], "rolled-back");
+    assert_eq!(record["rollback"], "restored");
+    assert_eq!(record["migration"]["status"], "validated");
+    assert_eq!(record["finalization"]["status"], "completed");
+    assert_eq!(record["serviceAfter"]["running"], true);
+    assert!(record["note"].is_null());
 }
 
 #[test]
