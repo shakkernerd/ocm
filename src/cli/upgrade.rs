@@ -1793,12 +1793,12 @@ impl Cli {
         env_name: &str,
         target: &ResolvedUpgradeTarget,
     ) -> Result<Option<String>, String> {
-        if let Some(version) = target
+        let version_hint = target
             .release_version
             .as_deref()
-            .filter(|version| compare_runtime_release_versions(version, version).is_some())
-        {
-            return Ok(Some(version.to_string()));
+            .filter(|version| compare_runtime_release_versions(version, version).is_some());
+        if matches!(&target.kind, ResolvedUpgradeTargetKind::Official(_)) {
+            return Ok(version_hint.map(str::to_string));
         }
 
         let Ok(output) = self.run_update_mode_openclaw_command_output(
@@ -1807,12 +1807,15 @@ impl Cli {
             "target openclaw --version",
             &["--version"],
         ) else {
-            return Ok(None);
+            return Ok(version_hint.map(str::to_string));
         };
         if !output.status.success() {
-            return Ok(None);
+            return Ok(version_hint.map(str::to_string));
         }
-        Ok(release_version_from_output(&output.first_line(), None))
+        Ok(
+            release_version_from_output(&output.first_line(), version_hint)
+                .or_else(|| version_hint.map(str::to_string)),
+        )
     }
 
     fn ensure_upgrade_is_not_downgrade(
@@ -1824,21 +1827,19 @@ impl Cli {
         let Some(target_version) = target_version else {
             return Ok(());
         };
-        let current_version = if let Some(current_version) = current_version_hint
-            .filter(|version| compare_runtime_release_versions(version, version).is_some())
-        {
-            current_version.to_string()
-        } else {
-            let Ok(current) =
-                self.run_openclaw_command(env_name, "current openclaw --version", &["--version"])
-            else {
-                return Ok(());
+        let current_version_hint = current_version_hint
+            .filter(|version| compare_runtime_release_versions(version, version).is_some());
+        let current_version =
+            match self.run_openclaw_command(env_name, "current openclaw --version", &["--version"])
+            {
+                Ok(current) => {
+                    release_version_from_output(&current.first_line(), current_version_hint)
+                        .or_else(|| current_version_hint.map(str::to_string))
+                }
+                Err(_) => current_version_hint.map(str::to_string),
             };
-            let Some(current_version) = release_version_from_output(&current.first_line(), None)
-            else {
-                return Ok(());
-            };
-            current_version
+        let Some(current_version) = current_version else {
+            return Ok(());
         };
 
         if current_version == target_version {
