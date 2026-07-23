@@ -134,7 +134,9 @@ case "$1" in
       exit 29
     fi
     mkdir -p "$home/.openclaw"
-    touch "$home/.openclaw/config-repaired"
+    if [ "${{OCM_TEST_DOCTOR_LEAVES_CONFIG_INVALID:-}}" != "1" ]; then
+      touch "$home/.openclaw/config-repaired"
+    fi
     echo "doctor ok"
     exit 0
     ;;
@@ -1764,6 +1766,85 @@ fn upgrade_rolls_back_when_target_config_doctor_fails() {
 
     let command_log = fs::read_to_string(command_log_path).unwrap();
     assert!(command_log.contains("config validate"), "{command_log}");
+    assert!(
+        command_log.contains("doctor --non-interactive --fix"),
+        "{command_log}"
+    );
+    assert!(
+        !command_log.contains("update finalize --json --yes --no-restart"),
+        "{command_log}"
+    );
+}
+
+#[test]
+fn upgrade_rolls_back_when_doctor_does_not_repair_target_config() {
+    let root = TestDir::new("upgrade-target-config-revalidation-failure");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_runtime = root.child("old-openclaw");
+    let new_runtime = root.child("new-openclaw");
+    write_executable_script(&old_runtime, &recording_openclaw_script("old-openclaw"));
+    write_executable_script(&new_runtime, &recording_openclaw_script("new-openclaw"));
+
+    let mut env = ocm_env(&root);
+    for (name, runtime) in [("old-local", &old_runtime), ("new-local", &new_runtime)] {
+        let add = run_ocm(
+            &cwd,
+            &env,
+            &[
+                "runtime",
+                "add",
+                name,
+                "--path",
+                &runtime.display().to_string(),
+            ],
+        );
+        assert!(add.status.success(), "{}", stderr(&add));
+    }
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "old-local"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+    let env_root = root.child("ocm-home/envs/demo");
+    let config_path = env_root.join(".openclaw/openclaw.json");
+    let original_config = "{\"meta\":{\"lastTouchedAt\":\"legacy\"}}\n";
+    fs::write(&config_path, original_config).unwrap();
+
+    env.insert(
+        "OCM_TEST_INVALID_CONFIG_UNTIL_DOCTOR".to_string(),
+        "1".to_string(),
+    );
+    env.insert(
+        "OCM_TEST_DOCTOR_LEAVES_CONFIG_INVALID".to_string(),
+        "1".to_string(),
+    );
+    let command_log_path = root.child("revalidation-failure-commands.log");
+    env.insert(
+        "OCM_TEST_COMMAND_LOG".to_string(),
+        path_string(&command_log_path),
+    );
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--runtime", "new-local"]);
+    assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("outcome=rolled-back"), "{output}");
+    assert!(output.contains("rollback=restored"), "{output}");
+    assert!(
+        output.contains("openclaw config validate after doctor failed"),
+        "{output}"
+    );
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(env_json["defaultRuntime"], "old-local");
+    assert_eq!(fs::read_to_string(config_path).unwrap(), original_config);
+
+    let command_log = fs::read_to_string(command_log_path).unwrap();
+    assert_eq!(command_log.matches("config validate").count(), 2);
     assert!(
         command_log.contains("doctor --non-interactive --fix"),
         "{command_log}"
