@@ -1328,7 +1328,10 @@ pub fn env_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} env set-runtime mira --version 2026.3.24"),
                 format!("{cmd} env set-runtime mira none"),
             ],
-            &["Use only one of a runtime name, `--version`, or `--channel`."],
+            &[
+                "Use only one of a runtime name, `--version`, or `--channel`.",
+                "Replacing an existing binding runs OpenClaw update finalization with snapshot-backed rollback before publishing the new runtime.",
+            ],
         ),
         "set-launcher" => render_leaf(
             "Bind or clear a launcher",

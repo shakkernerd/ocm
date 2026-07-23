@@ -1356,13 +1356,45 @@ impl Cli {
             &args[1..]
         };
         Self::assert_no_extra_args(extra_args)?;
-        if matches!(runtime_name.as_deref(), Some(name) if name.eq_ignore_ascii_case("none"))
-            && (version.is_some() || channel.is_some())
-        {
+        if runtime_name.is_some() && (version.is_some() || channel.is_some()) {
             return Err(
                 "env set-runtime accepts only one runtime source: --runtime, --version, or --channel"
                     .to_string(),
             );
+        }
+        if version.is_some() && channel.is_some() {
+            return Err("env set-runtime accepts only one of --version or --channel".to_string());
+        }
+
+        let current = self.environment_service().get(name)?;
+        let has_existing_binding =
+            current.default_runtime.is_some() || current.default_launcher.is_some();
+        let clears_runtime = matches!(runtime_name.as_deref(), Some(runtime) if runtime.eq_ignore_ascii_case("none"));
+        if has_existing_binding && !clears_runtime {
+            let runtime = runtime_name
+                .map(|runtime| validate_name(&runtime, "Runtime name"))
+                .transpose()?;
+            let summary = self.upgrade_env_to_runtime_target(name, version, channel, runtime)?;
+            if matches!(
+                summary.outcome.as_str(),
+                "failed" | "rolled-back" | "rollback-failed"
+            ) {
+                return Err(summary.note.unwrap_or_else(|| {
+                    format!("runtime transition failed with outcome {}", summary.outcome)
+                }));
+            }
+            let meta = self.environment_service().get(name)?;
+            if json_flag {
+                self.print_json(&meta)?;
+                return Ok(0);
+            }
+            let default_runtime = meta.default_runtime.unwrap_or_else(|| "none".to_string());
+            self.stdout_lines(render::env::env_runtime_updated(
+                &meta.name,
+                &default_runtime,
+                profile,
+            ));
+            return Ok(0);
         }
 
         let validated = match runtime_name {
