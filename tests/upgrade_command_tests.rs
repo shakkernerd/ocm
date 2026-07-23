@@ -575,6 +575,21 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     assert_eq!(record["serviceBefore"]["running"], true);
     assert_eq!(record["serviceAfter"]["running"], true);
     assert!(record["note"].is_null());
+    assert_eq!(record["runtimeRecovery"][0]["runtimeName"], "stable");
+    assert_eq!(record["runtimeRecovery"][0]["releaseVersion"], "2026.3.24");
+    assert_eq!(record["runtimeRecovery"][0]["backupId"], "stable");
+
+    let ocm_home = Path::new(env.get("OCM_HOME").unwrap());
+    let recovery_root = ocm_home
+        .join("upgrade-history")
+        .join("demo")
+        .join(format!("{}.recovery", record["id"].as_str().unwrap()))
+        .join("stable");
+    let recovery_meta: Value =
+        serde_json::from_slice(&fs::read(recovery_root.join("runtime.json")).unwrap()).unwrap();
+    assert_eq!(recovery_meta["name"], "stable");
+    assert_eq!(recovery_meta["releaseVersion"], "2026.3.24");
+    assert!(recovery_root.join("files").is_dir());
 }
 
 #[test]
@@ -708,6 +723,11 @@ fn upgrade_rolls_back_when_gateway_rpc_is_not_ready() {
     assert_eq!(record["finalization"]["status"], "completed");
     assert_eq!(record["serviceAfter"]["running"], true);
     assert!(record["note"].is_null());
+    let recovery_root = Path::new(env.get("OCM_HOME").unwrap())
+        .join("upgrade-history")
+        .join("demo")
+        .join(format!("{}.recovery", record["id"].as_str().unwrap()));
+    assert!(!recovery_root.exists());
 }
 
 #[test]
@@ -2211,6 +2231,53 @@ fn upgrade_can_switch_env_to_an_installed_runtime() {
         !command_log.contains("plugins update --all\n"),
         "{command_log}"
     );
+}
+
+#[test]
+fn upgrade_reuses_the_bound_named_runtime_without_retaining_recovery_bytes() {
+    let root = TestDir::new("upgrade-reuse-bound-runtime");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let runtime_path = root.child("local-openclaw");
+    write_executable_script(&runtime_path, &recording_openclaw_script("local-openclaw"));
+
+    let env = ocm_env(&root);
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "add",
+            "local",
+            "--path",
+            &runtime_path.display().to_string(),
+        ],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--runtime", "local"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--runtime", "local"]);
+    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("outcome=up-to-date"), "{output}");
+
+    let history = run_ocm(&cwd, &env, &["upgrade", "history", "demo", "--json"]);
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    let record = &history_json[0];
+    assert_eq!(record["source"]["name"], "local");
+    assert_eq!(record["target"]["name"], "local");
+    assert_eq!(record["runtimeRecovery"][0]["runtimeName"], "local");
+    assert!(record["runtimeRecovery"][0]["backupId"].is_null());
+
+    let recovery_root = Path::new(env.get("OCM_HOME").unwrap())
+        .join("upgrade-history")
+        .join("demo")
+        .join(format!("{}.recovery", record["id"].as_str().unwrap()));
+    assert!(!recovery_root.exists());
 }
 
 #[test]
