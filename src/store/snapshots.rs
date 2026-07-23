@@ -299,34 +299,29 @@ pub fn remove_env_snapshot(
         )
     })?;
 
-    let archive_staged = if path_exists(&archive_path) {
-        if let Err(error) = fs::rename(&archive_path, &staged_archive_path) {
-            let _ = fs::remove_dir(&staging_dir);
-            return Err(format!(
-                "failed to stage snapshot archive {} for removal: {error}",
-                display_path(&archive_path)
-            ));
-        }
-        true
-    } else {
-        false
-    };
-
     if let Err(error) = fs::rename(&meta_path, &staged_meta_path) {
-        let restore_error = if archive_staged {
-            fs::rename(&staged_archive_path, &archive_path)
-                .err()
-                .map(|restore_error| {
-                    format!("; restoring the staged archive also failed: {restore_error}")
-                })
-        } else {
-            None
-        };
         let _ = fs::remove_dir(&staging_dir);
         return Err(format!(
-            "failed to stage snapshot metadata {} for removal: {error}{}",
+            "failed to stage snapshot metadata {} for removal: {error}",
             display_path(&meta_path),
-            restore_error.unwrap_or_default()
+        ));
+    }
+
+    if path_exists(&archive_path)
+        && let Err(error) = fs::rename(&archive_path, &staged_archive_path)
+    {
+        let restore_error = fs::rename(&staged_meta_path, &meta_path).err();
+        if restore_error.is_none() {
+            let _ = fs::remove_dir(&staging_dir);
+        }
+        return Err(format!(
+            "failed to stage snapshot archive {} for removal: {error}{}",
+            display_path(&archive_path),
+            restore_error
+                .map(|restore_error| {
+                    format!("; restoring the staged metadata also failed: {restore_error}")
+                })
+                .unwrap_or_default()
         ));
     }
 
