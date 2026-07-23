@@ -4,8 +4,52 @@ use crate::cli::upgrade::{
 use crate::infra::terminal::{
     Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, terminal_width,
 };
+use crate::store::UpgradeHistoryRecord;
 
-use super::RenderProfile;
+use super::{RenderProfile, format_rfc3339};
+
+pub fn upgrade_history(
+    env_name: &str,
+    records: &[UpgradeHistoryRecord],
+    profile: RenderProfile,
+) -> Result<Vec<String>, String> {
+    if !profile.pretty {
+        return records
+            .iter()
+            .map(upgrade_history_raw_line)
+            .collect::<Result<Vec<_>, _>>();
+    }
+    if records.is_empty() {
+        return Ok(vec![paint(
+            &format!("No upgrade history for {env_name}."),
+            Tone::Muted,
+            profile.color,
+        )]);
+    }
+
+    let rows = records
+        .iter()
+        .map(|record| {
+            Ok(vec![
+                Cell::accent(record.id.clone()),
+                Cell::plain(format!("{}:{}", record.source.kind, record.source.name)),
+                Cell::plain(format!("{}:{}", record.target.kind, record.target.name)),
+                Cell::new(
+                    record.outcome.clone(),
+                    crate::infra::terminal::Align::Left,
+                    outcome_tone(&record.outcome),
+                ),
+                Cell::plain(format_rfc3339(record.completed_at)?),
+            ])
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    Ok(render_table(
+        &["Transaction", "From", "To", "Outcome", "Completed"],
+        &rows,
+        profile.color,
+    ))
+}
 
 pub fn upgrade_env(
     summary: &UpgradeEnvSummary,
@@ -406,6 +450,29 @@ fn upgrade_env_raw(summary: &UpgradeEnvSummary) -> Vec<String> {
         bits.push(format!("note={note}"));
     }
     vec![bits.join("  ")]
+}
+
+fn upgrade_history_raw_line(record: &UpgradeHistoryRecord) -> Result<String, String> {
+    let mut bits = vec![
+        format!("id={}", record.id),
+        format!("env={}", record.env_name),
+        format!("from={}:{}", record.source.kind, record.source.name),
+        format!("to={}:{}", record.target.kind, record.target.name),
+        format!("outcome={}", record.outcome),
+        format!("snapshot={}", record.snapshot_id),
+        format!("started={}", format_rfc3339(record.started_at)?),
+        format!("completed={}", format_rfc3339(record.completed_at)?),
+    ];
+    if let Some(version) = record.source.openclaw_version.as_deref() {
+        bits.push(format!("fromVersion={version}"));
+    }
+    if let Some(version) = record.target.openclaw_version.as_deref() {
+        bits.push(format!("toVersion={version}"));
+    }
+    if let Some(rollback) = record.rollback.as_deref() {
+        bits.push(format!("rollback={rollback}"));
+    }
+    Ok(bits.join("  "))
 }
 
 fn upgrade_batch_raw(summary: &UpgradeBatchSummary) -> Vec<String> {
