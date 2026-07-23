@@ -2897,6 +2897,15 @@ fn gateway_readiness_result(ready: bool, status: &Value) -> Result<(), String> {
     if rpc_error.is_some_and(gateway_auth_failure_proves_reachable) {
         return Ok(());
     }
+    let target_error = status
+        .get("targets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|target| target.pointer("/connect/error").and_then(Value::as_str));
+    if target_error.is_some_and(gateway_auth_failure_proves_reachable) {
+        return Ok(());
+    }
 
     let detail = rpc_error
         .or_else(|| {
@@ -2907,14 +2916,7 @@ fn gateway_readiness_result(ready: bool, status: &Value) -> Result<(), String> {
                 .and_then(|warning| warning.get("message"))
                 .and_then(Value::as_str)
         })
-        .or_else(|| {
-            status
-                .get("targets")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .find_map(|target| target.pointer("/connect/error").and_then(Value::as_str))
-        })
+        .or(target_error)
         .unwrap_or("OpenClaw reported that no gateway RPC endpoint was reachable");
 
     Err(format!("post-upgrade gateway readiness failed: {detail}"))
