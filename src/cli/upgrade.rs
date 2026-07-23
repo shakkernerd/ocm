@@ -1260,6 +1260,8 @@ impl Cli {
             });
         }
 
+        self.ensure_runtime_upgrade_isolated(env_name, &current.name)?;
+
         if options.dry_run {
             let service = self.upgrade_service_status(env_name)?;
             return Ok(UpgradeEnvSummary {
@@ -1522,6 +1524,35 @@ impl Cli {
         };
         transaction.cleanup();
         Ok(summary)
+    }
+
+    fn ensure_runtime_upgrade_isolated(
+        &self,
+        env_name: &str,
+        runtime_name: &str,
+    ) -> Result<(), String> {
+        let mut siblings = self
+            .environment_service()
+            .list()?
+            .into_iter()
+            .filter(|env| {
+                env.name != env_name && env.default_runtime.as_deref() == Some(runtime_name)
+            })
+            .map(|env| env.name)
+            .collect::<Vec<_>>();
+        if siblings.is_empty() {
+            return Ok(());
+        }
+
+        siblings.sort();
+        let siblings = siblings
+            .iter()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(format!(
+            "runtime \"{runtime_name}\" is shared with {siblings}; upgrading env \"{env_name}\" would replace their OpenClaw runtime before their config and state are migrated. Use --runtime {runtime_name} to reuse the installed runtime without updating it, or --version <version> to move this env to an isolated exact release"
+        ))
     }
 
     fn upgrade_launcher_bound_env(
