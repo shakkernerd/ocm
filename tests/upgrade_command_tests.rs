@@ -3,9 +3,13 @@ mod support;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread::{self, sleep};
+use std::time::Duration;
 
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
+use ocm::store::{now_utc, supervisor_runtime_path, supervisor_state_path};
+use ocm::supervisor::{SupervisorRuntimeChild, SupervisorRuntimeService, SupervisorRuntimeState};
 use serde_json::Value;
 use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
@@ -50,6 +54,50 @@ fn openclaw_package_tarball(script_body: &str, version: &str) -> Vec<u8> {
         builder.finish().unwrap();
     }
     encoder.finish().unwrap()
+}
+
+fn write_running_supervisor_runtime(
+    runtime_path: &Path,
+    ocm_home: &str,
+    binding_name: &str,
+    pid: u32,
+    child_port: u32,
+) {
+    let log_root = runtime_path.parent().unwrap();
+    let stdout_path = path_string(&log_root.join("demo.stdout.log"));
+    let stderr_path = path_string(&log_root.join("demo.stderr.log"));
+    let runtime = SupervisorRuntimeState {
+        kind: "ocm-supervisor-runtime".to_string(),
+        ocm_home: ocm_home.to_string(),
+        updated_at: now_utc(),
+        services: vec![SupervisorRuntimeService {
+            env_name: "demo".to_string(),
+            binding_kind: "runtime".to_string(),
+            binding_name: binding_name.to_string(),
+            gateway_state: "running".to_string(),
+            restart_handoff: Some("none".to_string()),
+            restart_count: 0,
+            child_port,
+            pid: Some(pid),
+            stdout_path: stdout_path.clone(),
+            stderr_path: stderr_path.clone(),
+            last_exit_code: None,
+            last_error: None,
+            last_event_at: None,
+            next_retry_at: None,
+        }],
+        children: vec![SupervisorRuntimeChild {
+            env_name: "demo".to_string(),
+            binding_kind: "runtime".to_string(),
+            binding_name: binding_name.to_string(),
+            pid,
+            restart_count: 0,
+            child_port,
+            stdout_path,
+            stderr_path,
+        }],
+    };
+    fs::write(runtime_path, serde_json::to_vec(&runtime).unwrap()).unwrap();
 }
 
 fn recording_openclaw_script(version: &str) -> String {
@@ -498,6 +546,126 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     let snapshot_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
     assert_eq!(snapshot_json.as_array().unwrap().len(), 1);
     assert_eq!(snapshot_json[0]["label"], "pre-upgrade");
+}
+
+#[test]
+fn upgrade_rolls_back_when_gateway_rpc_is_not_ready() {
+    let root = TestDir::new("upgrade-gateway-readiness-rollback");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let health_server =
+        TestHttpServer::serve_bytes_times("/health", "application/json", br#"{"ok":true}"#, 8);
+    let health_url = health_server.url();
+    let health_port = health_url
+        .split(':')
+        .nth(2)
+        .and_then(|value| value.split('/').next())
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap();
+
+    let old_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.24");
+    let old_integrity = sha512_integrity(&old_tarball);
+    let old_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &old_tarball,
+        10,
+    );
+    let new_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.25"), "2026.3.25");
+    let new_integrity = sha512_integrity(&new_tarball);
+    let new_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.25.tgz",
+        "application/octet-stream",
+        &new_tarball,
+        10,
+    );
+
+    let initial_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity
+    );
+    let updated_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.25\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25\":{{\"version\":\"2026.3.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\",\"2026.3.25\":\"2026-03-26T09:00:00.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity,
+        new_tarball_server.url(),
+        new_integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![
+            initial_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+        ],
+    );
+
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    install_fake_launchctl(&root, &mut env);
+
+    let port = health_port.to_string();
+    let start = run_ocm(&cwd, &env, &["start", "demo", "--port", port.as_str()]);
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let runtime_path = supervisor_runtime_path(&env, &cwd).unwrap();
+    fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
+    let ocm_home = env.get("OCM_HOME").unwrap().clone();
+    write_running_supervisor_runtime(&runtime_path, &ocm_home, "stable", 4242, health_port);
+
+    let state_path = supervisor_state_path(&env, &cwd).unwrap();
+    let replacement_runtime_path = runtime_path.clone();
+    let replacement_ocm_home = ocm_home.clone();
+    let restart_observer = thread::spawn(move || {
+        for _ in 0..200 {
+            let state = fs::read_to_string(&state_path).unwrap_or_default();
+            if state.contains("restartRequests") && state.contains("\"envName\": \"demo\"") {
+                write_running_supervisor_runtime(
+                    &replacement_runtime_path,
+                    &replacement_ocm_home,
+                    "stable",
+                    4243,
+                    health_port,
+                );
+                return;
+            }
+            sleep(Duration::from_millis(25));
+        }
+        panic!("upgrade did not request a supervised gateway restart");
+    });
+
+    env.insert("OCM_TEST_GATEWAY_UNREADY".to_string(), "1".to_string());
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
+    restart_observer.join().unwrap();
+
+    assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("outcome=rolled-back"), "{output}");
+    assert!(output.contains("rollback=restored"), "{output}");
+    assert!(
+        output.contains("post-upgrade gateway readiness failed: gateway RPC is not ready"),
+        "{output}"
+    );
+    assert!(!health_server.requests().is_empty());
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
+    assert_eq!(runtime_json["releaseVersion"], "2026.3.24");
 }
 
 #[test]
