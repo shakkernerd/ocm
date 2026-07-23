@@ -610,6 +610,7 @@ impl Cli {
                     let recovery = get_upgrade_runtime_recovery(
                         env_name,
                         &record.id,
+                        &record.snapshot_id,
                         &record.source.name,
                         &self.env,
                         &self.cwd,
