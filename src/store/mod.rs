@@ -30,7 +30,7 @@ pub use envs::{
 };
 pub(crate) use envs::{
     clone_environment_for_simulation, clone_environment_with_sandbox_origin,
-    import_environment_with_sandbox_origin,
+    create_environment_with_validated_runtime, import_environment_with_sandbox_origin,
 };
 pub(crate) use envs::{
     save_environment_with_validated_launcher, save_environment_with_validated_runtime,
