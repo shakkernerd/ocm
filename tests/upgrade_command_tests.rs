@@ -578,6 +578,108 @@ fn upgrade_rejects_mutating_a_runtime_shared_with_another_env() {
     }
 }
 
+#[test]
+fn upgrade_rejects_mutating_a_target_runtime_bound_to_another_env() {
+    let root = TestDir::new("upgrade-shared-target-runtime");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.24");
+    let old_integrity = sha512_integrity(&old_tarball);
+    let old_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &old_tarball,
+        10,
+    );
+    let new_tarball =
+        openclaw_package_tarball(&recording_openclaw_script("2026.3.25"), "2026.3.25");
+    let new_integrity = sha512_integrity(&new_tarball);
+    let new_tarball_server = TestHttpServer::serve_bytes_times(
+        "/openclaw-2026.3.25.tgz",
+        "application/octet-stream",
+        &new_tarball,
+        10,
+    );
+    let initial_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity
+    );
+    let updated_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.25\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25\":{{\"version\":\"2026.3.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\",\"2026.3.25\":\"2026-03-26T09:00:00.000Z\"}}}}",
+        old_tarball_server.url(),
+        old_integrity,
+        new_tarball_server.url(),
+        new_integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![
+            initial_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+            updated_packument.as_bytes().to_vec(),
+        ],
+    );
+
+    let source_runtime = root.child("source-openclaw");
+    write_executable_script(&source_runtime, &recording_openclaw_script("source-local"));
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let add_source = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "add",
+            "source-local",
+            "--path",
+            &source_runtime.display().to_string(),
+        ],
+    );
+    assert!(add_source.status.success(), "{}", stderr(&add_source));
+    let create_source = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "primary", "--runtime", "source-local"],
+    );
+    assert!(create_source.status.success(), "{}", stderr(&create_source));
+    let start_sibling = run_ocm(&cwd, &env, &["start", "sibling", "--no-service"]);
+    assert!(start_sibling.status.success(), "{}", stderr(&start_sibling));
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "primary", "--channel", "stable"]);
+    assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
+    let error = stderr(&upgrade);
+    assert!(error.contains("runtime \"stable\" is shared"), "{error}");
+    assert!(error.contains("\"sibling\""), "{error}");
+
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(runtime.status.success(), "{}", stderr(&runtime));
+    let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
+    assert_eq!(runtime_json["releaseVersion"], "2026.3.24");
+
+    let source = run_ocm(&cwd, &env, &["env", "show", "primary", "--json"]);
+    assert!(source.status.success(), "{}", stderr(&source));
+    let source_json: Value = serde_json::from_str(&stdout(&source)).unwrap();
+    assert_eq!(source_json["defaultRuntime"], "source-local");
+
+    let snapshots = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "list", "primary", "--json"],
+    );
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    let snapshot_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
+    assert!(snapshot_json.as_array().unwrap().is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn upgrade_switches_across_versions_from_runtime_with_broken_package_bin_symlink() {

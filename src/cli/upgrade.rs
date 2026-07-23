@@ -1060,16 +1060,19 @@ impl Cli {
         let previous_binding_name = current.name.clone();
 
         if target.is_explicit() {
+            let target_runtime_name = target.canonical_runtime_name()?;
+            if !target.is_named_runtime() {
+                self.ensure_runtime_upgrade_isolated(env_name, &target_runtime_name)?;
+            }
             let service = self.upgrade_service_status(env_name)?;
             if options.dry_run {
-                let target_runtime = target.canonical_runtime_name()?;
-                let binding_changed = target_runtime != current.name;
+                let binding_changed = target_runtime_name != current.name;
                 return Ok(UpgradeEnvSummary {
                     env_name: env_name.to_string(),
                     previous_binding_kind: "runtime".to_string(),
                     previous_binding_name,
                     binding_kind: "runtime".to_string(),
-                    binding_name: target_runtime,
+                    binding_name: target_runtime_name,
                     outcome: if binding_changed {
                         "would-switch".to_string()
                     } else {
@@ -1089,7 +1092,6 @@ impl Cli {
                     ),
                 });
             }
-            let target_runtime_name = target.canonical_runtime_name()?;
             let transaction = self.begin_upgrade_transaction(
                 env_name,
                 &[current.name.clone(), target_runtime_name.clone()],
@@ -1582,6 +1584,10 @@ impl Cli {
             });
         }
 
+        let target_runtime_name = target.canonical_runtime_name()?;
+        if !target.is_named_runtime() {
+            self.ensure_runtime_upgrade_isolated(env_name, &target_runtime_name)?;
+        }
         let service = self.upgrade_service_status(env_name)?;
         if options.dry_run {
             return Ok(UpgradeEnvSummary {
@@ -1589,7 +1595,7 @@ impl Cli {
                 previous_binding_kind: "launcher".to_string(),
                 previous_binding_name: launcher_name.to_string(),
                 binding_kind: "runtime".to_string(),
-                binding_name: target.canonical_runtime_name()?,
+                binding_name: target_runtime_name,
                 outcome: "would-switch".to_string(),
                 runtime_release_version: None,
                 runtime_release_channel: target.release_channel_hint(),
@@ -1600,7 +1606,6 @@ impl Cli {
             });
         }
 
-        let target_runtime_name = target.canonical_runtime_name()?;
         let transaction = self.begin_upgrade_transaction(
             env_name,
             std::slice::from_ref(&target_runtime_name),
