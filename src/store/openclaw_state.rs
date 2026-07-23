@@ -163,7 +163,10 @@ pub(crate) fn clear_nonportable_runtime_state(
         let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
         let name = entry.file_name();
-        if name == OsStr::new("openclaw.json") || workspaces.contains(&path) {
+        if name == OsStr::new("openclaw.json")
+            || is_managed_plugin_state_root(&name)
+            || workspaces.contains(&path)
+        {
             continue;
         }
         if name == OsStr::new("agents") {
@@ -182,6 +185,13 @@ pub(crate) fn clear_nonportable_runtime_state(
     }
 
     Ok(changed)
+}
+
+fn is_managed_plugin_state_root(name: &OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some("plugins") | Some("extensions") | Some("npm") | Some("git")
+    )
 }
 
 fn rewrite_runtime_state_root_refs(
@@ -675,7 +685,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_nonportable_runtime_state_preserves_config_workspace_and_agent_auth() {
+    fn clear_nonportable_runtime_state_preserves_config_workspaces_auth_and_plugin_payloads() {
         let temp =
             std::env::temp_dir().join(format!("ocm-openclaw-state-clear-{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp);
@@ -694,6 +704,16 @@ mod tests {
             "{}\n",
         )
         .unwrap();
+        for path in [
+            "plugins/installs.json",
+            "extensions/demo/openclaw.plugin.json",
+            "npm/projects/demo/package-lock.json",
+            "git/git-demo/repo/.git/HEAD",
+        ] {
+            let path = paths.state_dir.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "keep\n").unwrap();
+        }
         fs::write(paths.state_dir.join("logs.txt"), "log\n").unwrap();
         fs::write(paths.workspace_dir.join("notes/todo.txt"), "keep\n").unwrap();
         fs::write(
@@ -723,6 +743,14 @@ mod tests {
                 .join("agents/main/agent/auth-profiles.json")
                 .exists()
         );
+        for path in [
+            "plugins/installs.json",
+            "extensions/demo/openclaw.plugin.json",
+            "npm/projects/demo/package-lock.json",
+            "git/git-demo/repo/.git/HEAD",
+        ] {
+            assert!(paths.state_dir.join(path).exists(), "{path}");
+        }
         assert!(!paths.state_dir.join("agents/main/sessions").exists());
         assert!(!paths.state_dir.join("logs.txt").exists());
 

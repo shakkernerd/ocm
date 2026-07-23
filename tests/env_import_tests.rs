@@ -101,6 +101,89 @@ fn env_import_restores_an_archive_with_a_new_name_and_root() {
 }
 
 #[test]
+fn env_import_restores_managed_plugin_payloads_without_runtime_debris() {
+    let root = TestDir::new("env-import-plugin-payloads");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    let payloads = [
+        (
+            "plugins/installs.json",
+            "{\"legacy\":{\"source\":\"path\"}}\n",
+        ),
+        (
+            "extensions/path-demo/openclaw.plugin.json",
+            "{\"id\":\"path-demo\"}\n",
+        ),
+        (
+            "npm/projects/npm-demo/package-lock.json",
+            "{\"lockfileVersion\":3}\n",
+        ),
+        (
+            "npm/projects/npm-demo/node_modules/npm-demo/index.js",
+            "module.exports = 'npm-demo';\n",
+        ),
+        ("git/git-demo/repo/.git/HEAD", "ref: refs/heads/main\n"),
+        (
+            "git/git-demo/repo/openclaw.plugin.json",
+            "{\"id\":\"git-demo\"}\n",
+        ),
+    ];
+    for (path, contents) in payloads {
+        write_text(&source_state.join(path), contents);
+    }
+    write_text(
+        &source_state.join("plugin-runtime-deps/demo/node_modules/demo/index.js"),
+        "generated runtime dependency\n",
+    );
+
+    let archive = root.child("source.ocm-env.tar");
+    let export = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "export",
+            "source",
+            "--output",
+            archive.to_string_lossy().as_ref(),
+        ],
+    );
+    assert!(export.status.success(), "{}", stderr(&export));
+
+    let target_root = root.child("imports/target");
+    let import = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "import",
+            archive.to_string_lossy().as_ref(),
+            "--name",
+            "target",
+            "--root",
+            target_root.to_string_lossy().as_ref(),
+        ],
+    );
+    assert!(import.status.success(), "{}", stderr(&import));
+
+    let target_state = target_root.join(".openclaw");
+    for (path, contents) in payloads {
+        assert_eq!(
+            fs::read_to_string(target_state.join(path)).unwrap(),
+            contents,
+            "{path}"
+        );
+    }
+    assert!(!target_state.join("plugin-runtime-deps").exists());
+}
+
+#[test]
 fn env_import_rewrites_identity_bound_workspaces_to_the_imported_data_path() {
     let root = TestDir::new("env-import-runtime-identity");
     let cwd = root.child("workspace");
