@@ -7,6 +7,7 @@ use crate::infra::download::{download_to_file, normalize_sha256, verify_file_sha
 use crate::store::{display_path, lock_file, resolve_store_paths};
 
 pub const OPENCLAW_MIN_NODE_VERSION: &str = "22.14.0";
+const MANAGED_NODE_VERSION: &str = "24.15.0";
 
 const INTERNAL_MANAGED_NODE_ARCHIVE_URL_ENV: &str = "OCM_INTERNAL_MANAGED_NODE_ARCHIVE_URL";
 const INTERNAL_MANAGED_NODE_ARCHIVE_SHA256_ENV: &str = "OCM_INTERNAL_MANAGED_NODE_ARCHIVE_SHA256";
@@ -195,7 +196,7 @@ fn command_example(env: &BTreeMap<String, String>) -> String {
 }
 
 fn managed_node_distribution() -> Result<ManagedNodeDistribution, String> {
-    let version = OPENCLAW_MIN_NODE_VERSION.to_string();
+    let version = MANAGED_NODE_VERSION.to_string();
     let arch = match std::env::consts::ARCH {
         "x86_64" => "x64",
         "aarch64" => "arm64",
@@ -246,23 +247,23 @@ fn managed_node_distribution_for(
     npm_cli_relative_path: &'static str,
 ) -> Result<ManagedNodeDistribution, String> {
     let archive_sha256 = match (version, suffix) {
-        ("22.14.0", "darwin-arm64") => {
-            "e9404633bc02a5162c5c573b1e2490f5fb44648345d64a958b17e325729a5e42"
+        ("24.15.0", "darwin-arm64") => {
+            "372331b969779ab5d15b949884fc6eaf88d5afe87bde8ba881d6400b9100ffc4"
         }
-        ("22.14.0", "darwin-x64") => {
-            "6698587713ab565a94a360e091df9f6d91c8fadda6d00f0cf6526e9b40bed250"
+        ("24.15.0", "darwin-x64") => {
+            "ffd5ee293467927f3ee731a553eb88fd1f48cf74eebc2d74a6babe4af228673b"
         }
-        ("22.14.0", "linux-arm64") => {
-            "8cf30ff7250f9463b53c18f89c6c606dfda70378215b2c905d0a9a8b08bd45e0"
+        ("24.15.0", "linux-arm64") => {
+            "73afc234d558c24919875f51c2d1ea002a2ada4ea6f83601a383869fefa64eed"
         }
-        ("22.14.0", "linux-x64") => {
-            "9d942932535988091034dc94cc5f42b6dc8784d6366df3a36c4c9ccb3996f0c2"
+        ("24.15.0", "linux-x64") => {
+            "44836872d9aec49f1e6b52a9a922872db9a2b02d235a616a5681b6a85fec8d89"
         }
-        ("22.14.0", "win-arm64") => {
-            "2d71f5f9b2fffa33baa108c07d74b0d24e0c3dd8f441d567772ae0e3dd4b1a22"
+        ("24.15.0", "win-arm64") => {
+            "c9eb7402eda26e2ba7e44b6727fc85a8de56c5095b1f71ebd3062892211aa116"
         }
-        ("22.14.0", "win-x64") => {
-            "55b639295920b219bb2acbcfa00f90393a2789095b7323f79475c9f34795f217"
+        ("24.15.0", "win-x64") => {
+            "cc5149eabd53779ce1e7bdc5401643622d0c7e6800ade18928a767e940bb0e62"
         }
         _ => {
             return Err(format!(

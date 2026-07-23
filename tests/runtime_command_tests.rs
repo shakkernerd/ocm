@@ -804,7 +804,7 @@ fn official_runtime_install_stays_quiet_when_managed_node_fallback_is_available(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
     );
-    let _managed_node = install_fake_managed_node_archive(&root, &mut env, "22.14.0");
+    let _managed_node = install_fake_managed_node_archive(&root, &mut env, "24.15.0");
 
     let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
     assert!(install.status.success(), "{}", stderr(&install));
@@ -1329,7 +1329,7 @@ fn official_runtime_install_uses_managed_node_when_npm_is_missing() {
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
     install_fake_node_and_npm(&root, &mut env, "22.14.0");
-    let _managed_node = install_fake_managed_node_archive(&root, &mut env, "22.14.0");
+    let _managed_node = install_fake_managed_node_archive(&root, &mut env, "24.15.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1370,7 +1370,7 @@ fn official_runtime_install_rejects_untrusted_managed_node_archive() {
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
     install_fake_node_and_npm(&root, &mut env, "20.11.0");
-    let _managed_node = install_fake_managed_node_archive(&root, &mut env, "22.14.0");
+    let _managed_node = install_fake_managed_node_archive(&root, &mut env, "24.15.0");
     env.insert(
         "OCM_INTERNAL_MANAGED_NODE_ARCHIVE_SHA256".to_string(),
         "0".repeat(64),
@@ -1418,7 +1418,7 @@ fn official_runtime_install_uses_managed_node_when_host_node_is_too_old() {
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
     install_fake_node_and_npm(&root, &mut env, "20.11.0");
-    let _managed_node = install_fake_managed_node_archive(&root, &mut env, "22.14.0");
+    let _managed_node = install_fake_managed_node_archive(&root, &mut env, "24.15.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
