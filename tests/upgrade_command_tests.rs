@@ -97,6 +97,19 @@ case "$1" in
     printf '{{"dryRun":true}}\n'
     exit 0
     ;;
+  config)
+    [ "$2" = "validate" ] || {{
+      echo "unexpected config args: $*" >&2
+      exit 1
+    }}
+    if [ "${{OCM_TEST_INVALID_CONFIG_UNTIL_DOCTOR:-}}" = "1" ] &&
+       [ ! -f "$home/.openclaw/config-repaired" ]; then
+      echo "OpenClaw config is invalid" >&2
+      exit 1
+    fi
+    echo "Config valid"
+    exit 0
+    ;;
   doctor)
     has_arg "--non-interactive" "$@" && has_arg "--fix" "$@" || {{
       echo "missing doctor update flags" >&2
@@ -106,6 +119,8 @@ case "$1" in
       echo "missing OPENCLAW_UPDATE_IN_PROGRESS" >&2
       exit 1
     fi
+    mkdir -p "$home/.openclaw"
+    touch "$home/.openclaw/config-repaired"
     echo "doctor ok"
     exit 0
     ;;
@@ -1597,6 +1612,74 @@ fn upgrade_can_switch_env_to_an_installed_runtime() {
         !command_log.contains("plugins update --all\n"),
         "{command_log}"
     );
+}
+
+#[test]
+fn upgrade_repairs_target_config_before_finalization() {
+    let root = TestDir::new("upgrade-target-config-repair");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_runtime = root.child("old-openclaw");
+    let new_runtime = root.child("new-openclaw");
+    write_executable_script(&old_runtime, &recording_openclaw_script("old-openclaw"));
+    write_executable_script(&new_runtime, &recording_openclaw_script("new-openclaw"));
+
+    let mut env = ocm_env(&root);
+    for (name, runtime) in [("old-local", &old_runtime), ("new-local", &new_runtime)] {
+        let add = run_ocm(
+            &cwd,
+            &env,
+            &[
+                "runtime",
+                "add",
+                name,
+                "--path",
+                &runtime.display().to_string(),
+            ],
+        );
+        assert!(add.status.success(), "{}", stderr(&add));
+    }
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "old-local"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+    let env_root = root.child("ocm-home/envs/demo");
+    fs::write(
+        env_root.join(".openclaw/openclaw.json"),
+        "{\"meta\":{\"lastTouchedAt\":\"legacy\"}}\n",
+    )
+    .unwrap();
+
+    env.insert(
+        "OCM_TEST_INVALID_CONFIG_UNTIL_DOCTOR".to_string(),
+        "1".to_string(),
+    );
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--runtime", "new-local"]);
+    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("outcome=switched"), "{output}");
+    assert!(output.contains("config repair"), "{output}");
+
+    let command_log = fs::read_to_string(env_root.join("sim-commands.log")).unwrap();
+    let validate_before = command_log.find("config validate").unwrap();
+    let doctor = command_log.find("doctor --non-interactive --fix").unwrap();
+    let validate_after = command_log.rfind("config validate").unwrap();
+    let finalize = command_log
+        .find("update finalize --json --yes --no-restart")
+        .unwrap();
+    assert!(validate_before < doctor, "{command_log}");
+    assert!(doctor < validate_after, "{command_log}");
+    assert!(validate_after < finalize, "{command_log}");
+    assert!(env_root.join(".openclaw/config-repaired").exists());
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(env_json["defaultRuntime"], "new-local");
 }
 
 #[test]
