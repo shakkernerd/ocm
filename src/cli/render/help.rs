@@ -1691,7 +1691,10 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!(
                 "{cmd} env snapshot remove mira 1742922000-123456789"
             )],
-            &[],
+            &[
+                "OCM validates the stored environment, snapshot ID, and archive path before removal.",
+                "Metadata and archive content leave their live paths together; later cleanup failures are reported as warnings.",
+            ],
         ),
         "prune" => render_leaf(
             "Prune environment snapshots",
@@ -1721,7 +1724,10 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} env snapshot prune mira --keep 5 --yes"),
                 format!("{cmd} env snapshot prune --all --older-than 30 --json"),
             ],
-            &["TTY output renders tables for preview and applied removals by default."],
+            &[
+                "TTY output renders tables for preview and applied removals by default.",
+                "Applied prune output preserves cleanup warnings for each removed snapshot.",
+            ],
         ),
         _ => return None,
     })

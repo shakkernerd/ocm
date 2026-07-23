@@ -600,6 +600,13 @@ fn nested_snapshot_help_is_available() {
     assert!(output.contains("ocm env snapshot list <name> [--raw] [--json]"));
     assert!(output.contains("TTY output renders a table by default."));
 
+    let remove = run_ocm(&cwd, &env, &["help", "env", "snapshot", "remove"]);
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    let output = stdout(&remove);
+    assert!(output.contains("ocm env snapshot remove <name> <snapshot> [--raw] [--json]"));
+    assert!(output.contains("validates the stored environment, snapshot ID, and archive path"));
+    assert!(output.contains("later cleanup failures are reported as warnings"));
+
     let prune = run_ocm(&cwd, &env, &["help", "env", "snapshot", "prune"]);
     assert!(prune.status.success(), "{}", stderr(&prune));
     let output = stdout(&prune);
@@ -609,6 +616,7 @@ fn nested_snapshot_help_is_available() {
     assert!(
         output.contains("TTY output renders tables for preview and applied removals by default.")
     );
+    assert!(output.contains("preserves cleanup warnings for each removed snapshot"));
 }
 
 #[test]
