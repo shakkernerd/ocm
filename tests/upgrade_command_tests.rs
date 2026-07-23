@@ -3,7 +3,7 @@ mod support;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::thread::{self, sleep};
 use std::time::Duration;
 
@@ -136,6 +136,14 @@ case "$1" in
     ;;
   update)
     if [ "$2" = "finalize" ]; then
+      if [ -n "${{OCM_TEST_UPDATE_FINALIZE_STARTED:-}}" ]; then
+        : > "$OCM_TEST_UPDATE_FINALIZE_STARTED"
+      fi
+      if [ -n "${{OCM_TEST_UPDATE_FINALIZE_RELEASE:-}}" ]; then
+        while [ ! -e "$OCM_TEST_UPDATE_FINALIZE_RELEASE" ]; do
+          sleep 0.05
+        done
+      fi
       if [ "${{OCM_TEST_FAIL_UPDATE_FINALIZE:-}}" = "1" ]; then
         echo "forced update finalize failure" >&2
         exit 23
@@ -2515,6 +2523,110 @@ fn upgrade_can_switch_env_to_an_installed_runtime() {
         !command_log.contains("plugins update --all\n"),
         "{command_log}"
     );
+}
+
+#[test]
+fn upgrade_holds_the_environment_operation_lock_until_completion() {
+    let root = TestDir::new("upgrade-operation-lock");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_runtime = root.child("old-openclaw");
+    let new_runtime = root.child("new-openclaw");
+    write_executable_script(&old_runtime, &recording_openclaw_script("old-openclaw"));
+    write_executable_script(&new_runtime, &recording_openclaw_script("new-openclaw"));
+
+    let mut env = ocm_env(&root);
+    for (name, runtime) in [("old-local", &old_runtime), ("new-local", &new_runtime)] {
+        let add = run_ocm(
+            &cwd,
+            &env,
+            &[
+                "runtime",
+                "add",
+                name,
+                "--path",
+                &runtime.display().to_string(),
+            ],
+        );
+        assert!(add.status.success(), "{}", stderr(&add));
+    }
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "old-local"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let finalize_started = root.child("upgrade-finalize-started");
+    let finalize_release = root.child("upgrade-finalize-release");
+    env.insert(
+        "OCM_TEST_UPDATE_FINALIZE_STARTED".to_string(),
+        path_string(&finalize_started),
+    );
+    env.insert(
+        "OCM_TEST_UPDATE_FINALIZE_RELEASE".to_string(),
+        path_string(&finalize_release),
+    );
+
+    let mut upgrade_command = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    upgrade_command
+        .current_dir(&cwd)
+        .args(["upgrade", "demo", "--runtime", "new-local"])
+        .env_clear()
+        .envs(&env)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let upgrade = upgrade_command.spawn().unwrap();
+
+    for _ in 0..200 {
+        if finalize_started.exists() {
+            break;
+        }
+        sleep(Duration::from_millis(25));
+    }
+    if !finalize_started.exists() {
+        fs::write(&finalize_release, "").unwrap();
+        let output = upgrade.wait_with_output().unwrap();
+        panic!(
+            "upgrade did not reach finalization: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let mut binding_command = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    binding_command
+        .current_dir(&cwd)
+        .args(["env", "set-runtime", "demo", "old-local"])
+        .env_clear()
+        .envs(&env)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut binding = binding_command.spawn().unwrap();
+    sleep(Duration::from_millis(250));
+
+    if let Some(status) = binding.try_wait().unwrap() {
+        fs::write(&finalize_release, "").unwrap();
+        let upgrade = upgrade.wait_with_output().unwrap();
+        panic!(
+            "binding mutation completed with {status} while upgrade held the environment operation lock; upgrade stderr: {}",
+            String::from_utf8_lossy(&upgrade.stderr)
+        );
+    }
+
+    fs::write(&finalize_release, "").unwrap();
+    let upgrade = upgrade.wait_with_output().unwrap();
+    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    let binding = binding.wait_with_output().unwrap();
+    assert!(binding.status.success(), "{}", stderr(&binding));
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(env_json["defaultRuntime"], "old-local");
 }
 
 #[test]
