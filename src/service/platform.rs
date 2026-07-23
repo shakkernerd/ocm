@@ -986,20 +986,29 @@ fn run_launchctl<const N: usize>(
     env: &BTreeMap<String, String>,
     args: [&str; N],
 ) -> Result<Output, String> {
-    Command::new(service_manager_binary(env, ServiceManagerKind::Launchd))
-        .args(args)
-        .output()
-        .map_err(|error| format!("failed to run \"launchctl\": {error}"))
+    run_service_manager_command(
+        service_manager_binary(env, ServiceManagerKind::Launchd),
+        args,
+    )
+    .map_err(|error| format!("failed to run \"launchctl\": {error}"))
 }
 
 fn run_systemctl<const N: usize>(
     env: &BTreeMap<String, String>,
     args: [&str; N],
 ) -> Result<Output, String> {
-    Command::new(service_manager_binary(env, ServiceManagerKind::SystemdUser))
-        .args(args)
-        .output()
-        .map_err(|error| format!("failed to run \"systemctl\": {error}"))
+    run_service_manager_command(
+        service_manager_binary(env, ServiceManagerKind::SystemdUser),
+        args,
+    )
+    .map_err(|error| format!("failed to run \"systemctl\": {error}"))
+}
+
+fn run_service_manager_command<const N: usize>(
+    binary: &str,
+    args: [&str; N],
+) -> std::io::Result<Output> {
+    Command::new(binary).args(args).output()
 }
 
 fn launchctl_detail(output: &Output) -> String {
