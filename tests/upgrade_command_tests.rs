@@ -870,6 +870,32 @@ fn upgrade_rejects_downgrade_before_snapshot_or_target_download() {
 
     let target = run_ocm(&cwd, &env, &["runtime", "show", older_version]);
     assert!(!target.status.success());
+
+    let install_target = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "install", "--version", older_version],
+    );
+    assert!(
+        install_target.status.success(),
+        "{}",
+        stderr(&install_target)
+    );
+    let older_requests_before_named_target = older_server.requests().len();
+    let named_upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--runtime", older_version]);
+    assert_eq!(named_upgrade.status.code(), Some(1));
+    assert!(
+        stderr(&named_upgrade).contains(&format!(
+            "refusing to downgrade env \"demo\" from OpenClaw {newer_version} to {older_version}"
+        )),
+        "{}",
+        stderr(&named_upgrade)
+    );
+    assert_eq!(
+        older_server.requests().len(),
+        older_requests_before_named_target
+    );
+
     let snapshots = run_ocm(&cwd, &env, &["env", "snapshot", "list", "demo", "--json"]);
     assert!(snapshots.status.success(), "{}", stderr(&snapshots));
     let snapshots: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
