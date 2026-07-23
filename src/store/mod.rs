@@ -19,7 +19,6 @@ use crate::env::EnvSummary;
 pub(crate) use common::{
     ExclusiveFileLock, copy_dir_recursive, ensure_dir, lock_file, read_json, write_json,
 };
-pub(crate) use envs::save_environment_with_validated_launcher;
 pub(crate) use envs::{EnvironmentOperationLock, lock_env_registry, lock_environment_operation};
 pub(crate) use envs::{
     EnvironmentServicePolicyChange, restore_environment_service_policy,
@@ -32,6 +31,10 @@ pub use envs::{
 pub(crate) use envs::{
     clone_environment_for_simulation, clone_environment_with_sandbox_origin,
     import_environment_with_sandbox_origin,
+};
+pub(crate) use envs::{
+    save_environment_with_validated_launcher, save_environment_with_validated_runtime,
+    with_locked_environments,
 };
 pub(crate) use gateway_ports::{
     openclaw_port_family_available, openclaw_port_family_range, resolve_config_gateway_port,

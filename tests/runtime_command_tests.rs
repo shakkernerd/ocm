@@ -267,6 +267,84 @@ fn runtime_show_and_remove_use_runtime_metadata() {
 }
 
 #[test]
+fn runtime_remove_rejects_a_runtime_bound_to_an_environment() {
+    let root = TestDir::new("runtime-remove-bound");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_executable_script(&bin_dir.join("stable"), "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let remove = run_ocm(&cwd, &env, &["runtime", "remove", "stable"]);
+    assert_eq!(remove.status.code(), Some(1));
+    let error = stderr(&remove);
+    assert!(
+        error.contains("runtime \"stable\" is still used"),
+        "{error}"
+    );
+    assert!(error.contains("\"demo\""), "{error}");
+    assert!(error.contains("ocm upgrade"), "{error}");
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let environment = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(environment.status.success(), "{}", stderr(&environment));
+    assert!(stdout(&environment).contains("\"defaultRuntime\": \"stable\""));
+}
+
+#[test]
+fn runtime_add_rejects_a_name_referenced_by_a_stale_binding() {
+    let root = TestDir::new("runtime-add-stale-binding");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let runtime_path = bin_dir.join("stable");
+    write_executable_script(&runtime_path, "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+    fs::remove_file(root.child("ocm-home/runtimes/stable.json")).unwrap();
+
+    let replacement = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert_eq!(replacement.status.code(), Some(1));
+    let error = stderr(&replacement);
+    assert!(
+        error.contains("runtime \"stable\" is still used"),
+        "{error}"
+    );
+    assert!(error.contains("\"demo\""), "{error}");
+    assert!(!root.child("ocm-home/runtimes/stable.json").exists());
+}
+
+#[test]
 fn runtime_install_and_which_use_the_managed_binary_path() {
     let root = TestDir::new("runtime-install-which");
     let cwd = root.child("workspace");
