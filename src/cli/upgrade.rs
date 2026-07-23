@@ -3024,6 +3024,18 @@ mod tests {
             )
             .is_ok()
         );
+        assert!(
+            verify_gateway_status_readiness(
+                r#"{"rpc":{"ok":false,"error":"device identity required"}}"#
+            )
+            .is_ok()
+        );
+        assert!(
+            verify_gateway_status_readiness(
+                r#"{"rpc":{"ok":false,"error":"gateway closed (1008): unauthorized: gateway token mismatch"}}"#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -3044,6 +3056,15 @@ mod tests {
         assert!(
             current.contains("No gateway answered any probe"),
             "{current}"
+        );
+
+        let arbitrary_auth_error = verify_gateway_status_readiness(
+            r#"{"rpc":{"ok":false,"error":"authentication backend unavailable"}}"#,
+        )
+        .unwrap_err();
+        assert!(
+            arbitrary_auth_error.contains("authentication backend unavailable"),
+            "{arbitrary_auth_error}"
         );
     }
 
