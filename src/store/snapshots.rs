@@ -22,7 +22,7 @@ use super::layout::{
 use super::{
     OpenClawWorkspaceRuntime, audit_openclaw_state, clear_nonportable_runtime_state,
     get_environment, list_environments, now_utc, openclaw_env_snapshot_archive_options,
-    rewrite_openclaw_config_for_target, save_environment,
+    remove_upgrade_recovery_for_snapshot, rewrite_openclaw_config_for_target, save_environment,
 };
 
 static NEXT_RESTORE_ID: AtomicU64 = AtomicU64::new(0);
@@ -295,6 +295,7 @@ pub fn remove_env_snapshot(
     if path_exists(&archive_path) {
         fs::remove_file(&archive_path).map_err(|error| error.to_string())?;
     }
+    remove_upgrade_recovery_for_snapshot(&snapshot.env_name, &snapshot.id, env, cwd)?;
 
     remove_snapshot_parent_if_empty(&snapshot.env_name, env, cwd)?;
 

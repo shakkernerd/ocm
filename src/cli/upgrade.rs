@@ -32,7 +32,8 @@ use crate::store::{
     ensure_store, get_runtime, install_runtime_from_selected_official_openclaw_release,
     list_upgrade_history, lock_env_registry, remove_runtime, resolve_absolute_path,
     runtime_install_root, runtime_integrity_issue, runtime_meta_path, save_environment,
-    save_upgrade_history_record, upgrade_history_runtime_recovery_dir, write_json,
+    save_upgrade_history_record, upgrade_history_recovery_dir,
+    upgrade_history_runtime_recovery_dir, write_json,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -2430,6 +2431,8 @@ impl Cli {
                 "runtime \"{runtime_name}\" does not have installer-managed bytes to retain"
             ));
         };
+        let transaction_recovery_root =
+            upgrade_history_recovery_dir(env_name, &transaction.id, &self.env, &self.cwd)?;
         let recovery_root = upgrade_history_runtime_recovery_dir(
             env_name,
             &transaction.id,
@@ -2437,17 +2440,28 @@ impl Cli {
             &self.env,
             &self.cwd,
         )?;
-        if recovery_root.exists() {
+        if transaction_recovery_root.exists() {
             backup.backup_root = Some(source_root);
             return Err(format!(
                 "runtime recovery path already exists: {}",
-                display_path(&recovery_root)
+                display_path(&transaction_recovery_root)
             ));
         }
         fs::create_dir_all(&recovery_root).map_err(|error| error.to_string())?;
+        if let Err(error) = fs::write(
+            transaction_recovery_root.join("snapshot-id"),
+            &transaction.snapshot_id,
+        ) {
+            let _ = fs::remove_dir_all(&transaction_recovery_root);
+            backup.backup_root = Some(source_root);
+            return Err(format!(
+                "failed to record the recovery snapshot at {}: {error}",
+                display_path(&transaction_recovery_root)
+            ));
+        }
         let recovery_files = recovery_root.join("files");
         if let Err(error) = fs::rename(&source_root, &recovery_files) {
-            let _ = fs::remove_dir_all(&recovery_root);
+            let _ = fs::remove_dir_all(&transaction_recovery_root);
             backup.backup_root = Some(source_root);
             return Err(format!(
                 "failed to retain runtime recovery bytes at {}: {error}",
@@ -2455,7 +2469,7 @@ impl Cli {
             ));
         }
         backup.backup_root = Some(recovery_files);
-        backup.retained_root = Some(recovery_root.clone());
+        backup.retained_root = Some(transaction_recovery_root);
         write_json(&recovery_root.join("runtime.json"), &backup.meta)?;
         backup.backup_id = Some(runtime_name);
         Ok(())
