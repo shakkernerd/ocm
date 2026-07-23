@@ -142,19 +142,18 @@ pub fn get_env_snapshot(
     cwd: &Path,
 ) -> Result<EnvSnapshotMeta, String> {
     let safe_env_name = validate_name(env_name, "Environment name")?;
-    let safe_snapshot_id = snapshot_id.trim();
-    if safe_snapshot_id.is_empty() {
-        return Err("snapshot id is required".to_string());
-    }
+    let safe_snapshot_id = validate_name(snapshot_id, "Snapshot id")?;
 
-    let path = snapshot_meta_path(&safe_env_name, safe_snapshot_id, env, cwd)?;
+    let path = snapshot_meta_path(&safe_env_name, &safe_snapshot_id, env, cwd)?;
     if !path_exists(&path) {
         return Err(format!(
             "snapshot \"{}\" does not exist for environment \"{}\"",
             safe_snapshot_id, safe_env_name
         ));
     }
-    read_json(&path)
+    let snapshot = read_json(&path)?;
+    validate_env_snapshot_identity(&snapshot, &safe_env_name, &safe_snapshot_id, env, cwd)?;
+    Ok(snapshot)
 }
 
 pub fn summarize_snapshot(meta: &EnvSnapshotMeta) -> EnvSnapshotSummary {
@@ -317,7 +316,13 @@ pub fn list_env_snapshots(
     let files = load_json_files(&dir)?;
     let mut out = Vec::with_capacity(files.len());
     for file in files {
-        out.push(read_json(&file)?);
+        let snapshot_id = file
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| format!("snapshot path has an invalid id: {}", display_path(&file)))?;
+        let snapshot = read_json(&file)?;
+        validate_env_snapshot_identity(&snapshot, &safe_env_name, snapshot_id, env, cwd)?;
+        out.push(snapshot);
     }
     sort_snapshots(&mut out);
     Ok(out)
@@ -336,13 +341,64 @@ pub fn list_all_env_snapshots(
         if !path.is_dir() {
             continue;
         }
+        let env_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                format!(
+                    "snapshot directory has an invalid environment name: {}",
+                    display_path(&path)
+                )
+            })?;
+        let env_name = validate_name(env_name, "Environment name")?;
         let files = load_json_files(&path)?;
         for file in files {
-            out.push(read_json(&file)?);
+            let snapshot_id = file
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| {
+                    format!("snapshot path has an invalid id: {}", display_path(&file))
+                })?;
+            let snapshot = read_json(&file)?;
+            validate_env_snapshot_identity(&snapshot, &env_name, snapshot_id, env, cwd)?;
+            out.push(snapshot);
         }
     }
     sort_snapshots(&mut out);
     Ok(out)
+}
+
+fn validate_env_snapshot_identity(
+    snapshot: &EnvSnapshotMeta,
+    env_name: &str,
+    snapshot_id: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<(), String> {
+    if snapshot.kind != "ocm-env-snapshot" {
+        return Err(format!("unsupported snapshot kind: {}", snapshot.kind));
+    }
+    if snapshot.env_name != env_name {
+        return Err(format!(
+            "snapshot \"{snapshot_id}\" belongs to environment \"{}\", expected \"{env_name}\"",
+            snapshot.env_name
+        ));
+    }
+    if snapshot.id != snapshot_id {
+        return Err(format!(
+            "snapshot entry \"{snapshot_id}\" contains snapshot id \"{}\"",
+            snapshot.id
+        ));
+    }
+    let expected_archive = snapshot_archive_path(env_name, snapshot_id, env, cwd)?;
+    if Path::new(&snapshot.archive_path) != expected_archive {
+        return Err(format!(
+            "snapshot \"{snapshot_id}\" archive path is {}, expected {}",
+            snapshot.archive_path,
+            display_path(&expected_archive)
+        ));
+    }
+    Ok(())
 }
 
 fn sort_snapshots(snapshots: &mut [EnvSnapshotMeta]) {

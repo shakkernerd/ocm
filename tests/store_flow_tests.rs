@@ -1792,6 +1792,86 @@ fn environment_snapshot_remove_deletes_snapshot_artifacts_and_metadata() {
 }
 
 #[test]
+fn environment_snapshot_reads_reject_mismatched_identity_and_archive_paths() {
+    let root = TestDir::new("store-env-snapshot-identity");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: None,
+            service_enabled: false,
+            service_running: false,
+            default_runtime: None,
+            default_launcher: None,
+            dev: None,
+            protected: false,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    let snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: None,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let meta_path = root
+        .child("ocm-home/snapshots/source")
+        .join(format!("{}.json", snapshot.id));
+    let original = fs::read(&meta_path).unwrap();
+    let mut metadata: serde_json::Value = serde_json::from_slice(&original).unwrap();
+
+    metadata["envName"] = serde_json::Value::String("other".to_string());
+    fs::write(&meta_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    let error = get_env_snapshot("source", &snapshot.id, &env, &cwd).unwrap_err();
+    assert!(
+        error.contains("belongs to environment \"other\", expected \"source\""),
+        "{error}"
+    );
+
+    fs::write(&meta_path, &original).unwrap();
+    metadata = serde_json::from_slice(&original).unwrap();
+    metadata["id"] = serde_json::Value::String("different".to_string());
+    fs::write(&meta_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    let error = list_env_snapshots("source", &env, &cwd).unwrap_err();
+    assert!(
+        error.contains("contains snapshot id \"different\""),
+        "{error}"
+    );
+
+    fs::write(&meta_path, &original).unwrap();
+    metadata = serde_json::from_slice(&original).unwrap();
+    let foreign_archive = root.child("do-not-remove.tar");
+    fs::write(&foreign_archive, "foreign").unwrap();
+    metadata["archivePath"] =
+        serde_json::Value::String(foreign_archive.to_string_lossy().into_owned());
+    fs::write(&meta_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    let error = remove_env_snapshot(
+        RemoveEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            snapshot_id: snapshot.id.clone(),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap_err();
+    assert!(error.contains("archive path is"), "{error}");
+    assert!(foreign_archive.exists());
+
+    let error = get_env_snapshot("source", "../outside", &env, &cwd).unwrap_err();
+    assert!(error.contains("Snapshot id must use letters"), "{error}");
+}
+
+#[test]
 fn environment_snapshot_prune_keeps_the_newest_snapshot_in_scope() {
     let root = TestDir::new("store-env-snapshot-prune");
     let cwd = root.child("workspace");
