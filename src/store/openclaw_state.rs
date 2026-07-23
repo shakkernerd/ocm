@@ -109,6 +109,7 @@ pub(crate) fn openclaw_env_archive_options(
         should_skip_path: should_skip_openclaw_env_archive_path,
         included_path_roots: workspaces.archive_relative_roots(&paths.root)?,
         excluded_path_roots: openclaw_archive_excluded_path_roots(paths)?,
+        snapshot_sqlite_files: false,
     })
 }
 
