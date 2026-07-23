@@ -149,6 +149,8 @@ pub(crate) struct EnvDestroySummary {
     pub blockers: Vec<String>,
     pub steps: Vec<EnvDestroyStepSummary>,
     pub snapshots_removed: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     pub service_uninstalled: bool,
     pub processes_terminated: usize,
     pub worktree_removed: bool,
@@ -381,11 +383,18 @@ impl Cli {
         // Snapshots are the recovery path if destructive cleanup fails, so
         // remove them only after the environment and worktree are gone.
         for snapshot_id in &snapshot_ids {
-            self.environment_service()
-                .remove_snapshot_locked(RemoveEnvSnapshotOptions {
-                    env_name: name.clone(),
-                    snapshot_id: snapshot_id.clone(),
-                })?;
+            let removed =
+                self.environment_service()
+                    .remove_snapshot_locked(RemoveEnvSnapshotOptions {
+                        env_name: name.clone(),
+                        snapshot_id: snapshot_id.clone(),
+                    })?;
+            summary.warnings.extend(
+                removed
+                    .warnings
+                    .into_iter()
+                    .map(|warning| format!("snapshot {snapshot_id}: {warning}")),
+            );
         }
         summary.snapshots_removed = snapshot_ids.len();
 
@@ -1114,6 +1123,7 @@ impl Cli {
             blockers,
             steps,
             snapshots_removed: 0,
+            warnings: Vec::new(),
             service_uninstalled: false,
             processes_terminated: 0,
             worktree_removed: false,
