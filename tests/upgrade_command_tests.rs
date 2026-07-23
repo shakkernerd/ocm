@@ -2,6 +2,8 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::{self, sleep};
@@ -2914,6 +2916,62 @@ fn upgrade_rollback_failure_restores_the_pre_rollback_state() {
     assert_eq!(history_json[0]["outcome"], "failed");
     assert_eq!(history_json[0]["rollback"], "restored");
     assert_eq!(history_json[0]["rollbackOf"], fixture.transaction_id);
+}
+
+#[cfg(unix)]
+#[test]
+fn upgrade_rollback_removes_an_unrecorded_safety_snapshot_after_restore() {
+    let root = TestDir::new("upgrade-rollback-history-write-failure");
+    let fixture = seed_in_place_rollback(&root, "broken-recovery");
+    let history_dir = Path::new(fixture.env.get("OCM_HOME").unwrap()).join("upgrade-history/demo");
+    let mut permissions = fs::metadata(&history_dir).unwrap().permissions();
+    let original_mode = permissions.mode();
+    permissions.set_mode(0o500);
+    fs::set_permissions(&history_dir, permissions).unwrap();
+
+    let rollback = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--json"],
+    );
+
+    let mut permissions = fs::metadata(&history_dir).unwrap().permissions();
+    permissions.set_mode(original_mode);
+    fs::set_permissions(&history_dir, permissions).unwrap();
+
+    assert!(!rollback.status.success());
+    let rollback_json: Value = serde_json::from_str(&stdout(&rollback)).unwrap();
+    assert_eq!(rollback_json["outcome"], "failed");
+    assert!(rollback_json["safetySnapshotId"].is_null());
+    assert!(
+        rollback_json["note"]
+            .as_str()
+            .unwrap()
+            .contains("Rollback history was not recorded")
+    );
+    assert_eq!(
+        fs::read_to_string(&fixture.marker).unwrap(),
+        "after-upgrade"
+    );
+    assert!(fixture.original_recovery_root.exists());
+
+    let snapshots = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["env", "snapshot", "list", "demo", "--json"],
+    );
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    let snapshots_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
+    assert_eq!(snapshots_json.as_array().unwrap().len(), 1);
+
+    let history = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "history", "demo", "--json"],
+    );
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    assert_eq!(history_json.as_array().unwrap().len(), 1);
 }
 
 #[test]
