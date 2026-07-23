@@ -197,13 +197,28 @@ pub(crate) fn managed_runtime_launch_command(
             )
         })?
     };
+    let path_prepend = toolchain.node_bin.parent().map(Path::to_path_buf);
     let mut args = vec![binary_path.to_string()];
     args.extend(openclaw_args.iter().cloned());
     Ok(CommandSpec {
         program: display_path(&toolchain.node_bin),
         args,
-        path_prepend: None,
+        path_prepend,
     })
+}
+
+pub(crate) fn apply_path_prepend_to_environment(
+    env: &mut BTreeMap<String, String>,
+    path_prepend: Option<&Path>,
+) -> Result<(), String> {
+    let Some(path_prepend) = path_prepend else {
+        return Ok(());
+    };
+    let path = prepend_to_path(path_prepend, env.get("PATH"))?
+        .into_string()
+        .map_err(|_| "managed Node.js PATH contains non-Unicode data".to_string())?;
+    env.insert("PATH".to_string(), path);
+    Ok(())
 }
 
 fn command_example(env: &BTreeMap<String, String>) -> String {

@@ -566,6 +566,13 @@ EOF
     exit 0
     ;;
 esac
+if [ "${{OCM_TEST_REQUIRE_MANAGED_NODE_ON_PATH:-}}" = "1" ]; then
+  resolved_node="$(command -v node || true)"
+  if [ "$resolved_node" != "$0" ]; then
+    echo "managed OpenClaw PATH resolved node to ${{resolved_node:-missing}}, expected $0" >&2
+    exit 1
+  fi
+fi
 if [ -n "$script" ] && /usr/bin/grep -q "process\.argv\.slice(2)\.join(' ')" "$script"; then
   printf '%s\n' "$*"
   exit 0
