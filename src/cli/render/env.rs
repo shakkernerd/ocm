@@ -2444,6 +2444,14 @@ pub fn env_snapshot_removed(
         rows.push(KeyValueRow::plain("Label", label));
     }
     push_card(&mut lines, "Snapshot", rows, profile.color);
+    if !removed.warnings.is_empty() {
+        let rows = removed
+            .warnings
+            .iter()
+            .map(|warning| KeyValueRow::warning("Warning", warning.clone()))
+            .collect::<Vec<_>>();
+        lines.extend(render_key_value_card("Warnings", &rows, profile.color));
+    }
     lines
 }
 
@@ -2458,6 +2466,12 @@ fn env_snapshot_removed_raw(removed: &EnvSnapshotRemoveSummary) -> Vec<String> {
     if let Some(label) = removed.label.as_deref() {
         lines.push(format!("  label: {label}"));
     }
+    lines.extend(
+        removed
+            .warnings
+            .iter()
+            .map(|warning| format!("warning: {warning}")),
+    );
     lines
 }
 
@@ -2573,6 +2587,17 @@ pub fn env_snapshot_pruned(
         &rows,
         profile.color,
     ));
+    let warnings = removed
+        .iter()
+        .flat_map(|snapshot| {
+            snapshot.warnings.iter().map(|warning| {
+                KeyValueRow::warning("Warning", format!("{}: {warning}", snapshot.snapshot_id))
+            })
+        })
+        .collect::<Vec<_>>();
+    if !warnings.is_empty() {
+        lines.extend(render_key_value_card("Warnings", &warnings, profile.color));
+    }
     lines
 }
 
@@ -2585,6 +2610,12 @@ fn env_snapshot_pruned_raw(removed: &[EnvSnapshotRemoveSummary]) -> Vec<String> 
         }
         bits.push(snapshot.archive_path.clone());
         lines.push(format!("  {}", bits.join("  ")));
+        lines.extend(
+            snapshot
+                .warnings
+                .iter()
+                .map(|warning| format!("  warning: {}: {warning}", snapshot.snapshot_id)),
+        );
     }
     lines
 }

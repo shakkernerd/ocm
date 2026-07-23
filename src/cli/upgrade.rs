@@ -925,9 +925,14 @@ impl Cli {
                     snapshot_id: safety_snapshot_id.clone(),
                 },
             ) {
-                Ok(_) => {
+                Ok(removed) => {
                     retained_safety_snapshot_id = None;
-                    Some("Unrecorded safety snapshot was removed.".to_string())
+                    join_optional_warnings(
+                        Some("Unrecorded safety snapshot was removed.".to_string()),
+                        join_warnings(&removed.warnings).map(|warning| {
+                            format!("Snapshot cleanup requires attention: {warning}")
+                        }),
+                    )
                 }
                 Err(error) => Some(format!(
                     "Unrecorded safety snapshot cleanup failed: {error}"

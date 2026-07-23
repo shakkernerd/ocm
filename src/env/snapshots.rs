@@ -54,6 +54,8 @@ pub struct EnvSnapshotRemoveSummary {
     pub snapshot_id: String,
     pub label: Option<String>,
     pub archive_path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug)]

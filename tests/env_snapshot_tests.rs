@@ -1044,6 +1044,50 @@ fn env_snapshot_remove_json_reports_removed_snapshot_metadata() {
 }
 
 #[test]
+fn env_snapshot_remove_reports_cleanup_warnings_after_logical_removal() {
+    let root = TestDir::new("env-snapshot-remove-warning");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let snapshot = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "create", "source", "--json"],
+    );
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let snapshot_json: serde_json::Value = serde_json::from_str(&stdout(&snapshot)).unwrap();
+    let snapshot_id = snapshot_json["id"].as_str().unwrap();
+
+    let history_root = root.child("ocm-home/upgrade-history");
+    fs::create_dir_all(&history_root).unwrap();
+    fs::write(
+        history_root.join("source"),
+        "block linked recovery traversal",
+    )
+    .unwrap();
+
+    let remove = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "remove", "source", snapshot_id],
+    );
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    assert!(
+        stdout(&remove).contains("warning: linked upgrade recovery cleanup failed"),
+        "{}",
+        stdout(&remove)
+    );
+
+    let list = run_ocm(&cwd, &env, &["env", "snapshot", "list", "source"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert!(stdout(&list).contains("No snapshots."));
+}
+
+#[test]
 fn env_snapshot_prune_previews_candidates_without_removing_them() {
     let root = TestDir::new("env-snapshot-prune-preview");
     let cwd = root.child("workspace");
