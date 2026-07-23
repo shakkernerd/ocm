@@ -1882,22 +1882,35 @@ impl Cli {
         name: &str,
         args: &[&str],
     ) -> Result<(), String> {
+        let output =
+            self.run_update_mode_openclaw_command_output(env_name, runtime_name, name, args)?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!("{name} failed: {}", output.failure_summary()))
+        }
+    }
+
+    fn run_update_mode_openclaw_command_output(
+        &self,
+        env_name: &str,
+        runtime_name: &str,
+        name: &str,
+        args: &[&str],
+    ) -> Result<SimulationCommandOutput, String> {
         let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
         let resolved = self
             .environment_service()
             .resolve(env_name, Some(runtime_name.to_string()), None, &args)
             .map_err(|error| format!("{name} failed: {error}"))?;
-        match self.run_resolved_for_simulation(
+        self.run_resolved_for_simulation(
             resolved,
             &[
                 ("OPENCLAW_UPDATE_IN_PROGRESS", "1"),
                 ("OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE", "1"),
             ],
-        ) {
-            Ok(output) if output.status.success() => Ok(()),
-            Ok(output) => Err(format!("{name} failed: {}", output.failure_summary())),
-            Err(error) => Err(format!("{name} failed: {error}")),
-        }
+        )
+        .map_err(|error| format!("{name} failed: {error}"))
     }
 
     fn begin_upgrade_transaction(
