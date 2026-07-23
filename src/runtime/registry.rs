@@ -93,7 +93,7 @@ pub struct RuntimeService<'a> {
 }
 
 impl<'a> RuntimeService<'a> {
-    fn with_unbound_runtime<T>(
+    pub(super) fn with_unbound_runtime<T>(
         &self,
         name: &str,
         action: impl FnOnce() -> Result<T, String>,
