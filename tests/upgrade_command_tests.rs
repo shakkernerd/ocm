@@ -2903,6 +2903,73 @@ fn upgrade_rollback_refuses_a_transaction_with_a_successful_child() {
 }
 
 #[test]
+fn upgrade_rollback_skips_newer_automatic_failure_rollback_history() {
+    let root = TestDir::new("upgrade-explicit-rollback-skips-automatic");
+    let fixture = seed_in_place_rollback(&root, "2026.6.11");
+    let automatic_id = "1783728000-000000001";
+    let automatic = serde_json::json!({
+        "kind": "ocm-upgrade-transaction",
+        "formatVersion": 1,
+        "id": automatic_id,
+        "envName": "demo",
+        "source": {
+            "kind": "runtime",
+            "name": "stable",
+            "openclawVersion": "2026.6.33"
+        },
+        "target": {
+            "kind": "runtime",
+            "name": "stable",
+            "openclawVersion": "2026.7.1"
+        },
+        "snapshotId": "failed-upgrade-snapshot",
+        "runtimeRecovery": [],
+        "startedAt": "2026-07-11T00:00:00Z",
+        "completedAt": "2026-07-11T00:01:00Z",
+        "outcome": "rolled-back",
+        "migration": {"status": "failed"},
+        "finalization": {"status": "not-run"},
+        "serviceBefore": {"enabled": false, "running": false},
+        "serviceAfter": {"enabled": false, "running": false},
+        "rollback": "restored"
+    });
+    let history_dir = Path::new(fixture.env.get("OCM_HOME").unwrap()).join("upgrade-history/demo");
+    fs::write(
+        history_dir.join(format!("{automatic_id}.json")),
+        serde_json::to_vec(&automatic).unwrap(),
+    )
+    .unwrap();
+
+    let dry_run = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--dry-run", "--json"],
+    );
+    assert!(dry_run.status.success(), "{}", stderr(&dry_run));
+    let dry_run_json: Value = serde_json::from_str(&stdout(&dry_run)).unwrap();
+    assert_eq!(dry_run_json["transactionId"], fixture.transaction_id);
+
+    let explicit = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &[
+            "upgrade",
+            "rollback",
+            "demo",
+            "--transaction",
+            automatic_id,
+            "--json",
+        ],
+    );
+    assert!(!explicit.status.success());
+    assert!(
+        stderr(&explicit).contains("cannot be rolled back because its outcome is \"rolled-back\""),
+        "{}",
+        stderr(&explicit)
+    );
+}
+
+#[test]
 fn upgrade_rollback_restarts_and_verifies_a_managed_service() {
     let root = TestDir::new("upgrade-explicit-rollback-service");
     let cwd = root.child("workspace");

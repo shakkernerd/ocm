@@ -3569,10 +3569,10 @@ fn source_binding(env: &crate::env::EnvMeta) -> (String, String) {
 }
 
 fn is_rollback_candidate(record: &UpgradeHistoryRecord) -> bool {
-    matches!(
-        record.outcome.as_str(),
-        "updated" | "switched" | "rolled-back"
-    )
+    matches!(record.outcome.as_str(), "updated" | "switched")
+        || (record.outcome == "rolled-back"
+            && record.rollback_of.is_some()
+            && record.rollback.is_none())
 }
 
 fn has_successful_rollback_child(history: &[UpgradeHistoryRecord], transaction_id: &str) -> bool {
