@@ -1866,13 +1866,57 @@ impl Cli {
     ) -> Result<Option<String>, String> {
         // Resolve the replacement explicitly while the previous binding remains published.
         // A failed finalizer can then roll back without ever activating the replacement.
+        let config_repaired = self.repair_target_openclaw_config(env_name, runtime_name)?;
         self.run_update_mode_openclaw_command(
             env_name,
             runtime_name,
             "openclaw update finalize",
             &["update", "finalize", "--json", "--yes", "--no-restart"],
         )?;
-        Ok(Some("OpenClaw update finalization completed".to_string()))
+        Ok(Some(if config_repaired {
+            "OpenClaw config repair and update finalization completed".to_string()
+        } else {
+            "OpenClaw update finalization completed".to_string()
+        }))
+    }
+
+    fn repair_target_openclaw_config(
+        &self,
+        env_name: &str,
+        runtime_name: &str,
+    ) -> Result<bool, String> {
+        let env = self
+            .environment_service()
+            .get(env_name)
+            .map_err(|error| format!("failed to inspect OpenClaw config: {error}"))?;
+        let config_path = derive_env_paths(Path::new(&env.root)).config_path;
+        if !config_path.exists() {
+            return Ok(false);
+        }
+
+        let validation = self.run_update_mode_openclaw_command_output(
+            env_name,
+            runtime_name,
+            "openclaw config validate",
+            &["config", "validate"],
+        )?;
+        if validation.status.success() {
+            return Ok(false);
+        }
+
+        self.run_update_mode_openclaw_command(
+            env_name,
+            runtime_name,
+            "openclaw doctor",
+            &["doctor", "--non-interactive", "--fix"],
+        )?;
+        self.run_update_mode_openclaw_command(
+            env_name,
+            runtime_name,
+            "openclaw config validate after doctor",
+            &["config", "validate"],
+        )?;
+        Ok(true)
     }
 
     fn run_update_mode_openclaw_command(
