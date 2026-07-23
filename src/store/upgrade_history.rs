@@ -9,7 +9,7 @@ use super::common::{
 };
 use super::layout::{
     display_path, runtime_install_root, upgrade_history_env_dir, upgrade_history_meta_path,
-    upgrade_history_recovery_dir, upgrade_history_runtime_recovery_dir, validate_name,
+    upgrade_history_recovery_dir, validate_name,
 };
 use super::runtime_integrity_issue;
 use crate::runtime::{RuntimeMeta, RuntimeSourceKind};
@@ -165,6 +165,7 @@ pub(crate) fn lock_upgrade_transaction(
 pub(crate) fn get_upgrade_runtime_recovery(
     env_name: &str,
     transaction_id: &str,
+    snapshot_id: &str,
     runtime_name: &str,
     env: &BTreeMap<String, String>,
     cwd: &Path,
@@ -172,8 +173,23 @@ pub(crate) fn get_upgrade_runtime_recovery(
     let env_name = validate_name(env_name, "Environment name")?;
     let transaction_id = validate_name(transaction_id, "Upgrade transaction id")?;
     let runtime_name = validate_name(runtime_name, "Runtime name")?;
-    let recovery_root =
-        upgrade_history_runtime_recovery_dir(&env_name, &transaction_id, &runtime_name, env, cwd)?;
+    let transaction_recovery_root =
+        upgrade_history_recovery_dir(&env_name, &transaction_id, env, cwd)?;
+    let recovery_snapshot_path = transaction_recovery_root.join("snapshot-id");
+    let recovery_snapshot_id =
+        std::fs::read_to_string(&recovery_snapshot_path).map_err(|error| {
+            format!(
+                "runtime recovery snapshot marker is unavailable at {}: {error}",
+                display_path(&recovery_snapshot_path)
+            )
+        })?;
+    if recovery_snapshot_id.trim() != snapshot_id {
+        return Err(format!(
+            "runtime recovery for upgrade transaction \"{transaction_id}\" belongs to snapshot \"{}\", expected \"{snapshot_id}\"",
+            recovery_snapshot_id.trim()
+        ));
+    }
+    let recovery_root = transaction_recovery_root.join(&runtime_name);
     let install_root = recovery_root.join("install-root");
     let meta_path = recovery_root.join("runtime.json");
     if !path_exists(&meta_path) || !path_exists(&install_root) {
@@ -323,9 +339,9 @@ mod tests {
         RuntimeMeta, RuntimeSourceKind, UpgradeHistoryBinding, UpgradeHistoryRecord,
         UpgradeHistoryRuntimeRecovery, UpgradeHistoryServiceState, UpgradeHistoryStage,
         get_upgrade_history_record, get_upgrade_runtime_recovery, list_upgrade_history,
-        lock_upgrade_transaction, runtime_install_root, save_upgrade_history_record,
-        upgrade_history_runtime_recovery_dir, write_json,
+        lock_upgrade_transaction, runtime_install_root, save_upgrade_history_record, write_json,
     };
+    use crate::store::layout::upgrade_history_runtime_recovery_dir;
 
     fn test_env(label: &str) -> (PathBuf, BTreeMap<String, String>) {
         let root = std::env::temp_dir().join(format!(
@@ -535,17 +551,60 @@ mod tests {
             updated_at: created_at,
         };
         write_json(&recovery_root.join("runtime.json"), &meta).unwrap();
+        std::fs::write(
+            recovery_root.parent().unwrap().join("snapshot-id"),
+            "snapshot-1",
+        )
+        .unwrap();
 
-        let recovery =
-            get_upgrade_runtime_recovery("demo", transaction_id, runtime_name, &env, cwd).unwrap();
+        let recovery = get_upgrade_runtime_recovery(
+            "demo",
+            transaction_id,
+            "snapshot-1",
+            runtime_name,
+            &env,
+            cwd,
+        )
+        .unwrap();
         assert_eq!(recovery.meta.release_version.as_deref(), Some("2026.6.11"));
         assert_eq!(recovery.install_root, recovery_install_root);
+
+        std::fs::write(
+            recovery_root.parent().unwrap().join("snapshot-id"),
+            "snapshot-2",
+        )
+        .unwrap();
+        let error = get_upgrade_runtime_recovery(
+            "demo",
+            transaction_id,
+            "snapshot-1",
+            runtime_name,
+            &env,
+            cwd,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("belongs to snapshot \"snapshot-2\", expected \"snapshot-1\""),
+            "{error}"
+        );
+        std::fs::write(
+            recovery_root.parent().unwrap().join("snapshot-id"),
+            "snapshot-1",
+        )
+        .unwrap();
 
         let mut invalid = meta;
         invalid.install_root = Some(root.join("foreign").to_string_lossy().into_owned());
         write_json(&recovery_root.join("runtime.json"), &invalid).unwrap();
-        let error = get_upgrade_runtime_recovery("demo", transaction_id, runtime_name, &env, cwd)
-            .unwrap_err();
+        let error = get_upgrade_runtime_recovery(
+            "demo",
+            transaction_id,
+            "snapshot-1",
+            runtime_name,
+            &env,
+            cwd,
+        )
+        .unwrap_err();
         assert!(
             error.contains("not an installer-managed runtime"),
             "{error}"

@@ -2882,6 +2882,52 @@ fn upgrade_rollback_refuses_missing_in_place_recovery_before_mutation() {
 }
 
 #[test]
+fn upgrade_rollback_refuses_recovery_from_a_different_snapshot_before_mutation() {
+    let root = TestDir::new("upgrade-explicit-rollback-mismatched-recovery-snapshot");
+    let fixture = seed_in_place_rollback(&root, "2026.6.11");
+    fs::write(
+        fixture.original_recovery_root.join("snapshot-id"),
+        "different-snapshot",
+    )
+    .unwrap();
+
+    let rollback = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--json"],
+    );
+    assert!(!rollback.status.success());
+    assert!(
+        stderr(&rollback).contains("belongs to snapshot \"different-snapshot\", expected"),
+        "{}",
+        stderr(&rollback)
+    );
+    assert_eq!(
+        fs::read_to_string(&fixture.marker).unwrap(),
+        "after-upgrade"
+    );
+    assert!(fixture.original_recovery_root.exists());
+
+    let snapshots = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["env", "snapshot", "list", "demo", "--json"],
+    );
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    let snapshots_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
+    assert_eq!(snapshots_json.as_array().unwrap().len(), 1);
+
+    let history = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "history", "demo", "--json"],
+    );
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    assert_eq!(history_json.as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn upgrade_rollback_refuses_drifted_target_version_before_mutation() {
     let root = TestDir::new("upgrade-explicit-rollback-target-drift");
     let fixture = seed_in_place_rollback(&root, "2026.6.11");
