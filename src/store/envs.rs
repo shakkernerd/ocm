@@ -367,18 +367,39 @@ pub fn create_environment(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvMeta, String> {
+    create_environment_with_runtime_validation(options, false, env, cwd)
+}
+
+pub(crate) fn create_environment_with_validated_runtime(
+    options: CreateEnvironmentOptions,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
+    create_environment_with_runtime_validation(options, true, env, cwd)
+}
+
+fn create_environment_with_runtime_validation(
+    options: CreateEnvironmentOptions,
+    validate_runtime: bool,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvMeta, String> {
     let name = validate_name(&options.name, "Environment name")?;
     let _lock = lock_env_registry(env, cwd)?;
     let mut registry = load_env_registry(env, cwd)?;
     if find_environment(&registry, &name).is_some() {
         return Err(format!("environment \"{name}\" already exists"));
     }
-    let default_runtime = options
-        .default_runtime
-        .as_deref()
-        .map(|runtime_name| super::runtimes::get_runtime_verified(runtime_name, env, cwd))
-        .transpose()?
-        .map(|runtime| runtime.name);
+    let default_runtime = if validate_runtime {
+        options
+            .default_runtime
+            .as_deref()
+            .map(|runtime_name| super::runtimes::get_runtime_verified(runtime_name, env, cwd))
+            .transpose()?
+            .map(|runtime| runtime.name)
+    } else {
+        options.default_runtime
+    };
     let default_launcher = options
         .default_launcher
         .as_deref()
