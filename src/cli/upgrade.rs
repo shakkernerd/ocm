@@ -2936,6 +2936,7 @@ fn gateway_auth_failure_proves_reachable(error: &str) -> bool {
         "auth required"
             | "owner auth required"
             | "connect failed"
+            | "device identity required"
             | "device required"
             | "pairing required"
     ) || reason.starts_with("pairing required:")
@@ -3074,6 +3075,14 @@ mod tests {
         assert!(
             arbitrary_auth_error.contains("authentication backend unavailable"),
             "{arbitrary_auth_error}"
+        );
+
+        let bare_connect_failure =
+            verify_gateway_status_readiness(r#"{"rpc":{"ok":false,"error":"connect failed"}}"#)
+                .unwrap_err();
+        assert!(
+            bare_connect_failure.contains("connect failed"),
+            "{bare_connect_failure}"
         );
     }
 
