@@ -1,15 +1,16 @@
 use super::{RuntimeMeta, RuntimeReleaseSelectorKind, RuntimeService};
 use crate::runtime::releases::{
-    is_official_openclaw_releases_url, load_official_openclaw_release_selection,
-    normalize_openclaw_channel_selector, official_openclaw_releases_url,
-    select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
+    OpenClawRelease, RuntimeRelease, is_official_openclaw_releases_url,
+    load_official_openclaw_release_selection, normalize_openclaw_channel_selector,
+    official_openclaw_releases_url, select_official_openclaw_release_by_channel,
+    select_official_openclaw_release_by_version,
 };
 use crate::store::{
     BuildLocalRuntimeOptions as StoreBuildLocalRuntimeOptions, InstallContext,
     RuntimeReleaseDetails, get_runtime, install_runtime, install_runtime_from_local_openclaw_build,
     install_runtime_from_official_openclaw_release, install_runtime_from_release,
-    install_runtime_from_selected_official_openclaw_release, install_runtime_from_url,
-    list_runtimes, runtime_integrity_issue,
+    install_runtime_from_selected_official_openclaw_release, install_runtime_from_selected_release,
+    install_runtime_from_url, list_runtimes, runtime_integrity_issue,
 };
 use serde::Serialize;
 
@@ -61,6 +62,21 @@ pub struct UpdateRuntimeFromReleaseOptions {
     pub name: String,
     pub version: Option<String>,
     pub channel: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ResolvedRuntimeUpdateRelease {
+    Official(OpenClawRelease),
+    Manifest(RuntimeRelease),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedRuntimeUpdate {
+    pub(crate) existing: RuntimeMeta,
+    manifest_url: String,
+    selector_kind: RuntimeReleaseSelectorKind,
+    selector_value: String,
+    release: ResolvedRuntimeUpdateRelease,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -354,7 +370,8 @@ impl<'a> RuntimeService<'a> {
     ) -> Result<RuntimeMeta, String> {
         let name = options.name.clone();
         self.with_unbound_runtime(&name, || {
-            self.update_from_release_with_refresh(options, true)
+            let resolved = self.resolve_update_from_release(options)?;
+            self.apply_resolved_update(resolved, true)
         })
     }
 
@@ -362,22 +379,20 @@ impl<'a> RuntimeService<'a> {
         &self,
         options: UpdateRuntimeFromReleaseOptions,
     ) -> Result<RuntimeMeta, String> {
-        // Keep the existing supervisor spec active until the replacement runtime has
-        // migrated and validated the environment it will own.
-        self.update_from_release_with_refresh(options, false)
+        let resolved = self.resolve_update_from_release(options)?;
+        self.apply_resolved_update(resolved, false)
     }
 
-    fn update_from_release_with_refresh(
+    pub(crate) fn resolve_update_from_release(
         &self,
         options: UpdateRuntimeFromReleaseOptions,
-        refresh_supervisor: bool,
-    ) -> Result<RuntimeMeta, String> {
+    ) -> Result<ResolvedRuntimeUpdate, String> {
         if options.version.is_some() && options.channel.is_some() {
             return Err("runtime update accepts only one of --version or --channel".to_string());
         }
 
         let existing = get_runtime(&options.name, self.env, self.cwd)?;
-        let manifest_url = existing.source_manifest_url.ok_or_else(|| {
+        let manifest_url = existing.source_manifest_url.clone().ok_or_else(|| {
             format!(
                 "runtime \"{}\" is not backed by a release manifest",
                 existing.name
@@ -401,38 +416,74 @@ impl<'a> RuntimeService<'a> {
             },
             _ => unreachable!("conflicting selectors are rejected above"),
         };
+        let (selector_kind, selector_value) = match (&version, &channel) {
+            (Some(version), None) => (RuntimeReleaseSelectorKind::Version, version.clone()),
+            (None, Some(channel)) => (RuntimeReleaseSelectorKind::Channel, channel.clone()),
+            _ => unreachable!("runtime update requires a resolved selector"),
+        };
 
-        if is_official_openclaw_releases_url(Some(manifest_url.as_str()), self.env) {
-            let meta = install_runtime_from_official_openclaw_release(
-                InstallRuntimeFromOfficialReleaseOptions {
-                    name: existing.name,
-                    version,
-                    channel,
-                    description: existing.description,
-                    force: true,
-                },
-                self.env,
-                self.cwd,
-            );
-            let meta = meta?;
-            if refresh_supervisor {
-                self.refresh_supervisor_if_present()?;
+        let release = if is_official_openclaw_releases_url(Some(manifest_url.as_str()), self.env) {
+            let release = self
+                .official_openclaw_releases(version.as_deref(), channel.as_deref())?
+                .into_iter()
+                .next()
+                .ok_or_else(|| "OpenClaw release was not found".to_string())?;
+            ResolvedRuntimeUpdateRelease::Official(release)
+        } else {
+            let release = self
+                .releases_from_manifest(&manifest_url, version.as_deref(), channel.as_deref())?
+                .into_iter()
+                .next()
+                .ok_or_else(|| "runtime release was not found".to_string())?;
+            ResolvedRuntimeUpdateRelease::Manifest(release)
+        };
+
+        Ok(ResolvedRuntimeUpdate {
+            existing,
+            manifest_url,
+            selector_kind,
+            selector_value,
+            release,
+        })
+    }
+
+    pub(crate) fn apply_resolved_update(
+        &self,
+        resolved: ResolvedRuntimeUpdate,
+        refresh_supervisor: bool,
+    ) -> Result<RuntimeMeta, String> {
+        let selector_kind = Some(resolved.selector_kind);
+        let selector_value = Some(resolved.selector_value);
+        let meta = match resolved.release {
+            ResolvedRuntimeUpdateRelease::Official(release) => {
+                install_runtime_from_selected_official_openclaw_release(
+                    resolved.existing.name,
+                    true,
+                    resolved.manifest_url,
+                    release,
+                    RuntimeReleaseDetails::with_selector(selector_kind, selector_value),
+                    resolved.existing.description,
+                    InstallContext {
+                        env: self.env,
+                        cwd: self.cwd,
+                    },
+                )?
+                .meta
             }
-            return Ok(meta);
-        }
-
-        let meta = install_runtime_from_release(
-            InstallRuntimeFromReleaseOptions {
-                name: existing.name,
-                manifest_url,
-                version,
-                channel,
-                description: existing.description,
-                force: true,
-            },
-            self.env,
-            self.cwd,
-        )?;
+            ResolvedRuntimeUpdateRelease::Manifest(release) => {
+                install_runtime_from_selected_release(
+                    resolved.existing.name,
+                    true,
+                    resolved.manifest_url,
+                    release,
+                    selector_kind,
+                    selector_value,
+                    resolved.existing.description,
+                    self.env,
+                    self.cwd,
+                )?
+            }
+        };
         if refresh_supervisor {
             self.refresh_supervisor_if_present()?;
         }

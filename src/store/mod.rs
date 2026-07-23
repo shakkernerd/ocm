@@ -69,6 +69,7 @@ pub(crate) use openclaw_workspaces::{
 };
 pub(crate) use runtimes::install_runtime_from_local_openclaw_build;
 pub(crate) use runtimes::install_runtime_from_selected_official_openclaw_release;
+pub(crate) use runtimes::install_runtime_from_selected_release;
 pub(crate) use runtimes::{BuildLocalRuntimeOptions, InstallContext, RuntimeReleaseDetails};
 pub use runtimes::{
     add_runtime, get_runtime, get_runtime_verified, install_runtime,
