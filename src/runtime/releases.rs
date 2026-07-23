@@ -125,10 +125,6 @@ fn parse_openclaw_release_version(value: &str) -> Option<ParsedOpenClawReleaseVe
     })
 }
 
-pub fn compare_openclaw_release_versions(left: &str, right: &str) -> Option<Ordering> {
-    Some(parse_openclaw_release_version(left)?.cmp(&parse_openclaw_release_version(right)?))
-}
-
 pub(crate) fn compare_runtime_release_versions(left: &str, right: &str) -> Option<Ordering> {
     match (
         parse_openclaw_release_version(left),
@@ -540,5 +536,40 @@ fn openclaw_channel_priority(channel: &str) -> usize {
         "beta" => 1,
         "dev" => 2,
         _ => 3,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+
+    use super::compare_runtime_release_versions;
+
+    #[test]
+    fn openclaw_release_versions_order_prereleases_stable_and_corrections() {
+        assert_eq!(
+            compare_runtime_release_versions("2026.7.1-alpha.9", "2026.7.1-beta.1"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_runtime_release_versions("2026.7.1-beta.3", "2026.7.1"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_runtime_release_versions("2026.7.1-2", "2026.7.1"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_runtime_release_versions("2026.7.2-beta.3", "2026.7.1-2"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_runtime_release_versions("2026.7.1-2", "2026.7.1-1"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_runtime_release_versions("2026.7.1-dev.1", "2026.7.1"),
+            None
+        );
     }
 }
