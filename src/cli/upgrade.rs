@@ -3038,6 +3038,12 @@ mod tests {
             )
             .is_ok()
         );
+        assert!(
+            verify_gateway_status_readiness(
+                r#"{"ok":false,"targets":[{"connect":{"ok":false,"error":"gateway closed (1008): device identity required"}}]}"#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
