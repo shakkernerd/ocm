@@ -119,6 +119,15 @@ case "$1" in
       echo "missing OPENCLAW_UPDATE_IN_PROGRESS" >&2
       exit 1
     fi
+    if [ "${{OCM_TEST_REQUIRE_DOCTOR_OWNERSHIP_FLAGS:-}}" = "1" ]; then
+      if [ "${{OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART:-}}" != "1" ] ||
+         [ "${{OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR:-}}" != "0" ] ||
+         [ "${{OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION:-}}" != "0" ] ||
+         [ "${{OPENCLAW_SERVICE_REPAIR_POLICY:-}}" != "external" ]; then
+        echo "missing doctor service ownership flags" >&2
+        exit 1
+      fi
+    fi
     mkdir -p "$home/.openclaw"
     touch "$home/.openclaw/config-repaired"
     echo "doctor ok"
@@ -1656,6 +1665,10 @@ fn upgrade_repairs_target_config_before_finalization() {
 
     env.insert(
         "OCM_TEST_INVALID_CONFIG_UNTIL_DOCTOR".to_string(),
+        "1".to_string(),
+    );
+    env.insert(
+        "OCM_TEST_REQUIRE_DOCTOR_OWNERSHIP_FLAGS".to_string(),
         "1".to_string(),
     );
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--runtime", "new-local"]);
