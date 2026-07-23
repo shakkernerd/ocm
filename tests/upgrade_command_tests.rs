@@ -201,7 +201,9 @@ case "$1" in
       echo "missing gateway status flags" >&2
       exit 1
     }}
-    if [ "${{OCM_TEST_GATEWAY_UNREADY:-}}" = "1" ]; then
+    if [ "${{OCM_TEST_GATEWAY_AUTH_HANDSHAKE:-}}" = "1" ]; then
+      printf '{{"rpc":{{"ok":false,"error":"device identity required"}}}}\n'
+    elif [ "${{OCM_TEST_GATEWAY_UNREADY:-}}" = "1" ]; then
       printf '{{"rpc":{{"ok":false,"error":"gateway RPC is not ready"}}}}\n'
     else
       printf '{{"rpc":{{"ok":true}}}}\n'
@@ -509,6 +511,10 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     let start = run_ocm(&cwd, &env, &["start", "demo"]);
     assert!(start.status.success(), "{}", stderr(&start));
 
+    env.insert(
+        "OCM_TEST_GATEWAY_AUTH_HANDSHAKE".to_string(),
+        "1".to_string(),
+    );
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
     assert!(upgrade.status.success(), "{}", stderr(&upgrade));
     let output = stdout(&upgrade);
