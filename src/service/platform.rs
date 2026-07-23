@@ -1087,6 +1087,7 @@ fn validate_systemd_environment_key(key: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::collections::BTreeMap;
     use std::fs;
     #[cfg(unix)]
@@ -1098,11 +1099,62 @@ mod tests {
 
     use super::{
         ManagedServiceDefinition, ManagedServiceEnablement, ManagedServiceIdentity,
-        OCM_SERVICE_LABEL, ServiceManagerKind, gui_domain, managed_service_identity,
-        managed_service_label, restore_managed_service_registration, service_backend_support_error,
+        OCM_SERVICE_LABEL, SERVICE_MANAGER_BUSY_ATTEMPTS, ServiceManagerKind, gui_domain,
+        managed_service_identity, managed_service_label, restore_managed_service_registration,
+        retry_service_manager_executable_busy, service_backend_support_error,
         service_definition_dir, service_manager_kind, systemd_output_mode_for_version,
         write_managed_service_definition,
     };
+
+    #[test]
+    fn service_manager_execution_retries_a_busy_executable() {
+        let attempts = Cell::new(0);
+
+        let result = retry_service_manager_executable_busy(|| {
+            let attempt = attempts.get();
+            attempts.set(attempt + 1);
+            if attempt == 0 {
+                Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(attempts.get(), 2);
+    }
+
+    #[test]
+    fn service_manager_execution_does_not_retry_other_errors() {
+        let attempts = Cell::new(0);
+
+        let result: std::io::Result<()> = retry_service_manager_executable_busy(|| {
+            attempts.set(attempts.get() + 1);
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        });
+
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[test]
+    fn service_manager_execution_stops_at_the_busy_retry_limit() {
+        let attempts = Cell::new(0);
+
+        let result: std::io::Result<()> = retry_service_manager_executable_busy(|| {
+            attempts.set(attempts.get() + 1);
+            Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+        });
+
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::ExecutableFileBusy
+        );
+        assert_eq!(attempts.get(), SERVICE_MANAGER_BUSY_ATTEMPTS);
+    }
 
     #[test]
     fn manager_override_supports_systemd_user() {
