@@ -23,6 +23,7 @@ impl Cli {
             ["dev"] => Ok(render::help::dev_help(&cmd)),
             ["start"] => Ok(render::help::start_help(&cmd)),
             ["upgrade"] => Ok(render::help::upgrade_help(&cmd)),
+            ["upgrade", "rollback"] => Ok(render::help::upgrade_rollback_help(&cmd)),
             ["doctor"] => Ok(render::help::doctor_help(&cmd)),
             ["logs"] => Ok(render::help::logs_help(&cmd)),
             ["init"] => Ok(render::help::init_help(&cmd)),
@@ -116,6 +117,11 @@ impl Cli {
             [group, flag] if group == "upgrade" && Self::is_help_flag(flag) => {
                 Some(vec!["upgrade"])
             }
+            [group, next, rest @ ..] if group == "upgrade" && Self::is_help_token(next) => {
+                let mut topic = vec!["upgrade"];
+                topic.extend(rest.iter().map(String::as_str));
+                Some(topic)
+            }
             [group, next] if group == "init" && Self::is_help_token(next) => Some(vec!["init"]),
             [group, next, rest @ ..]
                 if matches!(
@@ -160,6 +166,11 @@ impl Cli {
             }
             [group, action, flag] if group == "doctor" && Self::is_help_flag(flag) => {
                 Some(vec!["doctor", action.as_str()])
+            }
+            [group, action, flag]
+                if group == "upgrade" && action == "rollback" && Self::is_help_flag(flag) =>
+            {
+                Some(vec!["upgrade", "rollback"])
             }
             [group, subcommand] if group == "env" && subcommand == "snapshot" => {
                 Some(vec!["env", "snapshot"])

@@ -580,6 +580,9 @@ fn upgrade_history_raw_line(record: &UpgradeHistoryRecord) -> Result<String, Str
     if let Some(rollback) = record.rollback.as_deref() {
         bits.push(format!("rollback={rollback}"));
     }
+    if let Some(rollback_of) = record.rollback_of.as_deref() {
+        bits.push(format!("rollbackOf={rollback_of}"));
+    }
     Ok(bits.join("  "))
 }
 

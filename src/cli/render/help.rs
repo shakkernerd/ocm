@@ -519,6 +519,9 @@ pub fn upgrade_help(cmd: &str) -> String {
         vec![
             format!("{cmd} upgrade history <env> [--raw] [--json]"),
             format!(
+                "{cmd} upgrade rollback <env> [--transaction <id>] [--dry-run] [--raw] [--json]"
+            ),
+            format!(
                 "{cmd} upgrade simulate <env> --to <version|channel|repo-path> [--scenario current|minimum|telegram|all] [--keep-simulations] [--raw] [--json]"
             ),
             format!(
@@ -542,7 +545,7 @@ pub fn upgrade_help(cmd: &str) -> String {
             ("--all", "Upgrade every env that can be updated safely"),
             (
                 "--dry-run",
-                "Preview what would change without writing snapshots, runtimes, envs, or services",
+                "Preview an upgrade or rollback without changing runtime, env, service, snapshot, or history state",
             ),
             (
                 "--no-rollback",
@@ -565,6 +568,8 @@ pub fn upgrade_help(cmd: &str) -> String {
         ],
         vec![
             format!("{cmd} upgrade history mira"),
+            format!("{cmd} upgrade rollback mira --dry-run"),
+            format!("{cmd} upgrade rollback mira"),
             format!("{cmd} upgrade simulate mira --to 2026.4.20"),
             format!("{cmd} upgrade simulate mira --to 2026.4.20 --scenario all"),
             format!("{cmd} upgrade simulate mira --to beta --scenario all"),
@@ -578,6 +583,9 @@ pub fn upgrade_help(cmd: &str) -> String {
         &[
             "Simulations clone the source env, leave the real env untouched, and clean temporary envs and runtimes by default.",
             "Upgrade history lists completed transaction records newest first without reading config contents or credentials.",
+            "Upgrade rollback restores the latest completed transition by default; use --transaction to select a specific unconsumed transaction.",
+            "Rollback refuses before mutation when the current binding, OpenClaw version, service policy, source binding, snapshot, or retained runtime recovery no longer matches the selected transaction.",
+            "Rollback creates a pre-rollback safety snapshot and linked history transaction. Rolling back that linked transaction safely reverses the rollback.",
             "Successful in-place managed-runtime updates retain the previous runtime files until the matching pre-upgrade snapshot is removed or pruned; runtime switches do not duplicate source runtimes.",
             "Use --scenario all to test current, clean minimum, and Telegram-configured env shapes.",
             "Use --keep-simulations only when you need retained simulation artifacts after the run.",
@@ -593,6 +601,40 @@ pub fn upgrade_help(cmd: &str) -> String {
             "If service restart/start fails, ocm restores the snapshot and previous runtime unless --no-rollback is set.",
             "Pinned runtimes stay pinned unless you pass --version, --channel, or --runtime explicitly.",
             "Local-command environments are reported clearly instead of being changed behind your back.",
+        ],
+    )
+}
+
+pub fn upgrade_rollback_help(cmd: &str) -> String {
+    render_leaf(
+        "Roll back an upgrade",
+        "Restore an environment from a completed upgrade transaction with runtime and service recovery.",
+        vec![format!(
+            "{cmd} upgrade rollback <env> [--transaction <id>] [--dry-run] [--raw] [--json]"
+        )],
+        &[
+            (
+                "--transaction <id>",
+                "Roll back one specific completed transaction instead of the latest available transition",
+            ),
+            (
+                "--dry-run",
+                "Validate rollback readiness without changing runtime, env, service, snapshot, or history state",
+            ),
+            ("--raw", "Force plain output instead of TTY cards"),
+            ("--json", "Print the rollback summary as JSON"),
+        ],
+        vec![
+            format!("{cmd} upgrade rollback mira --dry-run"),
+            format!("{cmd} upgrade rollback mira"),
+            format!("{cmd} upgrade rollback mira --transaction 1782864000-000000001 --json"),
+        ],
+        &[
+            "Without --transaction, OCM selects the newest completed upgrade or rollback transition that has not already been reversed.",
+            "Preflight requires the current binding, OpenClaw version, and service policy to match the selected transaction target.",
+            "The recorded pre-upgrade snapshot and source runtime or launcher must still be available. Same-name runtime updates also require healthy retained runtime recovery.",
+            "Rollback creates a pre-rollback safety snapshot and linked history transaction before stopping a managed service or replacing runtime bytes.",
+            "If restore or verification fails, OCM restores the pre-rollback runtime and environment state.",
         ],
     )
 }
