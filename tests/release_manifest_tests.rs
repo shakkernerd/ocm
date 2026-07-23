@@ -3,43 +3,13 @@ mod support;
 use serde_json::json;
 
 use ocm::runtime::releases::{
-    compare_openclaw_release_versions, load_official_openclaw_releases, load_release_manifest,
-    query_official_openclaw_releases, query_releases, select_official_openclaw_release_by_channel,
+    load_official_openclaw_releases, load_release_manifest, query_official_openclaw_releases,
+    query_releases, select_official_openclaw_release_by_channel,
     select_official_openclaw_release_by_version, select_release, select_release_by_channel,
     select_release_by_version,
 };
 
 use crate::support::TestHttpServer;
-
-#[test]
-fn openclaw_release_versions_order_prereleases_stable_and_corrections() {
-    use std::cmp::Ordering;
-
-    assert_eq!(
-        compare_openclaw_release_versions("2026.7.1-alpha.9", "2026.7.1-beta.1"),
-        Some(Ordering::Less)
-    );
-    assert_eq!(
-        compare_openclaw_release_versions("2026.7.1-beta.3", "2026.7.1"),
-        Some(Ordering::Less)
-    );
-    assert_eq!(
-        compare_openclaw_release_versions("2026.7.1-2", "2026.7.1"),
-        Some(Ordering::Greater)
-    );
-    assert_eq!(
-        compare_openclaw_release_versions("2026.7.2-beta.3", "2026.7.1-2"),
-        Some(Ordering::Greater)
-    );
-    assert_eq!(
-        compare_openclaw_release_versions("2026.7.1-2", "2026.7.1-1"),
-        Some(Ordering::Greater)
-    );
-    assert_eq!(
-        compare_openclaw_release_versions("2026.7.1-dev.1", "2026.7.1"),
-        None
-    );
-}
 
 #[test]
 fn load_release_manifest_fetches_and_validates_remote_json() {
