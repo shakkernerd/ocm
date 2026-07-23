@@ -2924,10 +2924,12 @@ fn gateway_readiness_result(ready: bool, status: &Value) -> Result<(), String> {
 
 fn gateway_auth_failure_proves_reachable(error: &str) -> bool {
     let normalized = error.trim().to_ascii_lowercase();
-    let reason = normalized
+    let Some(reason) = normalized
         .strip_prefix("gateway closed (1008):")
         .map(str::trim)
-        .unwrap_or(normalized.as_str());
+    else {
+        return normalized == "device identity required";
+    };
 
     matches!(
         reason,
@@ -2935,7 +2937,6 @@ fn gateway_auth_failure_proves_reachable(error: &str) -> bool {
             | "owner auth required"
             | "connect failed"
             | "device required"
-            | "device identity required"
             | "pairing required"
     ) || reason.starts_with("pairing required:")
         || reason.starts_with("unauthorized: gateway token missing")
