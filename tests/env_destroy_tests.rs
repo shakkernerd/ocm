@@ -456,6 +456,9 @@ fn env_destroy_yes_uninstalls_service_removes_snapshots_and_deletes_env() {
         ],
     );
     assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let history_root = root.child("ocm-home/upgrade-history");
+    fs::create_dir_all(&history_root).unwrap();
+    fs::write(history_root.join("demo"), "block linked recovery traversal").unwrap();
 
     let install = run_ocm(&cwd, &env, &["service", "install", "demo"]);
     assert!(install.status.success(), "{}", stderr(&install));
@@ -467,6 +470,11 @@ fn env_destroy_yes_uninstalls_service_removes_snapshots_and_deletes_env() {
     assert!(output.contains("Destroyed env demo"));
     assert!(output.contains("snapshots removed: 1"));
     assert!(output.contains("service removed: ocm"));
+    assert!(
+        output.contains("warning: snapshot")
+            && output.contains("linked upgrade recovery cleanup failed"),
+        "{output}"
+    );
 
     let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
     assert!(!show.status.success());

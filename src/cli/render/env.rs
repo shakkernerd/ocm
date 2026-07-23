@@ -223,6 +223,15 @@ pub fn env_destroyed(
         profile.color,
     );
 
+    if !summary.warnings.is_empty() {
+        let rows = summary
+            .warnings
+            .iter()
+            .map(|warning| KeyValueRow::warning("Warning", warning.clone()))
+            .collect::<Vec<_>>();
+        lines.extend(render_key_value_card("Warnings", &rows, profile.color));
+    }
+
     push_card(
         &mut lines,
         "Next",
@@ -260,6 +269,12 @@ fn env_destroyed_raw(summary: &EnvDestroySummary, command_example: &str) -> Vec<
     if summary.service_uninstalled {
         lines.push(format!("  service removed: {}", summary.service_label));
     }
+    lines.extend(
+        summary
+            .warnings
+            .iter()
+            .map(|warning| format!("warning: {warning}")),
+    );
     lines.push(format!("  list: {command_example} env list"));
     lines
 }
@@ -1760,6 +1775,7 @@ mod tests {
                 },
             ],
             snapshots_removed: 0,
+            warnings: Vec::new(),
             service_uninstalled: false,
             processes_terminated: 0,
             worktree_removed: false,
