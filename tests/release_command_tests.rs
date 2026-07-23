@@ -425,6 +425,12 @@ fn release_install_reuses_a_matching_installed_runtime() {
     let first = run_ocm(&cwd, &env, &["release", "install", "--channel", "stable"]);
     assert!(first.status.success(), "{}", stderr(&first));
     assert!(stdout(&first).contains("Installed runtime stable"));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
 
     let second = run_ocm(&cwd, &env, &["release", "install", "--channel", "stable"]);
     assert!(second.status.success(), "{}", stderr(&second));

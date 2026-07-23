@@ -2414,12 +2414,7 @@ fn upgrade_all_json_exits_failed_when_any_env_fails() {
     );
     assert!(create.status.success(), "{}", stderr(&create));
 
-    let remove_runtime = run_ocm(&cwd, &env, &["runtime", "remove", "missing-soon"]);
-    assert!(
-        remove_runtime.status.success(),
-        "{}",
-        stderr(&remove_runtime)
-    );
+    fs::remove_file(root.child("ocm-home/runtimes/missing-soon.json")).unwrap();
 
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "--all", "--json"]);
     assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
