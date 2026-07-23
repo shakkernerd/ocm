@@ -158,6 +158,10 @@ pub(crate) fn clear_nonportable_runtime_state(
     let workspaces = resolve_archivable_workspaces(paths, env, runtime)?;
 
     let mut changed = false;
+    for relative_path in openclaw_extension_runtime_debris_roots(&paths.state_dir)? {
+        remove_path(&paths.state_dir.join(relative_path))?;
+        changed = true;
+    }
     let entries = fs::read_dir(&paths.state_dir).map_err(|error| error.to_string())?;
     for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -440,7 +444,14 @@ fn is_durable_openclaw_archive_path(components: &[&str]) -> bool {
 }
 
 fn openclaw_archive_excluded_path_roots(paths: &EnvPaths) -> Result<BTreeSet<PathBuf>, String> {
-    let extensions_root = paths.state_dir.join("extensions");
+    Ok(openclaw_extension_runtime_debris_roots(&paths.state_dir)?
+        .into_iter()
+        .map(|path| Path::new(".openclaw").join(path))
+        .collect())
+}
+
+fn openclaw_extension_runtime_debris_roots(state_dir: &Path) -> Result<BTreeSet<PathBuf>, String> {
+    let extensions_root = state_dir.join("extensions");
     let entries = match fs::read_dir(&extensions_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
@@ -462,9 +473,7 @@ fn openclaw_archive_excluded_path_roots(paths: &EnvPaths) -> Result<BTreeSet<Pat
         let has_runtime_deps_marker = children
             .iter()
             .any(|child| is_openclaw_runtime_dependency_marker(&child.file_name()));
-        let plugin_relative_root = Path::new(".openclaw")
-            .join("extensions")
-            .join(entry.file_name());
+        let plugin_relative_root = Path::new("extensions").join(entry.file_name());
 
         for child in children {
             let name = child.file_name();
@@ -707,12 +716,23 @@ mod tests {
         for path in [
             "plugins/installs.json",
             "extensions/demo/openclaw.plugin.json",
+            "extensions/demo/node_modules/package/index.js",
+            "extensions/generated/openclaw.plugin.json",
             "npm/projects/demo/package-lock.json",
             "git/git-demo/repo/.git/HEAD",
         ] {
             let path = paths.state_dir.join(path);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "keep\n").unwrap();
+        }
+        for path in [
+            "extensions/generated/.openclaw-runtime-deps.json",
+            "extensions/generated/.openclaw-install-backups/backup.json",
+            "extensions/generated/node_modules/package/index.js",
+        ] {
+            let path = paths.state_dir.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "remove\n").unwrap();
         }
         fs::write(paths.state_dir.join("logs.txt"), "log\n").unwrap();
         fs::write(paths.workspace_dir.join("notes/todo.txt"), "keep\n").unwrap();
@@ -746,10 +766,19 @@ mod tests {
         for path in [
             "plugins/installs.json",
             "extensions/demo/openclaw.plugin.json",
+            "extensions/demo/node_modules/package/index.js",
+            "extensions/generated/openclaw.plugin.json",
             "npm/projects/demo/package-lock.json",
             "git/git-demo/repo/.git/HEAD",
         ] {
             assert!(paths.state_dir.join(path).exists(), "{path}");
+        }
+        for path in [
+            "extensions/generated/.openclaw-runtime-deps.json",
+            "extensions/generated/.openclaw-install-backups",
+            "extensions/generated/node_modules",
+        ] {
+            assert!(!paths.state_dir.join(path).exists(), "{path}");
         }
         assert!(!paths.state_dir.join("agents/main/sessions").exists());
         assert!(!paths.state_dir.join("logs.txt").exists());
