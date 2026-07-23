@@ -13,8 +13,8 @@ use crate::infra::download::{
 };
 use crate::managed_node::{CommandSpec, managed_runtime_install_command};
 use crate::runtime::releases::{
-    OpenClawRelease, load_official_openclaw_release_selection, load_release_manifest,
-    normalize_openclaw_channel_selector, official_openclaw_releases_url,
+    OpenClawRelease, RuntimeRelease, load_official_openclaw_release_selection,
+    load_release_manifest, normalize_openclaw_channel_selector, official_openclaw_releases_url,
     select_official_openclaw_release_by_channel, select_official_openclaw_release_by_version,
     select_release,
 };
@@ -1334,25 +1334,12 @@ pub fn install_runtime_from_release(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<RuntimeMeta, String> {
-    let name = validate_name(&options.name, "Runtime name")?;
-
     let manifest = load_release_manifest(&options.manifest_url)?;
     let release = select_release(
         &manifest,
         options.version.as_deref(),
         options.channel.as_deref(),
     )?;
-    let source_sha256 = release
-        .sha256
-        .as_deref()
-        .ok_or_else(|| {
-            format!(
-                "runtime release \"{}\" is missing required sha256 integrity",
-                release.version
-            )
-        })
-        .and_then(normalize_sha256)?;
-    let target = prepare_runtime_install_target(name, options.force, env, cwd)?;
     let (selector_kind, selector_value) =
         match (options.version.as_deref(), options.channel.as_deref()) {
             (Some(version), None) => (
@@ -1365,6 +1352,42 @@ pub fn install_runtime_from_release(
             ),
             _ => (None, None),
         };
+    install_runtime_from_selected_release(
+        options.name,
+        options.force,
+        options.manifest_url,
+        release,
+        selector_kind,
+        selector_value,
+        options.description,
+        env,
+        cwd,
+    )
+}
+
+pub(crate) fn install_runtime_from_selected_release(
+    name: String,
+    force: bool,
+    manifest_url: String,
+    release: RuntimeRelease,
+    selector_kind: Option<RuntimeReleaseSelectorKind>,
+    selector_value: Option<String>,
+    description: Option<String>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<RuntimeMeta, String> {
+    let name = validate_name(&name, "Runtime name")?;
+    let source_sha256 = release
+        .sha256
+        .as_deref()
+        .ok_or_else(|| {
+            format!(
+                "runtime release \"{}\" is missing required sha256 integrity",
+                release.version
+            )
+        })
+        .and_then(normalize_sha256)?;
+    let target = prepare_runtime_install_target(name, force, env, cwd)?;
     let release_details = RuntimeReleaseDetails {
         version: Some(release.version.clone()),
         channel: release.channel.clone(),
@@ -1372,7 +1395,7 @@ pub fn install_runtime_from_release(
         selector_value,
     };
     let description =
-        trim_description(options.description).or_else(|| trim_description(release.description));
+        trim_description(description).or_else(|| trim_description(release.description));
 
     let file_name = artifact_file_name_from_url(&release.url)?;
     install_runtime_at_path(
@@ -1380,7 +1403,7 @@ pub fn install_runtime_from_release(
         Path::new(&file_name),
         RuntimeSourceDetails {
             url: Some(release.url),
-            manifest_url: Some(options.manifest_url),
+            manifest_url: Some(manifest_url),
             sha256: Some(source_sha256),
             ..RuntimeSourceDetails::default()
         },
