@@ -589,7 +589,11 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
         serde_json::from_slice(&fs::read(recovery_root.join("runtime.json")).unwrap()).unwrap();
     assert_eq!(recovery_meta["name"], "stable");
     assert_eq!(recovery_meta["releaseVersion"], "2026.3.24");
-    assert!(recovery_root.join("files").is_dir());
+    assert!(
+        recovery_root
+            .join("install-root/files/node_modules/openclaw/openclaw.mjs")
+            .is_file()
+    );
     assert_eq!(
         fs::read_to_string(recovery_root.parent().unwrap().join("snapshot-id")).unwrap(),
         snapshot_json[0]["id"].as_str().unwrap()
