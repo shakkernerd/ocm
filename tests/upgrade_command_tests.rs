@@ -2353,6 +2353,96 @@ fn upgrade_can_switch_a_local_launcher_env_to_a_published_runtime() {
 }
 
 #[test]
+fn upgrade_rollback_refuses_a_broken_source_launcher_before_mutation() {
+    let root = TestDir::new("upgrade-rollback-broken-source-launcher");
+    let cwd = root.child("workspace");
+    let project_dir = cwd.join("openclaw");
+    fs::create_dir_all(&project_dir).unwrap();
+    let launcher_binary = root.child("launcher-openclaw");
+    write_executable_script(&launcher_binary, &recording_openclaw_script("2026.3.23"));
+
+    let tarball = openclaw_package_tarball(&recording_openclaw_script("2026.3.24"), "2026.3.24");
+    let integrity = sha512_integrity(&tarball);
+    let tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &tarball,
+    );
+    let packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}},\"time\":{{\"2026.3.24\":\"2026-03-25T16:35:52.000Z\"}}}}",
+        tarball_server.url(),
+        integrity
+    );
+    let packument_server =
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let start = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "start",
+            "hacking",
+            "--command",
+            &path_string(&launcher_binary),
+            "--cwd",
+            &path_string(&project_dir),
+            "--no-service",
+        ],
+    );
+    assert!(start.status.success(), "{}", stderr(&start));
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "hacking", "--channel", "stable"]);
+    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    assert!(stdout(&upgrade).contains("outcome=switched"));
+
+    let history = run_ocm(&cwd, &env, &["upgrade", "history", "hacking", "--json"]);
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    assert_eq!(history_json.as_array().unwrap().len(), 1);
+    assert_eq!(history_json[0]["source"]["kind"], "launcher");
+    assert_eq!(history_json[0]["source"]["openclawVersion"], "2026.3.23");
+
+    fs::remove_dir_all(&project_dir).unwrap();
+    let rollback = run_ocm(
+        &cwd,
+        &env,
+        &["upgrade", "rollback", "hacking", "--dry-run", "--json"],
+    );
+    assert!(!rollback.status.success());
+    assert!(
+        stderr(&rollback).contains("rollback source openclaw --version failed"),
+        "{}",
+        stderr(&rollback)
+    );
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "hacking", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(env_json["defaultRuntime"], "stable");
+    assert!(env_json["defaultLauncher"].is_null());
+
+    let snapshots = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "list", "hacking", "--json"],
+    );
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    let snapshots_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
+    assert_eq!(snapshots_json.as_array().unwrap().len(), 1);
+
+    let history = run_ocm(&cwd, &env, &["upgrade", "history", "hacking", "--json"]);
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    assert_eq!(history_json.as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn upgrade_can_switch_env_to_an_installed_runtime() {
     let root = TestDir::new("upgrade-installed-runtime");
     let cwd = root.child("workspace");
