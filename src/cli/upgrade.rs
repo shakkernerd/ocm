@@ -29,12 +29,11 @@ use crate::store::{
     InstallContext, RuntimeReleaseDetails, UpgradeHistoryBinding, UpgradeHistoryRecord,
     UpgradeHistoryRuntimeRecovery, UpgradeHistoryServiceState, UpgradeHistoryStage,
     UpgradeRuntimeRecovery, clean_path, copy_dir_recursive, derive_env_paths, display_path,
-    ensure_minimum_local_openclaw_config, ensure_store, get_launcher, get_runtime,
-    get_upgrade_history_record, get_upgrade_runtime_recovery,
-    install_runtime_from_selected_official_openclaw_release, list_upgrade_history,
-    lock_env_registry, lock_upgrade_transaction, remove_runtime, remove_upgrade_recovery,
-    resolve_absolute_path, runtime_install_root, runtime_integrity_issue, runtime_meta_path,
-    save_environment, save_upgrade_history_record, upgrade_history_recovery_dir,
+    ensure_minimum_local_openclaw_config, ensure_store, get_runtime, get_upgrade_history_record,
+    get_upgrade_runtime_recovery, install_runtime_from_selected_official_openclaw_release,
+    list_upgrade_history, lock_env_registry, lock_upgrade_transaction, remove_runtime,
+    remove_upgrade_recovery, resolve_absolute_path, runtime_install_root, runtime_integrity_issue,
+    runtime_meta_path, save_environment, save_upgrade_history_record, upgrade_history_recovery_dir,
     upgrade_history_runtime_recovery_dir, write_json,
 };
 
@@ -674,12 +673,31 @@ impl Cli {
                 Ok(None)
             }
             "launcher" => {
-                get_launcher(&record.source.name, &self.env, &self.cwd).map_err(|error| {
-                    format!(
-                        "cannot roll back upgrade transaction \"{}\": {error}",
-                        record.id
+                let version = self.run_launcher_mode_openclaw_command_output(
+                    env_name,
+                    &record.source.name,
+                    "rollback source openclaw --version",
+                    &["--version"],
+                )?;
+                if !version.status.success() {
+                    return Err(format!(
+                        "cannot roll back upgrade transaction \"{}\": launcher \"{}\" failed OpenClaw version verification: {}",
+                        record.id,
+                        record.source.name,
+                        version.failure_summary()
+                    ));
+                }
+                if let Some(expected_version) = record.source.openclaw_version.as_deref()
+                    && !version_output_matches_expected(
+                        version.first_line().trim(),
+                        expected_version,
                     )
-                })?;
+                {
+                    return Err(format!(
+                        "cannot roll back upgrade transaction \"{}\": launcher \"{}\" does not report OpenClaw {}",
+                        record.id, record.source.name, expected_version
+                    ));
+                }
                 Ok(None)
             }
             source_kind => Err(format!(
@@ -2840,6 +2858,22 @@ impl Cli {
             ],
         )
         .map_err(|error| format!("{name} failed: {error}"))
+    }
+
+    fn run_launcher_mode_openclaw_command_output(
+        &self,
+        env_name: &str,
+        launcher_name: &str,
+        name: &str,
+        args: &[&str],
+    ) -> Result<SimulationCommandOutput, String> {
+        let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        let resolved = self
+            .environment_service()
+            .resolve(env_name, None, Some(launcher_name.to_string()), &args)
+            .map_err(|error| format!("{name} failed: {error}"))?;
+        self.run_resolved_for_simulation(resolved, &[])
+            .map_err(|error| format!("{name} failed: {error}"))
     }
 
     fn begin_upgrade_transaction(
