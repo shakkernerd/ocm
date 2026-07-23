@@ -1856,6 +1856,67 @@ fn upgrade_rolls_back_when_doctor_does_not_repair_target_config() {
 }
 
 #[test]
+fn upgrade_skips_config_repair_when_openclaw_config_is_missing() {
+    let root = TestDir::new("upgrade-missing-config");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_runtime = root.child("old-openclaw");
+    let new_runtime = root.child("new-openclaw");
+    write_executable_script(&old_runtime, &recording_openclaw_script("old-openclaw"));
+    write_executable_script(&new_runtime, &recording_openclaw_script("new-openclaw"));
+
+    let env = ocm_env(&root);
+    for (name, runtime) in [("old-local", &old_runtime), ("new-local", &new_runtime)] {
+        let add = run_ocm(
+            &cwd,
+            &env,
+            &[
+                "runtime",
+                "add",
+                name,
+                "--path",
+                &runtime.display().to_string(),
+            ],
+        );
+        assert!(add.status.success(), "{}", stderr(&add));
+    }
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "old-local"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+    let env_root = root.child("ocm-home/envs/demo");
+    let config_path = env_root.join(".openclaw/openclaw.json");
+    assert!(!config_path.exists());
+
+    let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--runtime", "new-local"]);
+    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    let output = stdout(&upgrade);
+    assert!(output.contains("outcome=switched"), "{output}");
+    assert!(!output.contains("config repair"), "{output}");
+
+    let command_log = fs::read_to_string(env_root.join("sim-commands.log")).unwrap();
+    assert!(!command_log.contains("config validate"), "{command_log}");
+    assert!(
+        !command_log.contains("doctor --non-interactive --fix"),
+        "{command_log}"
+    );
+    assert!(
+        command_log.contains("update finalize --json --yes --no-restart"),
+        "{command_log}"
+    );
+    assert!(!config_path.exists());
+
+    let show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    let env_json: Value = serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(env_json["defaultRuntime"], "new-local");
+}
+
+#[test]
 fn env_set_runtime_uses_the_transactional_upgrade_path_for_existing_bindings() {
     let root = TestDir::new("set-runtime-transactional-upgrade");
     let cwd = root.child("workspace");
