@@ -967,7 +967,7 @@ fn upgrade_dry_run_reports_without_changing_runtime_or_creating_snapshot() {
         old_integrity
     );
     let packument_server =
-        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 1);
+        TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
 
     let mut env = ocm_env(&root);
     install_fake_node_and_npm(&root, &mut env, "22.22.3");
@@ -1589,7 +1589,11 @@ fn upgrade_rolls_back_runtime_when_service_restart_fails() {
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo", "--version", "2026.3.25"]);
     assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
     let output = stdout(&upgrade);
-    assert!(output.contains("outcome=rolled-back"), "{output}");
+    assert!(
+        output.contains("outcome=rolled-back"),
+        "stdout:\n{output}\nstderr:\n{}",
+        stderr(&upgrade)
+    );
     assert!(output.contains("rollback=restored"), "{output}");
     assert!(output.contains("snapshot="), "{output}");
 
@@ -1666,9 +1670,18 @@ fn upgrade_restores_runtime_when_runtime_preparation_fails() {
     assert!(start.status.success(), "{}", stderr(&start));
 
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
-    assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
+    assert!(
+        !upgrade.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        stdout(&upgrade),
+        stderr(&upgrade)
+    );
     let output = stdout(&upgrade);
-    assert!(output.contains("outcome=rolled-back"), "{output}");
+    assert!(
+        output.contains("outcome=rolled-back"),
+        "stdout:\n{output}\nstderr:\n{}",
+        stderr(&upgrade)
+    );
     assert!(output.contains("rollback=restored"), "{output}");
     assert!(
         output.contains("runtime artifact integrity is invalid"),
