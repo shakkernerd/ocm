@@ -127,6 +127,8 @@ ocm upgrade mira
 ocm upgrade --all
 ocm upgrade mira --dry-run
 ocm upgrade history mira
+ocm upgrade rollback mira --dry-run
+ocm upgrade rollback mira
 ocm upgrade simulate mira --to 2026.4.20
 ocm upgrade simulate mira --to 2026.4.20 --scenario all
 ocm upgrade simulate mira --to beta --scenario all
@@ -157,6 +159,17 @@ managed runtime retains the previous runtime files beside its transaction
 record. Removing or pruning the corresponding pre-upgrade snapshot removes
 those retained files; switching to a different runtime does not duplicate the
 source runtime.
+`ocm upgrade rollback <env>` restores the newest completed upgrade or rollback
+transition that has not already been reversed. Use `--transaction <id>` to
+select a specific transaction and `--dry-run` to validate it without mutation.
+Before creating a safety snapshot, rollback requires the current binding,
+OpenClaw version, and service policy to match the selected transaction target;
+it also verifies the recorded snapshot, source runtime or launcher, and any
+same-name retained runtime recovery. A real rollback creates a `pre-rollback`
+safety snapshot and a linked history transaction before it stops a managed
+service or replaces runtime bytes. If restore or verification fails, OCM puts
+the pre-rollback runtime and environment state back. Rolling back the linked
+transaction safely reverses the rollback.
 Once an environment is bound to a runtime, direct `runtime update`,
 `runtime install --force`, `runtime build-local --force`, and `runtime remove`
 operations reject that runtime. Use `ocm upgrade <env>` so the environment gets
