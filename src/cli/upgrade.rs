@@ -2879,10 +2879,40 @@ impl Cli {
             if !seen.insert(runtime_name.clone()) {
                 continue;
             }
-            let meta_path = runtime_meta_path(runtime_name, &self.env, &self.cwd)?;
+            let meta_path = match runtime_meta_path(runtime_name, &self.env, &self.cwd) {
+                Ok(meta_path) => meta_path,
+                Err(error) => {
+                    return Err(self.cleanup_failed_transaction_setup(
+                        env_name,
+                        &snapshot.id,
+                        runtime_backups,
+                        error,
+                    ));
+                }
+            };
             if meta_path.exists() {
-                let runtime = get_runtime(runtime_name, &self.env, &self.cwd)?;
-                runtime_backups.push(self.backup_runtime_for_upgrade(&runtime)?);
+                let runtime = match get_runtime(runtime_name, &self.env, &self.cwd) {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        return Err(self.cleanup_failed_transaction_setup(
+                            env_name,
+                            &snapshot.id,
+                            runtime_backups,
+                            error,
+                        ));
+                    }
+                };
+                match self.backup_runtime_for_upgrade(&runtime) {
+                    Ok(backup) => runtime_backups.push(backup),
+                    Err(error) => {
+                        return Err(self.cleanup_failed_transaction_setup(
+                            env_name,
+                            &snapshot.id,
+                            runtime_backups,
+                            error,
+                        ));
+                    }
+                }
             } else {
                 created_runtime_names.push(runtime_name.clone());
             }
@@ -2912,6 +2942,31 @@ impl Cli {
             runtime_mutated: false,
             rollback_of,
         })
+    }
+
+    fn cleanup_failed_transaction_setup(
+        &self,
+        env_name: &str,
+        snapshot_id: &str,
+        runtime_backups: Vec<RuntimeRollbackBackup>,
+        error: String,
+    ) -> String {
+        for backup in runtime_backups {
+            backup.cleanup();
+        }
+        match self.environment_service().remove_snapshot_locked(
+            crate::env::RemoveEnvSnapshotOptions {
+                env_name: env_name.to_string(),
+                snapshot_id: snapshot_id.to_string(),
+            },
+        ) {
+            Ok(_) => error,
+            Err(cleanup_error) => {
+                format!(
+                    "{error}; also failed to remove the incomplete transaction snapshot: {cleanup_error}"
+                )
+            }
+        }
     }
 
     fn finish_successful_upgrade(

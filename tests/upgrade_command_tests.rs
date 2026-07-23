@@ -2704,6 +2704,51 @@ fn upgrade_rollback_failure_restores_the_pre_rollback_state() {
 }
 
 #[test]
+fn upgrade_rollback_cleans_snapshot_when_transaction_setup_fails() {
+    let root = TestDir::new("upgrade-explicit-rollback-setup-failure");
+    let fixture = seed_in_place_rollback(&root, "2026.6.11");
+    let ocm_home = Path::new(fixture.env.get("OCM_HOME").unwrap());
+    fs::write(ocm_home.join("tmp"), "block transaction backup directory").unwrap();
+
+    let rollback = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--json"],
+    );
+    assert!(!rollback.status.success());
+    assert!(
+        stderr(&rollback).contains("failed to create transaction runtime backup directory")
+            || stderr(&rollback).contains("Not a directory")
+            || stderr(&rollback).contains("File exists"),
+        "{}",
+        stderr(&rollback)
+    );
+
+    let snapshots = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["env", "snapshot", "list", "demo", "--json"],
+    );
+    assert!(snapshots.status.success(), "{}", stderr(&snapshots));
+    let snapshots_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
+    assert_eq!(snapshots_json.as_array().unwrap().len(), 1);
+
+    let history = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "history", "demo", "--json"],
+    );
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    assert_eq!(history_json.as_array().unwrap().len(), 1);
+    assert_eq!(
+        fs::read_to_string(&fixture.marker).unwrap(),
+        "after-upgrade"
+    );
+    assert!(fixture.original_recovery_root.exists());
+}
+
+#[test]
 fn upgrade_repairs_target_config_before_finalization() {
     let root = TestDir::new("upgrade-target-config-repair");
     let cwd = root.child("workspace");
