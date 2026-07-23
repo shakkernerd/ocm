@@ -137,8 +137,8 @@ running service cannot be restarted or started after the change, OCM restores
 the snapshot and previous runtime by default. When an environment moves to a new
 runtime, OCM runs OpenClaw's update finalization path inside that environment
 before service restart. A running managed service is considered recovered only
-after its HTTP health endpoint responds and OpenClaw's gateway status reports a
-reachable RPC endpoint; otherwise the upgrade follows the normal rollback path.
+after its HTTP health endpoint responds and OpenClaw's gateway status proves the
+gateway is reachable; otherwise the upgrade follows the normal rollback path.
 Snapshots preserve managed path, npm, and Git plugin payloads together with
 their package metadata and symlinks, while generated plugin dependency caches
 and live runtime residue stay out of the archive.

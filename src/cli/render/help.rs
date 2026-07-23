@@ -585,7 +585,7 @@ pub fn upgrade_help(cmd: &str) -> String {
             "An env upgrade will not replace runtime bytes shared with another env; use --runtime to reuse those bytes or an exact --version for an isolated target.",
             "Upgrades create a pre-upgrade snapshot before changing env state.",
             "When an env moves to a new runtime, upgrade runs OpenClaw update finalization inside the env before service restart.",
-            "Managed-service upgrades require both HTTP health and OpenClaw gateway RPC readiness before reporting success.",
+            "Managed-service upgrades require both HTTP health and OpenClaw gateway reachability before reporting success.",
             "If service restart/start fails, ocm restores the snapshot and previous runtime unless --no-rollback is set.",
             "Pinned runtimes stay pinned unless you pass --version, --channel, or --runtime explicitly.",
             "Local-command environments are reported clearly instead of being changed behind your back.",
