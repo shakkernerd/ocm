@@ -100,7 +100,7 @@ fn install_fake_node_and_packing_npm(
     let log_path = root.child("fake-pack-npm.log");
     write_executable_script(
         &bin_dir.join("node"),
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'v22.14.0\\n'\n  exit 0\nfi\nif [ \"$(basename \"$1\")\" = \"ocm-npm-workspace-deps.mjs\" ]; then\n  script=\"$1\"\n  shift\n  exec \"$script\" \"$@\"\nfi\nprintf 'fake node\\n'\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'v22.22.3\\n'\n  exit 0\nfi\nif [ \"$(basename \"$1\")\" = \"ocm-npm-workspace-deps.mjs\" ]; then\n  script=\"$1\"\n  shift\n  exec \"$script\" \"$@\"\nfi\nprintf 'fake node\\n'\n",
     );
     let npm_script = format!(
         r#"#!/bin/sh
@@ -625,7 +625,7 @@ fn runtime_install_from_official_release_installs_the_openclaw_package() {
     let packument_server =
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -696,7 +696,7 @@ fn runtime_install_exposes_package_dependencies_to_openclaw_package_root() {
     let packument_server =
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -755,7 +755,7 @@ fn official_runtime_install_produces_a_runnable_env_binding() {
     let packument_server =
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -823,7 +823,7 @@ fn runtime_install_rejects_non_canonical_names_for_official_releases() {
     let packument = br#"{"dist-tags":{"latest":"2026.3.24"},"versions":{"2026.3.24":{"version":"2026.3.24","dist":{"tarball":"https://registry.npmjs.org/openclaw/-/openclaw-2026.3.24.tgz"}}}}"#;
     let server = TestHttpServer::serve_bytes("/openclaw", "application/json", packument);
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),
@@ -864,7 +864,7 @@ fn runtime_install_reuses_a_matching_official_runtime() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -900,7 +900,7 @@ fn concurrent_official_runtime_installs_reuse_the_published_runtime() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -974,7 +974,7 @@ fn concurrent_official_runtime_installs_reject_changed_integrity() {
         vec![packument(&integrity), packument(&changed_integrity)],
     );
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1042,7 +1042,7 @@ fn runtime_install_refreshes_a_matching_official_runtime_with_bad_package_dep_la
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1121,7 +1121,7 @@ fn runtime_install_refreshes_a_channel_runtime_when_the_published_release_moves(
         vec![first_packument.into_bytes(), second_packument.into_bytes()],
     );
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1206,7 +1206,7 @@ fn runtime_update_reuses_the_official_release_selector() {
         vec![packument_v1.into_bytes(), packument_v2.into_bytes()],
     );
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1328,7 +1328,7 @@ fn official_runtime_install_uses_managed_node_when_npm_is_missing() {
     let packument_server =
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     let _managed_node = install_fake_managed_node_archive(&root, &mut env, "24.15.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
@@ -1411,8 +1411,8 @@ fn official_runtime_install_rejects_untrusted_managed_node_archive() {
 }
 
 #[test]
-fn official_runtime_install_uses_managed_node_when_host_node_is_too_old() {
-    let root = TestDir::new("runtime-install-official-old-node");
+fn official_runtime_install_uses_managed_node_when_host_node_is_unsupported() {
+    let root = TestDir::new("runtime-install-official-unsupported-node");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
 
@@ -1431,7 +1431,7 @@ fn official_runtime_install_uses_managed_node_when_host_node_is_too_old() {
     let packument_server =
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "20.11.0");
+    install_fake_node_and_npm(&root, &mut env, "23.11.0");
     let _managed_node = install_fake_managed_node_archive(&root, &mut env, "24.15.0");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
@@ -2025,7 +2025,7 @@ fn official_runtime_install_requires_sha512_integrity_before_download() {
     let packument_server =
         TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),

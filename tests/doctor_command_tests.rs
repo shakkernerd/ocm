@@ -66,7 +66,7 @@ fn doctor_host_reports_ready_official_release_requirements() {
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
 
     let doctor = run_ocm(&cwd, &env, &["doctor", "host", "--json"]);
     assert!(doctor.status.success(), "{}", stderr(&doctor));

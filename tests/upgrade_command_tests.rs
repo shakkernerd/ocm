@@ -412,7 +412,7 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     );
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -514,7 +514,7 @@ fn upgrade_switches_across_versions_from_runtime_with_broken_package_bin_symlink
     );
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -614,7 +614,7 @@ fn upgrade_dry_run_reports_without_changing_runtime_or_creating_snapshot() {
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 1);
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -691,7 +691,7 @@ fn upgrade_simulate_tests_a_published_version_without_changing_the_source_env() 
     );
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -790,7 +790,7 @@ fn upgrade_simulate_errors_before_cloning_when_published_target_is_missing() {
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 4);
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -891,7 +891,7 @@ fn upgrade_simulate_runs_openclaw_update_contract_checks_for_published_targets()
     );
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1014,7 +1014,7 @@ fn upgrade_simulate_all_scenarios_reports_plugin_specific_failures() {
     );
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1126,7 +1126,7 @@ fn upgrade_simulate_reports_local_repo_doctor_failures() {
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 1);
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     install_fake_simulation_pnpm(&root, &mut env);
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
@@ -1210,7 +1210,7 @@ fn upgrade_rolls_back_runtime_when_service_restart_fails() {
     );
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1300,7 +1300,7 @@ fn upgrade_restores_runtime_when_runtime_preparation_fails() {
     );
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1373,7 +1373,7 @@ fn upgrade_rolls_back_when_post_upgrade_version_verification_fails() {
     );
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1447,7 +1447,7 @@ fn upgrade_reports_pinned_envs_without_moving_them() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1489,7 +1489,7 @@ fn upgrade_can_switch_a_local_launcher_env_to_a_published_runtime() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),
@@ -1746,7 +1746,7 @@ fn upgrade_keeps_a_stopped_installed_service_stopped() {
     let packument_server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     install_fake_launchctl(&root, &mut env);
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
@@ -1833,7 +1833,7 @@ fn upgrade_all_updates_safe_envs_and_skips_local_or_pinned_ones() {
     );
 
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         packument_server.url(),

@@ -5,7 +5,8 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 
 use crate::managed_node::{
-    OPENCLAW_MIN_NODE_VERSION, managed_node_fallback_detail, managed_node_fallback_supported,
+    OPENCLAW_MIN_NODE_VERSION, OPENCLAW_NODE_VERSION_REQUIREMENT, managed_node_fallback_detail,
+    managed_node_fallback_supported,
 };
 use crate::service::{ServiceManagerKind, service_manager_kind};
 use crate::store::resolve_user_home;
@@ -205,7 +206,7 @@ pub fn official_openclaw_runtime_requirement_message(
     env: &BTreeMap<String, String>,
 ) -> String {
     format!(
-        "official OpenClaw runtimes require Node.js >= {OPENCLAW_MIN_NODE_VERSION} and npm on PATH; {detail}. Run \"{} doctor host\" for a full machine check.",
+        "official OpenClaw runtimes require {OPENCLAW_NODE_VERSION_REQUIREMENT} and npm on PATH; {detail}. Run \"{} doctor host\" for a full machine check.",
         command_example(env)
     )
 }
@@ -213,14 +214,14 @@ pub fn official_openclaw_runtime_requirement_message(
 pub fn verify_official_openclaw_runtime_node(env: &BTreeMap<String, String>) -> Result<(), String> {
     let node_version = node_version(env)
         .map_err(|detail| official_openclaw_runtime_requirement_message(&detail, env))?;
-    match compare_version_like(&node_version, OPENCLAW_MIN_NODE_VERSION) {
-        Some(std::cmp::Ordering::Less) => Err(official_openclaw_runtime_requirement_message(
+    match openclaw_node_version_supported(&node_version) {
+        Some(true) => Ok(()),
+        Some(false) => Err(official_openclaw_runtime_requirement_message(
             &format!(
-                "found Node.js {node_version}; upgrade to {OPENCLAW_MIN_NODE_VERSION} or newer"
+                "found Node.js {node_version}, which is outside the supported OpenClaw ranges"
             ),
             env,
         )),
-        Some(_) => Ok(()),
         None => Err(official_openclaw_runtime_requirement_message(
             &format!("node --version returned an unreadable version: {node_version}"),
             env,
@@ -359,8 +360,8 @@ fn node_check(
         HostCheckLevel::Required
     };
     match node_version(env) {
-        Ok(version) => match compare_version_like(&version, OPENCLAW_MIN_NODE_VERSION) {
-            Some(std::cmp::Ordering::Less) => check(
+        Ok(version) => match openclaw_node_version_supported(&version) {
+            Some(false) => check(
                 "official-release",
                 "Node.js",
                 "Run published OpenClaw releases",
@@ -369,12 +370,12 @@ fn node_check(
                 HostCheckNotes::new(
                     Some(version.clone()),
                     Some(format!(
-                        "found Node.js {version}; official releases need {OPENCLAW_MIN_NODE_VERSION} or newer"
+                        "found Node.js {version}; official releases need {OPENCLAW_NODE_VERSION_REQUIREMENT}"
                     )),
                     Some(node_suggestion(managed_fallback_supported)),
                 ),
             ),
-            Some(_) => check(
+            Some(true) => check(
                 "official-release",
                 "Node.js",
                 "Run published OpenClaw releases",
@@ -455,10 +456,10 @@ fn node_detail(detail: String, managed_fallback_supported: bool) -> String {
 fn node_suggestion(managed_fallback_supported: bool) -> String {
     if managed_fallback_supported {
         format!(
-            "Install Node.js {OPENCLAW_MIN_NODE_VERSION} or newer if you want OCM to use your host toolchain; otherwise OCM can manage a private copy for official releases."
+            "Install {OPENCLAW_NODE_VERSION_REQUIREMENT} if you want OCM to use your host toolchain; otherwise OCM can manage a private copy for official releases."
         )
     } else {
-        format!("Install Node.js {OPENCLAW_MIN_NODE_VERSION} or newer.")
+        format!("Install {OPENCLAW_NODE_VERSION_REQUIREMENT}.")
     }
 }
 
@@ -1030,6 +1031,20 @@ fn parse_version_like(version: &str) -> Option<Vec<u64>> {
     Some(out)
 }
 
+fn openclaw_node_version_supported(version: &str) -> Option<bool> {
+    let parsed = parse_version_like(version)?;
+    let major = *parsed.first()?;
+    let minimum = match major {
+        22 => OPENCLAW_MIN_NODE_VERSION,
+        23 => return Some(false),
+        24 => "24.15.0",
+        25 => "25.9.0",
+        value if value > 25 => return Some(true),
+        _ => return Some(false),
+    };
+    Some(compare_version_like(version, minimum)? != std::cmp::Ordering::Less)
+}
+
 fn parse_browser_major_version(raw_version: &str) -> Option<u32> {
     raw_version
         .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.'))
@@ -1111,23 +1126,42 @@ mod tests {
 
     use super::{
         HostPackageManager, command_exists, compare_version_like, detect_host_package_manager,
-        host_is_root, parse_browser_major_version,
+        host_is_root, openclaw_node_version_supported, parse_browser_major_version,
     };
 
     #[test]
     fn compare_version_like_orders_semverish_versions() {
         assert_eq!(
-            compare_version_like("22.14.0", "22.14.0"),
+            compare_version_like("22.22.3", "22.22.3"),
             Some(std::cmp::Ordering::Equal)
         );
         assert_eq!(
-            compare_version_like("v22.15.1", "22.14.0"),
+            compare_version_like("v22.23.1", "22.22.3"),
             Some(std::cmp::Ordering::Greater)
         );
         assert_eq!(
-            compare_version_like("20.11.0", "22.14.0"),
+            compare_version_like("20.11.0", "22.22.3"),
             Some(std::cmp::Ordering::Less)
         );
+    }
+
+    #[test]
+    fn openclaw_node_version_support_matches_current_runtime_lines() {
+        for version in ["22.22.3", "22.23.0", "24.15.0", "25.9.0", "26.0.0"] {
+            assert_eq!(
+                openclaw_node_version_supported(version),
+                Some(true),
+                "{version}"
+            );
+        }
+        for version in ["20.20.0", "22.22.2", "23.11.0", "24.14.9", "25.8.9"] {
+            assert_eq!(
+                openclaw_node_version_supported(version),
+                Some(false),
+                "{version}"
+            );
+        }
+        assert_eq!(openclaw_node_version_supported("unknown"), None);
     }
 
     #[test]

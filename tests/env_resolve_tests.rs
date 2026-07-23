@@ -173,7 +173,7 @@ fn env_resolve_reports_release_backed_runtime_provenance() {
     let manifest_server =
         TestHttpServer::serve_bytes("/openclaw", "application/json", manifest_body.as_bytes());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         manifest_server.url(),

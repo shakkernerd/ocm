@@ -103,7 +103,7 @@ fn release_list_uses_the_official_openclaw_source() {
     fs::create_dir_all(&cwd).unwrap();
     let server = TestHttpServer::serve_bytes("/openclaw", "application/json", &packument_body());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),
@@ -273,7 +273,7 @@ fn release_list_rejects_conflicting_selectors() {
     fs::create_dir_all(&cwd).unwrap();
     let server = TestHttpServer::serve_bytes("/openclaw", "application/json", &packument_body());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),
@@ -315,7 +315,7 @@ fn release_install_uses_the_published_openclaw_source() {
     );
     let server = TestHttpServer::serve_bytes("/openclaw", "application/json", packument.as_bytes());
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),
@@ -416,7 +416,7 @@ fn release_install_reuses_a_matching_installed_runtime() {
     let server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 2);
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),
@@ -453,7 +453,7 @@ fn release_list_and_show_surface_installed_runtime_names() {
     let server =
         TestHttpServer::serve_bytes_times("/openclaw", "application/json", packument.as_bytes(), 3);
     let mut env = ocm_env(&root);
-    install_fake_node_and_npm(&root, &mut env, "22.14.0");
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
     env.insert(
         "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
         server.url(),

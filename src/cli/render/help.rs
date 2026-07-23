@@ -196,7 +196,7 @@ pub fn setup_help(cmd: &str) -> String {
         vec![format!("{cmd} setup")],
         &[
             "Setup asks a few questions, then runs the same env-first flow as `start`.",
-            "Official release choices prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing.",
+            "Official release choices prefer host Node.js 22.22.3+, 24.15.0+, or 25.9.0+ and npm, and OCM can manage a private copy on supported platforms when they are missing.",
             "If git is missing, setup can offer to install it for repo-aware coding workflows.",
             "When run inside an OpenClaw checkout, local mode defaults to `pnpm openclaw` in that folder.",
             "If OCM detects an existing plain OpenClaw home, setup points you at `migrate` so you can bring that state under OCM instead of starting fresh.",
@@ -504,7 +504,7 @@ pub fn start_help(cmd: &str) -> String {
             "Start writes the minimum local config by default so the env can boot immediately. Use `--onboard` for the interactive setup flow.",
             "Start installs and starts the env service by default. Use `--no-service` when you do not want a background process.",
             "Managed services currently support launchd on macOS and systemd --user on Linux.",
-            "Official release selectors prefer host Node.js >= 22.14.0 and npm, and OCM can manage a private copy on supported platforms when they are missing.",
+            "Official release selectors prefer host Node.js 22.22.3+, 24.15.0+, or 25.9.0+ and npm, and OCM can manage a private copy on supported platforms when they are missing.",
             "When start creates a new official-release env interactively, it can offer to install git for repo-aware coding workflows.",
             "If OCM detects an existing plain OpenClaw home, start keeps the new env fresh and points you at `migrate` if you want to bring that older state under OCM.",
             "`--json` cannot be combined with `--onboard` because onboarding is interactive.",
@@ -935,7 +935,7 @@ pub fn doctor_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} doctor host --fix git --yes"),
             ],
             &[
-                "Official release installs prefer host Node.js >= 22.14.0 and npm.",
+                "Official release installs prefer host Node.js 22.22.3+, 24.15.0+, or 25.9.0+ and npm.",
                 "On supported platforms, OCM can manage a private copy when they are missing.",
                 "Git is the first supported host fix target; OCM will not install Homebrew automatically.",
                 "Recommended tools are advisory; they do not block local-command or launcher flows.",
@@ -1484,7 +1484,7 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             &[
                 "Official installs use canonical runtime names derived from the selector.",
-                "Official release installs prefer host Node.js >= 22.14.0 and npm.",
+                "Official release installs prefer host Node.js 22.22.3+, 24.15.0+, or 25.9.0+ and npm.",
                 "On supported platforms, OCM can manage a private copy when they are missing.",
                 "Use `ocm doctor host` only if you want a full machine check or an explicit host-tool fix like git.",
             ],
@@ -1815,7 +1815,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Exactly one install source must be provided.",
                 "Official installs use canonical runtime names unless you reuse the same canonical name explicitly.",
-                "Official release installs prefer host Node.js >= 22.14.0 and npm.",
+                "Official release installs prefer host Node.js 22.22.3+, 24.15.0+, or 25.9.0+ and npm.",
                 "On supported platforms, OCM can manage a private copy when they are missing.",
                 "Use `ocm doctor host` only if you want a full machine check or an explicit host-tool fix like git.",
             ],
