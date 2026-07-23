@@ -126,6 +126,7 @@ This is the shortest path for most people.
 ocm upgrade mira
 ocm upgrade --all
 ocm upgrade mira --dry-run
+ocm upgrade history mira
 ocm upgrade simulate mira --to 2026.4.20
 ocm upgrade simulate mira --to 2026.4.20 --scenario all
 ocm upgrade simulate mira --to beta --scenario all
@@ -147,6 +148,11 @@ creating a snapshot, downloading the target, or changing runtime metadata.
 Switching only the binary cannot reverse newer OpenClaw config or SQLite state
 migrations; returning to an older release requires a complete snapshot captured
 while that release and its state schema were active.
+`ocm upgrade history <env>` lists completed upgrade transactions newest first,
+including source and target bindings and versions, the pre-upgrade snapshot,
+migration/finalization status, service state, and rollback outcome. History is
+stored as atomic JSON metadata under `OCM_HOME`; it does not copy config
+contents, command output, or credentials.
 Once an environment is bound to a runtime, direct `runtime update`,
 `runtime install --force`, `runtime build-local --force`, and `runtime remove`
 operations reject that runtime. Use `ocm upgrade <env>` so the environment gets
