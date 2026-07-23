@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::common::{load_json_files, path_exists, read_json, write_json};
+use super::common::{
+    ExclusiveFileLock, load_json_files, lock_file, path_exists, read_json, write_json,
+};
 use super::layout::{
     display_path, runtime_install_root, upgrade_history_env_dir, upgrade_history_meta_path,
     upgrade_history_recovery_dir, upgrade_history_runtime_recovery_dir, validate_name,
@@ -133,6 +135,20 @@ pub fn list_upgrade_history(
             .then_with(|| right.id.cmp(&left.id))
     });
     Ok(records)
+}
+
+pub(crate) fn lock_upgrade_transaction(
+    env_name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ExclusiveFileLock, String> {
+    let env_name = validate_name(env_name, "Environment name")?;
+    let path = super::ensure_store(env, cwd)?
+        .home
+        .join("locks")
+        .join("upgrades")
+        .join(format!("{env_name}.lock"));
+    lock_file(&path, "upgrade transaction")
 }
 
 pub(crate) fn get_upgrade_runtime_recovery(
@@ -266,6 +282,9 @@ fn validate_upgrade_history_record(record: &UpgradeHistoryRecord) -> Result<(), 
 mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
 
     use time::OffsetDateTime;
 
@@ -273,8 +292,8 @@ mod tests {
         RuntimeMeta, RuntimeSourceKind, UpgradeHistoryBinding, UpgradeHistoryRecord,
         UpgradeHistoryRuntimeRecovery, UpgradeHistoryServiceState, UpgradeHistoryStage,
         get_upgrade_history_record, get_upgrade_runtime_recovery, list_upgrade_history,
-        runtime_install_root, save_upgrade_history_record, upgrade_history_runtime_recovery_dir,
-        write_json,
+        lock_upgrade_transaction, runtime_install_root, save_upgrade_history_record,
+        upgrade_history_runtime_recovery_dir, write_json,
     };
 
     fn test_env(label: &str) -> (PathBuf, BTreeMap<String, String>) {
@@ -455,6 +474,32 @@ mod tests {
             error.contains("not an installer-managed runtime"),
             "{error}"
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn upgrade_transaction_lock_serializes_the_same_environment() {
+        let (root, env) = test_env("transaction-lock");
+        let cwd = root.as_path();
+        let first = lock_upgrade_transaction("demo", &env, cwd).unwrap();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let thread_env = env.clone();
+        let thread_cwd = root.clone();
+        let waiter = thread::spawn(move || {
+            let _second =
+                lock_upgrade_transaction("demo", &thread_env, thread_cwd.as_path()).unwrap();
+            acquired_tx.send(()).unwrap();
+        });
+
+        assert!(
+            acquired_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err()
+        );
+        drop(first);
+        acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        waiter.join().unwrap();
 
         let _ = std::fs::remove_dir_all(root);
     }

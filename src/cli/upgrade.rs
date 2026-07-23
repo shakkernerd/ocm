@@ -32,9 +32,9 @@ use crate::store::{
     ensure_minimum_local_openclaw_config, ensure_store, get_launcher, get_runtime,
     get_upgrade_history_record, get_upgrade_runtime_recovery,
     install_runtime_from_selected_official_openclaw_release, list_upgrade_history,
-    lock_env_registry, remove_runtime, remove_upgrade_recovery, resolve_absolute_path,
-    runtime_install_root, runtime_integrity_issue, runtime_meta_path, save_environment,
-    save_upgrade_history_record, upgrade_history_recovery_dir,
+    lock_env_registry, lock_upgrade_transaction, remove_runtime, remove_upgrade_recovery,
+    resolve_absolute_path, runtime_install_root, runtime_integrity_issue, runtime_meta_path,
+    save_environment, save_upgrade_history_record, upgrade_history_recovery_dir,
     upgrade_history_runtime_recovery_dir, write_json,
 };
 
@@ -474,6 +474,7 @@ impl Cli {
             });
         }
 
+        let _transaction_lock = lock_upgrade_transaction(env_name, &self.env, &self.cwd)?;
         let _operation_lock = self.environment_service().lock_operation(env_name)?;
         let plan = self.prepare_upgrade_rollback(env_name, Some(&plan.record.id))?;
         self.execute_upgrade_rollback_locked(env_name, plan)
@@ -1594,6 +1595,16 @@ impl Cli {
     }
 
     fn upgrade_env(
+        &self,
+        name: &str,
+        target: &UpgradeTarget,
+        options: UpgradeOptions,
+    ) -> Result<UpgradeEnvSummary, String> {
+        let _transaction_lock = lock_upgrade_transaction(name, &self.env, &self.cwd)?;
+        self.upgrade_env_locked(name, target, options)
+    }
+
+    fn upgrade_env_locked(
         &self,
         name: &str,
         target: &UpgradeTarget,
