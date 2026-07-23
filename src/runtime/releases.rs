@@ -129,6 +129,24 @@ pub fn compare_openclaw_release_versions(left: &str, right: &str) -> Option<Orde
     Some(parse_openclaw_release_version(left)?.cmp(&parse_openclaw_release_version(right)?))
 }
 
+pub(crate) fn compare_runtime_release_versions(left: &str, right: &str) -> Option<Ordering> {
+    match (
+        parse_openclaw_release_version(left),
+        parse_openclaw_release_version(right),
+    ) {
+        (Some(left), Some(right)) => Some(left.cmp(&right)),
+        (None, None) => {
+            let left = semver::Version::parse(left.trim().strip_prefix('v').unwrap_or(left.trim()))
+                .ok()?;
+            let right =
+                semver::Version::parse(right.trim().strip_prefix('v').unwrap_or(right.trim()))
+                    .ok()?;
+            Some(left.cmp_precedence(&right))
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct OpenClawPackageManifest {
     #[serde(rename = "dist-tags", default)]

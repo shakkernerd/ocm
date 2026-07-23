@@ -17,8 +17,8 @@ use crate::env::{
 use crate::infra::shell::{build_openclaw_dev_source_env, build_openclaw_env};
 use crate::openclaw_repo::{detect_openclaw_checkout, ensure_openclaw_worktree};
 use crate::runtime::releases::{
-    OpenClawRelease, is_official_openclaw_releases_url, normalize_openclaw_channel_selector,
-    official_openclaw_releases_url,
+    OpenClawRelease, compare_runtime_release_versions, is_official_openclaw_releases_url,
+    normalize_openclaw_channel_selector, official_openclaw_releases_url,
 };
 use crate::runtime::{
     InstallRuntimeFromOfficialReleaseOptions, OfficialRuntimePrepareAction, RuntimeMeta,
@@ -104,6 +104,20 @@ struct UpgradeTarget {
     version: Option<String>,
     channel: Option<String>,
     runtime: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+enum ResolvedUpgradeTargetKind {
+    Named(RuntimeMeta),
+    Official(OpenClawRelease),
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedUpgradeTarget {
+    name: String,
+    release_version: Option<String>,
+    release_channel: Option<String>,
+    kind: ResolvedUpgradeTargetKind,
 }
 
 #[derive(Clone, Debug)]
@@ -1061,7 +1075,14 @@ impl Cli {
         let previous_binding_name = current.name.clone();
 
         if target.is_explicit() {
-            let target_runtime_name = target.canonical_runtime_name()?;
+            let resolved = self.resolve_upgrade_target(target)?;
+            let target_runtime_name = resolved.name.clone();
+            let target_version = self.resolved_target_version(env_name, &resolved)?;
+            self.ensure_upgrade_is_not_downgrade(
+                env_name,
+                current.release_version.as_deref(),
+                &target_version,
+            )?;
             if !target.is_named_runtime() {
                 self.ensure_runtime_upgrade_isolated(env_name, &target_runtime_name)?;
             }
@@ -1079,8 +1100,8 @@ impl Cli {
                     } else {
                         "would-update".to_string()
                     },
-                    runtime_release_version: None,
-                    runtime_release_channel: target.release_channel_hint(),
+                    runtime_release_version: Some(target_version),
+                    runtime_release_channel: resolved.release_channel.clone(),
                     service_action: service_action_for_dry_run(
                         service.as_ref(),
                         binding_changed,
@@ -1098,7 +1119,7 @@ impl Cli {
                 &[current.name.clone(), target_runtime_name.clone()],
                 options.rollback_enabled,
             )?;
-            let prepared = match self.prepare_isolated_upgrade_target(env_name, target) {
+            let prepared = match self.prepare_isolated_upgrade_target(env_name, target, resolved) {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     return self.rollback_failed_upgrade(
@@ -1107,7 +1128,7 @@ impl Cli {
                         previous_binding_name,
                         "runtime",
                         target_runtime_name,
-                        None,
+                        Some(target_version),
                         target.release_channel_hint(),
                         transaction,
                         error,
@@ -1265,24 +1286,6 @@ impl Cli {
 
         self.ensure_runtime_upgrade_isolated(env_name, &current.name)?;
 
-        if options.dry_run {
-            let service = self.upgrade_service_status(env_name)?;
-            return Ok(UpgradeEnvSummary {
-                env_name: env_name.to_string(),
-                previous_binding_kind: "runtime".to_string(),
-                previous_binding_name: previous_binding_name.clone(),
-                binding_kind: "runtime".to_string(),
-                binding_name: previous_binding_name,
-                outcome: "would-update".to_string(),
-                runtime_release_version: current.release_version.clone(),
-                runtime_release_channel: current.release_channel.clone(),
-                service_action: service_action_for_dry_run(service.as_ref(), false, true),
-                snapshot_id: None,
-                rollback: None,
-                note: Some("dry run: no runtime, env, service, or snapshot changed".to_string()),
-            });
-        }
-
         if is_official_openclaw_releases_url(current.source_manifest_url.as_deref(), &self.env) {
             let service = self.upgrade_service_status(env_name)?;
             let target = UpgradeTarget {
@@ -1290,13 +1293,38 @@ impl Cli {
                 channel: current.release_selector_value.clone(),
                 runtime: None,
             };
-            let target_runtime_name = target.canonical_runtime_name()?;
+            let resolved = self.resolve_upgrade_target(&target)?;
+            let target_runtime_name = resolved.name.clone();
+            let target_version = self.resolved_target_version(env_name, &resolved)?;
+            self.ensure_upgrade_is_not_downgrade(
+                env_name,
+                current.release_version.as_deref(),
+                &target_version,
+            )?;
+            if options.dry_run {
+                return Ok(UpgradeEnvSummary {
+                    env_name: env_name.to_string(),
+                    previous_binding_kind: "runtime".to_string(),
+                    previous_binding_name: previous_binding_name.clone(),
+                    binding_kind: "runtime".to_string(),
+                    binding_name: target_runtime_name,
+                    outcome: "would-update".to_string(),
+                    runtime_release_version: Some(target_version),
+                    runtime_release_channel: resolved.release_channel.clone(),
+                    service_action: service_action_for_dry_run(service.as_ref(), false, true),
+                    snapshot_id: None,
+                    rollback: None,
+                    note: Some(
+                        "dry run: no runtime, env, service, or snapshot changed".to_string(),
+                    ),
+                });
+            }
             let transaction = self.begin_upgrade_transaction(
                 env_name,
                 &[current.name.clone(), target_runtime_name.clone()],
                 options.rollback_enabled,
             )?;
-            let prepared = match self.prepare_isolated_upgrade_target(env_name, &target) {
+            let prepared = match self.prepare_isolated_upgrade_target(env_name, &target, resolved) {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     return self.rollback_failed_upgrade(
@@ -1305,8 +1333,8 @@ impl Cli {
                         previous_binding_name,
                         "runtime",
                         target_runtime_name,
-                        current.release_version.clone(),
-                        current.release_channel.clone(),
+                        Some(target_version),
+                        target.release_channel_hint(),
                         transaction,
                         error,
                     );
@@ -1411,7 +1439,36 @@ impl Cli {
             return Ok(summary);
         }
 
+        let resolved_update = self.runtime_service().resolve_update_from_release(
+            crate::runtime::UpdateRuntimeFromReleaseOptions {
+                name: current.name.clone(),
+                version: None,
+                channel: None,
+            },
+        )?;
+        let target_version = resolved_update.release_version().to_string();
+        self.ensure_upgrade_is_not_downgrade(
+            env_name,
+            current.release_version.as_deref(),
+            &target_version,
+        )?;
         let service = self.upgrade_service_status(env_name)?;
+        if options.dry_run {
+            return Ok(UpgradeEnvSummary {
+                env_name: env_name.to_string(),
+                previous_binding_kind: "runtime".to_string(),
+                previous_binding_name: previous_binding_name.clone(),
+                binding_kind: "runtime".to_string(),
+                binding_name: previous_binding_name,
+                outcome: "would-update".to_string(),
+                runtime_release_version: Some(target_version),
+                runtime_release_channel: current.release_channel.clone(),
+                service_action: service_action_for_dry_run(service.as_ref(), false, true),
+                snapshot_id: None,
+                rollback: None,
+                note: Some("dry run: no runtime, env, service, or snapshot changed".to_string()),
+            });
+        }
         let transaction = self.begin_upgrade_transaction(
             env_name,
             std::slice::from_ref(&current.name),
@@ -1419,13 +1476,8 @@ impl Cli {
         )?;
         let updated = match self.with_progress(format!("Updating runtime {}", current.name), || {
             self.with_isolated_runtime_mutation(env_name, &current.name, || {
-                self.runtime_service().update_from_release_deferred(
-                    crate::runtime::UpdateRuntimeFromReleaseOptions {
-                        name: current.name.clone(),
-                        version: None,
-                        channel: None,
-                    },
-                )
+                self.runtime_service()
+                    .apply_resolved_update(resolved_update, false)
             })
         }) {
             Ok(updated) => updated,
@@ -1587,7 +1639,10 @@ impl Cli {
             });
         }
 
-        let target_runtime_name = target.canonical_runtime_name()?;
+        let resolved = self.resolve_upgrade_target(target)?;
+        let target_runtime_name = resolved.name.clone();
+        let target_version = self.resolved_target_version(env_name, &resolved)?;
+        self.ensure_upgrade_is_not_downgrade(env_name, None, &target_version)?;
         if !target.is_named_runtime() {
             self.ensure_runtime_upgrade_isolated(env_name, &target_runtime_name)?;
         }
@@ -1600,8 +1655,8 @@ impl Cli {
                 binding_kind: "runtime".to_string(),
                 binding_name: target_runtime_name,
                 outcome: "would-switch".to_string(),
-                runtime_release_version: None,
-                runtime_release_channel: target.release_channel_hint(),
+                runtime_release_version: Some(target_version),
+                runtime_release_channel: resolved.release_channel.clone(),
                 service_action: service_action_for_dry_run(service.as_ref(), true, true),
                 snapshot_id: None,
                 rollback: None,
@@ -1614,7 +1669,7 @@ impl Cli {
             std::slice::from_ref(&target_runtime_name),
             options.rollback_enabled,
         )?;
-        let prepared = match self.prepare_isolated_upgrade_target(env_name, target) {
+        let prepared = match self.prepare_isolated_upgrade_target(env_name, target, resolved) {
             Ok(prepared) => prepared,
             Err(error) => {
                 return self.rollback_failed_upgrade(
@@ -1623,7 +1678,7 @@ impl Cli {
                     launcher_name.to_string(),
                     "runtime",
                     target_runtime_name,
-                    None,
+                    Some(target_version),
                     target.release_channel_hint(),
                     transaction,
                     error,
@@ -1733,11 +1788,71 @@ impl Cli {
         self.service_service().status(env_name).map(Some)
     }
 
-    fn prepare_upgrade_target(
+    fn resolved_target_version(
         &self,
         env_name: &str,
+        target: &ResolvedUpgradeTarget,
+    ) -> Result<String, String> {
+        if let Some(version) = target.release_version.as_deref() {
+            return Ok(version.to_string());
+        }
+
+        let output = self.run_update_mode_openclaw_command_output(
+            env_name,
+            &target.name,
+            "target openclaw --version",
+            &["--version"],
+        )?;
+        if !output.status.success() {
+            return Err(format!(
+                "target openclaw --version failed: {}",
+                output.failure_summary()
+            ));
+        }
+        release_version_from_output(&output.first_line(), None).ok_or_else(|| {
+            format!(
+                "cannot determine the OpenClaw version provided by runtime \"{}\"",
+                target.name
+            )
+        })
+    }
+
+    fn ensure_upgrade_is_not_downgrade(
+        &self,
+        env_name: &str,
+        current_version_hint: Option<&str>,
+        target_version: &str,
+    ) -> Result<(), String> {
+        let current =
+            self.run_openclaw_command(env_name, "current openclaw --version", &["--version"])?;
+        let current_version =
+            release_version_from_output(&current.first_line(), current_version_hint).ok_or_else(
+                || {
+                    format!(
+                        "cannot determine the current OpenClaw version for env \"{env_name}\"; refusing to change its runtime without downgrade safety"
+                    )
+                },
+            )?;
+
+        if current_version == target_version {
+            return Ok(());
+        }
+
+        match compare_runtime_release_versions(&current_version, target_version) {
+            Some(std::cmp::Ordering::Greater) => Err(format!(
+                "refusing to downgrade env \"{env_name}\" from OpenClaw {current_version} to {target_version}: OCM does not run reverse config or SQLite state migrations, and newer environment state may be unreadable by the older runtime. Restore a complete pre-upgrade snapshot captured with {target_version} instead of switching only the runtime"
+            )),
+            Some(_) => Ok(()),
+            None => Err(format!(
+                "cannot safely compare current OpenClaw version \"{current_version}\" with target \"{target_version}\"; refusing to change env \"{env_name}\" without downgrade safety"
+            )),
+        }
+    }
+
+    fn resolve_upgrade_target(
+        &self,
         target: &UpgradeTarget,
-    ) -> Result<PreparedUpgradeTarget, String> {
+    ) -> Result<ResolvedUpgradeTarget, String> {
         let runtime_name = target.canonical_runtime_name()?;
         if target.is_named_runtime() {
             let meta = self.runtime_service().show(&runtime_name)?;
@@ -1746,43 +1861,78 @@ impl Cli {
                     "runtime \"{runtime_name}\" is not healthy: {issue}",
                 ));
             }
-            return Ok(PreparedUpgradeTarget {
+            return Ok(ResolvedUpgradeTarget {
                 name: runtime_name,
-                meta,
-                action: OfficialRuntimePrepareAction::Reused,
+                release_version: meta.release_version.clone(),
+                release_channel: meta.release_channel.clone(),
+                kind: ResolvedUpgradeTargetKind::Named(meta),
             });
         }
-        let (meta, action) =
-            self.with_progress(format!("Preparing OpenClaw runtime for {env_name}"), || {
-                self.runtime_service()
-                    .prepare_official_openclaw_runtime_deferred(
-                        InstallRuntimeFromOfficialReleaseOptions {
-                            name: runtime_name.clone(),
-                            version: target.version.clone(),
-                            channel: target.channel.clone(),
-                            description: None,
-                            force: false,
-                        },
-                    )
-            })?;
-        Ok(PreparedUpgradeTarget {
+
+        let release = self
+            .runtime_service()
+            .official_openclaw_releases(target.version.as_deref(), target.channel.as_deref())?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "OpenClaw release was not found".to_string())?;
+        Ok(ResolvedUpgradeTarget {
             name: runtime_name,
-            meta,
-            action,
+            release_version: Some(release.version.clone()),
+            release_channel: release.channel.clone(),
+            kind: ResolvedUpgradeTargetKind::Official(release),
         })
+    }
+
+    fn prepare_resolved_upgrade_target(
+        &self,
+        env_name: &str,
+        target: &UpgradeTarget,
+        resolved: ResolvedUpgradeTarget,
+    ) -> Result<PreparedUpgradeTarget, String> {
+        match resolved.kind {
+            ResolvedUpgradeTargetKind::Named(meta) => Ok(PreparedUpgradeTarget {
+                name: resolved.name,
+                meta,
+                action: OfficialRuntimePrepareAction::Reused,
+            }),
+            ResolvedUpgradeTargetKind::Official(release) => {
+                let (meta, action) = self.with_progress(
+                    format!("Preparing OpenClaw runtime for {env_name}"),
+                    || {
+                        self.runtime_service()
+                            .prepare_selected_official_openclaw_runtime_deferred(
+                                InstallRuntimeFromOfficialReleaseOptions {
+                                    name: resolved.name.clone(),
+                                    version: target.version.clone(),
+                                    channel: target.channel.clone(),
+                                    description: None,
+                                    force: false,
+                                },
+                                release,
+                            )
+                    },
+                )?;
+                Ok(PreparedUpgradeTarget {
+                    name: resolved.name,
+                    meta,
+                    action,
+                })
+            }
+        }
     }
 
     fn prepare_isolated_upgrade_target(
         &self,
         env_name: &str,
         target: &UpgradeTarget,
+        resolved: ResolvedUpgradeTarget,
     ) -> Result<PreparedUpgradeTarget, String> {
         if target.is_named_runtime() {
-            return self.prepare_upgrade_target(env_name, target);
+            return self.prepare_resolved_upgrade_target(env_name, target, resolved);
         }
-        let runtime_name = target.canonical_runtime_name()?;
+        let runtime_name = resolved.name.clone();
         self.with_isolated_runtime_mutation(env_name, &runtime_name, || {
-            self.prepare_upgrade_target(env_name, target)
+            self.prepare_resolved_upgrade_target(env_name, target, resolved)
         })
     }
 
@@ -2479,6 +2629,19 @@ fn version_output_matches_expected(actual: &str, expected: &str) -> bool {
         .any(|token| token == expected)
 }
 
+fn release_version_from_output(actual: &str, hint: Option<&str>) -> Option<String> {
+    if let Some(hint) = hint
+        && version_output_matches_expected(actual, hint)
+    {
+        return Some(hint.to_string());
+    }
+
+    actual
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '+'))
+        .find(|token| !token.is_empty() && compare_runtime_release_versions(token, token).is_some())
+        .map(str::to_string)
+}
+
 fn simulation_env_name(source_name: &str, scenario: &str) -> String {
     format!(
         "{}-{}-sim-{}",
@@ -2690,7 +2853,10 @@ fn gateway_health_ok(port: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_output_reports_unsupported_command, version_output_matches_expected};
+    use super::{
+        command_output_reports_unsupported_command, release_version_from_output,
+        version_output_matches_expected,
+    };
 
     #[test]
     fn version_output_accepts_exact_version() {
@@ -2719,6 +2885,22 @@ mod tests {
             "OpenClaw 12026.5.14",
             "2026.5.14"
         ));
+    }
+
+    #[test]
+    fn release_version_output_extracts_openclaw_and_generic_versions() {
+        assert_eq!(
+            release_version_from_output("OpenClaw 2026.7.1-2 (local)", None).as_deref(),
+            Some("2026.7.1-2")
+        );
+        assert_eq!(
+            release_version_from_output("runtime 0.3.0", None).as_deref(),
+            Some("0.3.0")
+        );
+        assert_eq!(
+            release_version_from_output("OpenClaw current-main", Some("2026.7.2")).as_deref(),
+            None
+        );
     }
 
     #[test]
