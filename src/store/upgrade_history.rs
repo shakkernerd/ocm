@@ -1,11 +1,16 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::common::{load_json_files, path_exists, read_json, write_json};
-use super::layout::{upgrade_history_env_dir, upgrade_history_meta_path, validate_name};
+use super::layout::{
+    display_path, runtime_install_root, upgrade_history_env_dir, upgrade_history_meta_path,
+    upgrade_history_recovery_dir, upgrade_history_runtime_recovery_dir, validate_name,
+};
+use super::runtime_integrity_issue;
+use crate::runtime::{RuntimeMeta, RuntimeSourceKind};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,7 +70,15 @@ pub struct UpgradeHistoryRecord {
     #[serde(default)]
     pub rollback: Option<String>,
     #[serde(default)]
+    pub rollback_of: Option<String>,
+    #[serde(default)]
     pub note: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct UpgradeRuntimeRecovery {
+    pub meta: RuntimeMeta,
+    pub install_root: PathBuf,
 }
 
 pub fn save_upgrade_history_record(
@@ -75,15 +88,7 @@ pub fn save_upgrade_history_record(
 ) -> Result<(), String> {
     let env_name = validate_name(&record.env_name, "Environment name")?;
     let transaction_id = validate_name(&record.id, "Upgrade transaction id")?;
-    if record.kind != "ocm-upgrade-transaction" {
-        return Err(format!("unsupported upgrade history kind: {}", record.kind));
-    }
-    if record.format_version != 1 {
-        return Err(format!(
-            "unsupported upgrade history format version: {}",
-            record.format_version
-        ));
-    }
+    validate_upgrade_history_record(record)?;
     let path = upgrade_history_meta_path(&env_name, &transaction_id, env, cwd)?;
     write_json(&path, record)
 }
@@ -102,7 +107,9 @@ pub fn get_upgrade_history_record(
             "upgrade transaction \"{transaction_id}\" does not exist for environment \"{env_name}\""
         ));
     }
-    read_json(&path)
+    let record = read_json(&path)?;
+    validate_upgrade_history_record(&record)?;
+    Ok(record)
 }
 
 pub fn list_upgrade_history(
@@ -115,7 +122,9 @@ pub fn list_upgrade_history(
     let files = load_json_files(&dir)?;
     let mut records: Vec<UpgradeHistoryRecord> = Vec::with_capacity(files.len());
     for file in files {
-        records.push(read_json(&file)?);
+        let record = read_json(&file)?;
+        validate_upgrade_history_record(&record)?;
+        records.push(record);
     }
     records.sort_by(|left, right| {
         right
@@ -124,6 +133,87 @@ pub fn list_upgrade_history(
             .then_with(|| right.id.cmp(&left.id))
     });
     Ok(records)
+}
+
+pub(crate) fn get_upgrade_runtime_recovery(
+    env_name: &str,
+    transaction_id: &str,
+    runtime_name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<UpgradeRuntimeRecovery, String> {
+    let env_name = validate_name(env_name, "Environment name")?;
+    let transaction_id = validate_name(transaction_id, "Upgrade transaction id")?;
+    let runtime_name = validate_name(runtime_name, "Runtime name")?;
+    let recovery_root =
+        upgrade_history_runtime_recovery_dir(&env_name, &transaction_id, &runtime_name, env, cwd)?;
+    let install_root = recovery_root.join("install-root");
+    let meta_path = recovery_root.join("runtime.json");
+    if !path_exists(&meta_path) || !path_exists(&install_root) {
+        return Err(format!(
+            "runtime recovery for \"{runtime_name}\" is unavailable for upgrade transaction \"{transaction_id}\""
+        ));
+    }
+
+    let meta: RuntimeMeta = read_json(&meta_path)?;
+    if meta.name != runtime_name {
+        return Err(format!(
+            "runtime recovery metadata at {} belongs to \"{}\", expected \"{runtime_name}\"",
+            display_path(&meta_path),
+            meta.name
+        ));
+    }
+    let expected_install_root = runtime_install_root(&runtime_name, env, cwd)?;
+    if meta.source_kind != RuntimeSourceKind::Installed
+        || meta
+            .install_root
+            .as_deref()
+            .map(Path::new)
+            .is_none_or(|path| path != expected_install_root)
+    {
+        return Err(format!(
+            "runtime recovery metadata for \"{runtime_name}\" is not an installer-managed runtime"
+        ));
+    }
+    let original_binary = Path::new(&meta.binary_path);
+    let relative_binary = original_binary
+        .strip_prefix(&expected_install_root)
+        .map_err(|_| {
+            format!(
+                "runtime recovery metadata for \"{runtime_name}\" points outside its managed install root"
+            )
+        })?;
+    let recovery_binary = install_root.join(relative_binary);
+    let mut relocated = meta.clone();
+    relocated.binary_path = display_path(&recovery_binary);
+    relocated.install_root = Some(display_path(&install_root));
+    if let Some(issue) = runtime_integrity_issue(&relocated, env) {
+        return Err(format!(
+            "runtime recovery for \"{runtime_name}\" is not healthy: {issue}"
+        ));
+    }
+
+    Ok(UpgradeRuntimeRecovery { meta, install_root })
+}
+
+pub(crate) fn remove_upgrade_recovery(
+    env_name: &str,
+    transaction_id: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<(), String> {
+    let env_name = validate_name(env_name, "Environment name")?;
+    let transaction_id = validate_name(transaction_id, "Upgrade transaction id")?;
+    let path = upgrade_history_recovery_dir(&env_name, &transaction_id, env, cwd)?;
+    if !path_exists(&path) {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&path).map_err(|error| {
+        format!(
+            "failed to remove upgrade recovery at {}: {error}",
+            display_path(&path)
+        )
+    })
 }
 
 pub(crate) fn remove_upgrade_recovery_for_snapshot(
@@ -159,6 +249,19 @@ pub(crate) fn remove_upgrade_recovery_for_snapshot(
     Ok(())
 }
 
+fn validate_upgrade_history_record(record: &UpgradeHistoryRecord) -> Result<(), String> {
+    if record.kind != "ocm-upgrade-transaction" {
+        return Err(format!("unsupported upgrade history kind: {}", record.kind));
+    }
+    if record.format_version != 1 {
+        return Err(format!(
+            "unsupported upgrade history format version: {}",
+            record.format_version
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -167,9 +270,11 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{
-        UpgradeHistoryBinding, UpgradeHistoryRecord, UpgradeHistoryRuntimeRecovery,
-        UpgradeHistoryServiceState, UpgradeHistoryStage, get_upgrade_history_record,
-        list_upgrade_history, save_upgrade_history_record,
+        RuntimeMeta, RuntimeSourceKind, UpgradeHistoryBinding, UpgradeHistoryRecord,
+        UpgradeHistoryRuntimeRecovery, UpgradeHistoryServiceState, UpgradeHistoryStage,
+        get_upgrade_history_record, get_upgrade_runtime_recovery, list_upgrade_history,
+        runtime_install_root, save_upgrade_history_record, upgrade_history_runtime_recovery_dir,
+        write_json,
     };
 
     fn test_env(label: &str) -> (PathBuf, BTreeMap<String, String>) {
@@ -227,6 +332,7 @@ mod tests {
                 running: true,
             },
             rollback: None,
+            rollback_of: None,
             note: None,
         }
     }
@@ -252,6 +358,103 @@ mod tests {
         let loaded = get_upgrade_history_record("demo", "1700000000-000000001", &env, cwd).unwrap();
         assert_eq!(loaded.source.openclaw_version.as_deref(), Some("2026.6.11"));
         assert_eq!(loaded.target.openclaw_version.as_deref(), Some("2026.6.33"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn upgrade_history_reads_records_without_rollback_linkage() {
+        let (root, env) = test_env("legacy-rollback-linkage");
+        let cwd = root.as_path();
+        let record = serde_json::json!({
+            "kind": "ocm-upgrade-transaction",
+            "formatVersion": 1,
+            "id": "1700000000-000000001",
+            "envName": "demo",
+            "source": {
+                "kind": "runtime",
+                "name": "stable",
+                "openclawVersion": "2026.6.11"
+            },
+            "target": {
+                "kind": "runtime",
+                "name": "stable",
+                "openclawVersion": "2026.6.33"
+            },
+            "snapshotId": "snapshot-1",
+            "runtimeRecovery": [],
+            "startedAt": "2023-11-14T22:13:20Z",
+            "completedAt": "2023-11-14T22:13:20Z",
+            "outcome": "updated",
+            "migration": {"status": "validated"},
+            "finalization": {"status": "completed"},
+            "serviceBefore": {"enabled": true, "running": true},
+            "serviceAfter": {"enabled": true, "running": true}
+        });
+        let path =
+            super::upgrade_history_meta_path("demo", "1700000000-000000001", &env, cwd).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+
+        let loaded = get_upgrade_history_record("demo", "1700000000-000000001", &env, cwd).unwrap();
+        assert!(loaded.rollback_of.is_none());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_recovery_loads_only_healthy_managed_bytes() {
+        let (root, env) = test_env("runtime-recovery");
+        let cwd = root.as_path();
+        let runtime_name = "stable";
+        let transaction_id = "1700000000-000000001";
+        let expected_install_root = runtime_install_root(runtime_name, &env, cwd).unwrap();
+        let relative_binary = PathBuf::from("files/bin/openclaw");
+        let recovery_root =
+            upgrade_history_runtime_recovery_dir("demo", transaction_id, runtime_name, &env, cwd)
+                .unwrap();
+        let recovery_install_root = recovery_root.join("install-root");
+        std::fs::create_dir_all(recovery_install_root.join("files/bin")).unwrap();
+        std::fs::write(recovery_install_root.join(&relative_binary), b"openclaw").unwrap();
+        let created_at = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let meta = RuntimeMeta {
+            kind: "ocm-runtime".to_string(),
+            name: runtime_name.to_string(),
+            binary_path: expected_install_root
+                .join(&relative_binary)
+                .to_string_lossy()
+                .into_owned(),
+            source_kind: RuntimeSourceKind::Installed,
+            source_path: None,
+            source_url: Some("https://example.invalid/openclaw.tgz".to_string()),
+            source_manifest_url: Some("https://example.invalid/openclaw".to_string()),
+            source_sha256: None,
+            source_integrity: None,
+            release_version: Some("2026.6.11".to_string()),
+            release_channel: Some("stable".to_string()),
+            release_selector_kind: None,
+            release_selector_value: None,
+            install_root: Some(expected_install_root.to_string_lossy().into_owned()),
+            description: None,
+            created_at,
+            updated_at: created_at,
+        };
+        write_json(&recovery_root.join("runtime.json"), &meta).unwrap();
+
+        let recovery =
+            get_upgrade_runtime_recovery("demo", transaction_id, runtime_name, &env, cwd).unwrap();
+        assert_eq!(recovery.meta.release_version.as_deref(), Some("2026.6.11"));
+        assert_eq!(recovery.install_root, recovery_install_root);
+
+        let mut invalid = meta;
+        invalid.install_root = Some(root.join("foreign").to_string_lossy().into_owned());
+        write_json(&recovery_root.join("runtime.json"), &invalid).unwrap();
+        let error = get_upgrade_runtime_recovery("demo", transaction_id, runtime_name, &env, cwd)
+            .unwrap_err();
+        assert!(
+            error.contains("not an installer-managed runtime"),
+            "{error}"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

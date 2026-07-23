@@ -27,10 +27,12 @@ use crate::runtime::{
 use crate::service::ServiceSummary;
 use crate::store::{
     InstallContext, RuntimeReleaseDetails, UpgradeHistoryBinding, UpgradeHistoryRecord,
-    UpgradeHistoryRuntimeRecovery, UpgradeHistoryServiceState, UpgradeHistoryStage, clean_path,
-    copy_dir_recursive, derive_env_paths, display_path, ensure_minimum_local_openclaw_config,
-    ensure_store, get_runtime, install_runtime_from_selected_official_openclaw_release,
-    list_upgrade_history, lock_env_registry, remove_runtime, resolve_absolute_path,
+    UpgradeHistoryRuntimeRecovery, UpgradeHistoryServiceState, UpgradeHistoryStage,
+    UpgradeRuntimeRecovery, clean_path, copy_dir_recursive, derive_env_paths, display_path,
+    ensure_minimum_local_openclaw_config, ensure_store, get_launcher, get_runtime,
+    get_upgrade_history_record, get_upgrade_runtime_recovery,
+    install_runtime_from_selected_official_openclaw_release, list_upgrade_history,
+    lock_env_registry, remove_runtime, remove_upgrade_recovery, resolve_absolute_path,
     runtime_install_root, runtime_integrity_issue, runtime_meta_path, save_environment,
     save_upgrade_history_record, upgrade_history_recovery_dir,
     upgrade_history_runtime_recovery_dir, write_json,
@@ -63,6 +65,24 @@ pub(crate) struct UpgradeBatchSummary {
     pub restarted: usize,
     pub failed: usize,
     pub results: Vec<UpgradeEnvSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpgradeRollbackSummary {
+    pub env_name: String,
+    pub transaction_id: String,
+    pub rollback_transaction_id: Option<String>,
+    pub previous_binding_kind: String,
+    pub previous_binding_name: String,
+    pub binding_kind: String,
+    pub binding_name: String,
+    pub outcome: String,
+    pub runtime_release_version: Option<String>,
+    pub service_action: Option<String>,
+    pub restored_snapshot_id: String,
+    pub safety_snapshot_id: Option<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -160,6 +180,13 @@ struct UpgradeTransactionPlan {
 }
 
 #[derive(Clone, Debug)]
+struct UpgradeRollbackPlan {
+    record: UpgradeHistoryRecord,
+    recovery: Option<UpgradeRuntimeRecovery>,
+    service: Option<ServiceSummary>,
+}
+
+#[derive(Clone, Debug)]
 struct PreparedSimulationRuntime {
     name: String,
     note: String,
@@ -247,6 +274,9 @@ impl Cli {
 
     pub(super) fn handle_upgrade_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "upgrade")?;
+        if matches!(args.first().map(String::as_str), Some("rollback")) {
+            return self.handle_upgrade_rollback(args[1..].to_vec(), json_flag, profile);
+        }
         if matches!(args.first().map(String::as_str), Some("history")) {
             let Some(env_name) = args.get(1) else {
                 return Err("upgrade history requires <env>".to_string());
@@ -390,6 +420,496 @@ impl Cli {
             &self.command_example(),
         ));
         Ok(if failed { 1 } else { 0 })
+    }
+
+    fn handle_upgrade_rollback(
+        &self,
+        args: Vec<String>,
+        json_flag: bool,
+        profile: render::RenderProfile,
+    ) -> Result<i32, String> {
+        let (args, dry_run) = Self::consume_flag(args, "--dry-run");
+        let (args, transaction_id) = Self::consume_option(args, "--transaction")?;
+        let transaction_id = Self::require_option_value(transaction_id, "--transaction")?;
+        let Some(env_name) = args.first() else {
+            return Err("upgrade rollback requires <env>".to_string());
+        };
+        Self::assert_no_extra_args(&args[1..])?;
+
+        let summary =
+            self.rollback_completed_upgrade(env_name, transaction_id.as_deref(), dry_run)?;
+        let failed = matches!(summary.outcome.as_str(), "failed" | "rollback-failed");
+        if json_flag {
+            self.print_json(&summary)?;
+        } else {
+            self.stdout_lines(render::upgrade::upgrade_rollback(&summary, profile));
+        }
+        Ok(if failed { 1 } else { 0 })
+    }
+
+    fn rollback_completed_upgrade(
+        &self,
+        env_name: &str,
+        transaction_id: Option<&str>,
+        dry_run: bool,
+    ) -> Result<UpgradeRollbackSummary, String> {
+        let plan = self.prepare_upgrade_rollback(env_name, transaction_id)?;
+        if dry_run {
+            return Ok(UpgradeRollbackSummary {
+                env_name: env_name.to_string(),
+                transaction_id: plan.record.id.clone(),
+                rollback_transaction_id: None,
+                previous_binding_kind: plan.record.target.kind.clone(),
+                previous_binding_name: plan.record.target.name.clone(),
+                binding_kind: plan.record.source.kind.clone(),
+                binding_name: plan.record.source.name.clone(),
+                outcome: "would-rollback".to_string(),
+                runtime_release_version: plan.record.source.openclaw_version.clone(),
+                service_action: rollback_service_action_for_dry_run(&plan.record),
+                restored_snapshot_id: plan.record.snapshot_id.clone(),
+                safety_snapshot_id: None,
+                note: Some(
+                    "dry run: no runtime, env, service, snapshot, or history changed".to_string(),
+                ),
+            });
+        }
+
+        let _operation_lock = self.environment_service().lock_operation(env_name)?;
+        let plan = self.prepare_upgrade_rollback(env_name, Some(&plan.record.id))?;
+        self.execute_upgrade_rollback_locked(env_name, plan)
+    }
+
+    fn prepare_upgrade_rollback(
+        &self,
+        env_name: &str,
+        transaction_id: Option<&str>,
+    ) -> Result<UpgradeRollbackPlan, String> {
+        let history = list_upgrade_history(env_name, &self.env, &self.cwd)?;
+        let record = match transaction_id {
+            Some(transaction_id) => {
+                get_upgrade_history_record(env_name, transaction_id, &self.env, &self.cwd)?
+            }
+            None => history
+                .iter()
+                .find(|record| {
+                    is_rollback_candidate(record)
+                        && !has_successful_rollback_child(&history, &record.id)
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "environment \"{env_name}\" does not have a completed upgrade transaction available to roll back"
+                    )
+                })?,
+        };
+        if !is_rollback_candidate(&record) {
+            return Err(format!(
+                "upgrade transaction \"{}\" cannot be rolled back because its outcome is \"{}\"",
+                record.id, record.outcome
+            ));
+        }
+        if has_successful_rollback_child(&history, &record.id) {
+            return Err(format!(
+                "upgrade transaction \"{}\" has already been rolled back",
+                record.id
+            ));
+        }
+
+        let current = self.environment_service().get(env_name)?;
+        let current_binding = source_binding(&current);
+        if current_binding.0 != record.target.kind || current_binding.1 != record.target.name {
+            return Err(format!(
+                "refusing to roll back upgrade transaction \"{}\": env \"{env_name}\" now uses {}:{}, expected {}:{}",
+                record.id,
+                current_binding.0,
+                current_binding.1,
+                record.target.kind,
+                record.target.name
+            ));
+        }
+        if current.service_enabled != record.service_after.enabled
+            || current.service_running != record.service_after.running
+        {
+            return Err(format!(
+                "refusing to roll back upgrade transaction \"{}\": service policy changed after the transaction",
+                record.id
+            ));
+        }
+        self.environment_service()
+            .get_snapshot(env_name, &record.snapshot_id)
+            .map_err(|error| {
+                format!(
+                    "cannot roll back upgrade transaction \"{}\": {error}",
+                    record.id
+                )
+            })?;
+        self.verify_rollback_target_version(env_name, &record)?;
+        let recovery = self.verify_rollback_source(env_name, &record)?;
+        let service = if current.service_enabled && current.service_running {
+            Some(self.service_service().status(env_name)?)
+        } else {
+            None
+        };
+
+        Ok(UpgradeRollbackPlan {
+            record,
+            recovery,
+            service,
+        })
+    }
+
+    fn verify_rollback_target_version(
+        &self,
+        env_name: &str,
+        record: &UpgradeHistoryRecord,
+    ) -> Result<(), String> {
+        let Some(expected_version) = record.target.openclaw_version.as_deref() else {
+            return Ok(());
+        };
+        let version =
+            self.run_openclaw_command(env_name, "current openclaw --version", &["--version"])?;
+        if version_output_matches_expected(version.first_line().trim(), expected_version) {
+            return Ok(());
+        }
+        Err(format!(
+            "refusing to roll back upgrade transaction \"{}\": env \"{env_name}\" reports OpenClaw {}, expected {}",
+            record.id,
+            version.first_line().trim(),
+            expected_version
+        ))
+    }
+
+    fn verify_rollback_source(
+        &self,
+        env_name: &str,
+        record: &UpgradeHistoryRecord,
+    ) -> Result<Option<UpgradeRuntimeRecovery>, String> {
+        match record.source.kind.as_str() {
+            "runtime" => {
+                if record.target.kind == "runtime" && record.source.name == record.target.name {
+                    self.ensure_runtime_upgrade_isolated(env_name, &record.source.name)?;
+                    let recovery_entry = record
+                        .runtime_recovery
+                        .iter()
+                        .find(|recovery| {
+                            recovery.runtime_name == record.source.name
+                                && recovery.backup_id.is_some()
+                        })
+                        .ok_or_else(|| {
+                            format!(
+                                "cannot roll back upgrade transaction \"{}\": retained runtime recovery for \"{}\" is unavailable",
+                                record.id, record.source.name
+                            )
+                        })?;
+                    if recovery_entry.backup_id.as_deref() != Some(record.source.name.as_str()) {
+                        return Err(format!(
+                            "cannot roll back upgrade transaction \"{}\": retained runtime recovery id does not match \"{}\"",
+                            record.id, record.source.name
+                        ));
+                    }
+                    let recovery = get_upgrade_runtime_recovery(
+                        env_name,
+                        &record.id,
+                        &record.source.name,
+                        &self.env,
+                        &self.cwd,
+                    )?;
+                    if let Some(expected_version) = record.source.openclaw_version.as_deref()
+                        && recovery.meta.release_version.as_deref() != Some(expected_version)
+                    {
+                        return Err(format!(
+                            "cannot roll back upgrade transaction \"{}\": retained runtime \"{}\" is OpenClaw {}, expected {}",
+                            record.id,
+                            record.source.name,
+                            recovery
+                                .meta
+                                .release_version
+                                .as_deref()
+                                .unwrap_or("unknown"),
+                            expected_version
+                        ));
+                    }
+                    return Ok(Some(recovery));
+                }
+
+                let runtime =
+                    get_runtime(&record.source.name, &self.env, &self.cwd).map_err(|error| {
+                        format!(
+                            "cannot roll back upgrade transaction \"{}\": {error}",
+                            record.id
+                        )
+                    })?;
+                if let Some(issue) = runtime_integrity_issue(&runtime, &self.env) {
+                    return Err(format!(
+                        "cannot roll back upgrade transaction \"{}\": runtime \"{}\" is not healthy: {issue}",
+                        record.id, record.source.name
+                    ));
+                }
+                if let Some(expected_version) = record.source.openclaw_version.as_deref() {
+                    let version = self.run_update_mode_openclaw_command_output(
+                        env_name,
+                        &record.source.name,
+                        "rollback source openclaw --version",
+                        &["--version"],
+                    )?;
+                    if !version.status.success()
+                        || !version_output_matches_expected(
+                            version.first_line().trim(),
+                            expected_version,
+                        )
+                    {
+                        return Err(format!(
+                            "cannot roll back upgrade transaction \"{}\": runtime \"{}\" does not report OpenClaw {}",
+                            record.id, record.source.name, expected_version
+                        ));
+                    }
+                }
+                Ok(None)
+            }
+            "launcher" => {
+                get_launcher(&record.source.name, &self.env, &self.cwd).map_err(|error| {
+                    format!(
+                        "cannot roll back upgrade transaction \"{}\": {error}",
+                        record.id
+                    )
+                })?;
+                Ok(None)
+            }
+            source_kind => Err(format!(
+                "cannot roll back upgrade transaction \"{}\": source binding kind \"{source_kind}\" is not supported",
+                record.id
+            )),
+        }
+    }
+
+    fn execute_upgrade_rollback_locked(
+        &self,
+        env_name: &str,
+        plan: UpgradeRollbackPlan,
+    ) -> Result<UpgradeRollbackSummary, String> {
+        let runtime_names = rollback_runtime_names(&plan.record);
+        let mut transaction = self.begin_upgrade_transaction_locked(
+            env_name,
+            UpgradeTransactionPlan {
+                source: plan.record.target.clone(),
+                target: plan.record.source.clone(),
+            },
+            &runtime_names,
+            true,
+            "pre-rollback",
+            Some(plan.record.id.clone()),
+        )?;
+        let rollback_transaction_id = transaction.id.clone();
+        let safety_snapshot_id = transaction.snapshot_id.clone();
+
+        if plan
+            .service
+            .as_ref()
+            .is_some_and(|service| service.installed && service.desired_running)
+            && let Err(error) = self.service_service().stop_locked(env_name)
+        {
+            return Ok(self.fail_upgrade_rollback_locked(
+                env_name,
+                &plan,
+                transaction,
+                format!("failed to stop the managed service before rollback: {error}"),
+            ));
+        }
+
+        if let Some(recovery) = plan.recovery.as_ref() {
+            if let Err(error) = self.restore_retained_runtime(recovery) {
+                return Ok(self.fail_upgrade_rollback_locked(env_name, &plan, transaction, error));
+            }
+            transaction.mark_runtime_mutated();
+        }
+
+        if let Err(error) =
+            self.environment_service()
+                .restore_snapshot_locked(RestoreEnvSnapshotOptions {
+                    env_name: env_name.to_string(),
+                    snapshot_id: plan.record.snapshot_id.clone(),
+                })
+        {
+            return Ok(self.fail_upgrade_rollback_locked(
+                env_name,
+                &plan,
+                transaction,
+                format!("failed to restore the recorded pre-upgrade snapshot: {error}"),
+            ));
+        }
+
+        let service_action = match self.reconcile_rolled_back_service_locked(env_name, &plan.record)
+        {
+            Ok(action) => action,
+            Err(error) => {
+                return Ok(self.fail_upgrade_rollback_locked(env_name, &plan, transaction, error));
+            }
+        };
+        let verification_note = match self.verify_upgraded_openclaw(
+            env_name,
+            plan.record.source.openclaw_version.as_deref(),
+            plan.record.service_before.running,
+        ) {
+            Ok(note) => note,
+            Err(error) => {
+                return Ok(self.fail_upgrade_rollback_locked(
+                    env_name,
+                    &plan,
+                    transaction,
+                    format!("post-rollback verification failed: {error}"),
+                ));
+            }
+        };
+        transaction.mark_post_update_not_needed();
+
+        let history_summary = UpgradeEnvSummary {
+            env_name: env_name.to_string(),
+            previous_binding_kind: plan.record.target.kind.clone(),
+            previous_binding_name: plan.record.target.name.clone(),
+            binding_kind: plan.record.source.kind.clone(),
+            binding_name: plan.record.source.name.clone(),
+            outcome: "rolled-back".to_string(),
+            runtime_release_version: plan.record.source.openclaw_version.clone(),
+            runtime_release_channel: None,
+            service_action: service_action.clone(),
+            snapshot_id: Some(safety_snapshot_id.clone()),
+            rollback: None,
+            note: verification_note.clone(),
+        };
+        if let Err(error) = self.retain_required_runtime_recovery(env_name, &mut transaction) {
+            return Ok(self.fail_upgrade_rollback_locked(
+                env_name,
+                &plan,
+                transaction,
+                format!("failed to retain pre-rollback runtime recovery: {error}"),
+            ));
+        }
+        if let Err(error) = self.record_upgrade_history(&transaction, &history_summary) {
+            return Ok(self.fail_upgrade_rollback_locked(
+                env_name,
+                &plan,
+                transaction,
+                format!("failed to record rollback history: {error}"),
+            ));
+        }
+        transaction.commit();
+
+        let cleanup_note = remove_upgrade_recovery(env_name, &plan.record.id, &self.env, &self.cwd)
+            .err()
+            .map(|error| format!("Original recovery cleanup requires attention: {error}"));
+
+        Ok(UpgradeRollbackSummary {
+            env_name: env_name.to_string(),
+            transaction_id: plan.record.id,
+            rollback_transaction_id: Some(rollback_transaction_id),
+            previous_binding_kind: plan.record.target.kind,
+            previous_binding_name: plan.record.target.name,
+            binding_kind: plan.record.source.kind,
+            binding_name: plan.record.source.name,
+            outcome: "rolled-back".to_string(),
+            runtime_release_version: plan.record.source.openclaw_version,
+            service_action,
+            restored_snapshot_id: plan.record.snapshot_id,
+            safety_snapshot_id: Some(safety_snapshot_id),
+            note: join_optional_warnings(verification_note, cleanup_note),
+        })
+    }
+
+    fn restore_retained_runtime(&self, recovery: &UpgradeRuntimeRecovery) -> Result<(), String> {
+        let install_root = runtime_install_root(&recovery.meta.name, &self.env, &self.cwd)?;
+        if install_root.exists() {
+            fs::remove_dir_all(&install_root).map_err(|error| {
+                format!(
+                    "failed to remove current runtime root {}: {error}",
+                    display_path(&install_root)
+                )
+            })?;
+        }
+        copy_dir_recursive(&recovery.install_root, &install_root)?;
+        let meta_path = runtime_meta_path(&recovery.meta.name, &self.env, &self.cwd)?;
+        write_json(&meta_path, &recovery.meta)
+    }
+
+    fn reconcile_rolled_back_service_locked(
+        &self,
+        env_name: &str,
+        record: &UpgradeHistoryRecord,
+    ) -> Result<Option<String>, String> {
+        if !record.service_before.enabled || !record.service_before.running {
+            return Ok(None);
+        }
+        let started = self
+            .with_progress(format!("Starting restored service for {env_name}"), || {
+                self.service_service().start_locked(env_name)
+            })?;
+        let note = self.wait_for_restarted_gateway_health(env_name, started.running)?;
+        if let Some(note) = note {
+            return Err(note);
+        }
+        Ok(Some("started".to_string()))
+    }
+
+    fn fail_upgrade_rollback_locked(
+        &self,
+        env_name: &str,
+        plan: &UpgradeRollbackPlan,
+        transaction: UpgradeTransaction,
+        error: String,
+    ) -> UpgradeRollbackSummary {
+        let rollback_transaction_id = transaction.id.clone();
+        let safety_snapshot_id = transaction.snapshot_id.clone();
+        let restore_result = self.rollback_upgrade_locked(env_name, &transaction);
+        let (outcome, rollback, note) = match restore_result {
+            Ok(()) => (
+                "failed".to_string(),
+                "restored".to_string(),
+                format!("rollback failed, so ocm restored the pre-rollback state: {error}"),
+            ),
+            Err(restore_error) => (
+                "rollback-failed".to_string(),
+                "failed".to_string(),
+                format!(
+                    "rollback failed ({error}); restoring the pre-rollback state also failed: {restore_error}"
+                ),
+            ),
+        };
+        let history_summary = UpgradeEnvSummary {
+            env_name: env_name.to_string(),
+            previous_binding_kind: plan.record.target.kind.clone(),
+            previous_binding_name: plan.record.target.name.clone(),
+            binding_kind: plan.record.source.kind.clone(),
+            binding_name: plan.record.source.name.clone(),
+            outcome: outcome.clone(),
+            runtime_release_version: plan.record.source.openclaw_version.clone(),
+            runtime_release_channel: None,
+            service_action: None,
+            snapshot_id: Some(safety_snapshot_id.clone()),
+            rollback: Some(rollback),
+            note: Some(note.clone()),
+        };
+        let history_error = self
+            .record_upgrade_history(&transaction, &history_summary)
+            .err();
+        transaction.cleanup();
+
+        UpgradeRollbackSummary {
+            env_name: env_name.to_string(),
+            transaction_id: plan.record.id.clone(),
+            rollback_transaction_id: Some(rollback_transaction_id),
+            previous_binding_kind: plan.record.target.kind.clone(),
+            previous_binding_name: plan.record.target.name.clone(),
+            binding_kind: plan.record.source.kind.clone(),
+            binding_name: plan.record.source.name.clone(),
+            outcome,
+            runtime_release_version: plan.record.source.openclaw_version.clone(),
+            service_action: None,
+            restored_snapshot_id: plan.record.snapshot_id.clone(),
+            safety_snapshot_id: Some(safety_snapshot_id),
+            note: join_optional_warnings(
+                Some(note),
+                history_error.map(|error| format!("Rollback history was not recorded: {error}")),
+            ),
+        }
     }
 
     fn upgrade_simulate(&self, args: Vec<String>) -> Result<Vec<UpgradeSimulationSummary>, String> {
@@ -2312,6 +2832,27 @@ impl Cli {
         runtime_names: &[String],
         rollback_enabled: bool,
     ) -> Result<UpgradeTransaction, String> {
+        let _operation_lock = self.environment_service().lock_operation(env_name)?;
+        self.begin_upgrade_transaction_locked(
+            env_name,
+            plan,
+            runtime_names,
+            rollback_enabled,
+            "pre-upgrade",
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn begin_upgrade_transaction_locked(
+        &self,
+        env_name: &str,
+        plan: UpgradeTransactionPlan,
+        runtime_names: &[String],
+        rollback_enabled: bool,
+        snapshot_label: &str,
+        rollback_of: Option<String>,
+    ) -> Result<UpgradeTransaction, String> {
         let env_meta = self.environment_service().get(env_name)?;
         let started_at = time::OffsetDateTime::now_utc();
         let id = format!(
@@ -2321,12 +2862,14 @@ impl Cli {
         );
         let snapshot = self
             .environment_service()
-            .create_snapshot(CreateEnvSnapshotOptions {
+            .create_snapshot_locked(CreateEnvSnapshotOptions {
                 env_name: env_name.to_string(),
-                label: Some("pre-upgrade".to_string()),
+                label: Some(snapshot_label.to_string()),
             })
             .map_err(|error| {
-                format!("failed to create pre-upgrade snapshot for env \"{env_name}\": {error}")
+                format!(
+                    "failed to create {snapshot_label} snapshot for env \"{env_name}\": {error}"
+                )
             })?;
         let mut seen = BTreeSet::new();
         let mut runtime_backups = Vec::new();
@@ -2367,6 +2910,7 @@ impl Cli {
                 note: None,
             },
             runtime_mutated: false,
+            rollback_of,
         })
     }
 
@@ -2510,6 +3054,7 @@ impl Cli {
                 running: env_meta.service_running,
             },
             rollback: summary.rollback.clone(),
+            rollback_of: transaction.rollback_of.clone(),
             note: None,
         };
         save_upgrade_history_record(&record, &self.env, &self.cwd)
@@ -2647,6 +3192,25 @@ impl Cli {
         }
         self.environment_service()
             .restore_snapshot(RestoreEnvSnapshotOptions {
+                env_name: env_name.to_string(),
+                snapshot_id: transaction.snapshot_id.clone(),
+            })?;
+        for runtime_name in &transaction.created_runtime_names {
+            self.remove_runtime_created_during_upgrade(runtime_name)?;
+        }
+        Ok(())
+    }
+
+    fn rollback_upgrade_locked(
+        &self,
+        env_name: &str,
+        transaction: &UpgradeTransaction,
+    ) -> Result<(), String> {
+        for runtime_backup in &transaction.runtime_backups {
+            self.restore_runtime_backup(runtime_backup)?;
+        }
+        self.environment_service()
+            .restore_snapshot_locked(RestoreEnvSnapshotOptions {
                 env_name: env_name.to_string(),
                 snapshot_id: transaction.snapshot_id.clone(),
             })?;
@@ -2836,6 +3400,7 @@ struct UpgradeTransaction {
     migration: UpgradeHistoryStage,
     finalization: UpgradeHistoryStage,
     runtime_mutated: bool,
+    rollback_of: Option<String>,
 }
 
 impl UpgradeTransaction {
@@ -2940,6 +3505,39 @@ fn source_binding(env: &crate::env::EnvMeta) -> (String, String) {
         return ("dev".to_string(), "dev".to_string());
     }
     ("none".to_string(), "none".to_string())
+}
+
+fn is_rollback_candidate(record: &UpgradeHistoryRecord) -> bool {
+    matches!(
+        record.outcome.as_str(),
+        "updated" | "switched" | "rolled-back"
+    )
+}
+
+fn has_successful_rollback_child(history: &[UpgradeHistoryRecord], transaction_id: &str) -> bool {
+    history.iter().any(|record| {
+        record.rollback_of.as_deref() == Some(transaction_id) && record.outcome == "rolled-back"
+    })
+}
+
+fn rollback_runtime_names(record: &UpgradeHistoryRecord) -> Vec<String> {
+    let mut names = Vec::new();
+    for binding in [&record.target, &record.source] {
+        if binding.kind == "runtime" && !names.contains(&binding.name) {
+            names.push(binding.name.clone());
+        }
+    }
+    names
+}
+
+fn rollback_service_action_for_dry_run(record: &UpgradeHistoryRecord) -> Option<String> {
+    if record.service_before.enabled && record.service_before.running {
+        Some("would-start".to_string())
+    } else if record.service_after.enabled && record.service_after.running {
+        Some("would-stop".to_string())
+    } else {
+        None
+    }
 }
 
 fn build_simulation_batch_summary(

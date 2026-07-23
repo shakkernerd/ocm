@@ -36,16 +36,28 @@ impl<'a> ServiceService<'a> {
 
     pub fn start(&self, name: &str) -> Result<ServiceActionSummary, String> {
         let _lock = crate::env::EnvironmentService::new(self.env, self.cwd).lock_operation(name)?;
+        self.start_locked(name)
+    }
+
+    pub(crate) fn start_locked(&self, name: &str) -> Result<ServiceActionSummary, String> {
         manage::start_service(name, self.env, self.cwd)
     }
 
     pub fn stop(&self, name: &str) -> Result<ServiceActionSummary, String> {
         let _lock = crate::env::EnvironmentService::new(self.env, self.cwd).lock_operation(name)?;
+        self.stop_locked(name)
+    }
+
+    pub(crate) fn stop_locked(&self, name: &str) -> Result<ServiceActionSummary, String> {
         manage::stop_service(name, self.env, self.cwd)
     }
 
     pub fn restart(&self, name: &str) -> Result<ServiceActionSummary, String> {
         let _lock = crate::env::EnvironmentService::new(self.env, self.cwd).lock_operation(name)?;
+        self.restart_locked(name)
+    }
+
+    pub(crate) fn restart_locked(&self, name: &str) -> Result<ServiceActionSummary, String> {
         manage::restart_service(name, self.env, self.cwd)
     }
 

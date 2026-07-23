@@ -1,5 +1,6 @@
 use crate::cli::upgrade::{
-    UpgradeBatchSummary, UpgradeEnvSummary, UpgradeSimulationBatchSummary, UpgradeSimulationSummary,
+    UpgradeBatchSummary, UpgradeEnvSummary, UpgradeRollbackSummary, UpgradeSimulationBatchSummary,
+    UpgradeSimulationSummary,
 };
 use crate::infra::terminal::{
     Cell, KeyValueRow, Tone, paint, render_key_value_card, render_table, terminal_width,
@@ -138,6 +139,83 @@ pub fn upgrade_env(
         ));
     }
 
+    lines
+}
+
+pub fn upgrade_rollback(summary: &UpgradeRollbackSummary, profile: RenderProfile) -> Vec<String> {
+    if !profile.pretty {
+        return upgrade_rollback_raw(summary);
+    }
+
+    let mut lines = vec![paint(
+        &format!("Upgrade Rollback {}", summary.env_name),
+        Tone::Strong,
+        profile.color,
+    )];
+    lines.push(String::new());
+    lines.extend(render_key_value_card(
+        "Result",
+        &[
+            KeyValueRow::accent("Env", &summary.env_name),
+            KeyValueRow::plain(
+                "Was using",
+                format!(
+                    "{}:{}",
+                    summary.previous_binding_kind, summary.previous_binding_name
+                ),
+            ),
+            KeyValueRow::plain(
+                "Now using",
+                format!("{}:{}", summary.binding_kind, summary.binding_name),
+            ),
+            KeyValueRow::new("Outcome", &summary.outcome, outcome_tone(&summary.outcome)),
+            KeyValueRow::new(
+                "Service",
+                summary.service_action.as_deref().unwrap_or("unchanged"),
+                service_tone(summary.service_action.as_deref()),
+            ),
+            KeyValueRow::accent("Restored snapshot", &summary.restored_snapshot_id),
+            KeyValueRow::plain(
+                "Safety snapshot",
+                summary
+                    .safety_snapshot_id
+                    .as_deref()
+                    .unwrap_or("not created"),
+            ),
+        ],
+        profile.color,
+    ));
+    lines.push(String::new());
+    lines.extend(render_key_value_card(
+        "History",
+        &[
+            KeyValueRow::plain("Rolled back", &summary.transaction_id),
+            KeyValueRow::plain(
+                "Transaction",
+                summary
+                    .rollback_transaction_id
+                    .as_deref()
+                    .unwrap_or("not recorded"),
+            ),
+        ],
+        profile.color,
+    ));
+    if let Some(version) = summary.runtime_release_version.as_deref() {
+        lines.push(String::new());
+        lines.extend(render_key_value_card(
+            "Release",
+            &[KeyValueRow::accent("OpenClaw", version)],
+            profile.color,
+        ));
+    }
+    if let Some(note) = summary.note.as_deref() {
+        lines.push(String::new());
+        lines.extend(render_key_value_card(
+            "Details",
+            &[KeyValueRow::muted("Note", note)],
+            profile.color,
+        ));
+    }
     lines
 }
 
@@ -445,6 +523,36 @@ fn upgrade_env_raw(summary: &UpgradeEnvSummary) -> Vec<String> {
     }
     if let Some(channel) = summary.runtime_release_channel.as_deref() {
         bits.push(format!("channel={channel}"));
+    }
+    if let Some(note) = summary.note.as_deref() {
+        bits.push(format!("note={note}"));
+    }
+    vec![bits.join("  ")]
+}
+
+fn upgrade_rollback_raw(summary: &UpgradeRollbackSummary) -> Vec<String> {
+    let mut bits = vec![
+        format!("env={}", summary.env_name),
+        format!("transaction={}", summary.transaction_id),
+        format!(
+            "from={}:{}",
+            summary.previous_binding_kind, summary.previous_binding_name
+        ),
+        format!("to={}:{}", summary.binding_kind, summary.binding_name),
+        format!("outcome={}", summary.outcome),
+        format!("restoredSnapshot={}", summary.restored_snapshot_id),
+    ];
+    if let Some(transaction_id) = summary.rollback_transaction_id.as_deref() {
+        bits.push(format!("rollbackTransaction={transaction_id}"));
+    }
+    if let Some(snapshot_id) = summary.safety_snapshot_id.as_deref() {
+        bits.push(format!("safetySnapshot={snapshot_id}"));
+    }
+    if let Some(action) = summary.service_action.as_deref() {
+        bits.push(format!("service={action}"));
+    }
+    if let Some(version) = summary.runtime_release_version.as_deref() {
+        bits.push(format!("version={version}"));
     }
     if let Some(note) = summary.note.as_deref() {
         bits.push(format!("note={note}"));

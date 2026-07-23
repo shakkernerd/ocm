@@ -82,11 +82,14 @@ pub use snapshots::{
     create_env_snapshot, get_env_snapshot, list_all_env_snapshots, list_env_snapshots,
     remove_env_snapshot, restore_env_snapshot, summarize_snapshot,
 };
-pub(crate) use upgrade_history::remove_upgrade_recovery_for_snapshot;
 pub use upgrade_history::{
     UpgradeHistoryBinding, UpgradeHistoryRecord, UpgradeHistoryRuntimeRecovery,
     UpgradeHistoryServiceState, UpgradeHistoryStage, get_upgrade_history_record,
     list_upgrade_history, save_upgrade_history_record,
+};
+pub(crate) use upgrade_history::{
+    UpgradeRuntimeRecovery, get_upgrade_runtime_recovery, remove_upgrade_recovery,
+    remove_upgrade_recovery_for_snapshot,
 };
 
 pub fn now_utc() -> OffsetDateTime {
