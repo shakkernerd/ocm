@@ -517,6 +517,7 @@ pub fn upgrade_help(cmd: &str) -> String {
         "Upgrade environments",
         "Update OpenClaw for one environment or every environment with pre-upgrade snapshots and service rollback when needed.",
         vec![
+            format!("{cmd} upgrade history <env> [--raw] [--json]"),
             format!(
                 "{cmd} upgrade simulate <env> --to <version|channel|repo-path> [--scenario current|minimum|telegram|all] [--keep-simulations] [--raw] [--json]"
             ),
@@ -563,6 +564,7 @@ pub fn upgrade_help(cmd: &str) -> String {
             ("--json", "Print upgrade summaries as JSON"),
         ],
         vec![
+            format!("{cmd} upgrade history mira"),
             format!("{cmd} upgrade simulate mira --to 2026.4.20"),
             format!("{cmd} upgrade simulate mira --to 2026.4.20 --scenario all"),
             format!("{cmd} upgrade simulate mira --to beta --scenario all"),
@@ -575,6 +577,7 @@ pub fn upgrade_help(cmd: &str) -> String {
         ],
         &[
             "Simulations clone the source env, leave the real env untouched, and clean temporary envs and runtimes by default.",
+            "Upgrade history lists completed transaction records newest first without reading config contents or credentials.",
             "Use --scenario all to test current, clean minimum, and Telegram-configured env shapes.",
             "Use --keep-simulations only when you need retained simulation artifacts after the run.",
             "Published-target simulations run OpenClaw's update dry-run plan before switching the clone.",

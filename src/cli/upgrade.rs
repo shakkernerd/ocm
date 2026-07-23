@@ -28,9 +28,9 @@ use crate::service::ServiceSummary;
 use crate::store::{
     InstallContext, RuntimeReleaseDetails, clean_path, copy_dir_recursive, derive_env_paths,
     display_path, ensure_minimum_local_openclaw_config, ensure_store, get_runtime,
-    install_runtime_from_selected_official_openclaw_release, lock_env_registry, remove_runtime,
-    resolve_absolute_path, runtime_install_root, runtime_integrity_issue, runtime_meta_path,
-    save_environment, write_json,
+    install_runtime_from_selected_official_openclaw_release, list_upgrade_history,
+    lock_env_registry, remove_runtime, resolve_absolute_path, runtime_install_root,
+    runtime_integrity_issue, runtime_meta_path, save_environment, write_json,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -238,6 +238,21 @@ impl Cli {
 
     pub(super) fn handle_upgrade_command(&self, args: Vec<String>) -> Result<i32, String> {
         let (args, json_flag, profile) = self.consume_human_output_flags(args, "upgrade")?;
+        if matches!(args.first().map(String::as_str), Some("history")) {
+            let Some(env_name) = args.get(1) else {
+                return Err("upgrade history requires <env>".to_string());
+            };
+            Self::assert_no_extra_args(&args[2..])?;
+            let history = list_upgrade_history(env_name, &self.env, &self.cwd)?;
+            if json_flag {
+                self.print_json(&history)?;
+            } else {
+                self.stdout_lines(render::upgrade::upgrade_history(
+                    env_name, &history, profile,
+                )?);
+            }
+            return Ok(0);
+        }
         if matches!(args.first().map(String::as_str), Some("simulate")) {
             let summaries = self.upgrade_simulate(args[1..].to_vec())?;
             let failed = summaries.iter().any(|summary| summary.outcome == "failed");
