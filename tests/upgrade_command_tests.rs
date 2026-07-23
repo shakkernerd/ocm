@@ -590,6 +590,28 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
     assert_eq!(recovery_meta["name"], "stable");
     assert_eq!(recovery_meta["releaseVersion"], "2026.3.24");
     assert!(recovery_root.join("files").is_dir());
+    assert_eq!(
+        fs::read_to_string(recovery_root.parent().unwrap().join("snapshot-id")).unwrap(),
+        snapshot_json[0]["id"].as_str().unwrap()
+    );
+
+    let remove_snapshot = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "remove",
+            "demo",
+            snapshot_json[0]["id"].as_str().unwrap(),
+        ],
+    );
+    assert!(
+        remove_snapshot.status.success(),
+        "{}",
+        stderr(&remove_snapshot)
+    );
+    assert!(!recovery_root.exists());
 }
 
 #[test]
