@@ -1470,7 +1470,7 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--description <text>", "Optional human description"),
                 (
                     "--force",
-                    "Replace an existing managed runtime of the same name",
+                    "Replace an existing unbound managed runtime of the same name",
                 ),
                 (
                     "--raw",
@@ -1485,6 +1485,7 @@ pub fn release_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             &[
                 "Official installs use canonical runtime names derived from the selector.",
+                "Bound runtimes are reused only when the selected release already matches. Use `ocm upgrade <env>` when OpenClaw bytes must change.",
                 "Official release installs prefer host Node.js 22.22.3+, 24.15.0+, or 25.9.0+ and npm.",
                 "On supported platforms, OCM can manage a private copy when they are missing.",
                 "Use `ocm doctor host` only if you want a full machine check or an explicit host-tool fix like git.",
@@ -1795,7 +1796,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--description <text>", "Optional human description"),
                 (
                     "--force",
-                    "Replace an existing managed runtime of the same name",
+                    "Replace an existing unbound managed runtime of the same name",
                 ),
                 (
                     "--raw",
@@ -1816,6 +1817,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
             &[
                 "Exactly one install source must be provided.",
                 "Official installs use canonical runtime names unless you reuse the same canonical name explicitly.",
+                "Bound runtimes are reused only when the selected release already matches. Use `ocm upgrade <env>` when OpenClaw bytes must change.",
                 "Official release installs prefer host Node.js 22.22.3+, 24.15.0+, or 25.9.0+ and npm.",
                 "On supported platforms, OCM can manage a private copy when they are missing.",
                 "Use `ocm doctor host` only if you want a full machine check or an explicit host-tool fix like git.",
@@ -1835,7 +1837,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--description <text>", "Optional human description"),
                 (
                     "--force",
-                    "Replace an existing managed runtime of the same name after the package is built",
+                    "Replace an existing unbound managed runtime of the same name",
                 ),
                 (
                     "--raw",
@@ -1850,6 +1852,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 "`build-local` uses `npm pack` so OpenClaw's prepack script performs the release-style build, UI build, package inventory, and built entry smoke checks.",
                 "The resulting runtime is installed under OCM's package runtime layout: files/node_modules/openclaw/openclaw.mjs.",
                 "Use this when testing release and upgrade behavior from a local checkout without source/Jiti execution paths.",
+                "A runtime bound to an environment cannot be replaced directly. Clear the binding first or use `ocm upgrade <env>` for published OpenClaw releases.",
             ],
         ),
         "update" => render_leaf(
@@ -1879,7 +1882,10 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 format!("{cmd} runtime update stable --version 0.3.0"),
                 format!("{cmd} runtime update --all"),
             ],
-            &[],
+            &[
+                "Direct updates are limited to unbound runtimes because they do not snapshot or migrate environment state.",
+                "Use `ocm upgrade <env>` to update OpenClaw for a bound environment. `--all` reports bound runtimes as failed without changing them.",
+            ],
         ),
         "releases" => render_leaf(
             "Inspect OpenClaw releases",
@@ -1978,7 +1984,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "remove" | "rm" => render_leaf(
             "Remove a runtime",
-            "Delete a runtime record.",
+            "Delete an unbound runtime record and its managed files.",
             vec![format!("{cmd} runtime remove <name> [--raw] [--json]")],
             &[
                 (
@@ -1988,7 +1994,7 @@ pub fn runtime_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the removed runtime record as JSON"),
             ],
             vec![format!("{cmd} runtime remove stable")],
-            &[],
+            &["Clear every environment binding before removing a runtime."],
         ),
         _ => return None,
     })

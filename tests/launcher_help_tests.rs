@@ -609,12 +609,38 @@ fn runtime_and_service_leaf_help_are_command_specific() {
     assert!(output.contains(
         "Use `ocm doctor host` only if you want a full machine check or an explicit host-tool fix like git."
     ));
+    assert!(
+        output
+            .contains("Bound runtimes are reused only when the selected release already matches.")
+    );
 
     let service = run_ocm(&cwd, &env, &["service", "start", "--help"]);
     assert!(service.status.success(), "{}", stderr(&service));
     let output = stdout(&service);
     assert!(output.contains("Start an env under the background service"));
     assert!(output.contains("ocm service start <env> [--raw] [--json]"));
+}
+
+#[test]
+fn runtime_mutation_help_directs_bound_environments_to_upgrade() {
+    let root = TestDir::new("help-runtime-bound-mutations");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    for command in [
+        vec!["help", "runtime", "install"],
+        vec!["help", "runtime", "build-local"],
+        vec!["help", "runtime", "update"],
+    ] {
+        let help = run_ocm(&cwd, &env, &command);
+        assert!(help.status.success(), "{}", stderr(&help));
+        assert!(stdout(&help).contains("ocm upgrade <env>"));
+    }
+
+    let remove = run_ocm(&cwd, &env, &["help", "runtime", "remove"]);
+    assert!(remove.status.success(), "{}", stderr(&remove));
+    assert!(stdout(&remove).contains("Clear every environment binding"));
 }
 
 #[test]
@@ -639,6 +665,10 @@ fn release_install_help_mentions_doctor_host() {
     assert!(output.contains(
         "Use `ocm doctor host` only if you want a full machine check or an explicit host-tool fix like git."
     ));
+    assert!(
+        output
+            .contains("Bound runtimes are reused only when the selected release already matches.")
+    );
 }
 
 #[test]

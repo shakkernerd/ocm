@@ -2178,14 +2178,20 @@ fn runtime_update_all_uses_stored_selectors_and_skips_registered_runtimes() {
         "{}",
         stderr(&install_tracked)
     );
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "nightly"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
 
     let update = run_ocm(&cwd, &env, &["runtime", "update", "--all", "--json"]);
-    assert!(update.status.success(), "{}", stderr(&update));
+    assert_eq!(update.status.code(), Some(1));
     let value: Value = serde_json::from_str(&stdout(&update)).unwrap();
     assert_eq!(value["count"], 3);
-    assert_eq!(value["updated"], 2);
+    assert_eq!(value["updated"], 1);
     assert_eq!(value["skipped"], 1);
-    assert_eq!(value["failed"], 0);
+    assert_eq!(value["failed"], 1);
     let array = value["results"].as_array().unwrap();
     assert_eq!(array.len(), 3);
     assert!(array.iter().any(|item| {
@@ -2203,18 +2209,24 @@ fn runtime_update_all_uses_stored_selectors_and_skips_registered_runtimes() {
     }));
     assert!(array.iter().any(|item| {
         item["name"] == "nightly"
-            && item["outcome"] == "updated"
-            && item["releaseVersion"] == "0.3.0-dev"
+            && item["outcome"] == "failed"
+            && item["releaseVersion"] == "0.2.0-dev"
             && item["releaseChannel"] == "nightly"
+            && item["issue"]
+                .as_str()
+                .unwrap()
+                .contains("runtime \"nightly\" is still used")
     }));
+    assert!(tracked_second_server.requests().is_empty());
 
     let update_plain = run_ocm(&cwd, &env, &["runtime", "update", "--all"]);
-    assert!(update_plain.status.success(), "{}", stderr(&update_plain));
+    assert_eq!(update_plain.status.code(), Some(1));
     let plain_output = stdout(&update_plain);
-    assert!(plain_output.contains("Runtime update summary: total=3 updated=2 skipped=1 failed=0"));
+    assert!(plain_output.contains("Runtime update summary: total=3 updated=1 skipped=1 failed=1"));
     assert!(plain_output.contains("external  outcome=skipped"));
     assert!(plain_output.contains("stable-pinned  outcome=updated"));
-    assert!(plain_output.contains("nightly  outcome=updated"));
+    assert!(plain_output.contains("nightly  outcome=failed"));
+    assert!(tracked_second_server.requests().is_empty());
 }
 
 #[test]

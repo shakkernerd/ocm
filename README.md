@@ -139,6 +139,11 @@ runtime, OCM runs OpenClaw's update finalization path inside that environment
 before service restart. Snapshots preserve managed path, npm, and Git plugin
 payloads together with their package metadata and symlinks, while generated
 plugin dependency caches and live runtime residue stay out of the archive.
+Once an environment is bound to a runtime, direct `runtime update`,
+`runtime install --force`, `runtime build-local --force`, and `runtime remove`
+operations reject that runtime. Use `ocm upgrade <env>` so the environment gets
+the snapshot, OpenClaw migration, rollback, and verification path, or clear the
+binding first when intentionally managing an unused runtime.
 
 `upgrade simulate` clones the source env, leaves the real env untouched, and
 cleans temporary simulation envs and runtimes when the run finishes. For
