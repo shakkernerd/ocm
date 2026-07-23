@@ -2921,7 +2921,7 @@ fn gateway_readiness_result(ready: bool, status: &Value) -> Result<(), String> {
 mod tests {
     use super::{
         command_output_reports_unsupported_command, release_version_from_output,
-        version_output_matches_expected,
+        verify_gateway_status_readiness, version_output_matches_expected,
     };
 
     #[test]
@@ -2966,6 +2966,61 @@ mod tests {
         assert_eq!(
             release_version_from_output("OpenClaw current-main", Some("2026.7.2")).as_deref(),
             None
+        );
+    }
+
+    #[test]
+    fn gateway_readiness_accepts_historical_and_current_payloads() {
+        assert!(
+            verify_gateway_status_readiness(
+                r#"{"rpc":{"ok":true,"server":{"version":"2026.6.11"}}}"#
+            )
+            .is_ok()
+        );
+        assert!(
+            verify_gateway_status_readiness(
+                r#"{"ok":true,"targets":[{"connect":{"ok":true,"rpcOk":true}}]}"#
+            )
+            .is_ok()
+        );
+        assert!(
+            verify_gateway_status_readiness(
+                r#"{"targets":[{"connect":{"ok":false}},{"connect":{"ok":true}}]}"#
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn gateway_readiness_rejects_unreachable_payloads_with_diagnostics() {
+        let historical = verify_gateway_status_readiness(
+            r#"{"rpc":{"ok":false,"error":"connect ECONNREFUSED 127.0.0.1:18789"}}"#,
+        )
+        .unwrap_err();
+        assert!(
+            historical.contains("connect ECONNREFUSED 127.0.0.1:18789"),
+            "{historical}"
+        );
+
+        let current = verify_gateway_status_readiness(
+            r#"{"ok":false,"warnings":[{"message":"No gateway answered any probe"}],"targets":[]}"#,
+        )
+        .unwrap_err();
+        assert!(
+            current.contains("No gateway answered any probe"),
+            "{current}"
+        );
+    }
+
+    #[test]
+    fn gateway_readiness_rejects_invalid_or_unknown_json() {
+        let invalid = verify_gateway_status_readiness("not-json").unwrap_err();
+        assert!(invalid.contains("invalid status JSON"), "{invalid}");
+
+        let unknown = verify_gateway_status_readiness(r#"{"gatewayState":"running"}"#).unwrap_err();
+        assert!(
+            unknown.contains("did not report RPC reachability"),
+            "{unknown}"
         );
     }
 
