@@ -885,6 +885,7 @@ impl Cli {
         let rollback_transaction_id = transaction.id.clone();
         let safety_snapshot_id = transaction.snapshot_id.clone();
         let restore_result = self.rollback_upgrade_locked(env_name, &transaction);
+        let restored_pre_rollback_state = restore_result.is_ok();
         let (outcome, rollback, note) = match restore_result {
             Ok(()) => (
                 "failed".to_string(),
@@ -916,6 +917,29 @@ impl Cli {
         let history_error = self
             .record_upgrade_history(&transaction, &history_summary)
             .err();
+        let mut retained_safety_snapshot_id = Some(safety_snapshot_id.clone());
+        let snapshot_cleanup_note = if history_error.is_some() && restored_pre_rollback_state {
+            match self.environment_service().remove_snapshot_locked(
+                crate::env::RemoveEnvSnapshotOptions {
+                    env_name: env_name.to_string(),
+                    snapshot_id: safety_snapshot_id.clone(),
+                },
+            ) {
+                Ok(_) => {
+                    retained_safety_snapshot_id = None;
+                    Some("Unrecorded safety snapshot was removed.".to_string())
+                }
+                Err(error) => Some(format!(
+                    "Unrecorded safety snapshot cleanup failed: {error}"
+                )),
+            }
+        } else if history_error.is_some() {
+            Some(format!(
+                "Safety snapshot \"{safety_snapshot_id}\" was retained because restoring the pre-rollback state failed."
+            ))
+        } else {
+            None
+        };
         transaction.cleanup();
 
         UpgradeRollbackSummary {
@@ -930,10 +954,14 @@ impl Cli {
             runtime_release_version: plan.record.source.openclaw_version.clone(),
             service_action: None,
             restored_snapshot_id: plan.record.snapshot_id.clone(),
-            safety_snapshot_id: Some(safety_snapshot_id),
+            safety_snapshot_id: retained_safety_snapshot_id,
             note: join_optional_warnings(
-                Some(note),
-                history_error.map(|error| format!("Rollback history was not recorded: {error}")),
+                join_optional_warnings(
+                    Some(note),
+                    history_error
+                        .map(|error| format!("Rollback history was not recorded: {error}")),
+                ),
+                snapshot_cleanup_note,
             ),
         }
     }
