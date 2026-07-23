@@ -127,6 +127,9 @@ pub fn create_env_snapshot(
     if result.is_err() {
         let _ = fs::remove_file(&archive_path);
         let _ = fs::remove_file(&meta_path);
+        if let Some(snapshot_dir) = archive_path.parent() {
+            let _ = fs::remove_dir(snapshot_dir);
+        }
     }
 
     result

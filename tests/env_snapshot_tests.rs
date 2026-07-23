@@ -691,6 +691,32 @@ fn env_snapshot_rejects_external_workspaces_before_writing_an_archive() {
 }
 
 #[test]
+fn env_snapshot_removes_partial_artifacts_when_sqlite_snapshot_fails() {
+    let root = TestDir::new("env-snapshot-invalid-sqlite");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let database = root.child("ocm-home/envs/source/.openclaw/state/openclaw.sqlite");
+    write_text(&database, "not a sqlite database\n");
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "source"]);
+    assert_eq!(snapshot.status.code(), Some(1));
+    assert!(
+        stderr(&snapshot).contains("SQLite"),
+        "{}",
+        stderr(&snapshot)
+    );
+    assert_eq!(
+        fs::read_to_string(&database).unwrap(),
+        "not a sqlite database\n"
+    );
+    assert!(!root.child("ocm-home/snapshots/source").exists());
+}
+
+#[test]
 fn env_snapshot_restore_json_reports_the_restored_binding_shape() {
     let root = TestDir::new("env-snapshot-restore-json");
     let cwd = root.child("workspace");
