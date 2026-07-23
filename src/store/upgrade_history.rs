@@ -111,6 +111,7 @@ pub fn get_upgrade_history_record(
     }
     let record = read_json(&path)?;
     validate_upgrade_history_record(&record)?;
+    validate_upgrade_history_identity(&record, &env_name, &transaction_id)?;
     Ok(record)
 }
 
@@ -126,6 +127,16 @@ pub fn list_upgrade_history(
     for file in files {
         let record = read_json(&file)?;
         validate_upgrade_history_record(&record)?;
+        let transaction_id = file
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                format!(
+                    "upgrade history path has an invalid transaction id: {}",
+                    display_path(&file)
+                )
+            })?;
+        validate_upgrade_history_identity(&record, &env_name, transaction_id)?;
         records.push(record);
     }
     records.sort_by(|left, right| {
@@ -278,6 +289,26 @@ fn validate_upgrade_history_record(record: &UpgradeHistoryRecord) -> Result<(), 
     Ok(())
 }
 
+fn validate_upgrade_history_identity(
+    record: &UpgradeHistoryRecord,
+    env_name: &str,
+    transaction_id: &str,
+) -> Result<(), String> {
+    if record.env_name != env_name {
+        return Err(format!(
+            "upgrade transaction \"{transaction_id}\" belongs to environment \"{}\", expected \"{env_name}\"",
+            record.env_name
+        ));
+    }
+    if record.id != transaction_id {
+        return Err(format!(
+            "upgrade history entry \"{transaction_id}\" contains transaction id \"{}\"",
+            record.id
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -417,6 +448,51 @@ mod tests {
 
         let loaded = get_upgrade_history_record("demo", "1700000000-000000001", &env, cwd).unwrap();
         assert!(loaded.rollback_of.is_none());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn upgrade_history_rejects_records_with_mismatched_identity() {
+        let (root, env) = test_env("mismatched-identity");
+        let cwd = root.as_path();
+        let transaction_id = "1700000000-000000001";
+        let path = super::upgrade_history_meta_path("demo", transaction_id, &env, cwd).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        let started_at = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let mut mismatched = record(transaction_id, started_at);
+        mismatched.env_name = "other".to_string();
+        write_json(&path, &mismatched).unwrap();
+
+        let error = get_upgrade_history_record("demo", transaction_id, &env, cwd).unwrap_err();
+        assert!(
+            error.contains("belongs to environment \"other\", expected \"demo\""),
+            "{error}"
+        );
+        let error = list_upgrade_history("demo", &env, cwd).unwrap_err();
+        assert!(
+            error.contains("belongs to environment \"other\", expected \"demo\""),
+            "{error}"
+        );
+
+        mismatched.env_name = "demo".to_string();
+        mismatched.id = "1700000000-000000002".to_string();
+        write_json(&path, &mismatched).unwrap();
+        let error = get_upgrade_history_record("demo", transaction_id, &env, cwd).unwrap_err();
+        assert!(
+            error.contains(
+                "upgrade history entry \"1700000000-000000001\" contains transaction id \"1700000000-000000002\""
+            ),
+            "{error}"
+        );
+        let error = list_upgrade_history("demo", &env, cwd).unwrap_err();
+        assert!(
+            error.contains(
+                "upgrade history entry \"1700000000-000000001\" contains transaction id \"1700000000-000000002\""
+            ),
+            "{error}"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
