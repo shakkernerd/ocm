@@ -120,6 +120,13 @@ impl<'a> EnvironmentService<'a> {
         options: CreateEnvSnapshotOptions,
     ) -> Result<EnvSnapshotSummary, String> {
         let _lock = self.lock_operation(&options.env_name)?;
+        self.create_snapshot_locked(options)
+    }
+
+    pub(crate) fn create_snapshot_locked(
+        &self,
+        options: CreateEnvSnapshotOptions,
+    ) -> Result<EnvSnapshotSummary, String> {
         let meta = create_env_snapshot(options, self.env, self.cwd)?;
         Ok(summarize_snapshot(&meta))
     }
@@ -149,6 +156,13 @@ impl<'a> EnvironmentService<'a> {
         options: RestoreEnvSnapshotOptions,
     ) -> Result<EnvSnapshotRestoreSummary, String> {
         let _lock = self.lock_operation(&options.env_name)?;
+        self.restore_snapshot_locked(options)
+    }
+
+    pub(crate) fn restore_snapshot_locked(
+        &self,
+        options: RestoreEnvSnapshotOptions,
+    ) -> Result<EnvSnapshotRestoreSummary, String> {
         let summary = restore_env_snapshot(options, self.env, self.cwd)?;
         sync_supervisor_if_present(self.env, self.cwd)?;
         Ok(summary)

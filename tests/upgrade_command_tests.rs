@@ -2320,6 +2320,131 @@ fn upgrade_reuses_the_bound_named_runtime_without_retaining_recovery_bytes() {
 }
 
 #[test]
+fn upgrade_rollback_restores_and_reverses_a_runtime_switch() {
+    let root = TestDir::new("upgrade-explicit-rollback-switch");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let old_runtime = root.child("old-openclaw");
+    let new_runtime = root.child("new-openclaw");
+    write_executable_script(&old_runtime, &recording_openclaw_script("2026.6.11"));
+    write_executable_script(&new_runtime, &recording_openclaw_script("2026.6.33"));
+
+    let env = ocm_env(&root);
+    for (name, runtime) in [("old", &old_runtime), ("new", &new_runtime)] {
+        let add = run_ocm(
+            &cwd,
+            &env,
+            &[
+                "runtime",
+                "add",
+                name,
+                "--path",
+                &runtime.display().to_string(),
+            ],
+        );
+        assert!(add.status.success(), "{}", stderr(&add));
+    }
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo", "--runtime", "old"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_json: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    let marker = Path::new(env_json["root"].as_str().unwrap())
+        .join(".openclaw")
+        .join("workspace")
+        .join("rollback-marker");
+    fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    fs::write(&marker, "before-upgrade").unwrap();
+
+    let upgrade = run_ocm(
+        &cwd,
+        &env,
+        &["upgrade", "demo", "--runtime", "new", "--raw"],
+    );
+    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    assert!(stdout(&upgrade).contains("outcome=switched"));
+    fs::write(&marker, "after-upgrade").unwrap();
+
+    let history = run_ocm(&cwd, &env, &["upgrade", "history", "demo", "--json"]);
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    let original_id = history_json[0]["id"].as_str().unwrap().to_string();
+
+    let dry_run = run_ocm(
+        &cwd,
+        &env,
+        &["upgrade", "rollback", "demo", "--dry-run", "--json"],
+    );
+    assert!(dry_run.status.success(), "{}", stderr(&dry_run));
+    let dry_run_json: Value = serde_json::from_str(&stdout(&dry_run)).unwrap();
+    assert_eq!(dry_run_json["transactionId"], original_id);
+    assert_eq!(dry_run_json["outcome"], "would-rollback");
+    assert_eq!(dry_run_json["bindingName"], "old");
+    assert!(dry_run_json["safetySnapshotId"].is_null());
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "after-upgrade");
+
+    let rollback = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "upgrade",
+            "rollback",
+            "demo",
+            "--transaction",
+            &original_id,
+            "--json",
+        ],
+    );
+    assert!(rollback.status.success(), "{}", stderr(&rollback));
+    let rollback_json: Value = serde_json::from_str(&stdout(&rollback)).unwrap();
+    assert_eq!(rollback_json["transactionId"], original_id);
+    assert_eq!(rollback_json["outcome"], "rolled-back");
+    assert_eq!(rollback_json["previousBindingName"], "new");
+    assert_eq!(rollback_json["bindingName"], "old");
+    assert_eq!(rollback_json["runtimeReleaseVersion"], "2026.6.11");
+    assert!(rollback_json["rollbackTransactionId"].is_string());
+    assert!(rollback_json["safetySnapshotId"].is_string());
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "before-upgrade");
+
+    let version = run_ocm(&cwd, &env, &["@demo", "--", "--version"]);
+    assert!(version.status.success(), "{}", stderr(&version));
+    assert_eq!(stdout(&version).trim(), "2026.6.11");
+
+    let rollback_history = run_ocm(&cwd, &env, &["upgrade", "history", "demo", "--json"]);
+    assert!(
+        rollback_history.status.success(),
+        "{}",
+        stderr(&rollback_history)
+    );
+    let rollback_history_json: Value = serde_json::from_str(&stdout(&rollback_history)).unwrap();
+    assert_eq!(rollback_history_json.as_array().unwrap().len(), 2);
+    assert_eq!(rollback_history_json[0]["outcome"], "rolled-back");
+    assert_eq!(rollback_history_json[0]["rollbackOf"], original_id);
+    assert_eq!(rollback_history_json[0]["source"]["name"], "new");
+    assert_eq!(rollback_history_json[0]["target"]["name"], "old");
+
+    let reverse = run_ocm(&cwd, &env, &["upgrade", "rollback", "demo", "--raw"]);
+    assert!(reverse.status.success(), "{}", stderr(&reverse));
+    assert!(stdout(&reverse).contains("outcome=rolled-back"));
+    assert!(stdout(&reverse).contains("to=runtime:new"));
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "after-upgrade");
+
+    let version = run_ocm(&cwd, &env, &["@demo", "--", "--version"]);
+    assert!(version.status.success(), "{}", stderr(&version));
+    assert_eq!(stdout(&version).trim(), "2026.6.33");
+
+    let final_history = run_ocm(&cwd, &env, &["upgrade", "history", "demo", "--json"]);
+    assert!(final_history.status.success(), "{}", stderr(&final_history));
+    let final_history_json: Value = serde_json::from_str(&stdout(&final_history)).unwrap();
+    assert_eq!(final_history_json.as_array().unwrap().len(), 3);
+    assert_eq!(
+        final_history_json[0]["rollbackOf"],
+        rollback_json["rollbackTransactionId"]
+    );
+}
+
+#[test]
 fn upgrade_repairs_target_config_before_finalization() {
     let root = TestDir::new("upgrade-target-config-repair");
     let cwd = root.child("workspace");
