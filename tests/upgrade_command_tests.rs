@@ -599,22 +599,35 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
         snapshot_json[0]["id"].as_str().unwrap()
     );
 
-    let remove_snapshot = run_ocm(
+    let create_newer_snapshot = run_ocm(
         &cwd,
         &env,
         &[
             "env",
             "snapshot",
-            "remove",
+            "create",
             "demo",
-            snapshot_json[0]["id"].as_str().unwrap(),
+            "--label",
+            "after-upgrade",
         ],
     );
     assert!(
-        remove_snapshot.status.success(),
+        create_newer_snapshot.status.success(),
         "{}",
-        stderr(&remove_snapshot)
+        stderr(&create_newer_snapshot)
     );
+
+    let prune_snapshot = run_ocm(
+        &cwd,
+        &env,
+        &["env", "snapshot", "prune", "demo", "--keep", "1", "--yes"],
+    );
+    assert!(
+        prune_snapshot.status.success(),
+        "{}",
+        stderr(&prune_snapshot)
+    );
+    assert!(stdout(&prune_snapshot).contains("Pruned 1 snapshot(s)."));
     assert!(!recovery_root.exists());
 }
 
