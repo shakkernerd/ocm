@@ -8,6 +8,7 @@ mod openclaw_state;
 mod openclaw_workspaces;
 mod runtimes;
 mod snapshots;
+mod upgrade_history;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -47,7 +48,7 @@ pub use layout::{
     resolve_store_paths, resolve_user_home, runtime_install_files_dir, runtime_install_root,
     runtime_meta_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
     source_watch_override_path, supervisor_logs_dir, supervisor_runtime_path,
-    supervisor_state_path, validate_name,
+    supervisor_state_path, upgrade_history_env_dir, upgrade_history_meta_path, validate_name,
 };
 pub(crate) use openclaw_config::{
     OpenClawConfigAudit, audit_openclaw_config, clear_skip_bootstrap_for_openclaw_onboarding,
@@ -80,6 +81,11 @@ pub use snapshots::{
     create_env_snapshot, get_env_snapshot, list_all_env_snapshots, list_env_snapshots,
     remove_env_snapshot, restore_env_snapshot, summarize_snapshot,
 };
+pub use upgrade_history::{
+    UpgradeHistoryBinding, UpgradeHistoryRecord, UpgradeHistoryRuntimeRecovery,
+    UpgradeHistoryServiceState, UpgradeHistoryStage, get_upgrade_history_record,
+    list_upgrade_history, save_upgrade_history_record,
+};
 
 pub fn now_utc() -> OffsetDateTime {
     OffsetDateTime::now_utc()
@@ -92,6 +98,7 @@ pub fn ensure_store(env: &BTreeMap<String, String>, cwd: &Path) -> Result<StoreP
     ensure_dir(&stores.launchers_dir)?;
     ensure_dir(&stores.runtimes_dir)?;
     ensure_dir(&stores.snapshots_dir)?;
+    ensure_dir(&stores.upgrade_history_dir)?;
     ensure_dir(&stores.supervisor_dir)?;
     Ok(stores)
 }
