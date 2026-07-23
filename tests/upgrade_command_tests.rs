@@ -101,6 +101,17 @@ fn write_running_supervisor_runtime(
     fs::write(runtime_path, serde_json::to_vec(&runtime).unwrap()).unwrap();
 }
 
+fn write_empty_supervisor_runtime(runtime_path: &Path, ocm_home: &str) {
+    let runtime = SupervisorRuntimeState {
+        kind: "ocm-supervisor-runtime".to_string(),
+        ocm_home: ocm_home.to_string(),
+        updated_at: now_utc(),
+        services: Vec::new(),
+        children: Vec::new(),
+    };
+    fs::write(runtime_path, serde_json::to_vec(&runtime).unwrap()).unwrap();
+}
+
 fn recording_openclaw_script(version: &str) -> String {
     format!(
         r#"#!/bin/sh
@@ -2889,6 +2900,162 @@ fn upgrade_rollback_refuses_a_transaction_with_a_successful_child() {
     assert!(history.status.success(), "{}", stderr(&history));
     let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
     assert_eq!(history_json.as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn upgrade_rollback_restarts_and_verifies_a_managed_service() {
+    let root = TestDir::new("upgrade-explicit-rollback-service");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let health_server =
+        TestHttpServer::serve_bytes_times("/health", "application/json", br#"{"ok":true}"#, 20);
+    let health_port = health_server
+        .url()
+        .split(':')
+        .nth(2)
+        .and_then(|value| value.split('/').next())
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap();
+
+    let old_runtime = root.child("old-openclaw");
+    let new_runtime = root.child("new-openclaw");
+    write_executable_script(&old_runtime, &recording_openclaw_script("2026.6.11"));
+    write_executable_script(&new_runtime, &recording_openclaw_script("2026.6.33"));
+
+    let mut env = ocm_env(&root);
+    env.insert(
+        "OCM_INTERNAL_SERVICE_MANAGER".to_string(),
+        "launchd".to_string(),
+    );
+    install_fake_launchctl(&root, &mut env);
+    for (name, runtime) in [("old", &old_runtime), ("new", &new_runtime)] {
+        let add = run_ocm(
+            &cwd,
+            &env,
+            &[
+                "runtime",
+                "add",
+                name,
+                "--path",
+                &runtime.display().to_string(),
+            ],
+        );
+        assert!(add.status.success(), "{}", stderr(&add));
+    }
+
+    let start = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "start",
+            "demo",
+            "--runtime",
+            "old",
+            "--port",
+            &health_port.to_string(),
+        ],
+    );
+    assert!(start.status.success(), "{}", stderr(&start));
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_json: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    let marker =
+        Path::new(env_json["root"].as_str().unwrap()).join(".openclaw/workspace/rollback-marker");
+    fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    fs::write(&marker, "before-upgrade").unwrap();
+
+    let snapshot = run_ocm(&cwd, &env, &["env", "snapshot", "create", "demo", "--json"]);
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let snapshot_json: Value = serde_json::from_str(&stdout(&snapshot)).unwrap();
+    let snapshot_id = snapshot_json["id"].as_str().unwrap();
+    let bind = run_ocm(&cwd, &env, &["env", "set-runtime", "demo", "new"]);
+    assert!(bind.status.success(), "{}", stderr(&bind));
+    fs::write(&marker, "after-upgrade").unwrap();
+
+    let transaction_id = "1782864000-000000001";
+    let history = serde_json::json!({
+        "kind": "ocm-upgrade-transaction",
+        "formatVersion": 1,
+        "id": transaction_id,
+        "envName": "demo",
+        "source": {
+            "kind": "runtime",
+            "name": "old",
+            "openclawVersion": "2026.6.11"
+        },
+        "target": {
+            "kind": "runtime",
+            "name": "new",
+            "openclawVersion": "2026.6.33"
+        },
+        "snapshotId": snapshot_id,
+        "runtimeRecovery": [],
+        "startedAt": "2026-07-01T00:00:00Z",
+        "completedAt": "2026-07-01T00:01:00Z",
+        "outcome": "switched",
+        "migration": {"status": "validated"},
+        "finalization": {"status": "completed"},
+        "serviceBefore": {"enabled": true, "running": true},
+        "serviceAfter": {"enabled": true, "running": true}
+    });
+    let history_dir = Path::new(env.get("OCM_HOME").unwrap()).join("upgrade-history/demo");
+    fs::create_dir_all(&history_dir).unwrap();
+    fs::write(
+        history_dir.join(format!("{transaction_id}.json")),
+        serde_json::to_vec(&history).unwrap(),
+    )
+    .unwrap();
+
+    let runtime_path = supervisor_runtime_path(&env, &cwd).unwrap();
+    fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
+    let ocm_home = env.get("OCM_HOME").unwrap().clone();
+    write_running_supervisor_runtime(&runtime_path, &ocm_home, "new", 4242, health_port);
+    let state_path = supervisor_state_path(&env, &cwd).unwrap();
+    let observed_runtime_path = runtime_path.clone();
+    let observed_ocm_home = ocm_home.clone();
+    let service_observer = thread::spawn(move || {
+        let mut saw_stop = false;
+        for _ in 0..400 {
+            let state = fs::read_to_string(&state_path).unwrap_or_default();
+            let parsed: Value = serde_json::from_str(&state).unwrap_or(Value::Null);
+            let children = parsed["children"].as_array().cloned().unwrap_or_default();
+            if !saw_stop && children.is_empty() {
+                write_empty_supervisor_runtime(&observed_runtime_path, &observed_ocm_home);
+                saw_stop = true;
+            } else if saw_stop
+                && children
+                    .iter()
+                    .any(|child| child["envName"] == "demo" && child["bindingName"] == "old")
+            {
+                write_running_supervisor_runtime(
+                    &observed_runtime_path,
+                    &observed_ocm_home,
+                    "old",
+                    4243,
+                    health_port,
+                );
+                return;
+            }
+            sleep(Duration::from_millis(25));
+        }
+        panic!("rollback did not stop and restart the managed service");
+    });
+
+    let rollback = run_ocm(&cwd, &env, &["upgrade", "rollback", "demo", "--raw"]);
+    service_observer.join().unwrap();
+    assert!(rollback.status.success(), "{}", stderr(&rollback));
+    let output = stdout(&rollback);
+    assert!(output.contains("outcome=rolled-back"), "{output}");
+    assert!(output.contains("service=started"), "{output}");
+    assert!(output.contains("to=runtime:old"), "{output}");
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "before-upgrade");
+    assert!(!health_server.requests().is_empty());
+
+    let service = run_ocm(&cwd, &env, &["service", "status", "demo", "--json"]);
+    assert!(service.status.success(), "{}", stderr(&service));
+    let service_json: Value = serde_json::from_str(&stdout(&service)).unwrap();
+    assert_eq!(service_json["running"], true);
+    assert_eq!(service_json["bindingName"], "old");
 }
 
 #[test]
