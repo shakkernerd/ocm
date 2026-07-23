@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use flate2::read::GzDecoder;
 use serde::de::DeserializeOwned;
@@ -11,10 +12,13 @@ use time::OffsetDateTime;
 use zip::ZipArchive;
 
 use crate::env::{default_service_enabled, default_service_running};
+use crate::infra::sqlite_snapshot::create_sqlite_snapshot;
 
 pub const ENV_ARCHIVE_METADATA_PATH: &str = "meta/env.json";
 pub const ENV_ARCHIVE_ROOT_DIR: &str = "root";
 const MAX_ENV_ARCHIVE_WRITE_ATTEMPTS: usize = 2;
+const SQLITE_SIDECAR_SUFFIXES: [&str; 3] = ["-wal", "-shm", "-journal"];
+static NEXT_SQLITE_STAGING_ID: AtomicU64 = AtomicU64::new(0);
 
 enum EnvArchiveWriteError {
     EntryDisappeared(String),
@@ -89,6 +93,7 @@ pub struct EnvArchiveOptions {
     pub should_skip_path: fn(&Path, EnvArchiveEntryKind) -> bool,
     pub included_path_roots: BTreeSet<PathBuf>,
     pub excluded_path_roots: BTreeSet<PathBuf>,
+    pub snapshot_sqlite_files: bool,
 }
 
 impl Default for EnvArchiveOptions {
@@ -97,6 +102,7 @@ impl Default for EnvArchiveOptions {
             should_skip_path: include_env_archive_path,
             included_path_roots: BTreeSet::new(),
             excluded_path_roots: BTreeSet::new(),
+            snapshot_sqlite_files: false,
         }
     }
 }
@@ -194,6 +200,10 @@ fn append_env_root(
     source_root: &Path,
     options: &EnvArchiveOptions,
 ) -> Result<(), EnvArchiveWriteError> {
+    let mut sqlite_staging = options
+        .snapshot_sqlite_files
+        .then(SqliteArchiveStaging::create)
+        .transpose()?;
     builder
         .append_dir(ENV_ARCHIVE_ROOT_DIR, source_root)
         .map_err(|error| {
@@ -222,6 +232,11 @@ fn append_env_root(
         if options.should_skip(relative_path, entry_kind) {
             continue;
         }
+        if options.snapshot_sqlite_files
+            && sqlite_database_path_for_sidecar(relative_path).is_some()
+        {
+            continue;
+        }
 
         let archive_path = Path::new(ENV_ARCHIVE_ROOT_DIR).join(relative_path);
         if metadata.is_dir() {
@@ -237,6 +252,43 @@ fn append_env_root(
             continue;
         }
 
+        if options.snapshot_sqlite_files && is_sqlite_database_path(relative_path) {
+            let source_metadata = fs::metadata(&path).map_err(|error| {
+                EnvArchiveWriteError::from_entry_io(io_error_with_context(
+                    error,
+                    format!("failed to inspect SQLite database {}", path.display()),
+                ))
+            })?;
+            if !source_metadata.is_file() {
+                return Err(EnvArchiveWriteError::Fatal(format!(
+                    "SQLite archive source is not a regular file: {}",
+                    path.display()
+                )));
+            }
+            let snapshot_path = sqlite_staging
+                .as_mut()
+                .expect("SQLite staging exists when snapshots are enabled")
+                .next_snapshot_path();
+            create_sqlite_snapshot(&path, &snapshot_path).map_err(EnvArchiveWriteError::Fatal)?;
+            fs::set_permissions(&snapshot_path, source_metadata.permissions()).map_err(
+                |error| {
+                    EnvArchiveWriteError::Fatal(format!(
+                        "failed to preserve SQLite permissions for {}: {error}",
+                        path.display()
+                    ))
+                },
+            )?;
+            builder
+                .append_path_with_name(&snapshot_path, &archive_path)
+                .map_err(|error| {
+                    EnvArchiveWriteError::Fatal(format!(
+                        "failed to archive SQLite database {}: {error}",
+                        path.display()
+                    ))
+                })?;
+            continue;
+        }
+
         builder
             .append_path_with_name(&path, &archive_path)
             .map_err(|error| {
@@ -248,6 +300,57 @@ fn append_env_root(
     }
 
     Ok(())
+}
+
+struct SqliteArchiveStaging {
+    root: PathBuf,
+    next_id: u64,
+}
+
+impl SqliteArchiveStaging {
+    fn create() -> Result<Self, EnvArchiveWriteError> {
+        let id = NEXT_SQLITE_STAGING_ID.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir()
+            .join("ocm-sqlite-archive")
+            .join(format!("{}-{id}", std::process::id()));
+        if root.exists() {
+            fs::remove_dir_all(&root)
+                .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))?;
+        }
+        fs::create_dir_all(&root)
+            .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))?;
+        Ok(Self { root, next_id: 0 })
+    }
+
+    fn next_snapshot_path(&mut self) -> PathBuf {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.root.join(format!("{id}.sqlite"))
+    }
+}
+
+impl Drop for SqliteArchiveStaging {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn is_sqlite_database_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".sqlite"))
+}
+
+fn sqlite_database_path_for_sidecar(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    for suffix in SQLITE_SIDECAR_SUFFIXES {
+        if let Some(database_name) = name.strip_suffix(suffix)
+            && database_name.ends_with(".sqlite")
+        {
+            return Some(path.with_file_name(database_name));
+        }
+    }
+    None
 }
 
 fn sorted_child_paths(path: &Path) -> io::Result<Vec<PathBuf>> {
@@ -377,6 +480,8 @@ mod tests {
     };
     use std::{fs, io};
 
+    use rusqlite::{Connection, OpenFlags};
+
     use super::{
         ArchivedEnvMeta, EnvArchiveEntryKind, EnvArchiveMetadata, EnvArchiveOptions,
         EnvArchiveWriteError, extract_env_archive, write_env_archive,
@@ -419,6 +524,7 @@ mod tests {
             should_skip_path: skip_openclaw_paths,
             included_path_roots: BTreeSet::from([PathBuf::from(".openclaw/team/ops")]),
             excluded_path_roots: BTreeSet::new(),
+            snapshot_sqlite_files: false,
         };
 
         for path in [
@@ -446,6 +552,7 @@ mod tests {
             excluded_path_roots: BTreeSet::from([PathBuf::from(
                 ".openclaw/extensions/demo/node_modules",
             )]),
+            snapshot_sqlite_files: false,
         };
 
         assert!(!options.should_skip(
@@ -534,6 +641,93 @@ mod tests {
         ));
 
         assert!(matches!(error, EnvArchiveWriteError::Fatal(_)));
+    }
+
+    #[test]
+    fn env_archive_snapshots_live_sqlite_state_without_sidecars() {
+        let source_root = temp_path("sqlite-source-root");
+        let archive_path = temp_path("sqlite-archives").join("demo.ocm-env.tar");
+        let extract_dir = temp_path("sqlite-extract");
+        let database_path = source_root.join(".openclaw/state/openclaw.sqlite");
+        fs::create_dir_all(database_path.parent().unwrap()).unwrap();
+
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .pragma_update(None, "journal_mode", "WAL")
+            .unwrap();
+        connection
+            .pragma_update(None, "wal_autocheckpoint", 0)
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE durable_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO durable_state VALUES ('sentinel', 'must survive');",
+            )
+            .unwrap();
+        assert!(database_path.with_extension("sqlite-wal").exists());
+
+        write_env_archive_with_options(
+            &serde_json::json!({ "kind": "test-archive" }),
+            &source_root,
+            &archive_path,
+            EnvArchiveOptions {
+                snapshot_sqlite_files: true,
+                ..EnvArchiveOptions::default()
+            },
+        )
+        .unwrap();
+
+        let extracted =
+            extract_env_archive::<serde_json::Value>(&archive_path, &extract_dir).unwrap();
+        let restored_database = extracted.root_dir.join(".openclaw/state/openclaw.sqlite");
+        assert!(restored_database.exists());
+        assert!(!restored_database.with_extension("sqlite-wal").exists());
+        assert!(!restored_database.with_extension("sqlite-shm").exists());
+        assert!(!restored_database.with_extension("sqlite-journal").exists());
+
+        let restored = Connection::open_with_flags(
+            restored_database,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .unwrap();
+        let value: String = restored
+            .query_row(
+                "SELECT value FROM durable_state WHERE key = 'sentinel'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "must survive");
+
+        drop(restored);
+        drop(connection);
+        let _ = fs::remove_dir_all(source_root);
+        let _ = fs::remove_dir_all(extract_dir);
+        let _ = fs::remove_file(archive_path);
+    }
+
+    #[test]
+    fn env_archive_refuses_to_raw_copy_malformed_sqlite_state() {
+        let source_root = temp_path("malformed-sqlite-source-root");
+        let archive_path = temp_path("malformed-sqlite-archives").join("demo.ocm-env.tar");
+        let database_path = source_root.join(".openclaw/state/openclaw.sqlite");
+        fs::create_dir_all(database_path.parent().unwrap()).unwrap();
+        fs::write(&database_path, "not a sqlite database").unwrap();
+
+        let error = write_env_archive_with_options(
+            &serde_json::json!({ "kind": "test-archive" }),
+            &source_root,
+            &archive_path,
+            EnvArchiveOptions {
+                snapshot_sqlite_files: true,
+                ..EnvArchiveOptions::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("SQLite"), "{error}");
+        let _ = fs::remove_dir_all(source_root);
+        let _ = fs::remove_file(archive_path);
     }
 
     #[test]
