@@ -108,6 +108,7 @@ pub(crate) fn openclaw_env_archive_options(
     Ok(EnvArchiveOptions {
         should_skip_path: should_skip_openclaw_env_archive_path,
         included_path_roots: workspaces.archive_relative_roots(&paths.root)?,
+        excluded_path_roots: openclaw_archive_excluded_path_roots(paths)?,
     })
 }
 
@@ -422,7 +423,67 @@ fn is_durable_openclaw_archive_path(components: &[&str]) -> bool {
             | [".openclaw", "identity", ..]
             | [".openclaw", "memory", ..]
             | [".openclaw", "plugins", ..]
+            | [".openclaw", "extensions", ..]
+            | [".openclaw", "npm", ..]
+            | [".openclaw", "git", ..]
     )
+}
+
+fn openclaw_archive_excluded_path_roots(paths: &EnvPaths) -> Result<BTreeSet<PathBuf>, String> {
+    let extensions_root = paths.state_dir.join("extensions");
+    let entries = match fs::read_dir(&extensions_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut excluded = BTreeSet::new();
+
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let plugin_root = entry.path();
+        let metadata = fs::symlink_metadata(&plugin_root).map_err(|error| error.to_string())?;
+        if !metadata.is_dir() {
+            continue;
+        }
+        let children = fs::read_dir(&plugin_root)
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        let has_runtime_deps_marker = children
+            .iter()
+            .any(|child| is_openclaw_runtime_dependency_marker(&child.file_name()));
+        let plugin_relative_root = Path::new(".openclaw")
+            .join("extensions")
+            .join(entry.file_name());
+
+        for child in children {
+            let name = child.file_name();
+            if is_openclaw_legacy_dependency_debris(&name)
+                || (name == OsStr::new("node_modules") && has_runtime_deps_marker)
+            {
+                excluded.insert(plugin_relative_root.join(name));
+            }
+        }
+    }
+
+    Ok(excluded)
+}
+
+fn is_openclaw_runtime_dependency_marker(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        name == ".openclaw-runtime-deps.json"
+            || name == ".openclaw-runtime-deps-stamp.json"
+            || name.starts_with(".openclaw-runtime-deps-")
+    })
+}
+
+fn is_openclaw_legacy_dependency_debris(name: &OsStr) -> bool {
+    is_openclaw_runtime_dependency_marker(name)
+        || name == OsStr::new(".openclaw-pnpm-store")
+        || name == OsStr::new(".openclaw-install-backups")
+        || name
+            .to_str()
+            .is_some_and(|name| name.starts_with(".openclaw-install-stage"))
 }
 
 fn collect_runtime_state_path_refs(
@@ -792,10 +853,35 @@ mod tests {
                 .included_path_roots
                 .contains(Path::new(".openclaw/workspace"))
         );
+        assert!(options.excluded_path_roots.is_empty());
         assert!(!should_skip_openclaw_env_archive_path(
             Path::new(".openclaw/workspace/notes.txt"),
             EnvArchiveEntryKind::File
         ));
+        for path in [
+            ".openclaw/plugins/installs.json",
+            ".openclaw/extensions/demo/package.json",
+            ".openclaw/npm/projects/demo/package-lock.json",
+            ".openclaw/npm/projects/demo/node_modules/demo/index.js",
+            ".openclaw/git/git-demo/repo/.git/HEAD",
+            ".openclaw/git/git-demo/repo/openclaw.plugin.json",
+        ] {
+            assert!(
+                !should_skip_openclaw_env_archive_path(Path::new(path), EnvArchiveEntryKind::File),
+                "{path} should be archived"
+            );
+        }
+        for path in [
+            ".openclaw/plugin-runtime-deps/node_modules/demo/index.js",
+            ".openclaw/bundled-plugin-runtime-deps/node_modules/demo/index.js",
+            ".openclaw/.openclaw-pnpm-store/v3/files/cache",
+            ".openclaw/.openclaw-npm-cache/_cacache/index",
+        ] {
+            assert!(
+                should_skip_openclaw_env_archive_path(Path::new(path), EnvArchiveEntryKind::File),
+                "{path} should not be archived"
+            );
+        }
         assert!(should_skip_openclaw_env_archive_path(
             Path::new(".openclaw/workspace-attestations/manifest.json"),
             EnvArchiveEntryKind::File

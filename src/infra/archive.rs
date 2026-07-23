@@ -88,6 +88,7 @@ pub enum EnvArchiveEntryKind {
 pub struct EnvArchiveOptions {
     pub should_skip_path: fn(&Path, EnvArchiveEntryKind) -> bool,
     pub included_path_roots: BTreeSet<PathBuf>,
+    pub excluded_path_roots: BTreeSet<PathBuf>,
 }
 
 impl Default for EnvArchiveOptions {
@@ -95,12 +96,20 @@ impl Default for EnvArchiveOptions {
         Self {
             should_skip_path: include_env_archive_path,
             included_path_roots: BTreeSet::new(),
+            excluded_path_roots: BTreeSet::new(),
         }
     }
 }
 
 impl EnvArchiveOptions {
     fn should_skip(&self, relative_path: &Path, kind: EnvArchiveEntryKind) -> bool {
+        if self
+            .excluded_path_roots
+            .iter()
+            .any(|root| relative_path == root || relative_path.starts_with(root))
+        {
+            return true;
+        }
         let explicitly_included = self.included_path_roots.iter().any(|root| {
             relative_path == root
                 || relative_path.starts_with(root)
@@ -409,6 +418,7 @@ mod tests {
         let options = EnvArchiveOptions {
             should_skip_path: skip_openclaw_paths,
             included_path_roots: BTreeSet::from([PathBuf::from(".openclaw/team/ops")]),
+            excluded_path_roots: BTreeSet::new(),
         };
 
         for path in [
@@ -425,6 +435,26 @@ mod tests {
         assert!(options.should_skip(
             Path::new(".openclaw/team/cache"),
             EnvArchiveEntryKind::Directory
+        ));
+    }
+
+    #[test]
+    fn archive_options_exclusions_override_selected_path_branches() {
+        let options = EnvArchiveOptions {
+            should_skip_path: skip_openclaw_paths,
+            included_path_roots: BTreeSet::from([PathBuf::from(".openclaw/extensions")]),
+            excluded_path_roots: BTreeSet::from([PathBuf::from(
+                ".openclaw/extensions/demo/node_modules",
+            )]),
+        };
+
+        assert!(!options.should_skip(
+            Path::new(".openclaw/extensions/demo/package.json"),
+            EnvArchiveEntryKind::File
+        ));
+        assert!(options.should_skip(
+            Path::new(".openclaw/extensions/demo/node_modules/package/index.js"),
+            EnvArchiveEntryKind::File
         ));
     }
 
