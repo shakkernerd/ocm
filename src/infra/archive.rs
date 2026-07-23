@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use flate2::read::GzDecoder;
 use serde::de::DeserializeOwned;
@@ -18,7 +17,6 @@ pub const ENV_ARCHIVE_METADATA_PATH: &str = "meta/env.json";
 pub const ENV_ARCHIVE_ROOT_DIR: &str = "root";
 const MAX_ENV_ARCHIVE_WRITE_ATTEMPTS: usize = 2;
 const SQLITE_SIDECAR_SUFFIXES: [&str; 3] = ["-wal", "-shm", "-journal"];
-static NEXT_SQLITE_STAGING_ID: AtomicU64 = AtomicU64::new(0);
 
 enum EnvArchiveWriteError {
     EntryDisappeared(String),
@@ -200,10 +198,6 @@ fn append_env_root(
     source_root: &Path,
     options: &EnvArchiveOptions,
 ) -> Result<(), EnvArchiveWriteError> {
-    let mut sqlite_staging = options
-        .snapshot_sqlite_files
-        .then(SqliteArchiveStaging::create)
-        .transpose()?;
     builder
         .append_dir(ENV_ARCHIVE_ROOT_DIR, source_root)
         .map_err(|error| {
@@ -265,21 +259,25 @@ fn append_env_root(
                     path.display()
                 )));
             }
-            let snapshot_path = sqlite_staging
-                .as_mut()
-                .expect("SQLite staging exists when snapshots are enabled")
-                .next_snapshot_path();
-            create_sqlite_snapshot(&path, &snapshot_path).map_err(EnvArchiveWriteError::Fatal)?;
-            fs::set_permissions(&snapshot_path, source_metadata.permissions()).map_err(
-                |error| {
-                    EnvArchiveWriteError::Fatal(format!(
-                        "failed to preserve SQLite permissions for {}: {error}",
-                        path.display()
-                    ))
-                },
-            )?;
+            let snapshot = create_sqlite_snapshot(&path).map_err(EnvArchiveWriteError::Fatal)?;
+            let snapshot_metadata = fs::metadata(snapshot.path()).map_err(|error| {
+                EnvArchiveWriteError::Fatal(format!(
+                    "failed to inspect SQLite snapshot for {}: {error}",
+                    path.display()
+                ))
+            })?;
+            let mut header = Header::new_gnu();
+            header.set_metadata(&source_metadata);
+            header.set_size(snapshot_metadata.len());
+            header.set_cksum();
+            let mut snapshot_file = File::open(snapshot.path()).map_err(|error| {
+                EnvArchiveWriteError::Fatal(format!(
+                    "failed to open SQLite snapshot for {}: {error}",
+                    path.display()
+                ))
+            })?;
             builder
-                .append_path_with_name(&snapshot_path, &archive_path)
+                .append_data(&mut header, &archive_path, &mut snapshot_file)
                 .map_err(|error| {
                     EnvArchiveWriteError::Fatal(format!(
                         "failed to archive SQLite database {}: {error}",
@@ -300,39 +298,6 @@ fn append_env_root(
     }
 
     Ok(())
-}
-
-struct SqliteArchiveStaging {
-    root: PathBuf,
-    next_id: u64,
-}
-
-impl SqliteArchiveStaging {
-    fn create() -> Result<Self, EnvArchiveWriteError> {
-        let id = NEXT_SQLITE_STAGING_ID.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir()
-            .join("ocm-sqlite-archive")
-            .join(format!("{}-{id}", std::process::id()));
-        if root.exists() {
-            fs::remove_dir_all(&root)
-                .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))?;
-        }
-        fs::create_dir_all(&root)
-            .map_err(|error| EnvArchiveWriteError::Fatal(error.to_string()))?;
-        Ok(Self { root, next_id: 0 })
-    }
-
-    fn next_snapshot_path(&mut self) -> PathBuf {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.root.join(format!("{id}.sqlite"))
-    }
-}
-
-impl Drop for SqliteArchiveStaging {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
-    }
 }
 
 fn is_sqlite_database_path(path: &Path) -> bool {
@@ -652,6 +617,12 @@ mod tests {
         fs::create_dir_all(database_path.parent().unwrap()).unwrap();
 
         let connection = Connection::open(&database_path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(&database_path, fs::Permissions::from_mode(0o640)).unwrap();
+        }
         connection
             .pragma_update(None, "journal_mode", "WAL")
             .unwrap();
@@ -681,6 +652,17 @@ mod tests {
             extract_env_archive::<serde_json::Value>(&archive_path, &extract_dir).unwrap();
         let restored_database = extracted.root_dir.join(".openclaw/state/openclaw.sqlite");
         assert!(restored_database.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = fs::metadata(&restored_database)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o640);
+        }
         assert!(!restored_database.with_extension("sqlite-wal").exists());
         assert!(!restored_database.with_extension("sqlite-shm").exists());
         assert!(!restored_database.with_extension("sqlite-journal").exists());
