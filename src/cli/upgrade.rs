@@ -2459,16 +2459,16 @@ impl Cli {
                 display_path(&transaction_recovery_root)
             ));
         }
-        let recovery_files = recovery_root.join("files");
-        if let Err(error) = fs::rename(&source_root, &recovery_files) {
+        let recovery_install_root = recovery_root.join("install-root");
+        if let Err(error) = fs::rename(&source_root, &recovery_install_root) {
             let _ = fs::remove_dir_all(&transaction_recovery_root);
             backup.backup_root = Some(source_root);
             return Err(format!(
                 "failed to retain runtime recovery bytes at {}: {error}",
-                display_path(&recovery_files)
+                display_path(&recovery_install_root)
             ));
         }
-        backup.backup_root = Some(recovery_files);
+        backup.backup_root = Some(recovery_install_root);
         backup.retained_root = Some(transaction_recovery_root);
         write_json(&recovery_root.join("runtime.json"), &backup.meta)?;
         backup.backup_id = Some(runtime_name);
