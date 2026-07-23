@@ -56,7 +56,14 @@ impl CommandSpec {
         let Some(path_prepend) = self.path_prepend.as_deref() else {
             return Ok(());
         };
-        command.env("PATH", prepend_to_path(path_prepend, env.get("PATH"))?);
+        command.env(
+            "PATH",
+            prepend_to_path(
+                path_prepend,
+                environment_path_value(env, cfg!(windows)),
+                cfg!(windows),
+            )?,
+        );
         Ok(())
     }
 }
@@ -212,12 +219,27 @@ pub(crate) fn apply_path_prepend_to_environment(
     env: &mut BTreeMap<String, String>,
     path_prepend: Option<&Path>,
 ) -> Result<(), String> {
+    apply_path_prepend_to_environment_with_platform_semantics(env, path_prepend, cfg!(windows))
+}
+
+fn apply_path_prepend_to_environment_with_platform_semantics(
+    env: &mut BTreeMap<String, String>,
+    path_prepend: Option<&Path>,
+    case_insensitive: bool,
+) -> Result<(), String> {
     let Some(path_prepend) = path_prepend else {
         return Ok(());
     };
-    let path = prepend_to_path(path_prepend, env.get("PATH"))?
-        .into_string()
-        .map_err(|_| "managed Node.js PATH contains non-Unicode data".to_string())?;
+    let path = prepend_to_path(
+        path_prepend,
+        environment_path_value(env, case_insensitive),
+        case_insensitive,
+    )?
+    .into_string()
+    .map_err(|_| "managed Node.js PATH contains non-Unicode data".to_string())?;
+    if let Some(existing_key) = environment_path_key(env, case_insensitive) {
+        env.remove(&existing_key);
+    }
     env.insert("PATH".to_string(), path);
     Ok(())
 }
@@ -394,14 +416,126 @@ fn relocate_checked_path(path: &Path, from_root: &Path, to_root: &Path) -> Resul
     Ok(to_root.join(relative))
 }
 
-fn prepend_to_path(path: &Path, current: Option<&String>) -> Result<OsString, String> {
+fn environment_path_value(
+    env: &BTreeMap<String, String>,
+    case_insensitive: bool,
+) -> Option<&String> {
+    environment_path_key(env, case_insensitive).and_then(|key| env.get(&key))
+}
+
+fn environment_path_key(env: &BTreeMap<String, String>, case_insensitive: bool) -> Option<String> {
+    if env.contains_key("PATH") {
+        return Some("PATH".to_string());
+    }
+    case_insensitive
+        .then(|| {
+            env.keys()
+                .find(|key| key.eq_ignore_ascii_case("PATH"))
+                .cloned()
+        })
+        .flatten()
+}
+
+fn prepend_to_path(
+    path: &Path,
+    current: Option<&String>,
+    case_insensitive: bool,
+) -> Result<OsString, String> {
     let mut paths = vec![path.to_path_buf()];
     if let Some(current) = current {
-        paths.extend(
-            std::env::split_paths(current)
-                .filter(|candidate| !candidate.as_os_str().is_empty() && candidate != path),
-        );
+        paths.extend(std::env::split_paths(current).filter(|candidate| {
+            !candidate.as_os_str().is_empty() && !paths_equal(candidate, path, case_insensitive)
+        }));
     }
     std::env::join_paths(paths)
         .map_err(|error| format!("failed to add managed Node.js to PATH for OpenClaw: {error}"))
+}
+
+fn paths_equal(left: &Path, right: &Path, case_insensitive: bool) -> bool {
+    left == right
+        || (case_insensitive
+            && left
+                .to_str()
+                .zip(right.to_str())
+                .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        apply_path_prepend_to_environment_with_platform_semantics, environment_path_value,
+        prepend_to_path,
+    };
+
+    #[test]
+    fn managed_node_path_reads_windows_path_case_insensitively() {
+        let mut env = BTreeMap::new();
+        env.insert("Path".to_string(), path_value(&["system", "tools"]));
+
+        assert_eq!(
+            environment_path_value(&env, true),
+            env.get("Path"),
+            "Windows Path must remain available to npm lifecycle commands"
+        );
+        assert_eq!(environment_path_value(&env, false), None);
+    }
+
+    #[test]
+    fn managed_node_path_replaces_windows_path_without_losing_system_entries() {
+        let mut env = BTreeMap::new();
+        env.insert("Path".to_string(), path_value(&["system", "tools"]));
+
+        apply_path_prepend_to_environment_with_platform_semantics(
+            &mut env,
+            Some(Path::new("managed-node")),
+            true,
+        )
+        .unwrap();
+
+        assert!(!env.contains_key("Path"));
+        assert_eq!(
+            std::env::split_paths(env.get("PATH").unwrap()).collect::<Vec<_>>(),
+            vec![
+                PathBuf::from("managed-node"),
+                PathBuf::from("system"),
+                PathBuf::from("tools")
+            ]
+        );
+    }
+
+    #[test]
+    fn managed_node_path_preserves_system_entries_and_deduplicates_itself() {
+        let managed = PathBuf::from("managed-node");
+        let current = path_value(&["system", "managed-node", "tools"]);
+        let combined = prepend_to_path(&managed, Some(&current), false).unwrap();
+        let entries = std::env::split_paths(&combined).collect::<Vec<_>>();
+
+        assert_eq!(
+            entries,
+            vec![managed, PathBuf::from("system"), PathBuf::from("tools")]
+        );
+    }
+
+    #[test]
+    fn managed_node_path_deduplicates_windows_case_variants() {
+        let managed = PathBuf::from("Managed-Node");
+        let current = path_value(&["system", "managed-node", "tools"]);
+        let combined = prepend_to_path(&managed, Some(&current), true).unwrap();
+        let entries = std::env::split_paths(&combined).collect::<Vec<_>>();
+
+        assert_eq!(
+            entries,
+            vec![managed, PathBuf::from("system"), PathBuf::from("tools")]
+        );
+    }
+
+    fn path_value(entries: &[&str]) -> String {
+        std::env::join_paths(entries.iter().map(Path::new))
+            .unwrap()
+            .into_string()
+            .unwrap()
+    }
 }
