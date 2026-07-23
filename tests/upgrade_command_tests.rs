@@ -2959,6 +2959,12 @@ fn upgrade_rollback_removes_an_unrecorded_safety_snapshot_after_restore() {
             .unwrap()
             .contains("Rollback history was not recorded")
     );
+    assert!(
+        rollback_json["note"]
+            .as_str()
+            .unwrap()
+            .contains("Unrecorded safety snapshot was removed")
+    );
     assert_eq!(
         fs::read_to_string(&fixture.marker).unwrap(),
         "after-upgrade"

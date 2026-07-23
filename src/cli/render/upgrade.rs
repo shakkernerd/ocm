@@ -175,13 +175,7 @@ pub fn upgrade_rollback(summary: &UpgradeRollbackSummary, profile: RenderProfile
                 service_tone(summary.service_action.as_deref()),
             ),
             KeyValueRow::accent("Restored snapshot", &summary.restored_snapshot_id),
-            KeyValueRow::plain(
-                "Safety snapshot",
-                summary
-                    .safety_snapshot_id
-                    .as_deref()
-                    .unwrap_or("not created"),
-            ),
+            KeyValueRow::plain("Safety snapshot", rollback_safety_snapshot_display(summary)),
         ],
         profile.color,
     ));
@@ -560,6 +554,16 @@ fn upgrade_rollback_raw(summary: &UpgradeRollbackSummary) -> Vec<String> {
     vec![bits.join("  ")]
 }
 
+fn rollback_safety_snapshot_display(summary: &UpgradeRollbackSummary) -> &str {
+    if let Some(snapshot_id) = summary.safety_snapshot_id.as_deref() {
+        snapshot_id
+    } else if summary.outcome == "would-rollback" {
+        "not created"
+    } else {
+        "removed"
+    }
+}
+
 fn upgrade_history_raw_line(record: &UpgradeHistoryRecord) -> Result<String, String> {
     let mut bits = vec![
         format!("id={}", record.id),
@@ -703,7 +707,43 @@ fn simulation_temp_label(summary: &UpgradeSimulationSummary) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::upgrade::{UpgradeSimulationBatchSummary, UpgradeSimulationCheck};
+    use crate::cli::upgrade::{
+        UpgradeRollbackSummary, UpgradeSimulationBatchSummary, UpgradeSimulationCheck,
+    };
+
+    fn rollback_summary(outcome: &str) -> UpgradeRollbackSummary {
+        UpgradeRollbackSummary {
+            env_name: "demo".to_string(),
+            transaction_id: "upgrade-1".to_string(),
+            rollback_transaction_id: Some("rollback-1".to_string()),
+            previous_binding_kind: "runtime".to_string(),
+            previous_binding_name: "new".to_string(),
+            binding_kind: "runtime".to_string(),
+            binding_name: "old".to_string(),
+            outcome: outcome.to_string(),
+            runtime_release_version: Some("2026.6.11".to_string()),
+            service_action: None,
+            restored_snapshot_id: "pre-upgrade".to_string(),
+            safety_snapshot_id: None,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn rollback_pretty_distinguishes_removed_and_uncreated_safety_snapshots() {
+        let removed =
+            upgrade_rollback(&rollback_summary("failed"), RenderProfile::pretty(false)).join("\n");
+        let dry_run = upgrade_rollback(
+            &rollback_summary("would-rollback"),
+            RenderProfile::pretty(false),
+        )
+        .join("\n");
+
+        assert!(removed.contains("removed"), "{removed}");
+        assert!(!removed.contains("not created"), "{removed}");
+        assert!(dry_run.contains("not created"), "{dry_run}");
+        assert!(!dry_run.contains("removed"), "{dry_run}");
+    }
 
     #[test]
     fn upgrade_simulation_batch_pretty_surfaces_failure_details() {
