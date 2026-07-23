@@ -1952,6 +1952,9 @@ impl Cli {
             &[
                 ("OPENCLAW_UPDATE_IN_PROGRESS", "1"),
                 ("OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE", "1"),
+                ("OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART", "1"),
+                ("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR", "0"),
+                ("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION", "0"),
             ],
         )
         .map_err(|error| format!("{name} failed: {error}"))
