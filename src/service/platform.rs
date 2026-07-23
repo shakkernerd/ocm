@@ -21,6 +21,8 @@ const SERVICE_DIR_MODE: u32 = 0o700;
 const SERVICE_FILE_MODE: u32 = 0o600;
 const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS: u32 = 1;
 const LAUNCH_AGENT_UMASK_DECIMAL: u32 = 0o077;
+const SERVICE_MANAGER_BUSY_ATTEMPTS: usize = 3;
+const SERVICE_MANAGER_BUSY_RETRY_MS: u64 = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ManagedServiceIdentity {
@@ -1008,7 +1010,25 @@ fn run_service_manager_command<const N: usize>(
     binary: &str,
     args: [&str; N],
 ) -> std::io::Result<Output> {
-    Command::new(binary).args(args).output()
+    retry_service_manager_executable_busy(|| Command::new(binary).args(args).output())
+}
+
+fn retry_service_manager_executable_busy<T>(
+    mut operation: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    for attempt in 0..SERVICE_MANAGER_BUSY_ATTEMPTS {
+        match operation() {
+            Ok(output) => return Ok(output),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && attempt + 1 < SERVICE_MANAGER_BUSY_ATTEMPTS =>
+            {
+                sleep(Duration::from_millis(SERVICE_MANAGER_BUSY_RETRY_MS));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("busy retry loop always returns on its final attempt")
 }
 
 fn launchctl_detail(output: &Output) -> String {
