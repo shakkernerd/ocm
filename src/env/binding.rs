@@ -22,6 +22,14 @@ impl<'a> EnvironmentService<'a> {
 
     pub fn set_runtime(&self, name: &str, runtime_name: &str) -> Result<EnvMeta, String> {
         let _lock = self.lock_operation(name)?;
+        self.set_runtime_locked(name, runtime_name)
+    }
+
+    pub(crate) fn set_runtime_locked(
+        &self,
+        name: &str,
+        runtime_name: &str,
+    ) -> Result<EnvMeta, String> {
         let mut meta = get_environment(name, self.env, self.cwd)?;
         if runtime_name.eq_ignore_ascii_case("none") {
             meta.default_runtime = None;
