@@ -517,6 +517,49 @@ fn runtime_build_local_packs_and_installs_release_shaped_package() {
 }
 
 #[test]
+fn runtime_build_local_rejects_a_bound_runtime_before_repo_validation() {
+    let root = TestDir::new("runtime-build-local-bound");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_executable_script(&bin_dir.join("main-local"), "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "main-local", "--path", "./bin/main-local"],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "main-local"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let build = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "build-local",
+            "main-local",
+            "--repo",
+            "./missing-openclaw",
+            "--force",
+        ],
+    );
+    assert_eq!(build.status.code(), Some(1));
+    let error = stderr(&build);
+    assert!(
+        error.contains("runtime \"main-local\" is still used"),
+        "{error}"
+    );
+    assert!(!error.contains("repo path does not exist"), "{error}");
+}
+
+#[test]
 fn runtime_build_local_uses_repo_workspace_dependency_adapter() {
     let root = TestDir::new("runtime-build-local-workspace-adapter");
     let cwd = root.child("workspace");
@@ -1221,6 +1264,99 @@ fn runtime_install_refreshes_a_channel_runtime_when_the_published_release_moves(
 }
 
 #[test]
+fn bound_official_runtime_is_reused_but_not_refreshed() {
+    let root = TestDir::new("runtime-install-official-bound");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let stable_tar = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable-1');\n");
+    let stable_integrity = sha512_integrity(&stable_tar);
+    let next_tar = openclaw_package_tarball("#!/usr/bin/env node\nconsole.log('stable-2');\n");
+    let next_integrity = sha512_integrity(&next_tar);
+    let stable_tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.24.tgz",
+        "application/octet-stream",
+        &stable_tar,
+    );
+    let next_tarball_server = TestHttpServer::serve_bytes(
+        "/openclaw-2026.3.25.tgz",
+        "application/octet-stream",
+        &next_tar,
+    );
+    let stable_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.24\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}}}}",
+        stable_tarball_server.url(),
+        stable_integrity
+    );
+    let moved_packument = format!(
+        "{{\"dist-tags\":{{\"latest\":\"2026.3.25\"}},\"versions\":{{\"2026.3.24\":{{\"version\":\"2026.3.24\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}},\"2026.3.25\":{{\"version\":\"2026.3.25\",\"dist\":{{\"tarball\":\"{}\",\"integrity\":\"{}\"}}}}}}}}",
+        stable_tarball_server.url(),
+        stable_integrity,
+        next_tarball_server.url(),
+        next_integrity
+    );
+    let packument_server = TestHttpServer::serve_bytes_sequence(
+        "/openclaw",
+        "application/json",
+        vec![
+            stable_packument.as_bytes().to_vec(),
+            stable_packument.into_bytes(),
+            moved_packument.as_bytes().to_vec(),
+            moved_packument.into_bytes(),
+        ],
+    );
+    let mut env = ocm_env(&root);
+    install_fake_node_and_npm(&root, &mut env, "22.22.3");
+    env.insert(
+        "OCM_INTERNAL_OPENCLAW_RELEASES_URL".to_string(),
+        packument_server.url(),
+    );
+
+    let install = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let reuse = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert!(reuse.status.success(), "{}", stderr(&reuse));
+    assert!(stdout(&reuse).contains("Using installed runtime stable"));
+
+    let refresh = run_ocm(&cwd, &env, &["runtime", "install", "--channel", "stable"]);
+    assert_eq!(refresh.status.code(), Some(1));
+    let error = stderr(&refresh);
+    assert!(
+        error.contains("runtime \"stable\" is still used"),
+        "{error}"
+    );
+    assert!(error.contains("\"demo\""), "{error}");
+
+    let create_on_moved_channel = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "second", "--channel", "stable"],
+    );
+    assert_eq!(create_on_moved_channel.status.code(), Some(1));
+    assert!(
+        stderr(&create_on_moved_channel).contains("runtime \"stable\" is still used"),
+        "{}",
+        stderr(&create_on_moved_channel)
+    );
+    assert!(next_tarball_server.requests().is_empty());
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    assert!(stdout(&show).contains("\"releaseVersion\": \"2026.3.24\""));
+    let list = run_ocm(&cwd, &env, &["env", "list", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let environments: Value = serde_json::from_str(&stdout(&list)).unwrap();
+    assert_eq!(environments.as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn runtime_releases_without_manifest_url_use_the_official_openclaw_source() {
     let root = TestDir::new("runtime-releases-official");
     let cwd = root.child("workspace");
@@ -1653,6 +1789,89 @@ fn runtime_update_reinstalls_a_manifest_backed_runtime_with_a_new_version() {
     assert!(output.contains("releaseVersion: 0.3.0"));
     assert!(output.contains("releaseChannel: stable"));
     assert!(output.contains(&format!("sourceSha256: {next_sha256}")));
+}
+
+#[test]
+fn runtime_update_rejects_a_bound_runtime_without_fetching_the_replacement() {
+    let root = TestDir::new("runtime-update-bound");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let stable_body = b"runtime-v0.2.0";
+    let stable_digest_path = root.child("sha256/openclaw-0.2.0");
+    fs::create_dir_all(stable_digest_path.parent().unwrap()).unwrap();
+    fs::write(&stable_digest_path, stable_body).unwrap();
+    let stable_sha256 = file_sha256(&stable_digest_path).unwrap();
+    let next_body = b"runtime-v0.3.0";
+    let next_digest_path = root.child("sha256/openclaw-0.3.0");
+    fs::write(&next_digest_path, next_body).unwrap();
+    let next_sha256 = file_sha256(&next_digest_path).unwrap();
+    let stable_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-0.2.0",
+        "application/octet-stream",
+        stable_body,
+    );
+    let next_server = TestHttpServer::serve_bytes(
+        "/artifacts/openclaw-0.3.0",
+        "application/octet-stream",
+        next_body,
+    );
+    let manifest_body = format!(
+        "{{\"releases\":[{{\"version\":\"0.2.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}},{{\"version\":\"0.3.0\",\"channel\":\"stable\",\"url\":\"{}\",\"sha256\":\"{}\"}}]}}",
+        stable_server.url(),
+        stable_sha256,
+        next_server.url(),
+        next_sha256
+    );
+    let manifest_server = TestHttpServer::serve_bytes(
+        "/manifests/releases.json",
+        "application/json",
+        manifest_body.as_bytes(),
+    );
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--manifest-url",
+            &manifest_server.url(),
+            "--version",
+            "0.2.0",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let update = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "update", "stable", "--version", "0.3.0"],
+    );
+    assert_eq!(update.status.code(), Some(1));
+    let error = stderr(&update);
+    assert!(
+        error.contains("runtime \"stable\" is still used"),
+        "{error}"
+    );
+    assert!(next_server.requests().is_empty());
+
+    let show = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
+    assert!(show.status.success(), "{}", stderr(&show));
+    assert!(stdout(&show).contains("\"releaseVersion\": \"0.2.0\""));
+    let binary = runtime_install_root("stable", &env, &cwd).unwrap();
+    assert_eq!(
+        fs::read(binary.join("files/openclaw-0.2.0")).unwrap(),
+        stable_body
+    );
 }
 
 #[test]
@@ -2175,6 +2394,64 @@ fn runtime_install_force_replaces_an_existing_runtime_definition() {
         "\"binaryPath\": \"{}\"",
         path_string(&expected_binary)
     )));
+}
+
+#[test]
+fn runtime_install_force_rejects_replacing_a_bound_runtime() {
+    let root = TestDir::new("runtime-install-force-bound");
+    let cwd = root.child("workspace");
+    let source_dir = cwd.join("downloads");
+    fs::create_dir_all(&source_dir).unwrap();
+    let original_path = source_dir.join("openclaw-original");
+    let replacement_path = source_dir.join("openclaw-replacement");
+    write_executable_script(&original_path, "#!/bin/sh\nprintf 'original\\n'\n");
+    write_executable_script(&replacement_path, "#!/bin/sh\nprintf 'replacement\\n'\n");
+    let env = ocm_env(&root);
+
+    let install = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--path",
+            "./downloads/openclaw-original",
+        ],
+    );
+    assert!(install.status.success(), "{}", stderr(&install));
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", "stable"],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let replace = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "runtime",
+            "install",
+            "stable",
+            "--path",
+            "./downloads/openclaw-replacement",
+            "--force",
+        ],
+    );
+    assert_eq!(replace.status.code(), Some(1));
+    let error = stderr(&replace);
+    assert!(
+        error.contains("runtime \"stable\" is still used"),
+        "{error}"
+    );
+
+    let install_root = runtime_install_root("stable", &env, &cwd).unwrap();
+    assert_eq!(
+        fs::read_to_string(install_root.join("files/openclaw-original")).unwrap(),
+        "#!/bin/sh\nprintf 'original\\n'\n"
+    );
+    assert!(!install_root.join("files/openclaw-replacement").exists());
 }
 
 #[test]
