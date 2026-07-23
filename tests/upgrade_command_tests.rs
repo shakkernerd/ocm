@@ -1,5 +1,6 @@
 mod support;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -216,6 +217,149 @@ echo "unexpected args: $*" >&2
 exit 1
 "#
     )
+}
+
+struct SeededInPlaceRollback {
+    cwd: PathBuf,
+    env: BTreeMap<String, String>,
+    marker: PathBuf,
+    transaction_id: String,
+    original_recovery_root: PathBuf,
+}
+
+fn seed_in_place_rollback(root: &TestDir, recovery_binary_version: &str) -> SeededInPlaceRollback {
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(root);
+    let ocm_home = PathBuf::from(env.get("OCM_HOME").unwrap());
+    let runtime_name = "stable";
+    let runtime_root = ocm_home.join("runtimes").join(runtime_name);
+    let runtime_binary = runtime_root.join("files/bin/openclaw");
+    fs::create_dir_all(runtime_binary.parent().unwrap()).unwrap();
+    write_executable_script(&runtime_binary, &recording_openclaw_script("2026.6.33"));
+    fs::create_dir_all(ocm_home.join("runtimes")).unwrap();
+    let runtime_meta = |version: &str| {
+        serde_json::json!({
+            "kind": "ocm-runtime",
+            "name": runtime_name,
+            "binaryPath": path_string(&runtime_binary),
+            "sourceKind": "installed",
+            "sourceUrl": "https://example.invalid/openclaw.tgz",
+            "sourceManifestUrl": "https://example.invalid/openclaw",
+            "releaseVersion": version,
+            "releaseChannel": "stable",
+            "installRoot": path_string(&runtime_root),
+            "description": null,
+            "createdAt": "2026-06-11T00:00:00Z",
+            "updatedAt": "2026-06-30T00:00:00Z"
+        })
+    };
+    fs::write(
+        ocm_home.join("runtimes/stable.json"),
+        serde_json::to_vec(&runtime_meta("2026.6.33")).unwrap(),
+    )
+    .unwrap();
+
+    let create = run_ocm(
+        &cwd,
+        &env,
+        &["env", "create", "demo", "--runtime", runtime_name],
+    );
+    assert!(create.status.success(), "{}", stderr(&create));
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_json: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    let marker =
+        Path::new(env_json["root"].as_str().unwrap()).join(".openclaw/workspace/rollback-marker");
+    fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    fs::write(&marker, "before-upgrade").unwrap();
+
+    let snapshot = run_ocm(
+        &cwd,
+        &env,
+        &[
+            "env",
+            "snapshot",
+            "create",
+            "demo",
+            "--label",
+            "pre-upgrade",
+            "--json",
+        ],
+    );
+    assert!(snapshot.status.success(), "{}", stderr(&snapshot));
+    let snapshot_json: Value = serde_json::from_str(&stdout(&snapshot)).unwrap();
+    let snapshot_id = snapshot_json["id"].as_str().unwrap();
+    fs::write(&marker, "after-upgrade").unwrap();
+
+    let transaction_id = "1782864000-000000001".to_string();
+    let original_recovery_root = ocm_home
+        .join("upgrade-history/demo")
+        .join(format!("{transaction_id}.recovery"));
+    let recovery_runtime_root = original_recovery_root.join(runtime_name);
+    let recovery_binary = recovery_runtime_root.join("install-root/files/bin/openclaw");
+    fs::create_dir_all(recovery_binary.parent().unwrap()).unwrap();
+    write_executable_script(
+        &recovery_binary,
+        &recording_openclaw_script(recovery_binary_version),
+    );
+    fs::write(
+        recovery_runtime_root.join("runtime.json"),
+        serde_json::to_vec(&runtime_meta("2026.6.11")).unwrap(),
+    )
+    .unwrap();
+    fs::write(original_recovery_root.join("snapshot-id"), snapshot_id).unwrap();
+    let history = serde_json::json!({
+        "kind": "ocm-upgrade-transaction",
+        "formatVersion": 1,
+        "id": transaction_id.clone(),
+        "envName": "demo",
+        "source": {
+            "kind": "runtime",
+            "name": runtime_name,
+            "openclawVersion": "2026.6.11"
+        },
+        "target": {
+            "kind": "runtime",
+            "name": runtime_name,
+            "openclawVersion": "2026.6.33"
+        },
+        "snapshotId": snapshot_id,
+        "runtimeRecovery": [{
+            "runtimeName": runtime_name,
+            "releaseVersion": "2026.6.11",
+            "backupId": runtime_name
+        }],
+        "startedAt": "2026-06-30T00:00:00Z",
+        "completedAt": "2026-06-30T00:01:00Z",
+        "outcome": "updated",
+        "migration": {"status": "validated"},
+        "finalization": {"status": "completed"},
+        "serviceBefore": {
+            "enabled": env_json["serviceEnabled"],
+            "running": env_json["serviceRunning"]
+        },
+        "serviceAfter": {
+            "enabled": env_json["serviceEnabled"],
+            "running": env_json["serviceRunning"]
+        }
+    });
+    fs::create_dir_all(ocm_home.join("upgrade-history/demo")).unwrap();
+    fs::write(
+        ocm_home
+            .join("upgrade-history/demo")
+            .join(format!("{transaction_id}.json")),
+        serde_json::to_vec(&history).unwrap(),
+    )
+    .unwrap();
+
+    SeededInPlaceRollback {
+        cwd,
+        env,
+        marker,
+        transaction_id,
+        original_recovery_root,
+    }
 }
 
 fn destructive_finalize_openclaw_script(version: &str) -> String {
@@ -2442,6 +2586,121 @@ fn upgrade_rollback_restores_and_reverses_a_runtime_switch() {
         final_history_json[0]["rollbackOf"],
         rollback_json["rollbackTransactionId"]
     );
+}
+
+#[test]
+fn upgrade_rollback_restores_retained_in_place_runtime_bytes() {
+    let root = TestDir::new("upgrade-explicit-rollback-in-place");
+    let fixture = seed_in_place_rollback(&root, "2026.6.11");
+
+    let rollback = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--json"],
+    );
+    assert!(rollback.status.success(), "{}", stderr(&rollback));
+    let rollback_json: Value = serde_json::from_str(&stdout(&rollback)).unwrap();
+    assert_eq!(rollback_json["transactionId"], fixture.transaction_id);
+    assert_eq!(rollback_json["outcome"], "rolled-back");
+    assert_eq!(rollback_json["bindingName"], "stable");
+    assert_eq!(rollback_json["runtimeReleaseVersion"], "2026.6.11");
+    assert_eq!(
+        fs::read_to_string(&fixture.marker).unwrap(),
+        "before-upgrade"
+    );
+    assert!(!fixture.original_recovery_root.exists());
+
+    let version = run_ocm(&fixture.cwd, &fixture.env, &["@demo", "--", "--version"]);
+    assert!(version.status.success(), "{}", stderr(&version));
+    assert_eq!(stdout(&version).trim(), "2026.6.11");
+
+    let history = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "history", "demo", "--json"],
+    );
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    assert_eq!(history_json.as_array().unwrap().len(), 2);
+    let rollback_record = &history_json[0];
+    assert_eq!(rollback_record["rollbackOf"], fixture.transaction_id);
+    assert_eq!(
+        rollback_record["runtimeRecovery"][0]["runtimeName"],
+        "stable"
+    );
+    assert_eq!(
+        rollback_record["runtimeRecovery"][0]["releaseVersion"],
+        "2026.6.33"
+    );
+    assert_eq!(rollback_record["runtimeRecovery"][0]["backupId"], "stable");
+    let reverse_recovery = Path::new(fixture.env.get("OCM_HOME").unwrap())
+        .join("upgrade-history/demo")
+        .join(format!(
+            "{}.recovery/stable/install-root/files/bin/openclaw",
+            rollback_record["id"].as_str().unwrap()
+        ));
+    assert!(reverse_recovery.is_file());
+
+    let reverse = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--json"],
+    );
+    assert!(reverse.status.success(), "{}", stderr(&reverse));
+    let reverse_json: Value = serde_json::from_str(&stdout(&reverse)).unwrap();
+    assert_eq!(reverse_json["outcome"], "rolled-back");
+    assert_eq!(reverse_json["runtimeReleaseVersion"], "2026.6.33");
+    assert_eq!(
+        fs::read_to_string(&fixture.marker).unwrap(),
+        "after-upgrade"
+    );
+
+    let version = run_ocm(&fixture.cwd, &fixture.env, &["@demo", "--", "--version"]);
+    assert!(version.status.success(), "{}", stderr(&version));
+    assert_eq!(stdout(&version).trim(), "2026.6.33");
+}
+
+#[test]
+fn upgrade_rollback_failure_restores_the_pre_rollback_state() {
+    let root = TestDir::new("upgrade-explicit-rollback-failure");
+    let fixture = seed_in_place_rollback(&root, "broken-recovery");
+
+    let rollback = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "rollback", "demo", "--json"],
+    );
+    assert!(!rollback.status.success());
+    let rollback_json: Value = serde_json::from_str(&stdout(&rollback)).unwrap();
+    assert_eq!(rollback_json["transactionId"], fixture.transaction_id);
+    assert_eq!(rollback_json["outcome"], "failed");
+    assert!(
+        rollback_json["note"]
+            .as_str()
+            .unwrap()
+            .contains("restored the pre-rollback state")
+    );
+    assert_eq!(
+        fs::read_to_string(&fixture.marker).unwrap(),
+        "after-upgrade"
+    );
+    assert!(fixture.original_recovery_root.exists());
+
+    let version = run_ocm(&fixture.cwd, &fixture.env, &["@demo", "--", "--version"]);
+    assert!(version.status.success(), "{}", stderr(&version));
+    assert_eq!(stdout(&version).trim(), "2026.6.33");
+
+    let history = run_ocm(
+        &fixture.cwd,
+        &fixture.env,
+        &["upgrade", "history", "demo", "--json"],
+    );
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    assert_eq!(history_json.as_array().unwrap().len(), 2);
+    assert_eq!(history_json[0]["outcome"], "failed");
+    assert_eq!(history_json[0]["rollback"], "restored");
+    assert_eq!(history_json[0]["rollbackOf"], fixture.transaction_id);
 }
 
 #[test]
