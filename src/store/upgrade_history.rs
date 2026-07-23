@@ -126,6 +126,39 @@ pub fn list_upgrade_history(
     Ok(records)
 }
 
+pub(crate) fn remove_upgrade_recovery_for_snapshot(
+    env_name: &str,
+    snapshot_id: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<(), String> {
+    let env_name = validate_name(env_name, "Environment name")?;
+    let recovery_parent = upgrade_history_env_dir(&env_name, env, cwd)?;
+    if !recovery_parent.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(&recovery_parent).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if !file_type.is_dir() || !entry.file_name().to_string_lossy().ends_with(".recovery") {
+            continue;
+        }
+        let Ok(recovery_snapshot_id) = std::fs::read_to_string(path.join("snapshot-id")) else {
+            continue;
+        };
+        if recovery_snapshot_id.trim() == snapshot_id {
+            std::fs::remove_dir_all(&path).map_err(|error| {
+                format!(
+                    "failed to remove upgrade recovery at {}: {error}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
