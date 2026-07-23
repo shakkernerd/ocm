@@ -1235,6 +1235,11 @@ fn upgrade_dry_run_reports_without_changing_runtime_or_creating_snapshot() {
     assert!(snapshots.status.success(), "{}", stderr(&snapshots));
     let snapshot_json: Value = serde_json::from_str(&stdout(&snapshots)).unwrap();
     assert_eq!(snapshot_json.as_array().unwrap().len(), 0);
+
+    let history = run_ocm(&cwd, &env, &["upgrade", "history", "demo", "--json"]);
+    assert!(history.status.success(), "{}", stderr(&history));
+    let history_json: Value = serde_json::from_str(&stdout(&history)).unwrap();
+    assert_eq!(history_json.as_array().unwrap().len(), 0);
 }
 
 #[test]
