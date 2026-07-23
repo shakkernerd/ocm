@@ -1,10 +1,14 @@
 mod support;
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use base64::Engine;
 use flate2::{Compression, write::GzEncoder};
-use ocm::store::clean_path;
+use fs2::FileExt;
+use ocm::store::{clean_path, env_registry_path};
 use sha2::{Digest, Sha512};
 use tar::{Builder, Header};
 
@@ -92,6 +96,78 @@ fn env_set_runtime_updates_and_clears_the_default_runtime() {
     let show_cleared = run_ocm(&cwd, &env, &["env", "show", "demo"]);
     assert!(show_cleared.status.success(), "{}", stderr(&show_cleared));
     assert!(!stdout(&show_cleared).contains("defaultRuntime:"));
+}
+
+#[test]
+fn runtime_binding_and_removal_share_the_environment_registry_lock() {
+    let root = TestDir::new("runtime-binding-remove-lock");
+    let cwd = root.child("workspace");
+    let bin_dir = cwd.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_executable_script(&bin_dir.join("stable"), "#!/bin/sh\nexit 0\n");
+    let env = ocm_env(&root);
+
+    let add = run_ocm(
+        &cwd,
+        &env,
+        &["runtime", "add", "stable", "--path", "./bin/stable"],
+    );
+    assert!(add.status.success(), "{}", stderr(&add));
+    let create = run_ocm(&cwd, &env, &["env", "create", "demo"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let lock_path = env_registry_path(&env, &cwd)
+        .unwrap()
+        .with_extension("lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+
+    let mut bind = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    bind.current_dir(&cwd)
+        .args(["env", "set-runtime", "demo", "stable"])
+        .env_clear()
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut bind = bind.spawn().unwrap();
+    thread::sleep(Duration::from_millis(100));
+
+    let mut remove = Command::new(env!("CARGO_BIN_EXE_ocm"));
+    remove
+        .current_dir(&cwd)
+        .args(["runtime", "remove", "stable"])
+        .env_clear()
+        .envs(&env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut remove = remove.spawn().unwrap();
+    thread::sleep(Duration::from_millis(100));
+
+    assert!(bind.try_wait().unwrap().is_none());
+    assert!(remove.try_wait().unwrap().is_none());
+    FileExt::unlock(&lock).unwrap();
+
+    let bind = bind.wait_with_output().unwrap();
+    let remove = remove.wait_with_output().unwrap();
+    assert_ne!(bind.status.success(), remove.status.success());
+
+    let environment = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(environment.status.success(), "{}", stderr(&environment));
+    let environment: serde_json::Value = serde_json::from_str(&stdout(&environment)).unwrap();
+    let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable"]);
+    if bind.status.success() {
+        assert!(runtime.status.success(), "{}", stderr(&runtime));
+        assert_eq!(environment["defaultRuntime"], "stable");
+    } else {
+        assert!(!runtime.status.success());
+        assert!(environment["defaultRuntime"].is_null());
+    }
 }
 
 #[test]
