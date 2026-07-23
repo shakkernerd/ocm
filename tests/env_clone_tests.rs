@@ -159,6 +159,44 @@ fn env_clone_preserves_configured_custom_workspaces_without_prefix_lookalikes() 
 }
 
 #[test]
+fn env_clone_preserves_keyed_workspaces_using_javascript_property_order() {
+    let root = TestDir::new("env-clone-keyed-workspace-order");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+
+    let create = run_ocm(&cwd, &env, &["env", "create", "source"]);
+    assert!(create.status.success(), "{}", stderr(&create));
+
+    let source_state = root.child("ocm-home/envs/source/.openclaw");
+    write_text(
+        &source_state.join("openclaw.json"),
+        r#"{"agents":{"entries":{"10":{},"2":{}}}}"#,
+    );
+    write_text(
+        &source_state.join("workspace/default.txt"),
+        "default workspace\n",
+    );
+    write_text(
+        &source_state.join("workspace-10/secondary.txt"),
+        "secondary workspace\n",
+    );
+
+    let clone = run_ocm(&cwd, &env, &["env", "clone", "source", "target"]);
+    assert!(clone.status.success(), "{}", stderr(&clone));
+
+    let target_state = root.child("ocm-home/envs/target/.openclaw");
+    assert_eq!(
+        fs::read_to_string(target_state.join("workspace/default.txt")).unwrap(),
+        "default workspace\n"
+    );
+    assert_eq!(
+        fs::read_to_string(target_state.join("workspace-10/secondary.txt")).unwrap(),
+        "secondary workspace\n"
+    );
+}
+
+#[test]
 fn env_clone_uses_openclaw_config_env_precedence_for_workspace_selection() {
     let root = TestDir::new("env-clone-config-env-precedence");
     let cwd = root.child("workspace");

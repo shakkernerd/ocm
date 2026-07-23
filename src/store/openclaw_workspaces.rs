@@ -15,6 +15,7 @@ const DEFAULT_AGENT_ID: &str = "main";
 const MAX_INCLUDE_DEPTH: usize = 10;
 const MAX_INCLUDE_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_INCLUDE_PATH_LENGTH: usize = 4096;
+const BLOCKED_OBJECT_KEYS: [&str; 3] = ["__proto__", "prototype", "constructor"];
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct OpenClawWorkspaceRuntime<'a> {
@@ -564,15 +565,59 @@ fn is_openclaw_env_var_name(name: &str) -> bool {
         && chars.all(|ch| ch == '_' || ch.is_ascii_uppercase() || ch.is_ascii_digit())
 }
 
-fn agent_entries(config: &Value) -> Vec<&Map<String, Value>> {
+fn agent_entries(config: &Value) -> Vec<Map<String, Value>> {
+    if let Some(entries) = config.pointer("/agents/entries").and_then(Value::as_object) {
+        return javascript_property_entries(entries)
+            .into_iter()
+            .filter(|(agent_id, _)| agent_id.as_str() != "__proto__")
+            .filter_map(|(agent_id, entry)| {
+                let mut entry = entry.as_object()?.clone();
+                entry.insert("id".to_string(), Value::String(agent_id.clone()));
+                Some(entry)
+            })
+            .collect();
+    }
     config
         .pointer("/agents/list")
         .and_then(Value::as_array)
-        .map(|entries| entries.iter().filter_map(Value::as_object).collect())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(Value::as_object)
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default()
 }
 
-fn resolve_default_agent_id(entries: &[&Map<String, Value>]) -> String {
+fn is_blocked_object_key(key: &str) -> bool {
+    BLOCKED_OBJECT_KEYS.contains(&key)
+}
+
+fn javascript_property_entries(entries: &Map<String, Value>) -> Vec<(&String, &Value)> {
+    let mut integer_entries = entries
+        .iter()
+        .filter_map(|entry @ (key, _)| javascript_array_index(key).map(|index| (index, entry)))
+        .collect::<Vec<_>>();
+    integer_entries.sort_unstable_by_key(|(index, _)| *index);
+
+    integer_entries
+        .into_iter()
+        .map(|(_, entry)| entry)
+        .chain(
+            entries
+                .iter()
+                .filter(|(key, _)| javascript_array_index(key).is_none()),
+        )
+        .collect()
+}
+
+fn javascript_array_index(key: &str) -> Option<u32> {
+    let index = key.parse::<u32>().ok()?;
+    (index != u32::MAX && index.to_string() == key).then_some(index)
+}
+
+fn resolve_default_agent_id(entries: &[Map<String, Value>]) -> String {
     let selected = entries
         .iter()
         .find(|entry| entry.get("default").and_then(Value::as_bool) == Some(true))
@@ -871,18 +916,37 @@ fn deep_merge(base: Value, override_value: Value) -> Value {
             base.extend(override_values);
             Value::Array(base)
         }
-        (Value::Object(mut base), Value::Object(override_values)) => {
+        (Value::Object(base), Value::Object(override_values)) => {
+            let mut base = sanitize_plain_object(base);
+            let override_values = sanitize_plain_object(override_values);
             for (key, value) in override_values {
-                let merged = base
-                    .remove(&key)
-                    .map(|current| deep_merge(current, value.clone()))
-                    .unwrap_or(value);
-                base.insert(key, merged);
+                if let Some(current) = base.get_mut(&key) {
+                    *current = deep_merge(std::mem::take(current), value);
+                } else {
+                    base.insert(key, value);
+                }
             }
             Value::Object(base)
         }
+        (_, Value::Object(override_values)) => {
+            Value::Object(sanitize_plain_object(override_values))
+        }
         (_, override_value) => override_value,
     }
+}
+
+fn sanitize_plain_object(object: Map<String, Value>) -> Map<String, Value> {
+    object
+        .into_iter()
+        .filter(|(key, _)| !is_blocked_object_key(key))
+        .map(|(key, value)| {
+            let value = match value {
+                Value::Object(nested) => Value::Object(sanitize_plain_object(nested)),
+                value => value,
+            };
+            (key, value)
+        })
+        .collect()
 }
 
 fn canonicalize_path_allow_missing(path: &Path) -> Result<PathBuf, String> {
@@ -996,11 +1060,11 @@ mod tests {
             r#"{
               "agents": {
                 "defaults": { "workspace": "~/teams" },
-                "list": [
-                  { "id": "Primary", "default": true },
-                  { "id": "Ops Team" },
-                  { "id": "Custom", "workspace": "~/.openclaw/team/custom" }
-                ]
+                "entries": {
+                  "Primary": { "default": true },
+                  "ops-team": {},
+                  "Custom": { "workspace": "~/.openclaw/team/custom" }
+                }
               }
             }"#,
         )
@@ -1020,6 +1084,206 @@ mod tests {
                 root.join("teams/ops-team"),
                 root.join(".openclaw/team/custom"),
             ])
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn keyed_workspace_inventory_preserves_the_first_entry_as_the_implicit_default() {
+        let root = test_root("inventory-key-order");
+        let paths = super::super::layout::derive_env_paths(&root);
+        fs::create_dir_all(&paths.state_dir).unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{
+              "agents": {
+                "defaults": { "workspace": "~/teams" },
+                "entries": {
+                  "zeta": { "workspace": "~/zeta" },
+                  "alpha": { "workspace": "~/alpha" }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
+        assert_eq!(inventory.default_agent_id, "zeta");
+        assert_eq!(
+            inventory.default_agent_workspace(),
+            Some(root.join("zeta").as_path())
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn keyed_workspace_inventory_matches_javascript_integer_key_order() {
+        let root = test_root("inventory-key-integer-order");
+        let paths = super::super::layout::derive_env_paths(&root);
+        fs::create_dir_all(&paths.state_dir).unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{
+              "agents": {
+                "entries": {
+                  "10": {},
+                  "2": {}
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
+        assert_eq!(inventory.default_agent_id, "2");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn keyed_workspace_inventory_preserves_direct_constructor_and_prototype_keys() {
+        let root = test_root("inventory-direct-object-keys");
+        let paths = super::super::layout::derive_env_paths(&root);
+        fs::create_dir_all(&paths.state_dir).unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{
+              "agents": {
+                "defaults": { "workspace": "~/teams" },
+                "entries": {
+                  "constructor": { "workspace": "~/constructor" },
+                  "prototype": { "workspace": "~/prototype" },
+                  "__proto__": { "workspace": "~/ignored-proto" },
+                  "ops": {}
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
+        assert_eq!(inventory.default_agent_id, "constructor");
+        assert_eq!(
+            inventory.default_agent_workspace(),
+            Some(root.join("constructor").as_path())
+        );
+        assert_eq!(
+            inventory.agent_workspace("prototype"),
+            Some(root.join("prototype").as_path())
+        );
+        assert_eq!(inventory.agent_workspace("__proto__"), None);
+        assert!(!inventory.contains(&root.join("ignored-proto")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn keyed_workspace_inventory_matches_openclaw_include_sanitization() {
+        let root = test_root("inventory-included-object-keys");
+        let paths = super::super::layout::derive_env_paths(&root);
+        fs::create_dir_all(paths.state_dir.join("config")).unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{
+              "$include": "./config/agents.json5",
+              "env": {}
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            paths.state_dir.join("config/agents.json5"),
+            r#"{
+              "agents": {
+                "defaults": { "workspace": "~/teams" },
+                "entries": {
+                  "constructor": { "workspace": "~/ignored" },
+                  "prototype": { "workspace": "~/ignored-prototype" },
+                  "__proto__": { "workspace": "~/ignored-proto" },
+                  "ops": {}
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
+        assert_eq!(inventory.default_agent_id, "ops");
+        assert_eq!(
+            inventory.default_agent_workspace(),
+            Some(root.join("teams").as_path())
+        );
+        assert_eq!(inventory.agent_workspace("constructor"), None);
+        assert_eq!(inventory.agent_workspace("prototype"), None);
+        assert_eq!(inventory.agent_workspace("__proto__"), None);
+        assert!(!inventory.contains(&root.join("ignored")));
+        assert!(!inventory.contains(&root.join("ignored-prototype")));
+        assert!(!inventory.contains(&root.join("ignored-proto")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn keyed_workspace_inventory_preserves_included_key_position_on_override() {
+        let root = test_root("inventory-key-include-order");
+        let paths = super::super::layout::derive_env_paths(&root);
+        fs::create_dir_all(paths.state_dir.join("config")).unwrap();
+        fs::write(
+            &paths.config_path,
+            r#"{
+              "$include": "./config/agents.json5",
+              "agents": {
+                "entries": {
+                  "primary": { "name": "override" }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            paths.state_dir.join("config/agents.json5"),
+            r#"{
+              agents: {
+                entries: {
+                  primary: {},
+                  ops: {}
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let inventory = resolve_env_openclaw_workspaces(
+            &paths,
+            &test_env(),
+            OpenClawWorkspaceRuntime::default(),
+        )
+        .unwrap();
+        assert_eq!(inventory.default_agent_id, "primary");
+        assert_eq!(
+            inventory.agent_workspace("ops"),
+            Some(paths.state_dir.join("workspace-ops").as_path())
         );
 
         let _ = fs::remove_dir_all(root);
