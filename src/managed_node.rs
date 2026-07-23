@@ -237,8 +237,10 @@ fn apply_path_prepend_to_environment_with_platform_semantics(
     )?
     .into_string()
     .map_err(|_| "managed Node.js PATH contains non-Unicode data".to_string())?;
-    if let Some(existing_key) = environment_path_key(env, case_insensitive) {
-        env.remove(&existing_key);
+    if case_insensitive {
+        env.retain(|key, _| !key.eq_ignore_ascii_case("PATH"));
+    } else {
+        env.remove("PATH");
     }
     env.insert("PATH".to_string(), path);
     Ok(())
@@ -420,20 +422,15 @@ fn environment_path_value(
     env: &BTreeMap<String, String>,
     case_insensitive: bool,
 ) -> Option<&String> {
-    environment_path_key(env, case_insensitive).and_then(|key| env.get(&key))
-}
-
-fn environment_path_key(env: &BTreeMap<String, String>, case_insensitive: bool) -> Option<String> {
-    if env.contains_key("PATH") {
-        return Some("PATH".to_string());
+    if let Some(path) = env.get("PATH") {
+        return Some(path);
     }
-    case_insensitive
-        .then(|| {
-            env.keys()
-                .find(|key| key.eq_ignore_ascii_case("PATH"))
-                .cloned()
-        })
-        .flatten()
+    if !case_insensitive {
+        return None;
+    }
+    env.iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| value)
 }
 
 fn prepend_to_path(
@@ -486,7 +483,8 @@ mod tests {
     #[test]
     fn managed_node_path_replaces_windows_path_without_losing_system_entries() {
         let mut env = BTreeMap::new();
-        env.insert("Path".to_string(), path_value(&["system", "tools"]));
+        env.insert("PATH".to_string(), path_value(&["system", "tools"]));
+        env.insert("Path".to_string(), path_value(&["stale"]));
 
         apply_path_prepend_to_environment_with_platform_semantics(
             &mut env,
@@ -496,6 +494,12 @@ mod tests {
         .unwrap();
 
         assert!(!env.contains_key("Path"));
+        assert_eq!(
+            env.keys()
+                .filter(|key| key.eq_ignore_ascii_case("PATH"))
+                .count(),
+            1
+        );
         assert_eq!(
             std::env::split_paths(env.get("PATH").unwrap()).collect::<Vec<_>>(),
             vec![
