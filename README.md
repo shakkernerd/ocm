@@ -251,10 +251,16 @@ OCM negotiates fresh-process restart support only when it executes an
 `openclaw.mjs` entrypoint directly or through OCM's managed Node.js toolchain,
 so the gateway PID is the process OCM owns. `ocm service status <env>` reports
 `protocol v1` when OpenClaw can hand restart intent back to OCM atomically.
+With that protocol, `ocm service restart <env>` asks OpenClaw to drain active
+work before handing the process restart back to OCM. If the drain is still in
+progress after OCM's observation window, the command returns a pending warning
+and leaves the gateway running; it does not escalate a slow drain into a kill.
+
 Package-manager, shell, host-Node, and other wrapper-backed bindings run in
 legacy compatibility mode without OCM's native service identity or detached
-respawn; use `ocm service restart <env>` or bind a directly invoked OpenClaw
-runtime for gateway-initiated fresh-process restarts.
+respawn. Bind a directly invoked OpenClaw runtime for gateway-aware restarts, or
+use `ocm service restart <env> --force` as an explicit recovery action that
+bypasses active-work draining.
 
 ## Why not just run OpenClaw directly?
 

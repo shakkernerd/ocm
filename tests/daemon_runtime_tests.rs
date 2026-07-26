@@ -842,7 +842,7 @@ fn service_restart_restarts_only_the_target_child() {
     let restart = run_ocm(
         &cwd,
         &restart_env,
-        &["service", "restart", "rescue", "--json"],
+        &["service", "restart", "rescue", "--force", "--json"],
     );
     assert!(restart.status.success(), "{}", stderr(&restart));
     let restarted = wait_for_runtime_child_pid_change(
@@ -909,7 +909,11 @@ fn service_restart_requeues_a_stopped_desired_child() {
         .expect("daemon runtime state did not report the quick clean exit as stopped");
     assert!(!started.exists());
 
-    let restart = run_ocm(&cwd, &env, &["service", "restart", "demo", "--json"]);
+    let restart = run_ocm(
+        &cwd,
+        &env,
+        &["service", "restart", "demo", "--force", "--json"],
+    );
     assert!(restart.status.success(), "{}", stderr(&restart));
     let runtime =
         wait_for_runtime_children(&runtime_path, 1, Some("demo"), Duration::from_secs(10))

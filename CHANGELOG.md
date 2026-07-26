@@ -4,6 +4,10 @@ All notable changes to OCM are documented here.
 
 ## Unreleased
 
+### Changed
+
+- Make `ocm service restart <env>` request an indefinite OpenClaw active-work drain before restart when restart-handoff protocol v1 is available, require explicit `--force` for interrupting legacy or unhealthy gateways, and return immediately for self-restarts so the requesting turn can finish.
+
 ## 0.2.30 - 2026-07-23
 
 ### Added

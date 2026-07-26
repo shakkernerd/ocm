@@ -1,13 +1,19 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 use serde::Serialize;
 
 use super::inspect::ServiceSummary;
 use super::service_backend_support_error;
-use crate::env::EnvironmentService;
+use crate::env::{EnvironmentService, ResolvedExecution};
+use crate::infra::shell::{build_openclaw_dev_source_env, build_openclaw_env};
+use crate::managed_node::apply_path_prepend_to_environment;
 use crate::store::{restore_environment_service_policy, set_environment_service_policy};
 use crate::supervisor::{SupervisorService, sync_supervisor_if_present};
 
@@ -30,6 +36,11 @@ pub struct ServiceActionSummary {
 }
 
 pub type ServiceInstallSummary = ServiceActionSummary;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ServiceRestartOptions {
+    pub force: bool,
+}
 
 #[derive(Clone, Copy)]
 enum ServiceSupervisorPolicy {
@@ -128,6 +139,7 @@ pub fn stop_service(
 
 pub fn restart_service(
     name: &str,
+    options: ServiceRestartOptions,
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<ServiceActionSummary, String> {
@@ -143,6 +155,48 @@ pub fn restart_service(
         return update_service(name, ServiceUpdate::Restart, env, cwd);
     }
 
+    if options.force {
+        return force_restart_running_service(name, before, env, cwd);
+    }
+
+    if before.restart_handoff.as_deref() != Some("protocol-v1") {
+        return Err(format!(
+            "env \"{name}\" has not negotiated external restart handoff protocol v1; upgrade its OpenClaw runtime or use \"ocm service restart {name} --force\" to bypass active-work draining"
+        ));
+    }
+
+    spawn_gateway_aware_restart(name, env, cwd)?;
+
+    if env.get("OCM_ACTIVE_ENV").map(String::as_str) == Some(name) {
+        let mut warnings = vec![
+            "gateway-aware restart was scheduled without waiting because the request originated inside the target gateway; it will restart after active work drains"
+                .to_string(),
+        ];
+        let summary = super::inspect::service_status_fast(name, env, cwd)?;
+        if !summary.running {
+            warnings
+                .push("gateway is already transitioning to its replacement process".to_string());
+        }
+        return Ok(service_action_summary("restart", summary, warnings));
+    }
+
+    let status = wait_for_restart_action_summary(name, before.child_pid, env, cwd)?;
+    let mut warnings = status.warnings;
+    if !status.observed_restart {
+        warnings.push(
+            "gateway-aware restart was accepted and remains pending while active work drains; OCM did not force-stop the gateway"
+                .to_string(),
+        );
+    }
+    Ok(service_action_summary("restart", status.summary, warnings))
+}
+
+fn force_restart_running_service(
+    name: &str,
+    before: ServiceSummary,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<ServiceActionSummary, String> {
     let supervisor = SupervisorService::new(env, cwd);
     let mut request_id = supervisor.request_child_restart(name)?;
     let restart_result = wait_for_restart_action_summary(name, before.child_pid, env, cwd);
@@ -179,6 +233,9 @@ pub fn restart_service(
                     "restart completed, but failed to clear restart request: {clear_error}"
                 ));
             }
+            status
+                .warnings
+                .push("forced restart bypassed OpenClaw active-work draining".to_string());
             Ok(service_action_summary(
                 "restart",
                 status.summary,
@@ -186,6 +243,133 @@ pub fn restart_service(
             ))
         }
         Err(restart_error) => Err(restart_error),
+    }
+}
+
+fn spawn_gateway_aware_restart(
+    name: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<(), String> {
+    let args = vec![
+        "gateway".to_string(),
+        "restart".to_string(),
+        "--wait".to_string(),
+        "0".to_string(),
+        "--json".to_string(),
+    ];
+    let resolved = EnvironmentService::new(env, cwd).resolve(name, None, None, &args)?;
+    let command = resolved_restart_command(resolved, env)?;
+    let mut process = Command::new(&command.program);
+    process
+        .args(&command.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env_clear()
+        .envs(&command.env)
+        .current_dir(&command.cwd);
+    #[cfg(unix)]
+    process.process_group(0);
+    let mut child = process
+        .spawn()
+        .map_err(|error| format!("failed to run \"{}\": {error}", command.program))?;
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "OpenClaw rejected the gateway-aware restart for env \"{name}\" (exit code {}); no forced restart was attempted. Inspect the gateway logs or use \"ocm service restart {name} --force\" to bypass active-work draining",
+                    status.code().unwrap_or(1)
+                ));
+            }
+            Ok(None) => sleep(Duration::from_millis(25)),
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect the gateway-aware restart helper for env \"{name}\": {error}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+struct ResolvedRestartCommand {
+    program: String,
+    args: Vec<String>,
+    env: BTreeMap<String, String>,
+    cwd: PathBuf,
+}
+
+fn resolved_restart_command(
+    resolved: ResolvedExecution,
+    process_env: &BTreeMap<String, String>,
+) -> Result<ResolvedRestartCommand, String> {
+    match resolved {
+        ResolvedExecution::Launcher {
+            env,
+            command,
+            run_dir,
+            ..
+        } => {
+            let openclaw_env = build_openclaw_env(&env, process_env);
+            if cfg!(windows) {
+                Ok(ResolvedRestartCommand {
+                    program: "cmd".to_string(),
+                    args: vec!["/C".to_string(), command],
+                    env: openclaw_env,
+                    cwd: run_dir,
+                })
+            } else {
+                Ok(ResolvedRestartCommand {
+                    program: "sh".to_string(),
+                    args: vec!["-lc".to_string(), command],
+                    env: openclaw_env,
+                    cwd: run_dir,
+                })
+            }
+        }
+        ResolvedExecution::Runtime {
+            env,
+            program,
+            program_args,
+            path_prepend,
+            run_dir,
+            ..
+        } => {
+            let mut openclaw_env = build_openclaw_env(&env, process_env);
+            apply_path_prepend_to_environment(&mut openclaw_env, path_prepend.as_deref())?;
+            Ok(ResolvedRestartCommand {
+                program,
+                args: program_args,
+                env: openclaw_env,
+                cwd: run_dir,
+            })
+        }
+        ResolvedExecution::Dev {
+            env,
+            program,
+            program_args,
+            run_dir,
+            ..
+        }
+        | ResolvedExecution::SourceWatch {
+            env,
+            program,
+            program_args,
+            run_dir,
+            ..
+        } => {
+            let openclaw_env = build_openclaw_dev_source_env(&env, process_env, &run_dir);
+            Ok(ResolvedRestartCommand {
+                program,
+                args: program_args,
+                env: openclaw_env,
+                cwd: run_dir,
+            })
+        }
     }
 }
 

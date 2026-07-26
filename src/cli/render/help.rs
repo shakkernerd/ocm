@@ -2125,9 +2125,15 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "restart" => render_leaf(
             "Restart an env under the background service",
-            "Restart one env under the shared OCM background service.",
-            vec![format!("{cmd} service restart <env> [--raw] [--json]")],
+            "Ask OpenClaw to drain active work before restarting one env under the shared OCM background service.",
+            vec![format!(
+                "{cmd} service restart <env> [--force] [--raw] [--json]"
+            )],
             &[
+                (
+                    "--force",
+                    "Bypass OpenClaw active-work draining and restart the supervised child directly",
+                ),
                 (
                     "--raw",
                     "Force plain line output instead of the TTY receipt view",
@@ -2135,7 +2141,10 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the action summary as JSON"),
             ],
             vec![format!("{cmd} service restart mira")],
-            &[],
+            &[
+                "The default gateway-aware restart can remain pending while active work drains.",
+                "Use --force only for recovery when the gateway cannot accept a graceful restart request.",
+            ],
         ),
         "uninstall" => render_leaf(
             "Disable an env in the background service",

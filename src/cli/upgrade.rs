@@ -2677,9 +2677,12 @@ impl Cli {
         }
 
         if service.running {
-            let restart = self
-                .with_progress(format!("Restarting service for {env_name}"), || {
-                    self.service_service().restart_locked(env_name)
+            let restart =
+                self.with_progress(format!("Restarting service for {env_name}"), || {
+                    self.service_service().restart_locked_with_options(
+                        env_name,
+                        crate::service::ServiceRestartOptions { force: true },
+                    )
                 })?;
             let note = join_optional_warnings(
                 join_warnings(&restart.warnings),

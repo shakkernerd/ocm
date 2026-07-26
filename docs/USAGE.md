@@ -303,6 +303,23 @@ ocm service stop mira
 ocm service restart mira
 ```
 
+Normal restart is gateway-aware when `ocm service status mira` reports restart
+handoff `protocol v1`: OpenClaw drains active work and then hands the fresh
+process restart back to OCM. A restart can therefore remain pending after the
+command returns. OCM leaves the existing gateway running while it drains
+instead of force-stopping it.
+
+Use the forced path only when the gateway is unhealthy or its binding cannot
+negotiate the restart handoff:
+
+```bash
+ocm service restart mira --force
+```
+
+Forced restart bypasses OpenClaw's active-work drain and can interrupt an
+in-flight turn. OpenClaw restart recovery may resume supported sessions, but a
+forced restart is intentionally the recovery path rather than the default.
+
 ### Remove the service
 
 ```bash

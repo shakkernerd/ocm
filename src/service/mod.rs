@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub use inspect::{ServiceSummary, ServiceSummaryList};
-pub use manage::{ServiceActionSummary, ServiceInstallSummary};
+pub use manage::{ServiceActionSummary, ServiceInstallSummary, ServiceRestartOptions};
 pub(crate) use platform::{
     ServiceManagerKind, service_backend_support_error, service_manager_kind,
 };
@@ -53,12 +53,24 @@ impl<'a> ServiceService<'a> {
     }
 
     pub fn restart(&self, name: &str) -> Result<ServiceActionSummary, String> {
-        let _lock = crate::env::EnvironmentService::new(self.env, self.cwd).lock_operation(name)?;
-        self.restart_locked(name)
+        self.restart_with_options(name, ServiceRestartOptions::default())
     }
 
-    pub(crate) fn restart_locked(&self, name: &str) -> Result<ServiceActionSummary, String> {
-        manage::restart_service(name, self.env, self.cwd)
+    pub fn restart_with_options(
+        &self,
+        name: &str,
+        options: ServiceRestartOptions,
+    ) -> Result<ServiceActionSummary, String> {
+        let _lock = crate::env::EnvironmentService::new(self.env, self.cwd).lock_operation(name)?;
+        self.restart_locked_with_options(name, options)
+    }
+
+    pub(crate) fn restart_locked_with_options(
+        &self,
+        name: &str,
+        options: ServiceRestartOptions,
+    ) -> Result<ServiceActionSummary, String> {
+        manage::restart_service(name, options, self.env, self.cwd)
     }
 
     pub fn uninstall(&self, name: &str) -> Result<ServiceActionSummary, String> {
