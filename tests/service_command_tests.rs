@@ -579,19 +579,6 @@ fn service_restart_requests_immediate_recovery_handoff_without_self_deadlock() {
 }
 
 #[test]
-fn service_restart_requires_handoff_or_explicit_force() {
-    let root = TestDir::new("service-restart-requires-handoff");
-    let (cwd, env, invocation_log) = setup_gateway_aware_restart_fixture(&root, "legacy");
-
-    let output = run_ocm(&cwd, &env, &["service", "restart", "demo"]);
-    assert!(!output.status.success());
-    let error = stderr(&output);
-    assert!(error.contains("has not negotiated external restart handoff protocol v1"));
-    assert!(error.contains("ocm service restart demo --force"));
-    assert!(!invocation_log.exists());
-}
-
-#[test]
 fn service_uninstall_disables_the_env_service() {
     let root = TestDir::new("service-uninstall");
     let cwd = root.child("workspace");

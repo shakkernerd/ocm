@@ -259,9 +259,11 @@ in-flight turn to finish before replacing the gateway process.
 
 Package-manager, shell, host-Node, and other wrapper-backed bindings run in
 legacy compatibility mode without OCM's native service identity or detached
-respawn. Bind a directly invoked OpenClaw runtime for gateway-aware restarts, or
-use `ocm service restart <env> --force` as an explicit emergency action that
-bypasses OpenClaw's recovery handoff and replaces the supervised child directly.
+respawn. `ocm service restart <env>` preserves their existing direct-supervisor
+restart behavior and warns that in-flight work cannot be recovered. Bind a
+directly invoked OpenClaw runtime to gain recovery-aware restarts. Use
+`ocm service restart <env> --force` only to explicitly bypass a recovery
+handoff that is advertised but unhealthy.
 
 ## Why not just run OpenClaw directly?
 

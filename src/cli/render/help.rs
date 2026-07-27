@@ -2143,7 +2143,8 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!("{cmd} service restart mira")],
             &[
                 "The default restart does not wait for active work; OpenClaw records eligible interrupted work for recovery before exiting.",
-                "Use --force only for recovery when the gateway cannot accept the OpenClaw restart handoff.",
+                "Gateways without recovery handoff support keep the legacy direct-restart behavior and emit a warning.",
+                "Use --force only to bypass a recovery handoff that is advertised but unhealthy.",
             ],
         ),
         "uninstall" => render_leaf(

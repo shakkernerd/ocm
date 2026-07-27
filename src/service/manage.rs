@@ -156,13 +156,23 @@ pub fn restart_service(
     }
 
     if options.force {
-        return force_restart_running_service(name, before, env, cwd);
+        return restart_running_service_directly(
+            name,
+            before,
+            env,
+            cwd,
+            "forced supervisor restart bypassed OpenClaw restart recovery handoff",
+        );
     }
 
     if before.restart_handoff.as_deref() != Some("protocol-v1") {
-        return Err(format!(
-            "env \"{name}\" has not negotiated external restart handoff protocol v1; upgrade its OpenClaw runtime or use \"ocm service restart {name} --force\" to restart the supervised child without OpenClaw recovery handoff"
-        ));
+        return restart_running_service_directly(
+            name,
+            before,
+            env,
+            cwd,
+            "OpenClaw restart recovery handoff protocol v1 is unavailable; used the legacy direct supervisor restart path, so in-flight work may have been interrupted",
+        );
     }
 
     spawn_recovery_aware_restart(name, env, cwd)?;
@@ -191,11 +201,12 @@ pub fn restart_service(
     Ok(service_action_summary("restart", status.summary, warnings))
 }
 
-fn force_restart_running_service(
+fn restart_running_service_directly(
     name: &str,
     before: ServiceSummary,
     env: &BTreeMap<String, String>,
     cwd: &Path,
+    restart_warning: &str,
 ) -> Result<ServiceActionSummary, String> {
     let supervisor = SupervisorService::new(env, cwd);
     let mut request_id = supervisor.request_child_restart(name)?;
@@ -233,9 +244,7 @@ fn force_restart_running_service(
                     "restart completed, but failed to clear restart request: {clear_error}"
                 ));
             }
-            status.warnings.push(
-                "forced supervisor restart bypassed OpenClaw restart recovery handoff".to_string(),
-            );
+            status.warnings.push(restart_warning.to_string());
             Ok(service_action_summary(
                 "restart",
                 status.summary,
