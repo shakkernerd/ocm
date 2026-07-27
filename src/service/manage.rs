@@ -161,15 +161,15 @@ pub fn restart_service(
 
     if before.restart_handoff.as_deref() != Some("protocol-v1") {
         return Err(format!(
-            "env \"{name}\" has not negotiated external restart handoff protocol v1; upgrade its OpenClaw runtime or use \"ocm service restart {name} --force\" to bypass active-work draining"
+            "env \"{name}\" has not negotiated external restart handoff protocol v1; upgrade its OpenClaw runtime or use \"ocm service restart {name} --force\" to restart the supervised child without OpenClaw recovery handoff"
         ));
     }
 
-    spawn_gateway_aware_restart(name, env, cwd)?;
+    spawn_recovery_aware_restart(name, env, cwd)?;
 
     if env.get("OCM_ACTIVE_ENV").map(String::as_str) == Some(name) {
         let mut warnings = vec![
-            "gateway-aware restart was scheduled without waiting because the request originated inside the target gateway; it will restart after active work drains"
+            "recovery-aware restart was scheduled without waiting because the request originated inside the target gateway; OpenClaw will preserve and resume eligible interrupted work after restart"
                 .to_string(),
         ];
         let summary = super::inspect::service_status_fast(name, env, cwd)?;
@@ -184,7 +184,7 @@ pub fn restart_service(
     let mut warnings = status.warnings;
     if !status.observed_restart {
         warnings.push(
-            "gateway-aware restart was accepted and remains pending while active work drains; OCM did not force-stop the gateway"
+            "recovery-aware restart was accepted, but OCM did not observe a replacement gateway within 30 seconds; no direct supervisor restart was attempted"
                 .to_string(),
         );
     }
@@ -233,9 +233,9 @@ fn force_restart_running_service(
                     "restart completed, but failed to clear restart request: {clear_error}"
                 ));
             }
-            status
-                .warnings
-                .push("forced restart bypassed OpenClaw active-work draining".to_string());
+            status.warnings.push(
+                "forced supervisor restart bypassed OpenClaw restart recovery handoff".to_string(),
+            );
             Ok(service_action_summary(
                 "restart",
                 status.summary,
@@ -246,7 +246,7 @@ fn force_restart_running_service(
     }
 }
 
-fn spawn_gateway_aware_restart(
+fn spawn_recovery_aware_restart(
     name: &str,
     env: &BTreeMap<String, String>,
     cwd: &Path,
@@ -254,8 +254,7 @@ fn spawn_gateway_aware_restart(
     let args = vec![
         "gateway".to_string(),
         "restart".to_string(),
-        "--wait".to_string(),
-        "0".to_string(),
+        "--force".to_string(),
         "--json".to_string(),
     ];
     let resolved = EnvironmentService::new(env, cwd).resolve(name, None, None, &args)?;
@@ -281,14 +280,14 @@ fn spawn_gateway_aware_restart(
             Ok(Some(status)) if status.success() => return Ok(()),
             Ok(Some(status)) => {
                 return Err(format!(
-                    "OpenClaw rejected the gateway-aware restart for env \"{name}\" (exit code {}); no forced restart was attempted. Inspect the gateway logs or use \"ocm service restart {name} --force\" to bypass active-work draining",
+                    "OpenClaw rejected the recovery-aware restart for env \"{name}\" (exit code {}); no direct supervisor restart was attempted. Inspect the gateway logs or use \"ocm service restart {name} --force\" to bypass OpenClaw recovery handoff",
                     status.code().unwrap_or(1)
                 ));
             }
             Ok(None) => sleep(Duration::from_millis(25)),
             Err(error) => {
                 return Err(format!(
-                    "failed to inspect the gateway-aware restart helper for env \"{name}\": {error}"
+                    "failed to inspect the recovery-aware restart helper for env \"{name}\": {error}"
                 ));
             }
         }

@@ -2125,14 +2125,14 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "restart" => render_leaf(
             "Restart an env under the background service",
-            "Ask OpenClaw to drain active work before restarting one env under the shared OCM background service.",
+            "Restart one env immediately through OpenClaw's recovery handoff so eligible interrupted work can resume after startup.",
             vec![format!(
                 "{cmd} service restart <env> [--force] [--raw] [--json]"
             )],
             &[
                 (
                     "--force",
-                    "Bypass OpenClaw active-work draining and restart the supervised child directly",
+                    "Bypass OpenClaw restart recovery and replace the supervised child directly",
                 ),
                 (
                     "--raw",
@@ -2142,8 +2142,8 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
             ],
             vec![format!("{cmd} service restart mira")],
             &[
-                "The default gateway-aware restart can remain pending while active work drains.",
-                "Use --force only for recovery when the gateway cannot accept a graceful restart request.",
+                "The default restart does not wait for active work; OpenClaw records eligible interrupted work for recovery before exiting.",
+                "Use --force only for recovery when the gateway cannot accept the OpenClaw restart handoff.",
             ],
         ),
         "uninstall" => render_leaf(

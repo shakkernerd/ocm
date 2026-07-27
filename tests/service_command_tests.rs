@@ -557,7 +557,7 @@ fn service_restart_restores_running_policy() {
 }
 
 #[test]
-fn service_restart_requests_gateway_aware_drain_without_self_deadlock() {
+fn service_restart_requests_immediate_recovery_handoff_without_self_deadlock() {
     let root = TestDir::new("service-restart-gateway-aware");
     let (cwd, env, invocation_log) = setup_gateway_aware_restart_fixture(&root, "protocol-v1");
 
@@ -574,7 +574,7 @@ fn service_restart_requests_gateway_aware_drain_without_self_deadlock() {
     }));
     assert_eq!(
         fs::read_to_string(invocation_log).unwrap(),
-        "gateway restart --wait 0 --json\n"
+        "gateway restart --force --json\n"
     );
 }
 
