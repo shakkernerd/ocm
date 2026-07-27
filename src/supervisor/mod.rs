@@ -1021,12 +1021,50 @@ fn child_specs_differ_only_in_ambient_env(
 
     let mut left = left.clone();
     let mut right = right.clone();
+    normalize_equivalent_runtime_launch(&mut left);
+    normalize_equivalent_runtime_launch(&mut right);
     left.process_env
         .retain(|key, _| !ambient_child_env_key(key));
     right
         .process_env
         .retain(|key, _| !ambient_child_env_key(key));
     left == right
+}
+
+fn normalize_equivalent_runtime_launch(spec: &mut SupervisorChildSpec) {
+    if spec.binding_kind != "runtime" || spec.runtime_source_kind.as_deref() != Some("installed") {
+        return;
+    }
+
+    let Some(binary_path) = spec.binary_path.as_deref() else {
+        return;
+    };
+    if Path::new(binary_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some("openclaw.mjs")
+    {
+        return;
+    }
+    if !matches!(
+        Path::new(binary_path)
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("node" | "node.exe")
+    ) {
+        return;
+    }
+
+    let Some(entrypoint) = spec.args.first().filter(|entrypoint| {
+        Path::new(entrypoint)
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some("openclaw.mjs")
+    }) else {
+        return;
+    };
+    spec.binary_path = Some(entrypoint.clone());
+    spec.args.remove(0);
 }
 
 fn ambient_child_env_key(key: &str) -> bool {
@@ -3062,6 +3100,35 @@ mod tests {
         );
 
         assert!(!child_specs_differ_only_in_ambient_env(&previous, &next));
+    }
+
+    #[test]
+    fn direct_and_managed_node_runtime_launches_are_equivalent_ambient_drift() {
+        let entrypoint = "/tmp/runtime/node_modules/openclaw/openclaw.mjs";
+        let mut direct = child_spec("rescue", 18790);
+        direct.binding_kind = "runtime".to_string();
+        direct.runtime_source_kind = Some("installed".to_string());
+        direct.binary_path = Some(entrypoint.to_string());
+        direct.args = vec![
+            "gateway".to_string(),
+            "run".to_string(),
+            "--port".to_string(),
+            "18790".to_string(),
+        ];
+        direct.process_env.insert(
+            "PATH".to_string(),
+            "/opt/homebrew/bin:/usr/bin:/bin".to_string(),
+        );
+
+        let mut managed = direct.clone();
+        managed.binary_path = Some("/tmp/toolchain/bin/node".to_string());
+        managed.args.insert(0, entrypoint.to_string());
+        managed.process_env.insert(
+            "PATH".to_string(),
+            "/tmp/toolchain/bin:/usr/bin:/bin".to_string(),
+        );
+
+        assert!(child_specs_differ_only_in_ambient_env(&direct, &managed));
     }
 
     #[test]
