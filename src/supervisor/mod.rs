@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -267,7 +267,7 @@ impl<'a> SupervisorService<'a> {
         let state_path = supervisor_state_path(self.env, self.cwd)?;
         let _lock = lock_supervisor_state(&state_path)?;
         let mut state = self.build_state()?;
-        preserve_persisted_restart_requests(&state_path, &mut state);
+        preserve_persisted_supervisor_state(&state_path, &mut state);
         if let Some(parent) = state_path.parent() {
             ensure_dir(parent)?;
         }
@@ -980,12 +980,102 @@ fn child_map(children: &[SupervisorChildSpec]) -> BTreeMap<String, SupervisorChi
         .collect()
 }
 
-fn preserve_persisted_restart_requests(state_path: &Path, state: &mut SupervisorState) {
+fn preserve_persisted_supervisor_state(state_path: &Path, state: &mut SupervisorState) {
     let Ok(persisted_state) = read_json::<SupervisorState>(state_path) else {
         return;
     };
 
+    preserve_ambient_only_child_specs(state, &persisted_state.children);
     preserve_restart_requests(state, persisted_state.restart_requests);
+}
+
+fn preserve_ambient_only_child_specs(
+    state: &mut SupervisorState,
+    persisted_children: &[SupervisorChildSpec],
+) {
+    // The persisted state can be consumed by an older daemon that compares the
+    // full spec. Keep its exact bytes when a newer CLI only inherited a
+    // different shell PATH/tool environment, or that daemon will reload every
+    // otherwise unchanged gateway.
+    let persisted = persisted_children
+        .iter()
+        .map(|child| (child.env_name.as_str(), child))
+        .collect::<BTreeMap<_, _>>();
+    for child in &mut state.children {
+        let Some(persisted_child) = persisted.get(child.env_name.as_str()) else {
+            continue;
+        };
+        if child_specs_differ_only_in_ambient_env(persisted_child, child) {
+            *child = (*persisted_child).clone();
+        }
+    }
+}
+
+fn child_specs_differ_only_in_ambient_env(
+    left: &SupervisorChildSpec,
+    right: &SupervisorChildSpec,
+) -> bool {
+    if left == right {
+        return false;
+    }
+
+    let mut left = left.clone();
+    let mut right = right.clone();
+    left.process_env
+        .retain(|key, _| !ambient_child_env_key(key));
+    right
+        .process_env
+        .retain(|key, _| !ambient_child_env_key(key));
+    left == right
+}
+
+fn ambient_child_env_key(key: &str) -> bool {
+    matches!(key, "HOME" | "PATH" | "TMPDIR" | "OCM_SELF" | "SHELL")
+        || SUPERVISED_CHILD_RUNTIME_ENV_KEYS.contains(&key)
+        || SERVICE_PROXY_ENV_KEYS.contains(&key)
+        || SERVICE_EXTRA_ENV_KEYS.contains(&key)
+        || key.starts_with("NPM_CONFIG_")
+        || key.starts_with("npm_config_")
+        || key.starts_with("COREPACK_")
+}
+
+fn supervisor_child_spec_changed_fields(
+    previous: &SupervisorChildSpec,
+    next: &SupervisorChildSpec,
+) -> Vec<String> {
+    let mut fields = Vec::new();
+    macro_rules! changed {
+        ($field:ident, $name:literal) => {
+            if previous.$field != next.$field {
+                fields.push($name.to_string());
+            }
+        };
+    }
+    changed!(binding_kind, "bindingKind");
+    changed!(binding_name, "bindingName");
+    changed!(restart_handoff_pid_bound, "restartHandoffPidBound");
+    changed!(command, "command");
+    changed!(binary_path, "binaryPath");
+    changed!(runtime_source_kind, "runtimeSourceKind");
+    changed!(runtime_release_version, "runtimeReleaseVersion");
+    changed!(runtime_release_channel, "runtimeReleaseChannel");
+    changed!(args, "args");
+    changed!(run_dir, "runDir");
+    changed!(child_port, "childPort");
+    changed!(stdout_path, "stdoutPath");
+    changed!(stderr_path, "stderrPath");
+
+    let env_keys = previous
+        .process_env
+        .keys()
+        .chain(next.process_env.keys())
+        .collect::<BTreeSet<_>>();
+    for key in env_keys {
+        if previous.process_env.get(key) != next.process_env.get(key) {
+            fields.push(format!("processEnv.{key}"));
+        }
+    }
+    fields
 }
 
 fn preserve_persisted_child_specs_except(
@@ -1118,10 +1208,12 @@ fn reconcile_running_children(
             let mut existing = running
                 .remove(&env_name)
                 .expect("running child should exist when needs_restart is true");
+            let changed_fields = supervisor_child_spec_changed_fields(&existing.spec, next_spec);
             eprintln!(
-                "ocm service: reloading {} ({})",
+                "ocm service: reloading {} ({}) because {} changed",
                 existing.spec.env_name,
-                child_binding_label(next_spec)
+                child_binding_label(next_spec),
+                changed_fields.join(", ")
             );
             stop_supervisor_child(&mut existing);
             pending.insert(
@@ -2921,5 +3013,68 @@ mod tests {
         );
         assert!(!process_env.contains_key("GH_TOKEN"));
         assert!(!process_env.contains_key("PWD"));
+    }
+
+    #[test]
+    fn ambient_caller_env_drift_keeps_the_persisted_child_spec() {
+        let mut persisted = child_spec("rescue", 18790);
+        persisted.process_env.extend([
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("PNPM_HOME".to_string(), "/old/pnpm".to_string()),
+            (
+                "OPENCLAW_STATE_DIR".to_string(),
+                "/tmp/rescue/.openclaw".to_string(),
+            ),
+            ("OCM_ACTIVE_ENV".to_string(), "rescue".to_string()),
+        ]);
+        let mut rebuilt = persisted.clone();
+        rebuilt
+            .process_env
+            .insert("PATH".to_string(), "/opt/homebrew/bin:/usr/bin".to_string());
+        rebuilt
+            .process_env
+            .insert("PNPM_HOME".to_string(), "/new/pnpm".to_string());
+
+        let mut state = SupervisorState {
+            kind: SUPERVISOR_STATE_KIND.to_string(),
+            ocm_home: "/tmp/ocm".to_string(),
+            generated_at: OffsetDateTime::UNIX_EPOCH,
+            children: vec![rebuilt],
+            skipped_envs: Vec::new(),
+            restart_requests: Vec::new(),
+        };
+        preserve_ambient_only_child_specs(&mut state, &[persisted.clone()]);
+
+        assert_eq!(state.children, vec![persisted]);
+    }
+
+    #[test]
+    fn openclaw_env_changes_are_not_treated_as_ambient_drift() {
+        let mut previous = child_spec("rescue", 18790);
+        previous.process_env.insert(
+            "OPENCLAW_STATE_DIR".to_string(),
+            "/tmp/old-state".to_string(),
+        );
+        let mut next = previous.clone();
+        next.process_env.insert(
+            "OPENCLAW_STATE_DIR".to_string(),
+            "/tmp/new-state".to_string(),
+        );
+
+        assert!(!child_specs_differ_only_in_ambient_env(&previous, &next));
+    }
+
+    #[test]
+    fn child_spec_diagnostics_name_fields_without_logging_values() {
+        let previous = child_spec("rescue", 18790);
+        let mut next = previous.clone();
+        next.binding_name = "next-runtime".to_string();
+        next.process_env
+            .insert("PATH".to_string(), "/private/path".to_string());
+
+        assert_eq!(
+            supervisor_child_spec_changed_fields(&previous, &next),
+            vec!["bindingName".to_string(), "processEnv.PATH".to_string()]
+        );
     }
 }

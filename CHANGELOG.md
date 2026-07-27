@@ -7,6 +7,7 @@ All notable changes to OCM are documented here.
 ### Changed
 
 - Make `ocm service restart <env>` restart immediately through OpenClaw's protocol-v1 recovery handoff so eligible interrupted sessions and subagents resume after startup, preserve the legacy direct-restart behavior with a warning when recovery is unavailable, keep `--force` as an explicit bypass for an unhealthy handoff, and avoid self-restart deadlocks.
+- Keep persisted supervisor child specifications stable when only the invoking shell's ambient environment changes, preventing unrelated gateways from reloading during scoped OCM operations, and report the exact field names behind genuine reloads.
 
 ## 0.2.30 - 2026-07-23
 
