@@ -1437,9 +1437,10 @@ fn process_exited_children(
     let mut runtime_dirty = false;
 
     for exited_child in exited {
-        let Some(previous_child) = running.remove(&exited_child.env_name) else {
+        let Some(mut previous_child) = running.remove(&exited_child.env_name) else {
             continue;
         };
+        stop_supervisor_child(&mut previous_child);
         runtime_dirty = true;
         results.push(child_run_result(
             &previous_child.spec,
@@ -1766,20 +1767,41 @@ fn stop_supervisor_child(running_child: &mut RunningSupervisorChild) {
         let process_group = format!("-{}", running_child.child.id());
         let _ = Command::new("kill")
             .args(["-TERM", "--", &process_group])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status();
         for _ in 0..20 {
-            match running_child.child.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) => sleep(Duration::from_millis(50)),
-                Err(_) => break,
+            let _ = running_child.child.try_wait();
+            if !supervisor_process_group_exists(&process_group) {
+                return;
             }
+            sleep(Duration::from_millis(50));
         }
         let _ = Command::new("kill")
             .args(["-KILL", "--", &process_group])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status();
+        for _ in 0..20 {
+            let _ = running_child.child.try_wait();
+            if !supervisor_process_group_exists(&process_group) {
+                return;
+            }
+            sleep(Duration::from_millis(50));
+        }
     }
     let _ = running_child.child.kill();
     let _ = running_child.child.wait();
+}
+
+#[cfg(unix)]
+fn supervisor_process_group_exists(process_group: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", "--", process_group])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn supervisor_state_equivalent(left: &SupervisorState, right: &SupervisorState) -> bool {
@@ -2762,6 +2784,62 @@ mod tests {
             decision.last_error.unwrap(),
             "process exited with 1; retrying after backoff"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exited_supervisor_child_cleans_remaining_process_group() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "ocm-supervisor-process-group-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let descendant_pid_path = test_dir.join("descendant.pid");
+        let mut spec = child_spec("process-group-cleanup", 19_999);
+        spec.command = Some(
+            "trap '' HUP; sleep 60 & descendant=$!; printf '%s' \"$descendant\" > \"$OCM_TEST_DESCENDANT_PID_FILE\"; exit 1"
+                .to_string(),
+        );
+        spec.binary_path = None;
+        spec.run_dir = test_dir.to_string_lossy().into_owned();
+        spec.stdout_path = test_dir.join("stdout.log").to_string_lossy().into_owned();
+        spec.stderr_path = test_dir.join("stderr.log").to_string_lossy().into_owned();
+        spec.process_env.insert(
+            "OCM_TEST_DESCENDANT_PID_FILE".to_string(),
+            descendant_pid_path.to_string_lossy().into_owned(),
+        );
+
+        let mut running_child = spawn_running_child(spec, 0, 0).unwrap();
+        let process_group = format!("-{}", running_child.child.id());
+        let status = running_child.child.wait().unwrap();
+        assert_eq!(status.code(), Some(1));
+
+        for _ in 0..100 {
+            if descendant_pid_path.exists() {
+                break;
+            }
+            sleep(Duration::from_millis(10));
+        }
+        let descendant_pid = fs::read_to_string(&descendant_pid_path).unwrap();
+        assert!(supervisor_process_group_exists(&process_group));
+
+        stop_supervisor_child(&mut running_child);
+
+        for _ in 0..100 {
+            let descendant_alive = Command::new("kill")
+                .args(["-0", "--", descendant_pid.trim()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            if !descendant_alive {
+                break;
+            }
+            sleep(Duration::from_millis(10));
+        }
+        assert!(!supervisor_process_group_exists(&process_group));
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
