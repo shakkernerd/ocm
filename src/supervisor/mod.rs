@@ -1773,23 +1773,28 @@ fn stop_supervisor_child(running_child: &mut RunningSupervisorChild) {
         for _ in 0..20 {
             let _ = running_child.child.try_wait();
             if !supervisor_process_group_exists(&process_group) {
-                return;
+                break;
             }
             sleep(Duration::from_millis(50));
         }
-        let _ = Command::new("kill")
-            .args(["-KILL", "--", &process_group])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        for _ in 0..20 {
-            let _ = running_child.child.try_wait();
-            if !supervisor_process_group_exists(&process_group) {
-                return;
+        if supervisor_process_group_exists(&process_group) {
+            let _ = Command::new("kill")
+                .args(["-KILL", "--", &process_group])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            for _ in 0..20 {
+                let _ = running_child.child.try_wait();
+                if !supervisor_process_group_exists(&process_group) {
+                    break;
+                }
+                sleep(Duration::from_millis(50));
             }
-            sleep(Duration::from_millis(50));
         }
     }
+    // Always wait on the process-group leader. It can exit after try_wait()
+    // reports None but before the group-existence probe; returning in that
+    // window leaves a zombie that can block OpenClaw's single-instance lock.
     let _ = running_child.child.kill();
     let _ = running_child.child.wait();
 }
@@ -2839,6 +2844,38 @@ mod tests {
             sleep(Duration::from_millis(10));
         }
         assert!(!supervisor_process_group_exists(&process_group));
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stopped_supervisor_child_reaps_process_group_leader() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "ocm-supervisor-child-reap-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let mut spec = child_spec("process-group-leader-reap", 19_998);
+        spec.command = Some("trap 'exit 0' TERM; while :; do sleep 1; done".to_string());
+        spec.binary_path = None;
+        spec.run_dir = test_dir.to_string_lossy().into_owned();
+        spec.stdout_path = test_dir.join("stdout.log").to_string_lossy().into_owned();
+        spec.stderr_path = test_dir.join("stderr.log").to_string_lossy().into_owned();
+
+        let mut running_child = spawn_running_child(spec, 0, 0).unwrap();
+        let child_pid = running_child.child.id().to_string();
+        sleep(Duration::from_millis(50));
+
+        stop_supervisor_child(&mut running_child);
+
+        let child_still_exists = Command::new("kill")
+            .args(["-0", "--", &child_pid])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(!child_still_exists, "supervised child was not reaped");
         let _ = fs::remove_dir_all(test_dir);
     }
 
