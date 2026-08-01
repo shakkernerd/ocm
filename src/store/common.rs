@@ -53,6 +53,9 @@ pub(crate) fn lock_file(path: &Path, label: &str) -> Result<ExclusiveFileLock, S
 }
 
 pub(crate) fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+    let source_permissions = fs::symlink_metadata(source)
+        .map_err(|error| error.to_string())?
+        .permissions();
     ensure_dir(destination)?;
 
     let entries = fs::read_dir(source)
@@ -67,7 +70,27 @@ pub(crate) fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()
         copy_path(&source_path, &destination_path)?;
     }
 
-    Ok(())
+    fs::set_permissions(destination, source_permissions).map_err(|error| error.to_string())
+}
+
+pub(crate) fn copy_path_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+    let file_type = metadata.file_type();
+
+    if file_type.is_symlink() {
+        return copy_symlink(source, destination);
+    }
+
+    if file_type.is_dir() {
+        return copy_dir_recursive(source, destination);
+    }
+
+    if let Some(parent) = destination.parent() {
+        ensure_dir(parent)?;
+    }
+    fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) fn copy_path(source: &Path, destination: &Path) -> Result<(), String> {

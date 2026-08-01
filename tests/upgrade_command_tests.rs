@@ -146,6 +146,11 @@ case "$1" in
           sleep 0.05
         done
       fi
+      if [ -n "${{OCM_TEST_REQUIRE_STOP_MARKER_DURING_FINALIZE:-}}" ] &&
+         [ ! -e "$OCM_TEST_REQUIRE_STOP_MARKER_DURING_FINALIZE" ]; then
+        echo "managed service was not stopped before update finalize" >&2
+        exit 24
+      fi
       if [ "${{OCM_TEST_FAIL_UPDATE_FINALIZE:-}}" = "1" ]; then
         echo "forced update finalize failure" >&2
         exit 23
@@ -676,7 +681,6 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
 
     let start = run_ocm(&cwd, &env, &["start", "demo"]);
     assert!(start.status.success(), "{}", stderr(&start));
-
     env.insert(
         "OCM_TEST_GATEWAY_AUTH_HANDSHAKE".to_string(),
         "1".to_string(),
@@ -686,13 +690,17 @@ fn upgrade_updates_a_tracked_runtime_and_refreshes_the_service() {
         "1".to_string(),
     );
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
-    assert!(upgrade.status.success(), "{}", stderr(&upgrade));
+    assert!(
+        upgrade.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        stdout(&upgrade),
+        stderr(&upgrade)
+    );
     let output = stdout(&upgrade);
     assert!(output.contains("outcome=updated"), "{output}");
     assert!(output.contains("service=started"), "{output}");
     assert!(output.contains("snapshot="), "{output}");
     assert!(output.contains("version=2026.3.25"), "{output}");
-
     let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
     assert!(runtime.status.success(), "{}", stderr(&runtime));
     let runtime_json: Value = serde_json::from_str(&stdout(&runtime)).unwrap();
@@ -878,10 +886,23 @@ fn upgrade_rolls_back_when_gateway_rpc_is_not_ready() {
     let state_path = supervisor_state_path(&env, &cwd).unwrap();
     let replacement_runtime_path = runtime_path.clone();
     let replacement_ocm_home = ocm_home.clone();
+    let stop_marker = root.child("service-stopped-before-finalize");
+    let observed_stop_marker = stop_marker.clone();
     let restart_observer = thread::spawn(move || {
-        for _ in 0..200 {
+        let mut saw_stop = false;
+        for _ in 0..400 {
             let state = fs::read_to_string(&state_path).unwrap_or_default();
-            if state.contains("restartRequests") && state.contains("\"envName\": \"demo\"") {
+            let parsed: Value = serde_json::from_str(&state).unwrap_or(Value::Null);
+            let children = parsed["children"].as_array().cloned().unwrap_or_default();
+            if !saw_stop && children.is_empty() {
+                write_empty_supervisor_runtime(&replacement_runtime_path, &replacement_ocm_home);
+                fs::write(&observed_stop_marker, "stopped").unwrap();
+                saw_stop = true;
+            } else if saw_stop
+                && (children.iter().any(|child| child["envName"] == "demo")
+                    || (state.contains("restartRequests")
+                        && state.contains("\"envName\": \"demo\"")))
+            {
                 write_running_supervisor_runtime(
                     &replacement_runtime_path,
                     &replacement_ocm_home,
@@ -893,9 +914,13 @@ fn upgrade_rolls_back_when_gateway_rpc_is_not_ready() {
             }
             sleep(Duration::from_millis(25));
         }
-        panic!("upgrade did not request a supervised gateway restart");
+        panic!("upgrade did not stop and restart the supervised gateway");
     });
 
+    env.insert(
+        "OCM_TEST_REQUIRE_STOP_MARKER_DURING_FINALIZE".to_string(),
+        path_string(&stop_marker),
+    );
     env.insert("OCM_TEST_GATEWAY_UNREADY".to_string(), "1".to_string());
     let upgrade = run_ocm(&cwd, &env, &["upgrade", "demo"]);
     restart_observer.join().unwrap();
@@ -1987,7 +2012,7 @@ fn upgrade_simulate_reports_local_repo_doctor_failures() {
 }
 
 #[test]
-fn upgrade_rolls_back_runtime_when_service_restart_fails() {
+fn upgrade_restores_runtime_and_secrets_when_service_restart_fails() {
     let root = TestDir::new("upgrade-service-rollback");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -2049,6 +2074,16 @@ fn upgrade_rolls_back_runtime_when_service_restart_fails() {
     let start = run_ocm(&cwd, &env, &["start", "demo"]);
     assert!(start.status.success(), "{}", stderr(&start));
 
+    let env_show = run_ocm(&cwd, &env, &["env", "show", "demo", "--json"]);
+    assert!(env_show.status.success(), "{}", stderr(&env_show));
+    let env_json: Value = serde_json::from_str(&stdout(&env_show)).unwrap();
+    let secret_path = Path::new(env_json["root"].as_str().unwrap())
+        .join(".openclaw/secrets/telegram/default.token");
+    fs::create_dir_all(secret_path.parent().unwrap()).unwrap();
+    fs::write(&secret_path, "keep-across-rollback\n").unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600)).unwrap();
+
     let launchctl_bin = env.get("OCM_INTERNAL_LAUNCHCTL_BIN").unwrap();
     write_executable_script(
         std::path::Path::new(launchctl_bin),
@@ -2059,11 +2094,15 @@ fn upgrade_rolls_back_runtime_when_service_restart_fails() {
     assert!(!upgrade.status.success(), "{}", stdout(&upgrade));
     let output = stdout(&upgrade);
     assert!(
-        output.contains("outcome=rolled-back"),
+        output.contains("outcome=rollback-failed"),
         "stdout:\n{output}\nstderr:\n{}",
         stderr(&upgrade)
     );
-    assert!(output.contains("rollback=restored"), "{output}");
+    assert!(output.contains("rollback=failed"), "{output}");
+    assert!(
+        output.contains("failed to restore the pre-upgrade service state"),
+        "{output}"
+    );
     assert!(output.contains("snapshot="), "{output}");
 
     let runtime = run_ocm(&cwd, &env, &["runtime", "show", "stable", "--json"]);
@@ -2081,6 +2120,10 @@ fn upgrade_rolls_back_runtime_when_service_restart_fails() {
         stderr(&target_runtime).contains("runtime \"2026.3.25\" does not exist"),
         "{}",
         stderr(&target_runtime)
+    );
+    assert_eq!(
+        fs::read_to_string(&secret_path).unwrap(),
+        "keep-across-rollback\n"
     );
 }
 

@@ -14,7 +14,9 @@ use crate::infra::archive::{
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::common::{copy_dir_recursive, load_json_files, path_exists, read_json, write_json};
+use super::common::{
+    copy_dir_recursive, copy_path_recursive, load_json_files, path_exists, read_json, write_json,
+};
 use super::layout::{
     derive_env_paths, display_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
     validate_name,
@@ -247,7 +249,9 @@ pub fn restore_env_snapshot(
                     OpenClawWorkspaceRuntime::for_env(&restored.name, restored.gateway_port),
                 )?;
             }
-            save_environment(restored, env, cwd)
+            let restored = save_environment(restored, env, cwd)?;
+            preserve_current_openclaw_secrets(&backup_root, &current_paths.root)?;
+            Ok(restored)
         })();
 
         match restore_result {
@@ -278,6 +282,38 @@ pub fn restore_env_snapshot(
 
     let _ = fs::remove_dir_all(&staging_dir);
     result
+}
+
+fn preserve_current_openclaw_secrets(
+    backup_root: &Path,
+    restored_root: &Path,
+) -> Result<(), String> {
+    let source = backup_root.join(".openclaw/secrets");
+    match fs::symlink_metadata(&source) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+
+    let destination = restored_root.join(".openclaw/secrets");
+    remove_path_if_present(&destination)?;
+    copy_path_recursive(&source, &destination).map_err(|error| {
+        format!("failed to preserve current OpenClaw secrets while restoring snapshot: {error}")
+    })
+}
+
+fn remove_path_if_present(path: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+
+    if metadata.is_dir() {
+        fs::remove_dir_all(path).map_err(|error| error.to_string())
+    } else {
+        fs::remove_file(path).map_err(|error| error.to_string())
+    }
 }
 
 pub fn remove_env_snapshot(

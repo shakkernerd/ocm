@@ -142,9 +142,15 @@ runtime, OCM runs OpenClaw's update finalization path inside that environment
 before service restart. A running managed service is considered recovered only
 after its HTTP health endpoint responds and OpenClaw's gateway status proves the
 gateway is reachable; otherwise the upgrade follows the normal rollback path.
+OCM stops a running managed gateway before OpenClaw update finalization so
+SQLite migrations and repairs do not contend with the old process, then restores
+the service's prior desired-running state after success or rollback.
 Snapshots preserve managed path, npm, and Git plugin payloads together with
 their package metadata and symlinks, while generated plugin dependency caches
-and live runtime residue stay out of the archive.
+and live runtime residue stay out of the archive. Snapshot archives also omit
+`.openclaw/secrets`; restore preserves the environment's current secret tree
+without placing credential material in the archive or rolling secret values
+back.
 Snapshot removal validates that the stored environment, snapshot ID, and
 archive path match the named snapshot before deleting anything. It takes the
 live metadata and archive out of service together, then reports warnings if
