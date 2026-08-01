@@ -151,6 +151,23 @@ and live runtime residue stay out of the archive. Snapshot archives also omit
 `.openclaw/secrets`; restore preserves the environment's current secret tree
 without placing credential material in the archive or rolling secret values
 back.
+
+Before upgrading a durable environment, run the target OpenClaw runtime's
+read-only update/doctor preflight and inspect its packaged plugin inventory.
+Stop the managed gateway before any repair that writes SQLite or configuration
+state. Confirm there is enough free space for the snapshot archive plus
+temporary copies of the largest SQLite databases; a multi-gigabyte derived
+cache can otherwise exhaust the volume before OCM changes the runtime. External
+or local plugins must also be installable by the target runtime—source-tree-only
+extensions and missing release dependencies are not proven by a successful
+core build.
+
+After the upgrade, verify more than HTTP readiness: validate SecretRefs, plugin
+loading, the selected agent runtime with a real model turn, and every configured
+channel with a real inbound/outbound smoke. If OpenClaw's restart-loop breaker
+suppressed channel auto-start after failed attempts, fix the startup problem,
+allow its observation window to expire, and perform one controlled restart
+rather than repeatedly restarting the gateway.
 Snapshot removal validates that the stored environment, snapshot ID, and
 archive path match the named snapshot before deleting anything. It takes the
 live metadata and archive out of service together, then reports warnings if

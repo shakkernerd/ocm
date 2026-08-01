@@ -155,6 +155,32 @@ Use `upgrade simulate` when you want to test what would happen against a publish
 - pinned runtimes stay pinned unless you pass `--version`, `--channel`, or `--runtime`
 - local-command environments are reported clearly instead of being changed behind your back
 
+For a durable environment, complete these checks before the real upgrade:
+
+1. Run the target runtime's read-only update/doctor plan against the existing
+   environment. If it requires canonical-session or other SQLite repair, stop
+   the managed gateway, take a verified cold backup, and run the target's
+   supported repair path while the service remains stopped.
+2. Verify target package parity for every configured plugin. A local source
+   checkout may contain an extension or dependency that the release-shaped
+   runtime does not package.
+3. Check free disk space for both the snapshot archive and temporary copies of
+   the largest SQLite databases. Derived caches can dominate this requirement;
+   remove them only through a supported target-runtime repair/compaction path.
+4. Keep credentials needed across environment replacement in operator-managed,
+   mode-restricted SecretRef files outside the environment root. Restore
+   preserves an existing `.openclaw/secrets` tree, but an archive deliberately
+   cannot recreate a secret that was already missing.
+5. After upgrade, require config/SecretRef validation, plugin diagnostics, a
+   real model/runtime turn, local and remote health, and real channel delivery.
+   HTTP readiness alone does not prove Telegram, iMessage, or another provider
+   started successfully.
+
+If failed startup attempts trip OpenClaw's restart-loop breaker, correct the
+underlying startup problem and wait for the breaker window to expire before one
+controlled service restart. Repeated restarts extend the outage and can create
+additional recovery work.
+
 ### 8. Run OpenClaw without activating the shell first
 
 ```bash
@@ -420,7 +446,9 @@ environment's current `.openclaw/secrets` tree, including its file modes and
 symlinks, while restoring the archived durable state around it. Secret values
 therefore do not roll back with a snapshot. For credentials that must survive
 environment replacement or be shared deliberately, prefer SecretRefs backed by
-an operator-managed path outside the environment root.
+an operator-managed path outside the environment root. Preservation protects
+the secret tree present at restore time; it cannot reconstruct a credential
+that was already deleted or never copied outside the environment.
 
 Remove:
 
