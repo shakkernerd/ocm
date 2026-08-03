@@ -149,7 +149,7 @@ Use `upgrade simulate` when you want to test what would happen against a publish
 - missing published targets fail before any simulation env is created
 - `--scenario all` runs built-in current, clean minimum, and Telegram-configured env shapes as separate simulation clones
 - a pre-upgrade snapshot is created before env state changes
-- snapshot archives intentionally omit `.openclaw/secrets`; rollback preserves the live secret tree instead of deleting or rolling it back
+- snapshot archives intentionally omit current-state roots such as `.openclaw/secrets` and `.openclaw/browser`; rollback preserves excluded current state instead of deleting or rolling it back
 - when an env moves to a new runtime, OCM stops any running managed gateway, runs OpenClaw's update finalization path cold, then restores the prior desired-running state
 - if service reconciliation fails, OCM restores the snapshot and previous runtime unless `--no-rollback` is set
 - pinned runtimes stay pinned unless you pass `--version`, `--channel`, or `--runtime`
@@ -440,15 +440,17 @@ Restore:
 ocm env snapshot restore mira <snapshot>
 ```
 
-Snapshot archives intentionally exclude `.openclaw/secrets` so exported
-archives do not become credential bundles. Restoring a snapshot preserves the
-environment's current `.openclaw/secrets` tree, including its file modes and
-symlinks, while restoring the archived durable state around it. Secret values
-therefore do not roll back with a snapshot. For credentials that must survive
+Snapshot archives intentionally exclude current-state roots such as
+`.openclaw/secrets` and `.openclaw/browser`. Restoring a snapshot preserves
+excluded current state, including file modes and symlinks, while restoring the
+archived durable state around it. This keeps current credentials, browser
+sessions, plugin-owned sidecars, and future excluded roots from being deleted
+or rolled back. Explicit process residue such as lock, socket, PID, and
+temporary runtime paths is discarded. For credentials that must survive
 environment replacement or be shared deliberately, prefer SecretRefs backed by
 an operator-managed path outside the environment root. Preservation protects
-the secret tree present at restore time; it cannot reconstruct a credential
-that was already deleted or never copied outside the environment.
+the current state present at restore time; it cannot reconstruct state that was
+already deleted.
 
 Remove:
 

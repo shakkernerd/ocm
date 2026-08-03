@@ -2012,7 +2012,7 @@ fn upgrade_simulate_reports_local_repo_doctor_failures() {
 }
 
 #[test]
-fn upgrade_restores_runtime_and_secrets_when_service_restart_fails() {
+fn upgrade_restores_runtime_and_preserves_excluded_state_when_service_restart_fails() {
     let root = TestDir::new("upgrade-service-rollback");
     let cwd = root.child("workspace");
     fs::create_dir_all(&cwd).unwrap();
@@ -2083,6 +2083,12 @@ fn upgrade_restores_runtime_and_secrets_when_service_restart_fails() {
     fs::write(&secret_path, "keep-across-rollback\n").unwrap();
     #[cfg(unix)]
     fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let browser_cookie_path = Path::new(env_json["root"].as_str().unwrap())
+        .join(".openclaw/browser/openclaw/user-data/Default/Cookies");
+    fs::create_dir_all(browser_cookie_path.parent().unwrap()).unwrap();
+    fs::write(&browser_cookie_path, "keep-browser-across-rollback\n").unwrap();
+    let plugin_state_path = Path::new(env_json["root"].as_str().unwrap()).join(".openclaw/lcm.db");
+    fs::write(&plugin_state_path, "keep-plugin-state-across-rollback\n").unwrap();
 
     let launchctl_bin = env.get("OCM_INTERNAL_LAUNCHCTL_BIN").unwrap();
     write_executable_script(
@@ -2124,6 +2130,14 @@ fn upgrade_restores_runtime_and_secrets_when_service_restart_fails() {
     assert_eq!(
         fs::read_to_string(&secret_path).unwrap(),
         "keep-across-rollback\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&browser_cookie_path).unwrap(),
+        "keep-browser-across-rollback\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&plugin_state_path).unwrap(),
+        "keep-plugin-state-across-rollback\n"
     );
 }
 

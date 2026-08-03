@@ -1647,7 +1647,7 @@ fn environment_snapshot_restore_replaces_env_state_from_the_snapshot() {
 
 #[cfg(unix)]
 #[test]
-fn environment_snapshot_restore_preserves_current_excluded_secrets() {
+fn environment_snapshot_restore_preserves_current_excluded_state() {
     use std::os::unix::fs::PermissionsExt;
 
     let root = TestDir::new("store-env-snapshot-restore-secrets");
@@ -1693,6 +1693,14 @@ fn environment_snapshot_restore_preserves_current_excluded_secrets() {
     fs::set_permissions(&token_path, fs::Permissions::from_mode(0o600)).unwrap();
     std::os::unix::fs::symlink("telegram/default.token", secrets_dir.join("current-token"))
         .unwrap();
+    let browser_cookie_path =
+        source_root.join(".openclaw/browser/openclaw/user-data/Default/Cookies");
+    write_text(&browser_cookie_path, "browser-before-snapshot\n");
+    let plugin_state_path = source_root.join(".openclaw/lcm.db");
+    write_text(&plugin_state_path, "plugin-state-before-snapshot\n");
+    let future_state_path = source_root.join(".openclaw/future-owner-state/data.json");
+    write_text(&future_state_path, "future-state-before-snapshot\n");
+    write_text(&source_root.join(".openclaw/run/gateway.pid"), "123\n");
 
     let snapshot = create_env_snapshot(
         CreateEnvSnapshotOptions {
@@ -1709,9 +1717,21 @@ fn environment_snapshot_restore_preserves_current_excluded_secrets() {
     )
     .unwrap();
     assert!(!extracted.root_dir.join(".openclaw/secrets").exists());
+    assert!(!extracted.root_dir.join(".openclaw/browser").exists());
+    assert!(!extracted.root_dir.join(".openclaw/lcm.db").exists());
+    assert!(
+        !extracted
+            .root_dir
+            .join(".openclaw/future-owner-state")
+            .exists()
+    );
+    assert!(!extracted.root_dir.join(".openclaw/run").exists());
 
     write_text(&token_path, "rotated-after-snapshot\n");
     fs::set_permissions(&token_path, fs::Permissions::from_mode(0o600)).unwrap();
+    write_text(&browser_cookie_path, "browser-after-snapshot\n");
+    write_text(&plugin_state_path, "plugin-state-after-snapshot\n");
+    write_text(&future_state_path, "future-state-after-snapshot\n");
     write_text(
         &source_root.join(".openclaw/workspace/notes.txt"),
         "after drift",
@@ -1751,6 +1771,19 @@ fn environment_snapshot_restore_preserves_current_excluded_secrets() {
         fs::read_link(secrets_dir.join("current-token")).unwrap(),
         Path::new("telegram/default.token")
     );
+    assert_eq!(
+        fs::read_to_string(&browser_cookie_path).unwrap(),
+        "browser-after-snapshot\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&plugin_state_path).unwrap(),
+        "plugin-state-after-snapshot\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&future_state_path).unwrap(),
+        "future-state-after-snapshot\n"
+    );
+    assert!(!source_root.join(".openclaw/run").exists());
     assert_eq!(
         fs::read_to_string(source_root.join(".openclaw/workspace/notes.txt")).unwrap(),
         "before restore"

@@ -148,9 +148,12 @@ the service's prior desired-running state after success or rollback.
 Snapshots preserve managed path, npm, and Git plugin payloads together with
 their package metadata and symlinks, while generated plugin dependency caches
 and live runtime residue stay out of the archive. Snapshot archives also omit
-`.openclaw/secrets`; restore preserves the environment's current secret tree
-without placing credential material in the archive or rolling secret values
-back.
+current-state roots such as `.openclaw/secrets` and `.openclaw/browser`.
+Restore carries excluded current state across root replacement instead of
+deleting it: archived durable state rolls back, while current credentials,
+browser sessions, plugin-owned sidecars, and future excluded roots remain
+current. Explicit process residue such as lock, socket, PID, and temporary
+runtime paths is discarded.
 
 Before upgrading a durable environment, run the target OpenClaw runtime's
 read-only update/doctor preflight and inspect its packaged plugin inventory.

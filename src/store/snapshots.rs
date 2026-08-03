@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -250,7 +251,7 @@ pub fn restore_env_snapshot(
                 )?;
             }
             let restored = save_environment(restored, env, cwd)?;
-            preserve_current_openclaw_secrets(&backup_root, &current_paths.root)?;
+            preserve_current_excluded_openclaw_state(&backup_root, &current_paths.root)?;
             Ok(restored)
         })();
 
@@ -284,22 +285,66 @@ pub fn restore_env_snapshot(
     result
 }
 
-fn preserve_current_openclaw_secrets(
+fn preserve_current_excluded_openclaw_state(
     backup_root: &Path,
     restored_root: &Path,
 ) -> Result<(), String> {
-    let source = backup_root.join(".openclaw/secrets");
-    match fs::symlink_metadata(&source) {
-        Ok(_) => {}
+    let source_root = backup_root.join(".openclaw");
+    let entries = match fs::read_dir(&source_root) {
+        Ok(entries) => entries
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.to_string()),
     };
 
-    let destination = restored_root.join(".openclaw/secrets");
-    remove_path_if_present(&destination)?;
-    copy_path_recursive(&source, &destination).map_err(|error| {
-        format!("failed to preserve current OpenClaw secrets while restoring snapshot: {error}")
-    })
+    let destination_root = restored_root.join(".openclaw");
+    for entry in entries {
+        let name = entry.file_name();
+        let source = entry.path();
+        let destination = destination_root.join(&name);
+        let metadata = fs::symlink_metadata(&source).map_err(|error| error.to_string())?;
+        if should_discard_current_openclaw_restore_entry(&name, metadata.is_dir()) {
+            continue;
+        }
+
+        let current_state_wins = matches!(name.to_str(), Some("secrets") | Some("browser"));
+        if !current_state_wins && path_exists(&destination) {
+            continue;
+        }
+
+        remove_path_if_present(&destination)?;
+        copy_path_recursive(&source, &destination).map_err(|error| {
+            format!(
+                "failed to preserve current excluded OpenClaw state at {} while restoring snapshot: {error}",
+                display_path(&source)
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn should_discard_current_openclaw_restore_entry(name: &OsStr, is_dir: bool) -> bool {
+    if is_dir
+        && matches!(
+            name.to_str(),
+            Some("run") | Some("tmp") | Some("temp") | Some("locks")
+        )
+    {
+        return true;
+    }
+
+    matches!(
+        Path::new(name).extension().and_then(OsStr::to_str),
+        Some("pid") | Some("lock") | Some("sock") | Some("socket")
+    ) || matches!(
+        name.to_str(),
+        Some("pid")
+            | Some("lock")
+            | Some("sock")
+            | Some("socket")
+            | Some("gateway-supervisor-restart-handoff.json")
+    )
 }
 
 fn remove_path_if_present(path: &Path) -> Result<(), String> {
