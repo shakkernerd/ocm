@@ -135,16 +135,19 @@ ocm upgrade simulate mira --to beta --scenario all
 ocm upgrade simulate mira --to ./openclaw
 ```
 
-`upgrade` creates a pre-upgrade snapshot before changing an environment. If a
+`upgrade` stops a running managed gateway before creating its pre-upgrade
+snapshot and keeps it stopped through runtime mutation and OpenClaw update
+finalization. This makes the rollback point consistent across SQLite, config,
+transcripts, queues, plugins, and workspaces instead of only making each SQLite
+backup individually safe. If a
 running service cannot be restarted or started after the change, OCM restores
 the snapshot and previous runtime by default. When an environment moves to a new
 runtime, OCM runs OpenClaw's update finalization path inside that environment
 before service restart. A running managed service is considered recovered only
 after its HTTP health endpoint responds and OpenClaw's gateway status proves the
 gateway is reachable; otherwise the upgrade follows the normal rollback path.
-OCM stops a running managed gateway before OpenClaw update finalization so
-SQLite migrations and repairs do not contend with the old process, then restores
-the service's prior desired-running state after success or rollback.
+OCM restores the service's prior desired-running state after success or
+rollback.
 Snapshots preserve managed path, npm, and Git plugin payloads together with
 their package metadata and symlinks, while generated plugin dependency caches
 and live runtime residue stay out of the archive. Snapshot archives also omit
@@ -154,6 +157,13 @@ deleting it: archived durable state rolls back, while current credentials,
 browser sessions, plugin-owned sidecars, and future excluded roots remain
 current. Explicit process residue such as lock, socket, PID, and temporary
 runtime paths is discarded.
+
+Manual snapshot creation uses the same cold boundary: OCM stops a running
+managed gateway before capture, records the original service policy in the
+archive, and restores the gateway afterward. Manual restore stops a running
+managed gateway before replacing its root, applies the snapshot's service
+policy after success, and attempts to restore the pre-restore policy if the
+restore fails.
 
 Before upgrading a durable environment, run the target OpenClaw runtime's
 read-only update/doctor preflight and inspect its packaged plugin inventory.

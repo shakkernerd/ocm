@@ -1615,7 +1615,10 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!(
                 "{cmd} env snapshot create mira --label before-upgrade"
             )],
-            &[],
+            &[
+                "A running managed gateway is stopped before capture and restored afterward; the snapshot retains its original service policy.",
+                "This prevents cross-store drift while SQLite, config, transcripts, queues, plugins, and workspaces are archived.",
+            ],
         ),
         "show" => render_leaf(
             "Show one environment snapshot",
@@ -1673,7 +1676,11 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!(
                 "{cmd} env snapshot restore mira 1742922000-123456789"
             )],
-            &["Snapshot restore keeps existing safety rails around foreign directories."],
+            &[
+                "A running managed gateway is stopped before root replacement.",
+                "Successful restore applies the snapshot's service policy; failed restore attempts to restore the pre-restore service state.",
+                "Snapshot restore keeps existing safety rails around foreign directories.",
+            ],
         ),
         "remove" => render_leaf(
             "Remove an environment snapshot",

@@ -58,8 +58,19 @@ pub fn create_env_snapshot(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvSnapshotMeta, String> {
+    create_env_snapshot_with_service_state(options, None, env, cwd)
+}
+
+pub(crate) fn create_env_snapshot_with_service_state(
+    options: CreateEnvSnapshotOptions,
+    service_state: Option<(bool, bool)>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvSnapshotMeta, String> {
     let env_name = validate_name(&options.env_name, "Environment name")?;
     let meta = get_environment(&env_name, env, cwd)?;
+    let (service_enabled, service_running) =
+        service_state.unwrap_or((meta.service_enabled, meta.service_running));
     let env_paths = derive_env_paths(Path::new(&meta.root));
     if !path_exists(&env_paths.root) {
         return Err(format!(
@@ -86,8 +97,8 @@ pub fn create_env_snapshot(
             source_root: Some(meta.root.clone()),
             gateway_port: meta.gateway_port,
             gateway_port_auto_assigned: meta.gateway_port_auto_assigned,
-            service_enabled: meta.service_enabled,
-            service_running: meta.service_running,
+            service_enabled,
+            service_running,
             default_runtime: meta.default_runtime.clone(),
             default_launcher: meta.default_launcher.clone(),
             protected: meta.protected,
@@ -105,8 +116,8 @@ pub fn create_env_snapshot(
         archive_path: display_path(&archive_path),
         source_root: meta.root.clone(),
         gateway_port: meta.gateway_port,
-        service_enabled: meta.service_enabled,
-        service_running: meta.service_running,
+        service_enabled,
+        service_running,
         default_runtime: meta.default_runtime.clone(),
         default_launcher: meta.default_launcher.clone(),
         protected: meta.protected,

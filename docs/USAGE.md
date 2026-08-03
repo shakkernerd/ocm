@@ -148,7 +148,8 @@ Use `upgrade simulate` when you want to test what would happen against a publish
 - simulation envs and temporary runtimes are cleaned up automatically; use `--keep-simulations` only when you need retained debug artifacts
 - missing published targets fail before any simulation env is created
 - `--scenario all` runs built-in current, clean minimum, and Telegram-configured env shapes as separate simulation clones
-- a pre-upgrade snapshot is created before env state changes
+- a running managed gateway is stopped before its pre-upgrade snapshot and remains stopped through mutation and finalization
+- the cold snapshot retains the gateway's original desired-running policy for rollback
 - snapshot archives intentionally omit current-state roots such as `.openclaw/secrets` and `.openclaw/browser`; rollback preserves excluded current state instead of deleting or rolling it back
 - when an env moves to a new runtime, OCM stops any running managed gateway, runs OpenClaw's update finalization path cold, then restores the prior desired-running state
 - if service reconciliation fails, OCM restores the snapshot and previous runtime unless `--no-rollback` is set
@@ -439,6 +440,14 @@ Restore:
 ```bash
 ocm env snapshot restore mira <snapshot>
 ```
+
+Snapshot creation and restore are cold for running OCM-managed gateways. OCM
+stops the target before capture, records its original service policy in the
+snapshot, and restores that policy after capture. Before restore it stops the
+target again; successful restore applies the snapshot's service policy, while a
+failed restore attempts to restore the pre-restore service state. This avoids a
+cross-store hybrid between SQLite, config, transcripts, queues, plugins, and
+workspaces and prevents open handles from writing into a replaced root.
 
 Snapshot archives intentionally exclude current-state roots such as
 `.openclaw/secrets` and `.openclaw/browser`. Restoring a snapshot preserves

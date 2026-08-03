@@ -2976,23 +2976,41 @@ impl Cli {
         rollback_of: Option<String>,
     ) -> Result<UpgradeTransaction, String> {
         let env_meta = self.environment_service().get(env_name)?;
+        let service_state = self
+            .service_service()
+            .quiesce_for_snapshot_locked(env_name)?;
         let started_at = time::OffsetDateTime::now_utc();
         let id = format!(
             "{}-{:09}",
             started_at.unix_timestamp(),
             started_at.nanosecond()
         );
-        let snapshot = self
+        let snapshot_result = self
             .environment_service()
-            .create_snapshot_locked(CreateEnvSnapshotOptions {
-                env_name: env_name.to_string(),
-                label: Some(snapshot_label.to_string()),
-            })
-            .map_err(|error| {
-                format!(
+            .create_snapshot_locked_with_service_state(
+                CreateEnvSnapshotOptions {
+                    env_name: env_name.to_string(),
+                    label: Some(snapshot_label.to_string()),
+                },
+                service_state.map(|state| (state.enabled, state.running)),
+            );
+        let snapshot = match snapshot_result {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                let snapshot_error = format!(
                     "failed to create {snapshot_label} snapshot for env \"{env_name}\": {error}"
-                )
-            })?;
+                );
+                return match self
+                    .service_service()
+                    .restore_after_snapshot_locked(env_name, service_state)
+                {
+                    Ok(()) => Err(snapshot_error),
+                    Err(service_error) => Err(format!(
+                        "{snapshot_error}; also failed to restore the managed service after snapshot capture: {service_error}"
+                    )),
+                };
+            }
+        };
         let mut seen = BTreeSet::new();
         let mut runtime_backups = Vec::new();
         let mut created_runtime_names = Vec::new();
@@ -3008,6 +3026,7 @@ impl Cli {
                         env_name,
                         &snapshot.id,
                         runtime_backups,
+                        service_state,
                         error,
                     ));
                 }
@@ -3020,6 +3039,7 @@ impl Cli {
                             env_name,
                             &snapshot.id,
                             runtime_backups,
+                            service_state,
                             error,
                         ));
                     }
@@ -3031,6 +3051,7 @@ impl Cli {
                             env_name,
                             &snapshot.id,
                             runtime_backups,
+                            service_state,
                             error,
                         ));
                     }
@@ -3071,24 +3092,33 @@ impl Cli {
         env_name: &str,
         snapshot_id: &str,
         runtime_backups: Vec<RuntimeRollbackBackup>,
+        service_state: Option<crate::service::ServiceMaintenanceState>,
         error: String,
     ) -> String {
         for backup in runtime_backups {
             backup.cleanup();
         }
-        match self.environment_service().remove_snapshot_locked(
+        let cleanup_result = self.environment_service().remove_snapshot_locked(
             crate::env::RemoveEnvSnapshotOptions {
                 env_name: env_name.to_string(),
                 snapshot_id: snapshot_id.to_string(),
             },
-        ) {
-            Ok(_) => error,
-            Err(cleanup_error) => {
-                format!(
-                    "{error}; also failed to remove the incomplete transaction snapshot: {cleanup_error}"
-                )
-            }
+        );
+        let service_result = self
+            .service_service()
+            .restore_after_snapshot_locked(env_name, service_state);
+        let mut result = error;
+        if let Err(cleanup_error) = cleanup_result {
+            result = format!(
+                "{result}; also failed to remove the incomplete transaction snapshot: {cleanup_error}"
+            );
         }
+        if let Err(service_error) = service_result {
+            result = format!(
+                "{result}; also failed to restore the managed service after snapshot capture: {service_error}"
+            );
+        }
+        result
     }
 
     fn finish_successful_upgrade(
