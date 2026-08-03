@@ -2677,9 +2677,12 @@ impl Cli {
         }
 
         if service.running {
-            let restart = self
-                .with_progress(format!("Restarting service for {env_name}"), || {
-                    self.service_service().restart_locked(env_name)
+            let restart =
+                self.with_progress(format!("Restarting service for {env_name}"), || {
+                    self.service_service().restart_locked_with_options(
+                        env_name,
+                        crate::service::ServiceRestartOptions { force: true },
+                    )
                 })?;
             let note = join_optional_warnings(
                 join_warnings(&restart.warnings),
@@ -2700,6 +2703,40 @@ impl Cli {
         }
 
         Ok((None, None))
+    }
+
+    fn stop_service_for_update_finalization(&self, env_name: &str) -> Result<bool, String> {
+        let Some(service) = self.upgrade_service_status(env_name)? else {
+            return Ok(false);
+        };
+        if !service.installed || !service.running {
+            return Ok(false);
+        }
+
+        let stopped = self.with_progress(
+            format!("Stopping service for cold update finalization: {env_name}"),
+            || self.service_service().stop_locked(env_name),
+        )?;
+        if stopped.running {
+            return Err(format!(
+                "managed service for {env_name} remained running after the update finalization stop"
+            ));
+        }
+        Ok(true)
+    }
+
+    fn restore_service_after_failed_upgrade_locked(
+        &self,
+        env_name: &str,
+        service_before: &UpgradeHistoryServiceState,
+    ) -> Result<(), String> {
+        if !service_before.enabled || !service_before.running {
+            return Ok(());
+        }
+        self.service_service()
+            .start_locked(env_name)
+            .map(|_| ())
+            .map_err(|error| format!("failed to restore the pre-upgrade service state: {error}"))
     }
 
     fn wait_for_restarted_gateway_health(
@@ -2810,6 +2847,7 @@ impl Cli {
     ) -> Result<Option<String>, String> {
         // Resolve the replacement explicitly while the previous binding remains published.
         // A failed finalizer can then roll back without ever activating the replacement.
+        let service_stopped = self.stop_service_for_update_finalization(env_name)?;
         let config_repaired = self.repair_target_openclaw_config(env_name, runtime_name)?;
         self.run_update_mode_openclaw_command(
             env_name,
@@ -2817,8 +2855,12 @@ impl Cli {
             "openclaw update finalize",
             &["update", "finalize", "--json", "--yes", "--no-restart"],
         )?;
-        Ok(Some(if config_repaired {
+        Ok(Some(if config_repaired && service_stopped {
+            "OpenClaw config repair and cold update finalization completed".to_string()
+        } else if config_repaired {
             "OpenClaw config repair and update finalization completed".to_string()
+        } else if service_stopped {
+            "OpenClaw cold update finalization completed".to_string()
         } else {
             "OpenClaw update finalization completed".to_string()
         }))
@@ -2934,23 +2976,41 @@ impl Cli {
         rollback_of: Option<String>,
     ) -> Result<UpgradeTransaction, String> {
         let env_meta = self.environment_service().get(env_name)?;
+        let service_state = self
+            .service_service()
+            .quiesce_for_snapshot_locked(env_name)?;
         let started_at = time::OffsetDateTime::now_utc();
         let id = format!(
             "{}-{:09}",
             started_at.unix_timestamp(),
             started_at.nanosecond()
         );
-        let snapshot = self
+        let snapshot_result = self
             .environment_service()
-            .create_snapshot_locked(CreateEnvSnapshotOptions {
-                env_name: env_name.to_string(),
-                label: Some(snapshot_label.to_string()),
-            })
-            .map_err(|error| {
-                format!(
+            .create_snapshot_locked_with_service_state(
+                CreateEnvSnapshotOptions {
+                    env_name: env_name.to_string(),
+                    label: Some(snapshot_label.to_string()),
+                },
+                service_state.map(|state| (state.enabled, state.running)),
+            );
+        let snapshot = match snapshot_result {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                let snapshot_error = format!(
                     "failed to create {snapshot_label} snapshot for env \"{env_name}\": {error}"
-                )
-            })?;
+                );
+                return match self
+                    .service_service()
+                    .restore_after_snapshot_locked(env_name, service_state)
+                {
+                    Ok(()) => Err(snapshot_error),
+                    Err(service_error) => Err(format!(
+                        "{snapshot_error}; also failed to restore the managed service after snapshot capture: {service_error}"
+                    )),
+                };
+            }
+        };
         let mut seen = BTreeSet::new();
         let mut runtime_backups = Vec::new();
         let mut created_runtime_names = Vec::new();
@@ -2966,6 +3026,7 @@ impl Cli {
                         env_name,
                         &snapshot.id,
                         runtime_backups,
+                        service_state,
                         error,
                     ));
                 }
@@ -2978,6 +3039,7 @@ impl Cli {
                             env_name,
                             &snapshot.id,
                             runtime_backups,
+                            service_state,
                             error,
                         ));
                     }
@@ -2989,6 +3051,7 @@ impl Cli {
                             env_name,
                             &snapshot.id,
                             runtime_backups,
+                            service_state,
                             error,
                         ));
                     }
@@ -3029,24 +3092,33 @@ impl Cli {
         env_name: &str,
         snapshot_id: &str,
         runtime_backups: Vec<RuntimeRollbackBackup>,
+        service_state: Option<crate::service::ServiceMaintenanceState>,
         error: String,
     ) -> String {
         for backup in runtime_backups {
             backup.cleanup();
         }
-        match self.environment_service().remove_snapshot_locked(
+        let cleanup_result = self.environment_service().remove_snapshot_locked(
             crate::env::RemoveEnvSnapshotOptions {
                 env_name: env_name.to_string(),
                 snapshot_id: snapshot_id.to_string(),
             },
-        ) {
-            Ok(_) => error,
-            Err(cleanup_error) => {
-                format!(
-                    "{error}; also failed to remove the incomplete transaction snapshot: {cleanup_error}"
-                )
-            }
+        );
+        let service_result = self
+            .service_service()
+            .restore_after_snapshot_locked(env_name, service_state);
+        let mut result = error;
+        if let Err(cleanup_error) = cleanup_result {
+            result = format!(
+                "{result}; also failed to remove the incomplete transaction snapshot: {cleanup_error}"
+            );
         }
+        if let Err(service_error) = service_result {
+            result = format!(
+                "{result}; also failed to restore the managed service after snapshot capture: {service_error}"
+            );
+        }
+        result
     }
 
     fn finish_successful_upgrade(
@@ -3245,6 +3317,9 @@ impl Cli {
     ) -> Result<UpgradeEnvSummary, String> {
         if !transaction.rollback_enabled {
             let snapshot_id = transaction.snapshot_id.clone();
+            let service_restore_warning = self
+                .restore_service_after_failed_upgrade_locked(env_name, &transaction.service_before)
+                .err();
             let mut summary = UpgradeEnvSummary {
                 env_name: env_name.to_string(),
                 previous_binding_kind: previous_binding_kind.to_string(),
@@ -3257,7 +3332,10 @@ impl Cli {
                 service_action: None,
                 snapshot_id: Some(snapshot_id),
                 rollback: Some("disabled".to_string()),
-                note: Some(format!("upgrade failed and rollback was disabled: {error}")),
+                note: join_optional_warnings(
+                    Some(format!("upgrade failed and rollback was disabled: {error}")),
+                    service_restore_warning,
+                ),
             };
             if let Err(history_error) = self.record_upgrade_history(&transaction, &summary) {
                 summary.note = join_optional_warnings(
@@ -3320,20 +3398,31 @@ impl Cli {
         env_name: &str,
         transaction: &UpgradeTransaction,
     ) -> Result<(), String> {
-        // Restore runtime bytes and metadata before the snapshot republishes supervisor
-        // state; otherwise rollback can briefly advertise the failed runtime revision.
-        for runtime_backup in &transaction.runtime_backups {
-            self.restore_runtime_backup(runtime_backup)?;
+        let rollback_result = (|| {
+            // Restore runtime bytes and metadata before the snapshot republishes supervisor
+            // state; otherwise rollback can briefly advertise the failed runtime revision.
+            for runtime_backup in &transaction.runtime_backups {
+                self.restore_runtime_backup(runtime_backup)?;
+            }
+            self.environment_service()
+                .restore_snapshot_locked(RestoreEnvSnapshotOptions {
+                    env_name: env_name.to_string(),
+                    snapshot_id: transaction.snapshot_id.clone(),
+                })?;
+            for runtime_name in &transaction.created_runtime_names {
+                self.remove_runtime_created_during_upgrade(runtime_name)?;
+            }
+            Ok(())
+        })();
+        let service_result =
+            self.restore_service_after_failed_upgrade_locked(env_name, &transaction.service_before);
+
+        match (rollback_result, service_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(service_error)) => Err(format!("{error}; {service_error}")),
         }
-        self.environment_service()
-            .restore_snapshot_locked(RestoreEnvSnapshotOptions {
-                env_name: env_name.to_string(),
-                snapshot_id: transaction.snapshot_id.clone(),
-            })?;
-        for runtime_name in &transaction.created_runtime_names {
-            self.remove_runtime_created_during_upgrade(runtime_name)?;
-        }
-        Ok(())
     }
 
     fn remove_runtime_created_during_upgrade(&self, runtime_name: &str) -> Result<(), String> {

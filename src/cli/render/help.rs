@@ -1615,7 +1615,10 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!(
                 "{cmd} env snapshot create mira --label before-upgrade"
             )],
-            &[],
+            &[
+                "A running managed gateway is stopped before capture and restored afterward; the snapshot retains its original service policy.",
+                "This prevents cross-store drift while SQLite, config, transcripts, queues, plugins, and workspaces are archived.",
+            ],
         ),
         "show" => render_leaf(
             "Show one environment snapshot",
@@ -1673,7 +1676,11 @@ pub fn env_snapshot_command_help(cmd: &str, action: &str) -> Option<String> {
             vec![format!(
                 "{cmd} env snapshot restore mira 1742922000-123456789"
             )],
-            &["Snapshot restore keeps existing safety rails around foreign directories."],
+            &[
+                "A running managed gateway is stopped before root replacement.",
+                "Successful restore applies the snapshot's service policy; failed restore attempts to restore the pre-restore service state.",
+                "Snapshot restore keeps existing safety rails around foreign directories.",
+            ],
         ),
         "remove" => render_leaf(
             "Remove an environment snapshot",
@@ -2125,9 +2132,15 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
         ),
         "restart" => render_leaf(
             "Restart an env under the background service",
-            "Restart one env under the shared OCM background service.",
-            vec![format!("{cmd} service restart <env> [--raw] [--json]")],
+            "Restart one env immediately through OpenClaw's recovery handoff so eligible interrupted work can resume after startup.",
+            vec![format!(
+                "{cmd} service restart <env> [--force] [--raw] [--json]"
+            )],
             &[
+                (
+                    "--force",
+                    "Bypass OpenClaw restart recovery and replace the supervised child directly",
+                ),
                 (
                     "--raw",
                     "Force plain line output instead of the TTY receipt view",
@@ -2135,7 +2148,11 @@ pub fn service_command_help(cmd: &str, action: &str) -> Option<String> {
                 ("--json", "Print the action summary as JSON"),
             ],
             vec![format!("{cmd} service restart mira")],
-            &[],
+            &[
+                "The default restart does not wait for active work; OpenClaw records eligible interrupted work for recovery before exiting.",
+                "Gateways without recovery handoff support keep the legacy direct-restart behavior and emit a warning.",
+                "Use --force only to bypass a recovery handoff that is advertised but unhealthy.",
+            ],
         ),
         "uninstall" => render_leaf(
             "Disable an env in the background service",

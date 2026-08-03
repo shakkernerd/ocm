@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,7 +15,9 @@ use crate::infra::archive::{
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::common::{copy_dir_recursive, load_json_files, path_exists, read_json, write_json};
+use super::common::{
+    copy_dir_recursive, copy_path_recursive, load_json_files, path_exists, read_json, write_json,
+};
 use super::layout::{
     derive_env_paths, display_path, snapshot_archive_path, snapshot_env_dir, snapshot_meta_path,
     validate_name,
@@ -55,8 +58,19 @@ pub fn create_env_snapshot(
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<EnvSnapshotMeta, String> {
+    create_env_snapshot_with_service_state(options, None, env, cwd)
+}
+
+pub(crate) fn create_env_snapshot_with_service_state(
+    options: CreateEnvSnapshotOptions,
+    service_state: Option<(bool, bool)>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<EnvSnapshotMeta, String> {
     let env_name = validate_name(&options.env_name, "Environment name")?;
     let meta = get_environment(&env_name, env, cwd)?;
+    let (service_enabled, service_running) =
+        service_state.unwrap_or((meta.service_enabled, meta.service_running));
     let env_paths = derive_env_paths(Path::new(&meta.root));
     if !path_exists(&env_paths.root) {
         return Err(format!(
@@ -83,8 +97,8 @@ pub fn create_env_snapshot(
             source_root: Some(meta.root.clone()),
             gateway_port: meta.gateway_port,
             gateway_port_auto_assigned: meta.gateway_port_auto_assigned,
-            service_enabled: meta.service_enabled,
-            service_running: meta.service_running,
+            service_enabled,
+            service_running,
             default_runtime: meta.default_runtime.clone(),
             default_launcher: meta.default_launcher.clone(),
             protected: meta.protected,
@@ -102,8 +116,8 @@ pub fn create_env_snapshot(
         archive_path: display_path(&archive_path),
         source_root: meta.root.clone(),
         gateway_port: meta.gateway_port,
-        service_enabled: meta.service_enabled,
-        service_running: meta.service_running,
+        service_enabled,
+        service_running,
         default_runtime: meta.default_runtime.clone(),
         default_launcher: meta.default_launcher.clone(),
         protected: meta.protected,
@@ -247,7 +261,9 @@ pub fn restore_env_snapshot(
                     OpenClawWorkspaceRuntime::for_env(&restored.name, restored.gateway_port),
                 )?;
             }
-            save_environment(restored, env, cwd)
+            let restored = save_environment(restored, env, cwd)?;
+            preserve_current_excluded_openclaw_state(&backup_root, &current_paths.root)?;
+            Ok(restored)
         })();
 
         match restore_result {
@@ -278,6 +294,82 @@ pub fn restore_env_snapshot(
 
     let _ = fs::remove_dir_all(&staging_dir);
     result
+}
+
+fn preserve_current_excluded_openclaw_state(
+    backup_root: &Path,
+    restored_root: &Path,
+) -> Result<(), String> {
+    let source_root = backup_root.join(".openclaw");
+    let entries = match fs::read_dir(&source_root) {
+        Ok(entries) => entries
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+
+    let destination_root = restored_root.join(".openclaw");
+    for entry in entries {
+        let name = entry.file_name();
+        let source = entry.path();
+        let destination = destination_root.join(&name);
+        let metadata = fs::symlink_metadata(&source).map_err(|error| error.to_string())?;
+        if should_discard_current_openclaw_restore_entry(&name, metadata.is_dir()) {
+            continue;
+        }
+
+        let current_state_wins = matches!(name.to_str(), Some("secrets") | Some("browser"));
+        if !current_state_wins && path_exists(&destination) {
+            continue;
+        }
+
+        remove_path_if_present(&destination)?;
+        copy_path_recursive(&source, &destination).map_err(|error| {
+            format!(
+                "failed to preserve current excluded OpenClaw state at {} while restoring snapshot: {error}",
+                display_path(&source)
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn should_discard_current_openclaw_restore_entry(name: &OsStr, is_dir: bool) -> bool {
+    if is_dir
+        && matches!(
+            name.to_str(),
+            Some("run") | Some("tmp") | Some("temp") | Some("locks")
+        )
+    {
+        return true;
+    }
+
+    matches!(
+        Path::new(name).extension().and_then(OsStr::to_str),
+        Some("pid") | Some("lock") | Some("sock") | Some("socket")
+    ) || matches!(
+        name.to_str(),
+        Some("pid")
+            | Some("lock")
+            | Some("sock")
+            | Some("socket")
+            | Some("gateway-supervisor-restart-handoff.json")
+    )
+}
+
+fn remove_path_if_present(path: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+
+    if metadata.is_dir() {
+        fs::remove_dir_all(path).map_err(|error| error.to_string())
+    } else {
+        fs::remove_file(path).map_err(|error| error.to_string())
+    }
 }
 
 pub fn remove_env_snapshot(

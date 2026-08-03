@@ -148,11 +148,39 @@ Use `upgrade simulate` when you want to test what would happen against a publish
 - simulation envs and temporary runtimes are cleaned up automatically; use `--keep-simulations` only when you need retained debug artifacts
 - missing published targets fail before any simulation env is created
 - `--scenario all` runs built-in current, clean minimum, and Telegram-configured env shapes as separate simulation clones
-- a pre-upgrade snapshot is created before env state changes
-- when an env moves to a new runtime, OCM runs OpenClaw's update finalization path inside that env before service restart
+- a running managed gateway is stopped before its pre-upgrade snapshot and remains stopped through mutation and finalization
+- the cold snapshot retains the gateway's original desired-running policy for rollback
+- snapshot archives intentionally omit current-state roots such as `.openclaw/secrets` and `.openclaw/browser`; rollback preserves excluded current state instead of deleting or rolling it back
+- when an env moves to a new runtime, OCM stops any running managed gateway, runs OpenClaw's update finalization path cold, then restores the prior desired-running state
 - if service reconciliation fails, OCM restores the snapshot and previous runtime unless `--no-rollback` is set
 - pinned runtimes stay pinned unless you pass `--version`, `--channel`, or `--runtime`
 - local-command environments are reported clearly instead of being changed behind your back
+
+For a durable environment, complete these checks before the real upgrade:
+
+1. Run the target runtime's read-only update/doctor plan against the existing
+   environment. If it requires canonical-session or other SQLite repair, stop
+   the managed gateway, take a verified cold backup, and run the target's
+   supported repair path while the service remains stopped.
+2. Verify target package parity for every configured plugin. A local source
+   checkout may contain an extension or dependency that the release-shaped
+   runtime does not package.
+3. Check free disk space for both the snapshot archive and temporary copies of
+   the largest SQLite databases. Derived caches can dominate this requirement;
+   remove them only through a supported target-runtime repair/compaction path.
+4. Keep credentials needed across environment replacement in operator-managed,
+   mode-restricted SecretRef files outside the environment root. Restore
+   preserves an existing `.openclaw/secrets` tree, but an archive deliberately
+   cannot recreate a secret that was already missing.
+5. After upgrade, require config/SecretRef validation, plugin diagnostics, a
+   real model/runtime turn, local and remote health, and real channel delivery.
+   HTTP readiness alone does not prove Telegram, iMessage, or another provider
+   started successfully.
+
+If failed startup attempts trip OpenClaw's restart-loop breaker, correct the
+underlying startup problem and wait for the breaker window to expire before one
+controlled service restart. Repeated restarts extend the outage and can create
+additional recovery work.
 
 ### 8. Run OpenClaw without activating the shell first
 
@@ -303,6 +331,31 @@ ocm service stop mira
 ocm service restart mira
 ```
 
+Normal restart is gateway-aware when `ocm service status mira` reports restart
+handoff `protocol v1`: OpenClaw records eligible active sessions and subagents,
+hands the fresh-process restart back to OCM immediately, and resumes recoverable
+work after the replacement gateway starts. The old gateway process does not wait
+for an in-flight turn to finish.
+
+When a binding cannot negotiate the restart handoff, OCM preserves the existing
+direct-supervisor restart behavior and prints a warning that in-flight work may
+have been interrupted. Existing restart commands therefore remain compatible.
+
+Use the forced path only when a gateway advertises recovery support but is too
+unhealthy to accept the restart handoff:
+
+```bash
+ocm service restart mira --force
+```
+
+Forced restart explicitly replaces the supervised child directly. It bypasses
+OpenClaw's restart-recovery handoff and can lose in-flight work, so it is
+intentionally an emergency override rather than a compatibility requirement.
+
+Recovery is limited to work OpenClaw knows how to persist and resume. It does
+not make arbitrary child processes or non-idempotent external side effects
+transactional.
+
 ### Remove the service
 
 ```bash
@@ -387,6 +440,26 @@ Restore:
 ```bash
 ocm env snapshot restore mira <snapshot>
 ```
+
+Snapshot creation and restore are cold for running OCM-managed gateways. OCM
+stops the target before capture, records its original service policy in the
+snapshot, and restores that policy after capture. Before restore it stops the
+target again; successful restore applies the snapshot's service policy, while a
+failed restore attempts to restore the pre-restore service state. This avoids a
+cross-store hybrid between SQLite, config, transcripts, queues, plugins, and
+workspaces and prevents open handles from writing into a replaced root.
+
+Snapshot archives intentionally exclude current-state roots such as
+`.openclaw/secrets` and `.openclaw/browser`. Restoring a snapshot preserves
+excluded current state, including file modes and symlinks, while restoring the
+archived durable state around it. This keeps current credentials, browser
+sessions, plugin-owned sidecars, and future excluded roots from being deleted
+or rolled back. Explicit process residue such as lock, socket, PID, and
+temporary runtime paths is discarded. For credentials that must survive
+environment replacement or be shared deliberately, prefer SecretRefs backed by
+an operator-managed path outside the environment root. Preservation protects
+the current state present at restore time; it cannot reconstruct state that was
+already deleted.
 
 Remove:
 

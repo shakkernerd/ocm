@@ -78,6 +78,7 @@ pub use runtimes::{
     install_runtime_from_official_openclaw_release, install_runtime_from_release,
     install_runtime_from_url, list_runtimes, remove_runtime, runtime_integrity_issue,
 };
+pub(crate) use snapshots::create_env_snapshot_with_service_state;
 pub use snapshots::{
     create_env_snapshot, get_env_snapshot, list_all_env_snapshots, list_env_snapshots,
     remove_env_snapshot, restore_env_snapshot, summarize_snapshot,

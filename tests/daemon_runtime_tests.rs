@@ -549,6 +549,44 @@ fn env_changes_refresh_persisted_service_state_without_extra_commands() {
 }
 
 #[test]
+fn supervisor_sync_does_not_reload_specs_for_ambient_caller_env_drift() {
+    let _guard = daemon_runtime_test_lock();
+    let root = TestDir::new("service-state-ambient-env-drift");
+    let (cwd, mut initial_env) = setup_service_fixture(&root);
+    initial_env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    initial_env.insert("PNPM_HOME".to_string(), "/old/pnpm".to_string());
+    let state_path = root.child("ocm-home/supervisor/state.json");
+
+    SupervisorService::new(&initial_env, &cwd).sync().unwrap();
+    let initial_state = read_persisted_service_state(&state_path);
+    let initial_demo = initial_state["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|child| child["envName"] == "demo")
+        .unwrap()
+        .clone();
+
+    let mut later_env = initial_env;
+    later_env.insert(
+        "PATH".to_string(),
+        "/opt/homebrew/bin:/usr/bin:/bin".to_string(),
+    );
+    later_env.insert("PNPM_HOME".to_string(), "/new/pnpm".to_string());
+    later_env.insert("CODEX_SESSION_ID".to_string(), "session-2".to_string());
+    SupervisorService::new(&later_env, &cwd).sync().unwrap();
+
+    let later_state = read_persisted_service_state(&state_path);
+    let later_demo = later_state["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|child| child["envName"] == "demo")
+        .unwrap();
+    assert_eq!(later_demo, &initial_demo);
+}
+
+#[test]
 fn child_restart_request_rebuilds_missing_or_stale_state() {
     let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("restart-request-rebuilds-state");
@@ -751,7 +789,67 @@ fn daemon_run_reloads_children_after_binding_changes() {
 }
 
 #[test]
-fn service_restart_restarts_only_the_target_child() {
+fn daemon_run_keeps_child_running_after_ambient_caller_env_drift() {
+    let _guard = daemon_runtime_test_lock();
+    let root = TestDir::new("daemon-ambient-env-drift");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let mut initial_env = ocm_env(&root);
+    initial_env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    initial_env.insert("PNPM_HOME".to_string(), "/old/pnpm".to_string());
+    let runtime_path = root.child("ocm-home/supervisor/runtime.json");
+    let started = root.child("started.txt");
+    let script = root.child("bin/openclaw");
+    write_legacy_openclaw_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$$\" >> '{}'\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+            path_string(&started),
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &initial_env,
+        &["launcher", "add", "dev", "--command", &path_string(&script)],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+    let created = run_ocm(
+        &cwd,
+        &initial_env,
+        &["env", "create", "demo", "--launcher", "dev"],
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+    set_service_enabled(&cwd, &initial_env, "demo", true);
+    SupervisorService::new(&initial_env, &cwd).sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &initial_env);
+    assert!(wait_for_file(&started, Duration::from_secs(5)));
+    let initial_runtime =
+        wait_for_runtime_children(&runtime_path, 1, Some("demo"), Duration::from_secs(5))
+            .expect("daemon runtime state did not report the running child");
+    let initial_pid = runtime_child_pid(&initial_runtime, "demo").unwrap();
+
+    let mut later_env = initial_env.clone();
+    later_env.insert(
+        "PATH".to_string(),
+        "/opt/homebrew/bin:/usr/bin:/bin".to_string(),
+    );
+    later_env.insert("PNPM_HOME".to_string(), "/new/pnpm".to_string());
+    SupervisorService::new(&later_env, &cwd).sync().unwrap();
+    sleep(Duration::from_millis(500));
+
+    let later_runtime =
+        wait_for_runtime_children(&runtime_path, 1, Some("demo"), Duration::from_secs(2))
+            .expect("daemon runtime state lost the running child");
+    assert_eq!(runtime_child_pid(&later_runtime, "demo"), Some(initial_pid));
+    assert_eq!(fs::read_to_string(&started).unwrap().lines().count(), 1);
+
+    stop_process(&mut daemon);
+}
+
+#[test]
+fn service_restart_preserves_legacy_fallback_and_restarts_only_the_target_child() {
     let _guard = daemon_runtime_test_lock();
     let root = TestDir::new("daemon-targeted-service-restart");
     let cwd = root.child("workspace");
@@ -845,6 +943,17 @@ fn service_restart_restarts_only_the_target_child() {
         &["service", "restart", "rescue", "--json"],
     );
     assert!(restart.status.success(), "{}", stderr(&restart));
+    let restart_body: serde_json::Value = serde_json::from_slice(&restart.stdout).unwrap();
+    assert!(
+        restart_body["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .contains("used the legacy direct supervisor restart path"))
+    );
     let restarted = wait_for_runtime_child_pid_change(
         &runtime_path,
         "rescue",
@@ -909,7 +1018,11 @@ fn service_restart_requeues_a_stopped_desired_child() {
         .expect("daemon runtime state did not report the quick clean exit as stopped");
     assert!(!started.exists());
 
-    let restart = run_ocm(&cwd, &env, &["service", "restart", "demo", "--json"]);
+    let restart = run_ocm(
+        &cwd,
+        &env,
+        &["service", "restart", "demo", "--force", "--json"],
+    );
     assert!(restart.status.success(), "{}", stderr(&restart));
     let runtime =
         wait_for_runtime_children(&runtime_path, 1, Some("demo"), Duration::from_secs(10))
@@ -1120,6 +1233,62 @@ fn daemon_stops_the_full_dev_process_tree_after_service_stop() {
     assert!(
         !process_exists(child_pid),
         "background descendant still alive after service stop"
+    );
+
+    stop_process(&mut daemon);
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_cleans_descendants_after_a_child_exits_before_restart() {
+    let _guard = daemon_runtime_test_lock();
+    let root = TestDir::new("daemon-exit-process-group-cleanup");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    let service = SupervisorService::new(&env, &cwd);
+
+    let starts = root.child("starts.txt");
+    let descendant_pid_file = root.child("descendant.pid");
+    let script = root.child("bin/openclaw.mjs");
+    write_legacy_openclaw_script(
+        &script,
+        &format!(
+            "#!/bin/sh\ncount=0\nif [ -f '{starts}' ]; then count=$(cat '{starts}'); fi\ncount=$((count + 1))\nprintf '%s\n' \"$count\" > '{starts}'\nif [ \"$count\" -eq 1 ]; then\n  trap '' HUP\n  sleep 60 &\n  printf '%s\n' \"$!\" > '{descendant_pid_file}'\n  sleep 1\n  exit 1\nfi\nsleep 10\n",
+            starts = path_string(&starts),
+            descendant_pid_file = path_string(&descendant_pid_file),
+        ),
+    );
+
+    let launcher = run_ocm(
+        &cwd,
+        &env,
+        &["launcher", "add", "dev", "--command", &path_string(&script)],
+    );
+    assert!(launcher.status.success(), "{}", stderr(&launcher));
+
+    let created = run_ocm(&cwd, &env, &["env", "create", "demo", "--launcher", "dev"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    set_service_enabled(&cwd, &env, "demo", true);
+    service.sync().unwrap();
+
+    let mut daemon = spawn_daemon_process(&cwd, &env);
+    assert!(wait_for_file(&descendant_pid_file, Duration::from_secs(5)));
+    let descendant_pid = fs::read_to_string(&descendant_pid_file)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    assert!(process_exists(descendant_pid));
+
+    assert!(wait_for_file_value(&starts, "2", Duration::from_secs(5)));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && process_exists(descendant_pid) {
+        sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !process_exists(descendant_pid),
+        "background descendant still alive after supervised child exit"
     );
 
     stop_process(&mut daemon);

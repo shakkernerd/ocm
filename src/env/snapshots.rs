@@ -5,8 +5,9 @@ use time::{Duration, OffsetDateTime};
 
 use super::EnvironmentService;
 use crate::store::{
-    create_env_snapshot, get_env_snapshot, list_all_env_snapshots, list_env_snapshots, now_utc,
-    remove_env_snapshot, restore_env_snapshot, summarize_snapshot,
+    create_env_snapshot, create_env_snapshot_with_service_state, get_env_snapshot,
+    list_all_env_snapshots, list_env_snapshots, now_utc, remove_env_snapshot, restore_env_snapshot,
+    summarize_snapshot,
 };
 use crate::supervisor::sync_supervisor_if_present;
 
@@ -130,6 +131,16 @@ impl<'a> EnvironmentService<'a> {
         options: CreateEnvSnapshotOptions,
     ) -> Result<EnvSnapshotSummary, String> {
         let meta = create_env_snapshot(options, self.env, self.cwd)?;
+        Ok(summarize_snapshot(&meta))
+    }
+
+    pub(crate) fn create_snapshot_locked_with_service_state(
+        &self,
+        options: CreateEnvSnapshotOptions,
+        service_state: Option<(bool, bool)>,
+    ) -> Result<EnvSnapshotSummary, String> {
+        let meta =
+            create_env_snapshot_with_service_state(options, service_state, self.env, self.cwd)?;
         Ok(summarize_snapshot(&meta))
     }
 

@@ -1645,6 +1645,151 @@ fn environment_snapshot_restore_replaces_env_state_from_the_snapshot() {
     assert!(restored_meta.protected);
 }
 
+#[cfg(unix)]
+#[test]
+fn environment_snapshot_restore_preserves_current_excluded_state() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = TestDir::new("store-env-snapshot-restore-secrets");
+    let cwd = root.child("workspace");
+    fs::create_dir_all(&cwd).unwrap();
+    let env = ocm_env(&root);
+    add_test_launcher("shell", &env, &cwd);
+
+    let created = create_environment(
+        CreateEnvironmentOptions {
+            name: "source".to_string(),
+            root: None,
+            gateway_port: Some(19789),
+            service_enabled: false,
+            service_running: false,
+            default_runtime: Some("stable".to_string()),
+            default_launcher: Some("shell".to_string()),
+            dev: None,
+            protected: true,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let source_root = Path::new(&created.root);
+    write_text(
+        &source_root.join(".openclaw/openclaw.json"),
+        "{\"gateway\":{\"port\":19789}}\n",
+    );
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "before restore",
+    );
+    let secrets_dir = source_root.join(".openclaw/secrets");
+    let token_path = secrets_dir.join("telegram/default.token");
+    write_text(&token_path, "original-token\n");
+    fs::set_permissions(&secrets_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(
+        token_path.parent().unwrap(),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    fs::set_permissions(&token_path, fs::Permissions::from_mode(0o600)).unwrap();
+    std::os::unix::fs::symlink("telegram/default.token", secrets_dir.join("current-token"))
+        .unwrap();
+    let browser_cookie_path =
+        source_root.join(".openclaw/browser/openclaw/user-data/Default/Cookies");
+    write_text(&browser_cookie_path, "browser-before-snapshot\n");
+    let plugin_state_path = source_root.join(".openclaw/lcm.db");
+    write_text(&plugin_state_path, "plugin-state-before-snapshot\n");
+    let future_state_path = source_root.join(".openclaw/future-owner-state/data.json");
+    write_text(&future_state_path, "future-state-before-snapshot\n");
+    write_text(&source_root.join(".openclaw/run/gateway.pid"), "123\n");
+
+    let snapshot = create_env_snapshot(
+        CreateEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            label: Some("before-upgrade".to_string()),
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+    let extracted = extract_env_archive::<EnvArchiveMetadata>(
+        Path::new(&snapshot.archive_path),
+        &root.child("snapshot-extracted-secrets"),
+    )
+    .unwrap();
+    assert!(!extracted.root_dir.join(".openclaw/secrets").exists());
+    assert!(!extracted.root_dir.join(".openclaw/browser").exists());
+    assert!(!extracted.root_dir.join(".openclaw/lcm.db").exists());
+    assert!(
+        !extracted
+            .root_dir
+            .join(".openclaw/future-owner-state")
+            .exists()
+    );
+    assert!(!extracted.root_dir.join(".openclaw/run").exists());
+
+    write_text(&token_path, "rotated-after-snapshot\n");
+    fs::set_permissions(&token_path, fs::Permissions::from_mode(0o600)).unwrap();
+    write_text(&browser_cookie_path, "browser-after-snapshot\n");
+    write_text(&plugin_state_path, "plugin-state-after-snapshot\n");
+    write_text(&future_state_path, "future-state-after-snapshot\n");
+    write_text(
+        &source_root.join(".openclaw/workspace/notes.txt"),
+        "after drift",
+    );
+
+    restore_env_snapshot(
+        RestoreEnvSnapshotOptions {
+            env_name: "source".to_string(),
+            snapshot_id: snapshot.id,
+        },
+        &env,
+        &cwd,
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(&token_path).unwrap(),
+        "rotated-after-snapshot\n"
+    );
+    assert_eq!(
+        fs::metadata(&secrets_dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&token_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(token_path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::read_link(secrets_dir.join("current-token")).unwrap(),
+        Path::new("telegram/default.token")
+    );
+    assert_eq!(
+        fs::read_to_string(&browser_cookie_path).unwrap(),
+        "browser-after-snapshot\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&plugin_state_path).unwrap(),
+        "plugin-state-after-snapshot\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&future_state_path).unwrap(),
+        "future-state-after-snapshot\n"
+    );
+    assert!(!source_root.join(".openclaw/run").exists());
+    assert_eq!(
+        fs::read_to_string(source_root.join(".openclaw/workspace/notes.txt")).unwrap(),
+        "before restore"
+    );
+}
+
 #[test]
 fn environment_snapshot_restore_clears_broken_foreign_runtime_state_but_keeps_agent_auth() {
     let root = TestDir::new("store-env-snapshot-restore-runtime-cleanup");

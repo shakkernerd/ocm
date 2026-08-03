@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -267,7 +267,7 @@ impl<'a> SupervisorService<'a> {
         let state_path = supervisor_state_path(self.env, self.cwd)?;
         let _lock = lock_supervisor_state(&state_path)?;
         let mut state = self.build_state()?;
-        preserve_persisted_restart_requests(&state_path, &mut state);
+        preserve_persisted_supervisor_state(&state_path, &mut state);
         if let Some(parent) = state_path.parent() {
             ensure_dir(parent)?;
         }
@@ -980,12 +980,140 @@ fn child_map(children: &[SupervisorChildSpec]) -> BTreeMap<String, SupervisorChi
         .collect()
 }
 
-fn preserve_persisted_restart_requests(state_path: &Path, state: &mut SupervisorState) {
+fn preserve_persisted_supervisor_state(state_path: &Path, state: &mut SupervisorState) {
     let Ok(persisted_state) = read_json::<SupervisorState>(state_path) else {
         return;
     };
 
+    preserve_ambient_only_child_specs(state, &persisted_state.children);
     preserve_restart_requests(state, persisted_state.restart_requests);
+}
+
+fn preserve_ambient_only_child_specs(
+    state: &mut SupervisorState,
+    persisted_children: &[SupervisorChildSpec],
+) {
+    // The persisted state can be consumed by an older daemon that compares the
+    // full spec. Keep its exact bytes when a newer CLI only inherited a
+    // different shell PATH/tool environment, or that daemon will reload every
+    // otherwise unchanged gateway.
+    let persisted = persisted_children
+        .iter()
+        .map(|child| (child.env_name.as_str(), child))
+        .collect::<BTreeMap<_, _>>();
+    for child in &mut state.children {
+        let Some(persisted_child) = persisted.get(child.env_name.as_str()) else {
+            continue;
+        };
+        if child_specs_differ_only_in_ambient_env(persisted_child, child) {
+            *child = (*persisted_child).clone();
+        }
+    }
+}
+
+fn child_specs_differ_only_in_ambient_env(
+    left: &SupervisorChildSpec,
+    right: &SupervisorChildSpec,
+) -> bool {
+    if left == right {
+        return false;
+    }
+
+    let mut left = left.clone();
+    let mut right = right.clone();
+    normalize_equivalent_runtime_launch(&mut left);
+    normalize_equivalent_runtime_launch(&mut right);
+    left.process_env
+        .retain(|key, _| !ambient_child_env_key(key));
+    right
+        .process_env
+        .retain(|key, _| !ambient_child_env_key(key));
+    left == right
+}
+
+fn normalize_equivalent_runtime_launch(spec: &mut SupervisorChildSpec) {
+    if spec.binding_kind != "runtime" || spec.runtime_source_kind.as_deref() != Some("installed") {
+        return;
+    }
+
+    let Some(binary_path) = spec.binary_path.as_deref() else {
+        return;
+    };
+    if Path::new(binary_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some("openclaw.mjs")
+    {
+        return;
+    }
+    if !matches!(
+        Path::new(binary_path)
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("node" | "node.exe")
+    ) {
+        return;
+    }
+
+    let Some(entrypoint) = spec.args.first().filter(|entrypoint| {
+        Path::new(entrypoint)
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some("openclaw.mjs")
+    }) else {
+        return;
+    };
+    spec.binary_path = Some(entrypoint.clone());
+    spec.args.remove(0);
+}
+
+fn ambient_child_env_key(key: &str) -> bool {
+    matches!(key, "HOME" | "PATH" | "TMPDIR" | "OCM_SELF" | "SHELL")
+        || SUPERVISED_CHILD_RUNTIME_ENV_KEYS.contains(&key)
+        || SERVICE_PROXY_ENV_KEYS.contains(&key)
+        || SERVICE_EXTRA_ENV_KEYS.contains(&key)
+        || key.starts_with("NPM_CONFIG_")
+        || key.starts_with("npm_config_")
+        || key.starts_with("COREPACK_")
+}
+
+fn supervisor_child_spec_changed_fields(
+    previous: &SupervisorChildSpec,
+    next: &SupervisorChildSpec,
+) -> Vec<String> {
+    let mut fields = Vec::new();
+    macro_rules! changed {
+        ($field:ident, $name:literal) => {
+            if previous.$field != next.$field {
+                fields.push($name.to_string());
+            }
+        };
+    }
+    changed!(binding_kind, "bindingKind");
+    changed!(binding_name, "bindingName");
+    changed!(restart_handoff_pid_bound, "restartHandoffPidBound");
+    changed!(command, "command");
+    changed!(binary_path, "binaryPath");
+    changed!(runtime_source_kind, "runtimeSourceKind");
+    changed!(runtime_release_version, "runtimeReleaseVersion");
+    changed!(runtime_release_channel, "runtimeReleaseChannel");
+    changed!(args, "args");
+    changed!(run_dir, "runDir");
+    changed!(child_port, "childPort");
+    changed!(stdout_path, "stdoutPath");
+    changed!(stderr_path, "stderrPath");
+
+    let env_keys = previous
+        .process_env
+        .keys()
+        .chain(next.process_env.keys())
+        .collect::<BTreeSet<_>>();
+    for key in env_keys {
+        if previous.process_env.get(key) != next.process_env.get(key) {
+            fields.push(format!("processEnv.{key}"));
+        }
+    }
+    fields
 }
 
 fn preserve_persisted_child_specs_except(
@@ -1118,10 +1246,12 @@ fn reconcile_running_children(
             let mut existing = running
                 .remove(&env_name)
                 .expect("running child should exist when needs_restart is true");
+            let changed_fields = supervisor_child_spec_changed_fields(&existing.spec, next_spec);
             eprintln!(
-                "ocm service: reloading {} ({})",
+                "ocm service: reloading {} ({}) because {} changed",
                 existing.spec.env_name,
-                child_binding_label(next_spec)
+                child_binding_label(next_spec),
+                changed_fields.join(", ")
             );
             stop_supervisor_child(&mut existing);
             pending.insert(
@@ -1307,9 +1437,10 @@ fn process_exited_children(
     let mut runtime_dirty = false;
 
     for exited_child in exited {
-        let Some(previous_child) = running.remove(&exited_child.env_name) else {
+        let Some(mut previous_child) = running.remove(&exited_child.env_name) else {
             continue;
         };
+        stop_supervisor_child(&mut previous_child);
         runtime_dirty = true;
         results.push(child_run_result(
             &previous_child.spec,
@@ -1636,20 +1767,46 @@ fn stop_supervisor_child(running_child: &mut RunningSupervisorChild) {
         let process_group = format!("-{}", running_child.child.id());
         let _ = Command::new("kill")
             .args(["-TERM", "--", &process_group])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status();
         for _ in 0..20 {
-            match running_child.child.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) => sleep(Duration::from_millis(50)),
-                Err(_) => break,
+            let _ = running_child.child.try_wait();
+            if !supervisor_process_group_exists(&process_group) {
+                break;
+            }
+            sleep(Duration::from_millis(50));
+        }
+        if supervisor_process_group_exists(&process_group) {
+            let _ = Command::new("kill")
+                .args(["-KILL", "--", &process_group])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            for _ in 0..20 {
+                let _ = running_child.child.try_wait();
+                if !supervisor_process_group_exists(&process_group) {
+                    break;
+                }
+                sleep(Duration::from_millis(50));
             }
         }
-        let _ = Command::new("kill")
-            .args(["-KILL", "--", &process_group])
-            .status();
     }
+    // Always wait on the process-group leader. It can exit after try_wait()
+    // reports None but before the group-existence probe; returning in that
+    // window leaves a zombie that can block OpenClaw's single-instance lock.
     let _ = running_child.child.kill();
     let _ = running_child.child.wait();
+}
+
+#[cfg(unix)]
+fn supervisor_process_group_exists(process_group: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", "--", process_group])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn supervisor_state_equivalent(left: &SupervisorState, right: &SupervisorState) -> bool {
@@ -2634,6 +2791,94 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn exited_supervisor_child_cleans_remaining_process_group() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "ocm-supervisor-process-group-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let descendant_pid_path = test_dir.join("descendant.pid");
+        let mut spec = child_spec("process-group-cleanup", 19_999);
+        spec.command = Some(
+            "trap '' HUP; sleep 60 & descendant=$!; printf '%s' \"$descendant\" > \"$OCM_TEST_DESCENDANT_PID_FILE\"; exit 1"
+                .to_string(),
+        );
+        spec.binary_path = None;
+        spec.run_dir = test_dir.to_string_lossy().into_owned();
+        spec.stdout_path = test_dir.join("stdout.log").to_string_lossy().into_owned();
+        spec.stderr_path = test_dir.join("stderr.log").to_string_lossy().into_owned();
+        spec.process_env.insert(
+            "OCM_TEST_DESCENDANT_PID_FILE".to_string(),
+            descendant_pid_path.to_string_lossy().into_owned(),
+        );
+
+        let mut running_child = spawn_running_child(spec, 0, 0).unwrap();
+        let process_group = format!("-{}", running_child.child.id());
+        let status = running_child.child.wait().unwrap();
+        assert_eq!(status.code(), Some(1));
+
+        for _ in 0..100 {
+            if descendant_pid_path.exists() {
+                break;
+            }
+            sleep(Duration::from_millis(10));
+        }
+        let descendant_pid = fs::read_to_string(&descendant_pid_path).unwrap();
+        assert!(supervisor_process_group_exists(&process_group));
+
+        stop_supervisor_child(&mut running_child);
+
+        for _ in 0..100 {
+            let descendant_alive = Command::new("kill")
+                .args(["-0", "--", descendant_pid.trim()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            if !descendant_alive {
+                break;
+            }
+            sleep(Duration::from_millis(10));
+        }
+        assert!(!supervisor_process_group_exists(&process_group));
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stopped_supervisor_child_reaps_process_group_leader() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "ocm-supervisor-child-reap-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let mut spec = child_spec("process-group-leader-reap", 19_998);
+        spec.command = Some("trap 'exit 0' TERM; while :; do sleep 1; done".to_string());
+        spec.binary_path = None;
+        spec.run_dir = test_dir.to_string_lossy().into_owned();
+        spec.stdout_path = test_dir.join("stdout.log").to_string_lossy().into_owned();
+        spec.stderr_path = test_dir.join("stderr.log").to_string_lossy().into_owned();
+
+        let mut running_child = spawn_running_child(spec, 0, 0).unwrap();
+        let child_pid = running_child.child.id().to_string();
+        sleep(Duration::from_millis(50));
+
+        stop_supervisor_child(&mut running_child);
+
+        let child_still_exists = Command::new("kill")
+            .args(["-0", "--", &child_pid])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(!child_still_exists, "supervised child was not reaped");
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
     #[test]
     fn restart_requests_are_part_of_supervisor_state_equivalence() {
         let active = supervisor_state(Vec::new());
@@ -2921,5 +3166,97 @@ mod tests {
         );
         assert!(!process_env.contains_key("GH_TOKEN"));
         assert!(!process_env.contains_key("PWD"));
+    }
+
+    #[test]
+    fn ambient_caller_env_drift_keeps_the_persisted_child_spec() {
+        let mut persisted = child_spec("rescue", 18790);
+        persisted.process_env.extend([
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("PNPM_HOME".to_string(), "/old/pnpm".to_string()),
+            (
+                "OPENCLAW_STATE_DIR".to_string(),
+                "/tmp/rescue/.openclaw".to_string(),
+            ),
+            ("OCM_ACTIVE_ENV".to_string(), "rescue".to_string()),
+        ]);
+        let mut rebuilt = persisted.clone();
+        rebuilt
+            .process_env
+            .insert("PATH".to_string(), "/opt/homebrew/bin:/usr/bin".to_string());
+        rebuilt
+            .process_env
+            .insert("PNPM_HOME".to_string(), "/new/pnpm".to_string());
+
+        let mut state = SupervisorState {
+            kind: SUPERVISOR_STATE_KIND.to_string(),
+            ocm_home: "/tmp/ocm".to_string(),
+            generated_at: OffsetDateTime::UNIX_EPOCH,
+            children: vec![rebuilt],
+            skipped_envs: Vec::new(),
+            restart_requests: Vec::new(),
+        };
+        preserve_ambient_only_child_specs(&mut state, &[persisted.clone()]);
+
+        assert_eq!(state.children, vec![persisted]);
+    }
+
+    #[test]
+    fn openclaw_env_changes_are_not_treated_as_ambient_drift() {
+        let mut previous = child_spec("rescue", 18790);
+        previous.process_env.insert(
+            "OPENCLAW_STATE_DIR".to_string(),
+            "/tmp/old-state".to_string(),
+        );
+        let mut next = previous.clone();
+        next.process_env.insert(
+            "OPENCLAW_STATE_DIR".to_string(),
+            "/tmp/new-state".to_string(),
+        );
+
+        assert!(!child_specs_differ_only_in_ambient_env(&previous, &next));
+    }
+
+    #[test]
+    fn direct_and_managed_node_runtime_launches_are_equivalent_ambient_drift() {
+        let entrypoint = "/tmp/runtime/node_modules/openclaw/openclaw.mjs";
+        let mut direct = child_spec("rescue", 18790);
+        direct.binding_kind = "runtime".to_string();
+        direct.runtime_source_kind = Some("installed".to_string());
+        direct.binary_path = Some(entrypoint.to_string());
+        direct.args = vec![
+            "gateway".to_string(),
+            "run".to_string(),
+            "--port".to_string(),
+            "18790".to_string(),
+        ];
+        direct.process_env.insert(
+            "PATH".to_string(),
+            "/opt/homebrew/bin:/usr/bin:/bin".to_string(),
+        );
+
+        let mut managed = direct.clone();
+        managed.binary_path = Some("/tmp/toolchain/bin/node".to_string());
+        managed.args.insert(0, entrypoint.to_string());
+        managed.process_env.insert(
+            "PATH".to_string(),
+            "/tmp/toolchain/bin:/usr/bin:/bin".to_string(),
+        );
+
+        assert!(child_specs_differ_only_in_ambient_env(&direct, &managed));
+    }
+
+    #[test]
+    fn child_spec_diagnostics_name_fields_without_logging_values() {
+        let previous = child_spec("rescue", 18790);
+        let mut next = previous.clone();
+        next.binding_name = "next-runtime".to_string();
+        next.process_env
+            .insert("PATH".to_string(), "/private/path".to_string());
+
+        assert_eq!(
+            supervisor_child_spec_changed_fields(&previous, &next),
+            vec!["bindingName".to_string(), "processEnv.PATH".to_string()]
+        );
     }
 }

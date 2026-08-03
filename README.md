@@ -135,16 +135,52 @@ ocm upgrade simulate mira --to beta --scenario all
 ocm upgrade simulate mira --to ./openclaw
 ```
 
-`upgrade` creates a pre-upgrade snapshot before changing an environment. If a
+`upgrade` stops a running managed gateway before creating its pre-upgrade
+snapshot and keeps it stopped through runtime mutation and OpenClaw update
+finalization. This makes the rollback point consistent across SQLite, config,
+transcripts, queues, plugins, and workspaces instead of only making each SQLite
+backup individually safe. If a
 running service cannot be restarted or started after the change, OCM restores
 the snapshot and previous runtime by default. When an environment moves to a new
 runtime, OCM runs OpenClaw's update finalization path inside that environment
 before service restart. A running managed service is considered recovered only
 after its HTTP health endpoint responds and OpenClaw's gateway status proves the
 gateway is reachable; otherwise the upgrade follows the normal rollback path.
+OCM restores the service's prior desired-running state after success or
+rollback.
 Snapshots preserve managed path, npm, and Git plugin payloads together with
 their package metadata and symlinks, while generated plugin dependency caches
-and live runtime residue stay out of the archive.
+and live runtime residue stay out of the archive. Snapshot archives also omit
+current-state roots such as `.openclaw/secrets` and `.openclaw/browser`.
+Restore carries excluded current state across root replacement instead of
+deleting it: archived durable state rolls back, while current credentials,
+browser sessions, plugin-owned sidecars, and future excluded roots remain
+current. Explicit process residue such as lock, socket, PID, and temporary
+runtime paths is discarded.
+
+Manual snapshot creation uses the same cold boundary: OCM stops a running
+managed gateway before capture, records the original service policy in the
+archive, and restores the gateway afterward. Manual restore stops a running
+managed gateway before replacing its root, applies the snapshot's service
+policy after success, and attempts to restore the pre-restore policy if the
+restore fails.
+
+Before upgrading a durable environment, run the target OpenClaw runtime's
+read-only update/doctor preflight and inspect its packaged plugin inventory.
+Stop the managed gateway before any repair that writes SQLite or configuration
+state. Confirm there is enough free space for the snapshot archive plus
+temporary copies of the largest SQLite databases; a multi-gigabyte derived
+cache can otherwise exhaust the volume before OCM changes the runtime. External
+or local plugins must also be installable by the target runtime—source-tree-only
+extensions and missing release dependencies are not proven by a successful
+core build.
+
+After the upgrade, verify more than HTTP readiness: validate SecretRefs, plugin
+loading, the selected agent runtime with a real model turn, and every configured
+channel with a real inbound/outbound smoke. If OpenClaw's restart-loop breaker
+suppressed channel auto-start after failed attempts, fix the startup problem,
+allow its observation window to expire, and perform one controlled restart
+rather than repeatedly restarting the gateway.
 Snapshot removal validates that the stored environment, snapshot ID, and
 archive path match the named snapshot before deleting anything. It takes the
 live metadata and archive out of service together, then reports warnings if
@@ -251,10 +287,19 @@ OCM negotiates fresh-process restart support only when it executes an
 `openclaw.mjs` entrypoint directly or through OCM's managed Node.js toolchain,
 so the gateway PID is the process OCM owns. `ocm service status <env>` reports
 `protocol v1` when OpenClaw can hand restart intent back to OCM atomically.
+With that protocol, `ocm service restart <env>` asks OpenClaw to restart
+immediately through its recovery handoff. OpenClaw records eligible active
+sessions and subagents before exiting, OCM starts the replacement gateway, and
+OpenClaw resumes that recoverable work after startup. This does not wait for an
+in-flight turn to finish before replacing the gateway process.
+
 Package-manager, shell, host-Node, and other wrapper-backed bindings run in
 legacy compatibility mode without OCM's native service identity or detached
-respawn; use `ocm service restart <env>` or bind a directly invoked OpenClaw
-runtime for gateway-initiated fresh-process restarts.
+respawn. `ocm service restart <env>` preserves their existing direct-supervisor
+restart behavior and warns that in-flight work cannot be recovered. Bind a
+directly invoked OpenClaw runtime to gain recovery-aware restarts. Use
+`ocm service restart <env> --force` only to explicitly bypass a recovery
+handoff that is advertised but unhealthy.
 
 ## Why not just run OpenClaw directly?
 
